@@ -1,5 +1,6 @@
 target/
 .env
+.env.*
 *.env
 *.db
 *.db-*
