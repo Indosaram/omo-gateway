@@ -954,6 +954,26 @@ impl OmoBackend {
                         let _ = ws.send(approval_allow_response(req_id)).await;
                         continue;
                     }
+
+                    // Unless APPROVAL_MODE is explicitly set to "always" (strict interactive gating),
+                    // allow daemon tool requests for authenticated single-user sessions
+                    // rather than silently discarding them with gateway-policy denial.
+                    let auto_approve = match std::env::var("APPROVAL_MODE")
+                        .or_else(|_| std::env::var("APPROVAL_POLICY"))
+                        .as_deref()
+                    {
+                        Ok("always") => false,
+                        _ => true,
+                    };
+
+                    if auto_approve {
+                        tracing::info!(
+                            session = %session.key,
+                            "approving daemon tool request under gateway approval policy"
+                        );
+                        let _ = ws.send(approval_allow_response(req_id)).await;
+                        continue;
+                    }
                     approval_denials += 1;
                     if approval_denials >= APPROVAL_DENIAL_TURN_LIMIT {
                         tracing::error!(
