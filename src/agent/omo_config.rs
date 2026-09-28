@@ -60,7 +60,7 @@ impl Default for OmoBackendConfig {
             appserver_url: CRON_APPSERVER_URL_DEFAULT.to_string(),
             auth_token: None,
             connect_timeout: Duration::from_secs(5),
-            request_timeout: Duration::from_secs(600),
+            request_timeout: Duration::from_secs(1800),
             total_timeout: Duration::from_secs(1800),
             no_content_grace: Duration::from_secs(15),
             default_model: None,
@@ -145,7 +145,8 @@ impl OmoBackendConfig {
         Self::validate_url(&appserver_url)?;
 
         // Idle-gap tolerance between streamed daemon events; long agent turns
-        // (digests, refactors) need minutes, not seconds.
+        // (digests, refactors) need minutes, not seconds. 기본 1800s(30분)로
+        // 총 상한과 맞춰, 조용한 구간 때문에 총 상한보다 먼저 끊기는 일이 없게 한다.
         let request_timeout = match std::env::var("OMON_OMO_TURN_TIMEOUT_SECS") {
             Ok(v) if !v.trim().is_empty() => {
                 Duration::from_secs(v.trim().parse::<u64>().map_err(|_| {
@@ -154,15 +155,13 @@ impl OmoBackendConfig {
                     ))
                 })?)
             }
-            _ => Duration::from_secs(600),
+            _ => Duration::from_secs(1800),
         };
 
         // Hard ceiling for a whole turn: a looping agent keeps emitting
         // events, so the per-event gap timeout never fires. On deadline the
         // backend sends turn/interrupt so the daemon thread is freed.
-        // 1800s fits a multi-round investigation turn: the reasoning model
-        // needs 1-4min per tool round, and cutting at 900s killed turns that
-        // had already found the answer.
+        // 기본 1800s(30분): 대화형 턴은 INTERACTIVE_TURN_CAP(1800s)까지 허용한다.
         let total_timeout = match std::env::var("OMON_OMO_TURN_TOTAL_TIMEOUT_SECS") {
             Ok(v) if !v.trim().is_empty() => Duration::from_secs(
                 v.trim().parse::<u64>().map_err(|_| {
@@ -253,10 +252,10 @@ mod tests {
     #[test]
     fn test_turn_stream_timeout_env_contract() {
         let _guard = ENV_LOCK.lock().unwrap();
-        // Default: 10 minutes of event-gap tolerance for long agent turns
+        // Default: the gap tolerance matches the whole-turn ceiling (30 min)
         std::env::remove_var("OMON_OMO_TURN_TIMEOUT_SECS");
         let cfg = OmoBackendConfig::from_env().unwrap();
-        assert_eq!(cfg.request_timeout, Duration::from_secs(600));
+        assert_eq!(cfg.request_timeout, Duration::from_secs(1800));
 
         // Explicit override
         std::env::set_var("OMON_OMO_TURN_TIMEOUT_SECS", "300");

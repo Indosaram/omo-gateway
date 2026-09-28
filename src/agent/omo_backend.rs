@@ -53,6 +53,9 @@ fn active_turn_entry_is_stale(age: Duration, effective_total_timeout: Duration) 
     age > effective_total_timeout + ACTIVE_TURN_STALE_MARGIN
 }
 
+/// Interactive (Discord) turns stop at 1800s (30m); cron turns keep their own budget.
+const INTERACTIVE_TURN_CAP: Duration = Duration::from_secs(1800);
+
 pub struct OmoBackend {
     pub config: OmoBackendConfig,
     pub pool: Option<SqlitePool>,
@@ -1270,7 +1273,7 @@ impl AgentBackend for OmoBackend {
         let effective_total_timeout = if is_cron_session {
             self.config.total_timeout
         } else {
-            self.config.total_timeout.min(Duration::from_secs(300))
+            self.config.total_timeout.min(INTERACTIVE_TURN_CAP)
         };
         let deadline = tokio::time::Instant::now() + effective_total_timeout;
 

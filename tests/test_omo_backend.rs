@@ -2873,8 +2873,8 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let config = OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
-                .with_connect_timeout(std::time::Duration::from_secs(600))
-                .with_request_timeout(std::time::Duration::from_secs(600))
+                .with_connect_timeout(std::time::Duration::from_secs(2400))
+                .with_request_timeout(std::time::Duration::from_secs(2400))
                 .with_total_timeout(std::time::Duration::from_secs(1800));
             let dispatcher = Arc::new(CapturingDispatcher::new());
             let backend = OmoBackend::new(config, dispatcher);
@@ -2887,7 +2887,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             let _ = futures_util::poll!(&mut run);
 
             tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(301)).await;
+            tokio::time::advance(std::time::Duration::from_secs(1801)).await;
             let poll_result = futures_util::poll!(&mut run);
             tokio::time::resume();
 
@@ -2941,7 +2941,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             });
 
             let config = OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
-                .with_request_timeout(std::time::Duration::from_secs(600))
+                .with_request_timeout(std::time::Duration::from_secs(2400))
                 .with_total_timeout(std::time::Duration::from_secs(1800));
             let dispatcher = Arc::new(CapturingDispatcher::new());
             let backend = OmoBackend::new(config, dispatcher);
@@ -2959,7 +2959,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             }
 
             tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(301)).await;
+            tokio::time::advance(std::time::Duration::from_secs(1801)).await;
             let poll_result = futures_util::poll!(&mut run);
             tokio::time::resume();
 
@@ -3033,7 +3033,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             });
 
             let config = OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
-                .with_request_timeout(std::time::Duration::from_secs(600))
+                .with_request_timeout(std::time::Duration::from_secs(2400))
                 .with_total_timeout(std::time::Duration::from_secs(1800));
             let dispatcher = Arc::new(CapturingDispatcher::new());
             let backend = OmoBackend::new(config, dispatcher);
@@ -3051,7 +3051,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             }
 
             tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(301)).await;
+            tokio::time::advance(std::time::Duration::from_secs(1801)).await;
             let poll_result = futures_util::poll!(&mut run);
             tokio::time::resume();
 
@@ -3125,7 +3125,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             });
 
             let config = OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
-                .with_request_timeout(std::time::Duration::from_secs(600))
+                .with_request_timeout(std::time::Duration::from_secs(2400))
                 .with_total_timeout(std::time::Duration::from_secs(1800));
             let dispatcher = Arc::new(CapturingDispatcher::new());
             let backend = OmoBackend::new(config, dispatcher);
@@ -3147,7 +3147,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             }
 
             tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(301)).await;
+            tokio::time::advance(std::time::Duration::from_secs(1801)).await;
             let poll_result = futures_util::poll!(&mut run);
             tokio::time::resume();
 
@@ -3330,7 +3330,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             });
 
             let config = OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
-                .with_request_timeout(std::time::Duration::from_secs(600))
+                .with_request_timeout(std::time::Duration::from_secs(2400))
                 .with_total_timeout(std::time::Duration::from_secs(1800));
             let (stream_started_tx, mut stream_started_rx) = tokio::sync::mpsc::unbounded_channel();
             let dispatcher = Arc::new(CapturingDispatcher::new());
@@ -3354,7 +3354,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             );
 
             tokio::time::pause();
-            tokio::time::advance(std::time::Duration::from_secs(301)).await;
+            tokio::time::advance(std::time::Duration::from_secs(1801)).await;
             let mut poll_result = futures_util::poll!(&mut run);
             if poll_result.is_pending() {
                 tokio::time::advance(std::time::Duration::from_secs(5)).await;
@@ -3447,7 +3447,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             });
 
             let config = OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
-                .with_request_timeout(std::time::Duration::from_secs(600))
+                .with_request_timeout(std::time::Duration::from_secs(2400))
                 .with_total_timeout(std::time::Duration::from_secs(1800));
             let dispatcher = Arc::new(CapturingDispatcher::new());
             let backend = OmoBackend::new(config, dispatcher);
@@ -3465,8 +3465,8 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             }
 
             tokio::time::pause();
-            // Spend 250s in first initialize
-            tokio::time::advance(std::time::Duration::from_secs(250)).await;
+            // Spend 1500s in first initialize
+            tokio::time::advance(std::time::Duration::from_secs(1500)).await;
             let _ = futures_util::poll!(&mut run);
 
             // Signal connection reset to trigger retry
@@ -3486,8 +3486,8 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
             }
             tokio::time::pause();
 
-            // Advance to original start + 300s (250s + 0.5s + 49.5s = 300s)
-            tokio::time::advance(std::time::Duration::from_millis(49_500)).await;
+            // Advance to original start + 1801s (1500s + 0.5s + 300.5s = 1801s)
+            tokio::time::advance(std::time::Duration::from_millis(300_500)).await;
             let poll_result = futures_util::poll!(&mut run);
             tokio::time::resume();
 

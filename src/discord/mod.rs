@@ -1,6 +1,7 @@
 pub mod adapter;
 pub mod approval;
 pub mod attachments;
+pub mod buttons;
 pub mod commands;
 pub mod pairing;
 pub mod table_render;

@@ -1072,6 +1072,11 @@ async fn handle_event(
         FullEvent::InteractionCreate {
             interaction: Interaction::Component(component),
         } => {
+            if let Some(click) = super::buttons::parse_button_custom_id(&component.data.custom_id) {
+                super::buttons::handle_button_click(ctx, component, &data.allowed_users, click)
+                    .await?;
+                return Ok(());
+            }
             if is_approval_custom_id(&component.data.custom_id) {
                 let component_roles: Vec<u64> = component
                     .member

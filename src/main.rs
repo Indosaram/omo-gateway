@@ -589,8 +589,62 @@ async fn main() -> Result<()> {
     }
 }
 
+/// Full Disk Access is the one TCC permission macOS never hands to a program
+/// itself. Touching protected paths at startup registers this binary in the FDA
+/// list; when the reads are still denied we surface the privacy pane so the
+/// user makes the single toggle that then sticks (the binary is signed with a
+/// stable Developer ID identity, so the grant survives rebuilds).
+fn ensure_full_disk_access() {
+    let home = env::var("HOME").unwrap_or_default();
+    let candidates = [
+        format!("{home}/Library/Application Support/com.apple.TCC/TCC.db"),
+        "/Library/Application Support/com.apple.TCC/TCC.db".to_string(),
+        format!("{home}/Library/Messages/chat.db"),
+        format!("{home}/Library/Safari"),
+        format!("{home}/Library/Mail"),
+        "/Volumes/T9-Mac/.Spotlight-V100".to_string(),
+        "/Volumes/T9-Mac/.fseventsd".to_string(),
+    ];
+    let mut denied = Vec::new();
+    for path in candidates {
+        let probe = Path::new(&path);
+        if !probe.exists() {
+            continue;
+        }
+        let outcome = if probe.is_dir() {
+            match std::fs::read_dir(probe) {
+                Ok(mut entries) => match entries.next() {
+                    Some(Ok(_)) | None => Ok(()),
+                    Some(Err(error)) => Err(error),
+                },
+                Err(error) => Err(error),
+            }
+        } else {
+            std::fs::File::open(probe).and_then(|mut file| {
+                let mut byte = [0u8; 1];
+                std::io::Read::read(&mut file, &mut byte).map(|_| ())
+            })
+        };
+        if let Err(error) = outcome {
+            denied.push(format!("{path}: {error}"));
+        }
+    }
+    if denied.is_empty() {
+        info!("full disk access: granted (all protected probes readable)");
+        return;
+    }
+    warn!(
+        denied = %denied.join(" | "),
+        "full disk access: denied — opening the privacy pane for a one-time toggle"
+    );
+    let _ = std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .status();
+}
+
 async fn run_gateway() -> Result<()> {
     let config = Config::from_env()?;
+    ensure_full_disk_access();
     let pool = init_pool(&config.database_url).await?;
 
     let approval_guard = SmartApprovalGuard::new().with_pool(pool.clone());
