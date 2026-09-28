@@ -1048,6 +1048,31 @@ impl OmoBackend {
                             let short_name =
                                 tool_name.split_whitespace().next().unwrap_or(tool_name);
                             *tool_call_counts.entry(short_name.to_string()).or_insert(0) += 1;
+
+                            // Live-stream tool activity to Discord so the user
+                            // sees progress during long turns instead of just
+                            // a typing indicator.
+                            if !is_cron_session {
+                                let breakdown: Vec<String> = tool_call_counts
+                                    .iter()
+                                    .map(|(k, v)| if *v > 1 { format!("`{k}` ×{v}") } else { format!("`{k}`") })
+                                    .collect();
+                                let progress = format!(
+                                    "-# 🔧 도구 실행 중… ({total_tool_calls}회: {})",
+                                    breakdown.join(", ")
+                                );
+                                let _ = self
+                                    .emit_chunk(
+                                        session,
+                                        stream_id,
+                                        sequence,
+                                        progress,
+                                        false,
+                                        reply_to.clone(),
+                                    )
+                                    .await;
+                                sequence = sequence.saturating_add(1);
+                            }
                         } else if item_type == "agentMessage" && total_tool_calls > 0 {
                             full_content.clear();
                         }
