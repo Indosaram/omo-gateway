@@ -1,0 +1,2 @@
+Fixture JSON: {"content-intel":{"command":["bun","run","x.ts"],"cwd":"/tmp","timeout_secs":900,"done_labels":{"publish":"done"},"nonterminal_actions":["preview"]}}
+Parsed config assertion: config.nonterminal_actions.contains("preview") passed in loads_only_the_requested_namespace.

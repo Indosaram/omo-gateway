@@ -2,7 +2,7 @@
 //! `<namespace>` in the button-actions file with `<action> <arg>` appended. Exit 0 marks the
 //! button done; any other outcome restores it for a retry.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
@@ -21,9 +21,41 @@ const DEFAULT_TIMEOUT_SECS: u64 = 600;
 const MAX_REPLY_CHARS: usize = 1900;
 const PENDING_LABEL: &str = "⏳ 처리 중…";
 const DEFAULT_DONE_LABEL: &str = "✓ 완료";
+const EXECUTED_INTERACTION_LIMIT: usize = 500;
+const ACK_FAILURE_REPLY: &str = "⚠️ 버튼 응답 확인에 실패해 실행하지 않았습니다";
 const INHERITED_ENV: [&str; 6] = ["HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "LC_ALL"];
 
 static IN_FLIGHT: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+static EXECUTED_INTERACTIONS: LazyLock<Mutex<InteractionLru>> =
+    LazyLock::new(|| Mutex::new(InteractionLru::default()));
+
+#[derive(Default)]
+struct InteractionLru {
+    ids: HashSet<u64>,
+    order: VecDeque<u64>,
+}
+
+impl InteractionLru {
+    fn contains(&mut self, id: u64) -> bool {
+        if !self.ids.contains(&id) {
+            return false;
+        }
+        self.order.retain(|existing| *existing != id);
+        self.order.push_back(id);
+        true
+    }
+
+    fn insert(&mut self, id: u64) {
+        if self.ids.insert(id) {
+            self.order.push_back(id);
+            if self.order.len() > EXECUTED_INTERACTION_LIMIT {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.ids.remove(&oldest);
+                }
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ButtonClick {
@@ -39,6 +71,8 @@ pub struct ButtonActionConfig {
     pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub done_labels: HashMap<String, String>,
+    #[serde(default)]
+    pub nonterminal_actions: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -286,6 +320,16 @@ async fn set_buttons(
     }
 }
 
+async fn post_ack_failure_reply(http: &Http, channel_id: ChannelId, message_id: MessageId) {
+    let reply = CreateMessage::new()
+        .content(ACK_FAILURE_REPLY)
+        .reference_message((channel_id, message_id))
+        .allowed_mentions(CreateAllowedMentions::new());
+    if let Err(error) = channel_id.send_message(http, reply).await {
+        tracing::warn!(%error, %message_id, "failed to post button acknowledgement failure");
+    }
+}
+
 pub async fn handle_button_click(
     ctx: &Context,
     component: &ComponentInteraction,
@@ -293,6 +337,11 @@ pub async fn handle_button_click(
     click: ButtonClick,
 ) -> serenity::Result<()> {
     let user_id = component.user.id.get();
+    let interaction_id = component.id.get();
+    if EXECUTED_INTERACTIONS.lock().contains(interaction_id) {
+        tracing::warn!(interaction_id, custom_id = %component.data.custom_id, "duplicate button interaction ignored");
+        return Ok(());
+    }
     if !is_button_clicker_allowed(user_id, allowed_users) {
         tracing::warn!(user_id, custom_id = %component.data.custom_id, "unauthorized button click");
         return respond_ephemeral(ctx, component, "이 버튼을 누를 권한이 없습니다.").await;
@@ -319,8 +368,11 @@ pub async fn handle_button_click(
         .await
     {
         IN_FLIGHT.lock().remove(&message_id.get());
-        return Err(error);
+        post_ack_failure_reply(&ctx.http, component.channel_id, message_id).await;
+        tracing::warn!(%error, %message_id, "button acknowledgement failed; action was not run");
+        return Ok(());
     }
+    EXECUTED_INTERACTIONS.lock().insert(interaction_id);
 
     let channel_id = component.channel_id;
     let original = component.message.components.clone();
@@ -364,7 +416,12 @@ pub async fn handle_button_click(
                 .done_labels
                 .get(&click.action)
                 .map_or(DEFAULT_DONE_LABEL, String::as_str);
-            rebuild_buttons(&original, &clicked, Some(label), true)
+            rebuild_buttons(
+                &original,
+                &clicked,
+                Some(label),
+                !config.nonterminal_actions.contains(&click.action),
+            )
         } else {
             rebuild_buttons(&original, &clicked, None, false)
         };
@@ -401,6 +458,7 @@ mod tests {
             cwd: Some(dir.to_path_buf()),
             timeout_secs: Some(timeout_secs),
             done_labels: HashMap::new(),
+            nonterminal_actions: HashSet::new(),
         }
     }
 
@@ -446,13 +504,15 @@ mod tests {
     fn loads_only_the_requested_namespace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("button-actions.json");
-        assert!(load_button_action(&path, "content-intel")
-            .unwrap()
-            .is_none());
+        assert!(
+            load_button_action(&path, "content-intel")
+                .unwrap()
+                .is_none()
+        );
 
         std::fs::write(
             &path,
-            r#"{"content-intel":{"command":["bun","run","x.ts"],"cwd":"/tmp","timeout_secs":900,"done_labels":{"publish":"done"}},"empty":{"command":[]}}"#,
+            r#"{"content-intel":{"command":["bun","run","x.ts"],"cwd":"/tmp","timeout_secs":900,"done_labels":{"publish":"done"},"nonterminal_actions":["preview"]},"empty":{"command":[]}}"#,
         )
         .unwrap();
         let config = load_button_action(&path, "content-intel").unwrap().unwrap();
@@ -462,6 +522,7 @@ mod tests {
             config.done_labels.get("publish").map(String::as_str),
             Some("done")
         );
+        assert!(config.nonterminal_actions.contains("preview"));
         assert!(load_button_action(&path, "other").unwrap().is_none());
         assert!(load_button_action(&path, "empty").unwrap().is_none());
 
@@ -579,5 +640,46 @@ mod tests {
         let json = serde_json::to_value(&restored).unwrap();
         assert_eq!(json[0]["components"][0]["label"], "발행");
         assert_eq!(json[0]["components"][0]["disabled"], false);
+    }
+
+    #[test]
+    fn executed_interaction_lru_deduplicates_and_evicts_oldest() {
+        let mut lru = InteractionLru::default();
+        lru.insert(41);
+        assert!(lru.contains(41));
+        for id in 0..EXECUTED_INTERACTION_LIMIT as u64 - 1 {
+            lru.insert(id + 100);
+        }
+        assert!(lru.contains(41));
+        lru.insert(10_000);
+        assert!(lru.contains(41));
+        assert!(!lru.contains(100));
+    }
+
+    #[test]
+    fn nonterminal_done_label_keeps_clicked_button_enabled() {
+        let rows: Vec<ActionRow> = serde_json::from_value(serde_json::json!([{
+            "type": 1,
+            "components": [{"type": 2, "style": 3, "label": "Preview", "custom_id": "omon:btn:content-intel:preview:86"}]
+        }]))
+        .unwrap();
+        let done = rebuild_buttons(
+            &rows,
+            "omon:btn:content-intel:preview:86",
+            Some("✓ Preview"),
+            false,
+        )
+        .unwrap();
+        let json = serde_json::to_value(done).unwrap();
+        assert_eq!(json[0]["components"][0]["label"], "✓ Preview");
+        assert_eq!(json[0]["components"][0]["disabled"], false);
+    }
+
+    #[test]
+    fn failed_acknowledgement_does_not_claim_interaction_for_execution() {
+        let mut executed = InteractionLru::default();
+        let interaction_id = 42;
+        assert!(!executed.contains(interaction_id));
+        assert!(ACK_FAILURE_REPLY.contains("실행하지 않았습니다"));
     }
 }

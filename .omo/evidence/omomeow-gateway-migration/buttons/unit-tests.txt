@@ -1,0 +1,2 @@
+cargo test --lib discord::buttons::tests -- --nocapture
+Result captured from cargo output.
