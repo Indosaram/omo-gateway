@@ -162,7 +162,7 @@ async fn test_thread_delete_cleans_up_omo_thread_id_preserving_session() {
         "name": "deleted-thread",
         "type": 11,
         "guild_id": "111",
-        "parent_id": null
+        "parent_id": "111000"
     }))
     .unwrap();
 
