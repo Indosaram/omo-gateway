@@ -1,0 +1,462 @@
+diff --git a/src/agent/omo_backend.rs b/src/agent/omo_backend.rs
+index 4ca1f6f..6019438 100644
+--- a/src/agent/omo_backend.rs
++++ b/src/agent/omo_backend.rs
+@@ -42,7 +42,7 @@ pub struct ActiveTurn {
+     pub thread_id: String,
+     /// None means submission may have reached the peer but no start ACK was observed.
+     pub turn_id: Option<String>,
+-    /// When this submission was recorded, consumed by the stale-entry reclaim.
++    /// Submission time, refreshed by interactive work events for stale-entry reclaim.
+     pub inserted_at: tokio::time::Instant,
+ }
+ 
+@@ -53,8 +53,9 @@ fn active_turn_entry_is_stale(age: Duration, effective_total_timeout: Duration)
+     age > effective_total_timeout + ACTIVE_TURN_STALE_MARGIN
+ }
+ 
+-/// Interactive (Discord) turns stop at 1800s (30m); cron turns keep their own budget.
++/// Interactive inactivity window; cron turns keep their fixed total budget.
+ const INTERACTIVE_TURN_CAP: Duration = Duration::from_secs(1800);
++const FALLBACK_MODEL: &str = "mahoquot/gpt-6-luna";
+ 
+ pub struct OmoBackend {
+     pub config: OmoBackendConfig,
+@@ -517,15 +518,58 @@ impl OmoBackend {
+         thread_id: String,
+         session: &mut SessionContext,
+         event: InboundEvent,
+-        deadline: tokio::time::Instant,
++        mut deadline: tokio::time::Instant,
+         effective_total_timeout: Duration,
++        model_override: Option<&str>,
++        fallback_eligible: &mut bool,
+     ) -> Result<()> {
+         let user_prompt = render_user_prompt(&event);
+-        let model = session
++        let model = model_override.or(session
+             .state
+             .active_model
+             .as_deref()
+-            .or(self.config.default_model.as_deref());
++            .or(self.config.default_model.as_deref()));
++        if let Some(model) = model.filter(|_| {
++            model_override.is_some()
++                || session
++                    .state
++                    .metadata
++                    .contains_key("omo_fallback_model_active")
++        }) {
++            ws.send(Message::text(
++                json!({"jsonrpc":"2.0", "id":4,
++                "method":"thread/settings/update", "params":{"threadId":thread_id,"model":model}})
++                .to_string(),
++            ))
++            .await
++            .map_err(|e| OmonError::Llm(format!("model update send failed: {e}")))?;
++            loop {
++                let frame = tokio::time::timeout_at(deadline, ws.next())
++                    .await
++                    .map_err(|_| OmonError::Llm("model update timed out".into()))?
++                    .ok_or_else(|| OmonError::Llm("closed before model update".into()))?
++                    .map_err(|e| OmonError::Llm(format!("model update transport error: {e}")))?;
++                if let Message::Text(text) = frame {
++                    let response: Value = serde_json::from_str(&text).map_err(|e| {
++                        OmonError::Llm(format!("invalid model update response: {e}"))
++                    })?;
++                    if response.get("id").and_then(Value::as_u64) == Some(4) {
++                        if let Some(error) = response.get("error") {
++                            return Err(OmonError::Llm(format!("model update rejected: {error}")));
++                        }
++                        break;
++                    }
++                }
++            }
++            if model_override.is_some() {
++                session
++                    .state
++                    .metadata
++                    .insert("omo_fallback_model_active".into(), json!(true));
++            } else {
++                session.state.metadata.remove("omo_fallback_model_active");
++            }
++        }
+         // Own the submission before the first socket-write poll. The actor drops
+         // this future before cancel(), so ambiguous ownership must outlive it.
+         let submitted_at = tokio::time::Instant::now();
+@@ -605,7 +649,6 @@ impl OmoBackend {
+         let mut turn_id: Option<String> = None;
+         let mut turn_started_ack = false;
+         let mut last_activity_at = tokio::time::Instant::now();
+-        let no_content_grace = self.config.no_content_grace;
+ 
+         let ack_deadline = started_at
+             + Duration::from_secs(30).min(deadline.saturating_duration_since(started_at));
+@@ -617,7 +660,7 @@ impl OmoBackend {
+         } else {
+             Duration::ZERO
+         };
+-        let work_deadline = deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
++        let mut work_deadline = deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
+ 
+         loop {
+             let now = tokio::time::Instant::now();
+@@ -1020,6 +1063,18 @@ impl OmoBackend {
+                 continue;
+             }
+ 
++            // Only work from the acknowledged current turn renews the interactive
++            // budget. Heartbeats, replay, and unrelated turns must not keep it alive.
++            if !is_cron_session && turn_started_ack && method.starts_with("item/") {
++                let activity_at = tokio::time::Instant::now();
++                last_activity_at = activity_at;
++                work_deadline = activity_at + effective_total_timeout;
++                deadline = work_deadline + cleanup_reserve;
++                if let Some(active) = self.active_turns.lock().get_mut(&session.key.storage_key()) {
++                    active.inserted_at = activity_at;
++                }
++            }
++
+             match method.as_str() {
+                 "turn/started" => {
+                     approval_denials = 0;
+@@ -1055,7 +1110,13 @@ impl OmoBackend {
+                             if !is_cron_session {
+                                 let breakdown: Vec<String> = tool_call_counts
+                                     .iter()
+-                                    .map(|(k, v)| if *v > 1 { format!("`{k}` ×{v}") } else { format!("`{k}`") })
++                                    .map(|(k, v)| {
++                                        if *v > 1 {
++                                            format!("`{k}` ×{v}")
++                                        } else {
++                                            format!("`{k}`")
++                                        }
++                                    })
+                                     .collect();
+                                 let progress = format!(
+                                     "-# 🔧 도구 실행 중… ({total_tool_calls}회: {})",
+@@ -1129,6 +1190,19 @@ impl OmoBackend {
+                                         .and_then(Value::as_str)
+                                 })
+                                 .unwrap_or("turn failed");
++                            *fallback_eligible = total_tool_calls == 0
++                                && full_content.is_empty()
++                                && [
++                                    "429",
++                                    "500",
++                                    "502",
++                                    "503",
++                                    "504",
++                                    "rate limit",
++                                    "overloaded",
++                                ]
++                                .iter()
++                                .any(|marker| err_msg.to_lowercase().contains(marker));
+                             return Err(OmonError::Llm(format!("omo turn failed: {err_msg}")));
+                         }
+                         Some("completed") => {}
+@@ -1162,18 +1236,8 @@ impl OmoBackend {
+ 
+                     let has_content = !scrubbed_content.is_empty() || total_tool_calls > 0;
+                     if !has_content {
+-                        // A terminal frame with no streamed content is only
+-                        // ignored during the startup race window (observed:
+-                        // the daemon raced a premature turn/completed at +6s
+-                        // while the real turn was still running). Past that
+-                        // window an empty terminal is a real empty turn —
+-                        // e.g. an upstream LLM failure the daemon recorded
+-                        // as a successful empty completion — and must fail
+-                        // the turn instead of stalling until the deadline.
+-                        if started_at.elapsed() < no_content_grace {
+-                            continue;
+-                        }
+                         self.active_turns.lock().remove(&session.key.storage_key());
++                        *fallback_eligible = full_content.is_empty();
+                         return Err(OmonError::Llm(
+                             "omo turn ended with no content (likely upstream LLM failure)".into(),
+                         ));
+@@ -1376,15 +1440,51 @@ impl AgentBackend for OmoBackend {
+         // Execution phase: turn/start socket write begins here. Once submission
+         // may have begun or the turn is accepted, we must NEVER resubmit the turn
+         // automatically even on disconnect, because the peer does not deduplicate turns.
+-        self.execute_turn(
+-            ws,
+-            thread_id,
+-            session,
+-            event,
+-            deadline,
+-            effective_total_timeout,
+-        )
+-        .await
++        let primary_model = session
++            .state
++            .active_model
++            .as_deref()
++            .or(self.config.default_model.as_deref())
++            .map(str::to_owned);
++        let mut fallback_eligible = false;
++        let result = self
++            .execute_turn(
++                ws,
++                thread_id,
++                session,
++                event.clone(),
++                deadline,
++                effective_total_timeout,
++                None,
++                &mut fallback_eligible,
++            )
++            .await;
++        if result.is_err()
++            && fallback_eligible
++            && primary_model
++                .as_deref()
++                .is_some_and(|model| model != FALLBACK_MODEL)
++        {
++            tracing::warn!(model = FALLBACK_MODEL, error = ?result,
++                "retrying confirmed empty model failure with fallback");
++            let deadline = tokio::time::Instant::now() + effective_total_timeout;
++            let (ws, thread_id) = self
++                .setup_turn(session, deadline, effective_total_timeout)
++                .await?;
++            return self
++                .execute_turn(
++                    ws,
++                    thread_id,
++                    session,
++                    event,
++                    deadline,
++                    effective_total_timeout,
++                    Some(FALLBACK_MODEL),
++                    &mut fallback_eligible,
++                )
++                .await;
++        }
++        result
+     }
+ 
+     async fn cancel(&self, session: &SessionContext) -> Result<()> {
+diff --git a/src/agent/omo_config.rs b/src/agent/omo_config.rs
+index 45fd9cb..82ab0d3 100644
+--- a/src/agent/omo_config.rs
++++ b/src/agent/omo_config.rs
+@@ -158,10 +158,8 @@ impl OmoBackendConfig {
+             _ => Duration::from_secs(1800),
+         };
+ 
+-        // Hard ceiling for a whole turn: a looping agent keeps emitting
+-        // events, so the per-event gap timeout never fires. On deadline the
+-        // backend sends turn/interrupt so the daemon thread is freed.
+-        // 기본 1800s(30분): 대화형 턴은 INTERACTIVE_TURN_CAP(1800s)까지 허용한다.
++        // Setup budget and interactive inactivity window (renewed by current-turn
++        // work events). Cron retains a fixed whole-turn deadline.
+         let total_timeout = match std::env::var("OMON_OMO_TURN_TOTAL_TIMEOUT_SECS") {
+             Ok(v) if !v.trim().is_empty() => Duration::from_secs(
+                 v.trim().parse::<u64>().map_err(|_| {
+diff --git a/src/agent/omo_protocol.rs b/src/agent/omo_protocol.rs
+index f0e9436..1c00b89 100644
+--- a/src/agent/omo_protocol.rs
++++ b/src/agent/omo_protocol.rs
+@@ -9,6 +9,7 @@ pub fn initialize_request() -> Message {
+             "id": 1,
+             "method": "initialize",
+             "params": {
++                "capabilities": { "experimentalApi": true },
+                 "clientInfo": {
+                     "name": "omo-gateway",
+                     "title": "omo-gateway",
+diff --git a/tests/test_omo_backend.rs b/tests/test_omo_backend.rs
+index c0ab97d..0c02220 100644
+--- a/tests/test_omo_backend.rs
++++ b/tests/test_omo_backend.rs
+@@ -76,6 +76,90 @@ fn correlation_ack() -> Value {
+     json!({"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"t2","status":"inProgress"}}})
+ }
+ 
++#[tokio::test]
++async fn luna_fallback_retries_empty_failure_once_without_changing_primary() {
++    for fallback_succeeds in [true, false] {
++        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let address = listener.local_addr().unwrap();
++        let peer = tokio::spawn(async move {
++            for (attempt, model) in ["mahoquot/gemini-3.8-flash-high", "mahoquot/gpt-6-luna"]
++                .iter()
++                .enumerate()
++            {
++                let (socket, _) = listener.accept().await.unwrap();
++                let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
++                let methods = if attempt == 0 {
++                    vec!["initialize", "thread/resume", "turn/start"]
++                } else {
++                    vec![
++                        "initialize",
++                        "thread/resume",
++                        "thread/settings/update",
++                        "turn/start",
++                    ]
++                };
++                for method in methods {
++                    let message = ws.next().await.unwrap().unwrap();
++                    let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
++                    assert_eq!(request["method"], method);
++                    if method == "thread/settings/update" {
++                        assert_eq!(request["params"]["model"], *model);
++                    }
++                    if method == "turn/start" {
++                        assert_eq!(request["params"]["model"], *model);
++                        ws.send(Message::text(correlation_ack().to_string()))
++                            .await
++                            .unwrap();
++                    } else {
++                        ws.send(Message::text(
++                            json!({"id":request["id"],"result":{"thread":{"id":"r1"}}}).to_string(),
++                        ))
++                        .await
++                        .unwrap();
++                    }
++                }
++                if attempt == 1 && fallback_succeeds {
++                    ws.send(Message::text(
++                        correlation_delta("r1", "t2", "OK").to_string(),
++                    ))
++                    .await
++                    .unwrap();
++                }
++                ws.send(Message::text(
++                    correlation_terminal("t2", "completed").to_string(),
++                ))
++                .await
++                .unwrap();
++            }
++        });
++        let dispatcher = Arc::new(CapturingDispatcher::new());
++        let backend = OmoBackend::new(
++            OmoBackendConfig::new(format!("ws://{address}")),
++            dispatcher.clone(),
++        );
++        let key = SessionKey::new("local", None::<String>, "fallback", None::<String>, "user");
++        let mut session = SessionContext::new(key.clone());
++        session.state.active_model = Some("mahoquot/gemini-3.8-flash-high".into());
++        session
++            .state
++            .metadata
++            .insert("omo_thread_id".into(), json!("r1"));
++        let result = tokio::time::timeout(
++            std::time::Duration::from_secs(5),
++            backend.run(&mut session, InboundEvent::message(key, "msg", "probe")),
++        )
++        .await
++        .unwrap();
++        assert_eq!(result.is_ok(), fallback_succeeds);
++        assert_eq!(
++            session.state.active_model.as_deref(),
++            Some("mahoquot/gemini-3.8-flash-high")
++        );
++        assert!(backend.active_turns.lock().is_empty());
++        peer.await.unwrap();
++    }
++}
++
+ fn correlation_delta(thread: &str, turn: &str, text: &str) -> Value {
+     json!({"jsonrpc":"2.0","method":"item/agentMessage/delta",
+         "params":{"threadId":thread,"turnId":turn,"itemId":"m1","delta":text}})
+@@ -155,6 +239,20 @@ async fn correlation_distinguishes_interrupted_and_failed() {
+     }
+ }
+ 
++#[tokio::test]
++async fn correlated_empty_completion_fails_without_waiting_for_turn_deadline() {
++    let (result, chunks) = run_correlated_frames(vec![
++        correlation_ack(),
++        correlation_terminal("t2", "completed"),
++    ])
++    .await;
++    assert!(result
++        .expect_err("empty completion must fail")
++        .to_string()
++        .contains("no content"));
++    assert!(!chunks.iter().any(|chunk| chunk.is_final));
++}
++
+ struct CapturingDispatcher {
+     actions: ParkingMutex<Vec<OutboundAction>>,
+     tool_started: ParkingMutex<Option<tokio::sync::oneshot::Sender<()>>>,
+@@ -1741,7 +1839,7 @@ async fn test_omo_backend_retries_once_after_connection_drop() {
+ }
+ 
+ #[tokio::test]
+-async fn test_omo_backend_deadline_interrupts_looping_turn() {
++async fn test_omo_backend_deadline_interrupts_looping_cron_turn() {
+     // Given: a daemon whose agent loops forever streaming deltas
+     let server = FakeAppServer::spawn_with_looping_deltas().await;
+     let url = format!("ws://127.0.0.1:{}", server.port);
+@@ -1762,6 +1860,10 @@ async fn test_omo_backend_deadline_interrupts_looping_turn() {
+     let mut session = SessionContext::new(session_key.clone());
+ 
+     // When: the turn runs past the whole-turn deadline
++    session
++        .state
++        .metadata
++        .insert("cron_scheduler_delivery".into(), json!(true));
+     let event = InboundEvent::message(session_key.clone(), "msg-1", "Loop forever");
+     let started = std::time::Instant::now();
+     let result = backend.run(&mut session, event).await;
+@@ -3265,6 +3367,7 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
+         PhaseToBlock::Streaming => {
+             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+             let port = listener.local_addr().unwrap().port();
++            let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+             let (interrupt_tx, interrupt_rx) = tokio::sync::oneshot::channel::<()>();
+             let interrupt_seen = Arc::new(AtomicBool::new(false));
+             let is_clone = interrupt_seen.clone();
+@@ -3307,6 +3410,10 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
+                                         "params":{"threadId":"t1","turnId":"turn-active","itemId":"m1","delta":"STREAMING"}
+                                     });
+                                     let _ = ws.send(Message::text(delta.to_string())).await;
++                                    for _ in 0..3 {
++                                        progress_rx.recv().await.expect("progress trigger");
++                                        ws.send(Message::text(delta.to_string())).await.unwrap();
++                                    }
+                                 }
+                                 "turn/interrupt" => {
+                                     is_clone.store(true, Ordering::SeqCst);
+@@ -3353,15 +3460,33 @@ async fn run_deadline_test_for_phase(phase: PhaseToBlock) {
+                 "turn must be active"
+             );
+ 
++            for _ in 0..3 {
++                tokio::time::pause();
++                tokio::time::advance(std::time::Duration::from_secs(900)).await;
++                assert!(futures_util::poll!(&mut run).is_pending());
++                tokio::time::resume();
++                progress_tx.send(()).unwrap();
++                tokio::select! {
++                    res = &mut run => panic!("active turn stopped: {res:?}"),
++                    res = tokio::time::timeout(std::time::Duration::from_secs(5), stream_started_rx.recv()) => {
++                        res.expect("bounded progress wait").expect("progress delivered");
++                    }
++                }
++                let active = backend.active_turns.lock();
++                assert!(active
++                    .values()
++                    .all(|entry| entry.inserted_at.elapsed() < std::time::Duration::from_secs(5)));
++            }
++
+             tokio::time::pause();
+             tokio::time::advance(std::time::Duration::from_secs(1801)).await;
+-            let mut poll_result = futures_util::poll!(&mut run);
+-            if poll_result.is_pending() {
+-                tokio::time::advance(std::time::Duration::from_secs(5)).await;
+-                poll_result = futures_util::poll!(&mut run);
+-            }
++            let _ = futures_util::poll!(&mut run);
+             tokio::time::resume();
+-            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), interrupt_rx).await;
++            let result = tokio::time::timeout(std::time::Duration::from_secs(6), &mut run)
++                .await
++                .expect("bounded interrupt cleanup");
++            interrupt_rx.await.expect("interrupt observed");
++            let poll_result = std::task::Poll::Ready(result);
+ 
+             match poll_result {
+                 std::task::Poll::Ready(Err(err)) => {

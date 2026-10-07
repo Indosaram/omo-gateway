@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": "daemon-multiplexer-agent-workspaces",
+  "active_work_id": null,
   "works": {
     "daemon-multiplexer-agent-workspaces": {
       "work_id": "daemon-multiplexer-agent-workspaces",
@@ -11,6 +11,19 @@
       ],
       "status": "completed",
       "worktree_path": null
+    },
+    "omomeow-gateway-migration": {
+      "work_id": "omomeow-gateway-migration",
+      "active_plan": ".omo/plans/omomeow-gateway-migration.md",
+      "plan_name": "omomeow-gateway-migration",
+      "session_ids": [
+        "senpi:01a10a8f-b976-7ea0-8f0c-d5032fc3560c"
+      ],
+      "status": "completed",
+      "worktree_path": "/Users/indo/code/project/omon-gateway-wt/omomeow-migration-w1"
     }
-  }
+  },
+  "active_work": null,
+  "status": "completed",
+  "completed_at": "2026-10-07T17:03:00.982Z"
 }
