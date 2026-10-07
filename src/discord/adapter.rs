@@ -773,7 +773,7 @@ impl DiscordAdapter {
     }
 }
 
-async fn handle_event(
+pub async fn handle_event(
     ctx: &serenity::Context,
     event: &FullEvent,
     data: &PoiseData,
@@ -1166,9 +1166,83 @@ async fn handle_event(
                 });
             }
         }
+        FullEvent::ThreadCreate { thread } => {
+            handle_thread_create(thread).await;
+        }
+        FullEvent::ThreadUpdate { old: _, new } => {
+            handle_thread_update(data, new).await;
+        }
+        FullEvent::ThreadDelete { thread, .. } => {
+            handle_thread_delete(data, thread).await;
+        }
         _ => {}
     }
     Ok(())
+}
+
+pub async fn handle_thread_create(thread: &serenity::GuildChannel) {
+    tracing::info!(
+        thread_id = %thread.id,
+        parent_id = ?thread.parent_id,
+        thread_name = %thread.name,
+        "Discord thread created"
+    );
+}
+
+pub async fn handle_thread_update(data: &PoiseData, new: &serenity::GuildChannel) {
+    let is_archived = new
+        .thread_metadata
+        .as_ref()
+        .map(|m| m.archived)
+        .unwrap_or(false);
+    let thread_id_str = new.id.to_string();
+    tracing::info!(
+        thread_id = %thread_id_str,
+        is_archived,
+        "Discord thread updated"
+    );
+    let session_key = crate::SessionKey::new(
+        "discord",
+        None::<String>,
+        thread_id_str.clone(),
+        None::<String>,
+        "",
+    );
+    if is_archived {
+        let _ = data.multiplexer.stop(&session_key).await;
+        let _ = sqlx::query(
+            "UPDATE sessions SET metadata = json_set(COALESCE(metadata, '{}'), '$.thread_archived', true) WHERE session_key = ?"
+        )
+        .bind(session_key.storage_key())
+        .execute(&data.pool)
+        .await;
+    } else {
+        let _ = sqlx::query(
+            "UPDATE sessions SET metadata = json_set(COALESCE(metadata, '{}'), '$.thread_archived', false) WHERE session_key = ?"
+        )
+        .bind(session_key.storage_key())
+        .execute(&data.pool)
+        .await;
+    }
+}
+
+pub async fn handle_thread_delete(data: &PoiseData, thread: &serenity::PartialGuildChannel) {
+    let thread_id_str = thread.id.to_string();
+    tracing::info!(thread_id = %thread_id_str, "Discord thread deleted");
+    let session_key = crate::SessionKey::new(
+        "discord",
+        None::<String>,
+        thread_id_str.clone(),
+        None::<String>,
+        "",
+    );
+    let _ = data.multiplexer.stop(&session_key).await;
+    let _ = sqlx::query(
+        "UPDATE sessions SET metadata = json_remove(COALESCE(metadata, '{}'), '$.omo_thread_id') WHERE session_key = ?"
+    )
+    .bind(session_key.storage_key())
+    .execute(&data.pool)
+    .await;
 }
 
 pub async fn route_claimed_event(data: &PoiseData, event: InboundEvent) -> Result<bool> {
