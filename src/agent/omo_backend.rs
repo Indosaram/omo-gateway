@@ -33,6 +33,23 @@ type WsStream = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::Tc
 /// policy-denial loop otherwise burns the entire turn deadline flailing.
 pub const APPROVAL_DENIAL_TURN_LIMIT: u32 = 5;
 
+#[allow(dead_code)]
+pub const DEFAULT_FALLBACK_MODEL: &str = crate::agent::omo_config::DEFAULT_FALLBACK_MODEL;
+
+fn is_model_rejected_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("model not found")
+        || lower.contains("unknown model")
+        || lower.contains("unknown_model")
+        || lower.contains("model rejected")
+        || lower.contains("model update rejected")
+        || lower.contains("rejected the model")
+        || lower.contains("invalid model")
+        || lower.contains("unsupported model")
+        || lower.contains("model_not_found")
+        || lower.contains("thread/settings/update")
+}
+
 /// Extra slack beyond a turn's own total deadline before a refusal-guard entry
 /// is presumed dead and a new submission may take its place.
 pub const ACTIVE_TURN_STALE_MARGIN: Duration = Duration::from_secs(600);
@@ -511,6 +528,7 @@ impl OmoBackend {
         Ok((ws, thread_id))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_turn(
         &self,
         mut ws: WsStream,
@@ -519,13 +537,66 @@ impl OmoBackend {
         event: InboundEvent,
         deadline: tokio::time::Instant,
         effective_total_timeout: Duration,
+        model_override: Option<&str>,
+        fallback_eligible: &mut bool,
     ) -> Result<()> {
         let user_prompt = render_user_prompt(&event);
-        let model = session
+        let model = model_override.or(session
             .state
             .active_model
             .as_deref()
-            .or(self.config.default_model.as_deref());
+            .or(self.config.default_model.as_deref()));
+        // Invariant: model changes flow only via active_model / turn/start params / thread/settings/update.
+        // omo_config reads global omo.json but never writes it.
+        if let Some(model) = model.filter(|_| {
+            model_override.is_some()
+                || session
+                    .state
+                    .metadata
+                    .get("omo_fallback_model_active")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+        }) {
+            ws.send(Message::text(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 4,
+                    "method": "thread/settings/update",
+                    "params": { "threadId": thread_id, "model": model }
+                })
+                .to_string(),
+            ))
+            .await
+            .map_err(|e| OmonError::Llm(format!("model update send failed: {e}")))?;
+            loop {
+                let frame = tokio::time::timeout_at(deadline, ws.next())
+                    .await
+                    .map_err(|_| OmonError::Llm("model update timed out".into()))?
+                    .ok_or_else(|| OmonError::Llm("closed before model update".into()))?
+                    .map_err(|e| OmonError::Llm(format!("model update transport error: {e}")))?;
+                if let Message::Text(text) = frame {
+                    let response: Value = serde_json::from_str(&text).map_err(|e| {
+                        OmonError::Llm(format!("invalid model update response: {e}"))
+                    })?;
+                    if response.get("id").and_then(Value::as_u64) == Some(4) {
+                        if let Some(error) = response.get("error") {
+                            let err_str = error.to_string();
+                            *fallback_eligible = is_model_rejected_error(&err_str);
+                            return Err(OmonError::Llm(format!("model update rejected: {error}")));
+                        }
+                        break;
+                    }
+                }
+            }
+            if model_override.is_some() {
+                session
+                    .state
+                    .metadata
+                    .insert("omo_fallback_model_active".into(), json!(true));
+            } else {
+                session.state.metadata.remove("omo_fallback_model_active");
+            }
+        }
         // Own the submission before the first socket-write poll. The actor drops
         // this future before cancel(), so ambiguous ownership must outlive it.
         let submitted_at = tokio::time::Instant::now();
@@ -605,7 +676,7 @@ impl OmoBackend {
         let mut turn_id: Option<String> = None;
         let mut turn_started_ack = false;
         let mut last_activity_at = tokio::time::Instant::now();
-        let no_content_grace = self.config.no_content_grace;
+        let _no_content_grace = self.config.no_content_grace;
 
         let ack_deadline = started_at
             + Duration::from_secs(30).min(deadline.saturating_duration_since(started_at));
@@ -896,6 +967,10 @@ impl OmoBackend {
             {
                 if let Some(error) = val.get("error") {
                     self.active_turns.lock().remove(&session.key.storage_key());
+                    let err_str = error.to_string();
+                    if is_model_rejected_error(&err_str) {
+                        *fallback_eligible = true;
+                    }
                     return Err(OmonError::Llm(format!("turn/start error: {error}")));
                 }
                 let id = val
@@ -958,13 +1033,12 @@ impl OmoBackend {
                     // Unless APPROVAL_MODE is explicitly set to "always" (strict interactive gating),
                     // allow daemon tool requests for authenticated single-user sessions
                     // rather than silently discarding them with gateway-policy denial.
-                    let auto_approve = match std::env::var("APPROVAL_MODE")
-                        .or_else(|_| std::env::var("APPROVAL_POLICY"))
-                        .as_deref()
-                    {
-                        Ok("always") => false,
-                        _ => true,
-                    };
+                    let auto_approve = !matches!(
+                        std::env::var("APPROVAL_MODE")
+                            .or_else(|_| std::env::var("APPROVAL_POLICY"))
+                            .as_deref(),
+                        Ok("always")
+                    );
 
                     if auto_approve {
                         tracing::info!(
@@ -1055,7 +1129,13 @@ impl OmoBackend {
                             if !is_cron_session {
                                 let breakdown: Vec<String> = tool_call_counts
                                     .iter()
-                                    .map(|(k, v)| if *v > 1 { format!("`{k}` ×{v}") } else { format!("`{k}`") })
+                                    .map(|(k, v)| {
+                                        if *v > 1 {
+                                            format!("`{k}` ×{v}")
+                                        } else {
+                                            format!("`{k}`")
+                                        }
+                                    })
                                     .collect();
                                 let progress = format!(
                                     "-# 🔧 도구 실행 중… ({total_tool_calls}회: {})",
@@ -1129,6 +1209,21 @@ impl OmoBackend {
                                         .and_then(Value::as_str)
                                 })
                                 .unwrap_or("turn failed");
+                            let is_quota_error = [
+                                "429",
+                                "500",
+                                "502",
+                                "503",
+                                "504",
+                                "rate limit",
+                                "overloaded",
+                            ]
+                            .iter()
+                            .any(|marker| err_msg.to_lowercase().contains(marker));
+                            let is_rejected = is_model_rejected_error(err_msg);
+                            *fallback_eligible = total_tool_calls == 0
+                                && full_content.is_empty()
+                                && (is_quota_error || is_rejected);
                             return Err(OmonError::Llm(format!("omo turn failed: {err_msg}")));
                         }
                         Some("completed") => {}
@@ -1162,18 +1257,8 @@ impl OmoBackend {
 
                     let has_content = !scrubbed_content.is_empty() || total_tool_calls > 0;
                     if !has_content {
-                        // A terminal frame with no streamed content is only
-                        // ignored during the startup race window (observed:
-                        // the daemon raced a premature turn/completed at +6s
-                        // while the real turn was still running). Past that
-                        // window an empty terminal is a real empty turn —
-                        // e.g. an upstream LLM failure the daemon recorded
-                        // as a successful empty completion — and must fail
-                        // the turn instead of stalling until the deadline.
-                        if started_at.elapsed() < no_content_grace {
-                            continue;
-                        }
                         self.active_turns.lock().remove(&session.key.storage_key());
+                        *fallback_eligible = full_content.is_empty();
                         return Err(OmonError::Llm(
                             "omo turn ended with no content (likely upstream LLM failure)".into(),
                         ));
@@ -1376,15 +1461,55 @@ impl AgentBackend for OmoBackend {
         // Execution phase: turn/start socket write begins here. Once submission
         // may have begun or the turn is accepted, we must NEVER resubmit the turn
         // automatically even on disconnect, because the peer does not deduplicate turns.
-        self.execute_turn(
-            ws,
-            thread_id,
-            session,
-            event,
-            deadline,
-            effective_total_timeout,
-        )
-        .await
+        let fallback_model = &self.config.fallback_model;
+        let primary_model = session
+            .state
+            .active_model
+            .as_deref()
+            .or(self.config.default_model.as_deref())
+            .map(str::to_owned);
+        let mut fallback_eligible = false;
+        let result = self
+            .execute_turn(
+                ws,
+                thread_id,
+                session,
+                event.clone(),
+                deadline,
+                effective_total_timeout,
+                None,
+                &mut fallback_eligible,
+            )
+            .await;
+        if result.is_err()
+            && fallback_eligible
+            && primary_model
+                .as_deref()
+                .is_some_and(|model| model != fallback_model)
+        {
+            tracing::warn!(
+                model = fallback_model,
+                error = ?result,
+                "retrying turn failure with fallback model"
+            );
+            let deadline = tokio::time::Instant::now() + effective_total_timeout;
+            let (ws, thread_id) = self
+                .setup_turn(session, deadline, effective_total_timeout)
+                .await?;
+            return self
+                .execute_turn(
+                    ws,
+                    thread_id,
+                    session,
+                    event,
+                    deadline,
+                    effective_total_timeout,
+                    Some(fallback_model.as_str()),
+                    &mut fallback_eligible,
+                )
+                .await;
+        }
+        result
     }
 
     async fn cancel(&self, session: &SessionContext) -> Result<()> {

@@ -76,6 +76,281 @@ fn correlation_ack() -> Value {
     json!({"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"t2","status":"inProgress"}}})
 }
 
+#[tokio::test]
+async fn model_rejected_failure_triggers_fallback_to_deepseek_and_persists_marker() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        // Attempt 0: Primary model fails turn/start with "model not found"
+        let (socket1, _) = listener.accept().await.unwrap();
+        let mut ws1 = tokio_tungstenite::accept_async(socket1).await.unwrap();
+        for method in ["initialize", "thread/resume", "turn/start"] {
+            let msg = ws1.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], method);
+            if method == "turn/start" {
+                assert_eq!(req["params"]["model"], "custom/quota-dead-model");
+                ws1.send(Message::text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req["id"],
+                        "error": { "code": -32603, "message": "model not found: custom/quota-dead-model" }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            } else {
+                ws1.send(Message::text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req["id"],
+                        "result": { "thread": { "id": "r1" } }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+        }
+
+        // Attempt 1: Fallback re-setup + execute_turn with default fallback model
+        let (socket2, _) = listener.accept().await.unwrap();
+        let mut ws2 = tokio_tungstenite::accept_async(socket2).await.unwrap();
+        for method in [
+            "initialize",
+            "thread/resume",
+            "thread/settings/update",
+            "turn/start",
+        ] {
+            let msg = ws2.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], method);
+            if method == "thread/settings/update" {
+                assert_eq!(req["params"]["model"], "inferhub/cb/deepseek-v4.1-flash");
+            }
+            if method == "turn/start" {
+                assert_eq!(req["params"]["model"], "inferhub/cb/deepseek-v4.1-flash");
+                ws2.send(Message::text(correlation_ack().to_string()))
+                    .await
+                    .unwrap();
+            } else {
+                ws2.send(Message::text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req["id"],
+                        "result": { "thread": { "id": "r1" } }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+        }
+        ws2.send(Message::text(
+            correlation_delta("r1", "t2", "Fallback OK").to_string(),
+        ))
+        .await
+        .unwrap();
+        ws2.send(Message::text(
+            correlation_terminal("t2", "completed").to_string(),
+        ))
+        .await
+        .unwrap();
+    });
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address}")),
+        dispatcher.clone(),
+    );
+    let key = SessionKey::new(
+        "local",
+        None::<String>,
+        "fallback-session",
+        None::<String>,
+        "user",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session.state.active_model = Some("custom/quota-dead-model".into());
+    session
+        .state
+        .metadata
+        .insert("omo_thread_id".into(), json!("r1"));
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(
+            &mut session,
+            InboundEvent::message(key.clone(), "msg", "test"),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        result.is_ok(),
+        "turn must succeed via fallback: {:?}",
+        result.err()
+    );
+    assert_eq!(
+        session
+            .state
+            .metadata
+            .get("omo_fallback_model_active")
+            .and_then(Value::as_bool),
+        Some(true),
+        "persisted fallback marker must be active after fallback execution"
+    );
+    // Primary active_model remains unchanged in session state
+    assert_eq!(
+        session.state.active_model.as_deref(),
+        Some("custom/quota-dead-model")
+    );
+    assert!(backend.active_turns.lock().is_empty());
+    peer.await.unwrap();
+
+    // Simulated restart with persisted marker: Next turn uses fallback settings directly
+    let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address2 = listener2.local_addr().unwrap();
+    let peer2 = tokio::spawn(async move {
+        let (socket, _) = listener2.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        for method in [
+            "initialize",
+            "thread/resume",
+            "thread/settings/update",
+            "turn/start",
+        ] {
+            let msg = ws.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], method);
+            if method == "thread/settings/update" {
+                assert_eq!(req["params"]["model"], "custom/quota-dead-model");
+            }
+            if method == "turn/start" {
+                assert_eq!(req["params"]["model"], "custom/quota-dead-model");
+                ws.send(Message::text(correlation_ack().to_string()))
+                    .await
+                    .unwrap();
+            } else {
+                ws.send(Message::text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req["id"],
+                        "result": { "thread": { "id": "r1" } }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+        }
+        ws.send(Message::text(
+            correlation_delta("r1", "t2", "Restarted OK").to_string(),
+        ))
+        .await
+        .unwrap();
+        ws.send(Message::text(
+            correlation_terminal("t2", "completed").to_string(),
+        ))
+        .await
+        .unwrap();
+    });
+
+    let backend2 = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address2}")),
+        dispatcher.clone(),
+    );
+    let result2 = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend2.run(
+            &mut session,
+            InboundEvent::message(key, "msg2", "next turn"),
+        ),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        result2.is_ok(),
+        "restarted turn must succeed: {:?}",
+        result2.err()
+    );
+    peer2.await.unwrap();
+}
+
+#[tokio::test]
+async fn fallback_one_shot_guard_never_refalls_back_from_fallback() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        // Attempt 0: Primary model IS the fallback model, and it fails.
+        // It must NOT trigger another fallback!
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        for method in ["initialize", "thread/resume", "turn/start"] {
+            let msg = ws.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], method);
+            if method == "turn/start" {
+                assert_eq!(req["params"]["model"], "inferhub/cb/deepseek-v4.1-flash");
+                ws.send(Message::text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req["id"],
+                        "error": { "code": -32603, "message": "model not found: deepseek" }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            } else {
+                ws.send(Message::text(
+                    json!({
+                        "jsonrpc": "2.0",
+                        "id": req["id"],
+                        "result": { "thread": { "id": "r1" } }
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+        }
+    });
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address}")),
+        dispatcher.clone(),
+    );
+    let key = SessionKey::new(
+        "local",
+        None::<String>,
+        "fallback-oneshot",
+        None::<String>,
+        "user",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session.state.active_model = Some("inferhub/cb/deepseek-v4.1-flash".into());
+    session
+        .state
+        .metadata
+        .insert("omo_thread_id".into(), json!("r1"));
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(&mut session, InboundEvent::message(key, "msg", "test")),
+    )
+    .await
+    .unwrap();
+
+    assert!(result.is_err(), "must fail without infinite fallback loop");
+    assert!(result.unwrap_err().to_string().contains("model not found"));
+    peer.await.unwrap();
+}
+
 fn correlation_delta(thread: &str, turn: &str, text: &str) -> Value {
     json!({"jsonrpc":"2.0","method":"item/agentMessage/delta",
         "params":{"threadId":thread,"turnId":turn,"itemId":"m1","delta":text}})

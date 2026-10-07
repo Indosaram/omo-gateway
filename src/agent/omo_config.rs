@@ -47,12 +47,16 @@ pub struct OmoBackendConfig {
     /// fails the turn (an upstream LLM failure recorded as an empty success).
     pub no_content_grace: Duration,
     pub default_model: Option<String>,
+    pub fallback_model: String,
     pub per_agent_workspace: bool,
     pub workspace_root: Option<PathBuf>,
 }
 
 /// Default local daemon URL when neither lane configures an endpoint.
 pub const CRON_APPSERVER_URL_DEFAULT: &str = "ws://127.0.0.1:19742";
+
+/// Default fallback model when primary model fails due to quota or daemon model rejection.
+pub const DEFAULT_FALLBACK_MODEL: &str = "inferhub/cb/deepseek-v4.1-flash";
 
 impl Default for OmoBackendConfig {
     fn default() -> Self {
@@ -64,6 +68,7 @@ impl Default for OmoBackendConfig {
             total_timeout: Duration::from_secs(1800),
             no_content_grace: Duration::from_secs(15),
             default_model: None,
+            fallback_model: DEFAULT_FALLBACK_MODEL.to_string(),
             per_agent_workspace: true,
             workspace_root: None,
         }
@@ -105,6 +110,11 @@ impl OmoBackendConfig {
 
     pub fn with_default_model(mut self, default_model: Option<impl Into<String>>) -> Self {
         self.default_model = default_model.map(Into::into);
+        self
+    }
+
+    pub fn with_fallback_model(mut self, fallback_model: impl Into<String>) -> Self {
+        self.fallback_model = fallback_model.into();
         self
     }
 
@@ -185,6 +195,13 @@ impl OmoBackendConfig {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        let fallback_model = std::env::var("OMON_OMO_FALLBACK_MODEL")
+            .or_else(|_| std::env::var("FALLBACK_MODEL"))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| DEFAULT_FALLBACK_MODEL.to_string());
+
         let per_agent_workspace = match std::env::var("OMON_PER_AGENT_WORKSPACE") {
             Ok(v) => {
                 let trimmed = v.trim().to_ascii_lowercase();
@@ -207,6 +224,7 @@ impl OmoBackendConfig {
             total_timeout,
             no_content_grace: Duration::from_secs(15),
             default_model,
+            fallback_model,
             per_agent_workspace,
             workspace_root,
         })
@@ -266,6 +284,22 @@ mod tests {
         std::env::set_var("OMON_OMO_TURN_TIMEOUT_SECS", "soon");
         assert!(OmoBackendConfig::from_env().is_err());
         std::env::remove_var("OMON_OMO_TURN_TIMEOUT_SECS");
+    }
+
+    #[test]
+    fn test_fallback_model_env_contract() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("OMON_OMO_FALLBACK_MODEL");
+        std::env::remove_var("FALLBACK_MODEL");
+        let cfg = OmoBackendConfig::from_env().unwrap();
+        assert_eq!(cfg.fallback_model, "inferhub/cb/deepseek-v4.1-flash");
+
+        std::env::set_var("OMON_OMO_FALLBACK_MODEL", "custom/fallback-model");
+        let cfg = OmoBackendConfig::from_env().unwrap();
+        assert_eq!(cfg.fallback_model, "custom/fallback-model");
+
+        std::env::remove_var("OMON_OMO_FALLBACK_MODEL");
+        std::env::remove_var("FALLBACK_MODEL");
     }
 
     #[test]

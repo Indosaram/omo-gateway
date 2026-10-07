@@ -1,0 +1,64 @@
+running 41 tests
+test missing_rollout_fails_with_continuity_error ... ok
+test fallback_one_shot_guard_never_refalls_back_from_fallback ... ok
+test correlation_distinguishes_interrupted_and_failed ... ok
+test profile_tool_restrictions_are_enforced ... ok
+test omo_approval_roundtrip_uses_session_policy ... ok
+test correlation_requires_ack_and_ignores_subscription_replay ... ok
+test rejects_foreign_and_stale_turn_frames ... ok
+test model_rejected_failure_triggers_fallback_to_deepseek_and_persists_marker ... ok
+test test_omo_backend_cron_sessions_always_start_fresh_thread ... ok
+test test_omo_backend_cron_session_suppresses_activity_lines_and_delivers_only_final_result ... ok
+test test_omo_backend_e2e_thread_lifecycle_and_streaming ... FAILED
+test test_omo_backend_emits_hermes_activity_lines ... ok
+test test_omo_backend_accepts_received_completion_at_deadline_edge ... ok
+test test_omo_backend_ignores_turn_completed_for_other_thread ... ok
+test test_omo_backend_ignores_turn_completed_without_content ... ok
+test test_omo_backend_omits_workspace_when_per_agent_disabled ... ok
+test pre_ack_disconnect_does_not_resubmit_turn ... ok
+test accepted_disconnect_does_not_resubmit_turn ... ok
+test test_omo_backend_replaces_stale_cached_thread ... ok
+test test_omo_backend_provisions_agent_workspace_and_passes_to_thread_start ... ok
+test persistence_failure_prevents_turn_submission ... ok
+test failed_final_delivery_is_not_acknowledged ... ok
+test stop_before_start_ack_never_reports_uncancelled_success ... ok
+test pending_start_stop_public_surface ... ok
+test test_omo_backend_surfaces_turn_start_rpc_error_immediately ... ok
+test test_omo_backend_skips_ack_when_delivery_fails ... ok
+test stop_interrupts_remote_turn_before_ack ... ok
+test test_omo_backend_waits_for_final_message_after_tool_activity ... ok
+test stop_interrupts_remote_turn ... ok
+test test_omo_backend_runs_ack_command_after_cron_delivery ... ok
+test failed_first_turn_keeps_durable_binding ... ok
+test test_omo_backend_persists_without_preexisting_session_row ... ok
+test test_omo_backend_deadline_fires_on_ping_only_stream ... ok
+test test_omo_backend_empty_terminal_past_grace_fails_fast ... ok
+test interactive_deadline_bounds_all_protocol_phases ... ok
+test test_omo_backend_deadline_interrupts_looping_turn ... ok
+test pre_submit_disconnect_retries_and_succeeds ... ok
+test test_omo_backend_retries_once_after_connection_drop ... ok
+test test_omo_backend_requires_turn_terminal_even_after_final_agent_message ... ok
+test test_omo_backend_aborts_turn_on_repeated_approval_denials ... FAILED
+test test_omo_backend_unreachable_daemon_error ... ok
+
+failures:
+
+---- test_omo_backend_e2e_thread_lifecycle_and_streaming stdout ----
+
+thread 'test_omo_backend_e2e_thread_lifecycle_and_streaming' (58554972) panicked at tests/test_omo_backend.rs:1693:5:
+assertion `left == right` failed
+  left: Some(true)
+ right: Some(false)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- test_omo_backend_aborts_turn_on_repeated_approval_denials stdout ----
+
+thread 'test_omo_backend_aborts_turn_on_repeated_approval_denials' (58554966) panicked at tests/test_omo_backend.rs:2496:5:
+unexpected error: LLM error: timeout during turn streaming
+
+
+failures:
+    test_omo_backend_aborts_turn_on_repeated_approval_denials
+    test_omo_backend_e2e_thread_lifecycle_and_streaming
+
+test result: FAILED. 39 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.72s

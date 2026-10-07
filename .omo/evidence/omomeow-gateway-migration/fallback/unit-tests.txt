@@ -1,0 +1,10 @@
+running 2 tests
+test fallback_one_shot_guard_never_refalls_back_from_fallback ... ok
+test model_rejected_failure_triggers_fallback_to_deepseek_and_persists_marker ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 39 filtered out; finished in 0.01s
+
+running 1 test
+test agent::omo_config::tests::test_fallback_model_env_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 406 filtered out; finished in 0.01s
