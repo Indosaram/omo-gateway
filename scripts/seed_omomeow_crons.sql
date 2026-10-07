@@ -1,0 +1,15 @@
+INSERT OR REPLACE INTO cron_jobs (id, session_key, expression, payload_json, enabled) VALUES
+('omomeow:calendar_check_5m', NULL, '*/5 * * * *', '{"job_id":"calendar_check_5m","name":"Calendar 5m Check","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:mail_check_5m', NULL, '*/5 * * * *', '{"job_id":"mail_check_5m","name":"Mail 5m Check","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:govsupport_daily_0800', NULL, '0 8 * * *', '{"job_id":"govsupport_daily_0800","name":"Gov Support Daily 08:00","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:release_check_4x', NULL, '0 9,13,17,21 * * *', '{"job_id":"release_check_4x","name":"Release Check 4x Daily","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_repo_pulls', NULL, '*/10 * * * *', '{"job_id":"watch_repo_pulls","name":"Watch Repo Pulls","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_disk_space', NULL, '*/15 * * * *', '{"job_id":"watch_disk_space","name":"Watch Disk Space","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_service_health', NULL, '*/5 * * * *', '{"job_id":"watch_service_health","name":"Watch Service Health","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_db_stats', NULL, '0 * * * *', '{"job_id":"watch_db_stats","name":"Watch DB Stats","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_log_errors', NULL, '*/10 * * * *', '{"job_id":"watch_log_errors","name":"Watch Log Errors","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_cpu_load', NULL, '*/5 * * * *', '{"job_id":"watch_cpu_load","name":"Watch CPU Load","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_memory_usage', NULL, '*/5 * * * *', '{"job_id":"watch_memory_usage","name":"Watch Memory Usage","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_network_traffic', NULL, '*/15 * * * *', '{"job_id":"watch_network_traffic","name":"Watch Network Traffic","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_backup_status', NULL, '0 2 * * *', '{"job_id":"watch_backup_status","name":"Watch Backup Status","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
+('omomeow:watch_ssl_expiry', NULL, '0 6 * * *', '{"job_id":"watch_ssl_expiry","name":"Watch SSL Expiry","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0);
