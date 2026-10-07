@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage:
+  omomeow-delegate --title <TITLE> --repo <REPO> --brief <BRIEF> [OPTIONS]
+  omomeow-delegate <TITLE> <REPO> <BRIEF>
+
+Options:
+  --title <TITLE>        Title / description of the work item (Required)
+  --repo <REPO>          Target repository path or name (Required)
+  --brief <BRIEF>        Detailed task brief / instructions (Required)
+  --thread-id <ID>       Discord or parent thread ID (optional, default: $THREAD_ID or $DISCORD_THREAD_ID)
+  --db <PATH>            Path to SQLite database file or sqlite:// URI (default: $DATABASE_URL or omon_gateway.db)
+  --cwd <PATH>           Working directory for created tab/workspace
+  -h, --help             Show this help message
+EOF
+    exit "${1:-0}"
+}
+
+TITLE=""
+REPO=""
+BRIEF=""
+THREAD_ID="${THREAD_ID:-${DISCORD_THREAD_ID:-}}"
+DB_TARGET="${DATABASE_URL:-omon_gateway.db}"
+CUSTOM_CWD=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --title)
+            TITLE="$2"
+            shift 2
+            ;;
+        --repo)
+            REPO="$2"
+            shift 2
+            ;;
+        --brief)
+            BRIEF="$2"
+            shift 2
+            ;;
+        --thread-id)
+            THREAD_ID="$2"
+            shift 2
+            ;;
+        --db)
+            DB_TARGET="$2"
+            shift 2
+            ;;
+        --cwd)
+            CUSTOM_CWD="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage 0
+            ;;
+        -*)
+            echo "Unknown option: $1" >&2
+            usage 1
+            ;;
+        *)
+            if [[ -z "$TITLE" ]]; then
+                TITLE="$1"
+            elif [[ -z "$REPO" ]]; then
+                REPO="$1"
+            elif [[ -z "$BRIEF" ]]; then
+                BRIEF="$1"
+            else
+                echo "Unexpected positional argument: $1" >&2
+                usage 1
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$TITLE" || -z "$REPO" || -z "$BRIEF" ]]; then
+    echo "Error: --title, --repo, and --brief are required." >&2
+    usage 1
+fi
+
+DB_PATH="$DB_TARGET"
+DB_PATH="${DB_PATH#sqlite://}"
+DB_PATH="${DB_PATH#sqlite:}"
+if [[ "$DB_PATH" =~ ^/[^/].* ]]; then
+    :
+elif [[ "$DB_PATH" =~ ^localhost/.* ]]; then
+    DB_PATH="${DB_PATH#localhost}"
+fi
+
+DB_DIR="$(dirname "$DB_PATH")"
+if [[ -n "$DB_DIR" && "$DB_DIR" != "." && ! -d "$DB_DIR" ]]; then
+    mkdir -p "$DB_DIR"
+fi
+
+RAND_SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 6 2>/dev/null || echo "$$")
+EPOCH=$(date +%s)
+WORK_ITEM_ID="wi_${EPOCH}_${RAND_SUFFIX}"
+
+PANE_ID=""
+TARGET_CWD="${CUSTOM_CWD:-$REPO}"
+
+if command -v herdr >/dev/null 2>&1; then
+    HERDR_OUT=""
+    if [[ -d "$TARGET_CWD" ]]; then
+        HERDR_OUT=$(herdr tab create --label "$TITLE" --cwd "$TARGET_CWD" 2>/dev/null || true)
+    else
+        HERDR_OUT=$(herdr tab create --label "$TITLE" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$HERDR_OUT" ]]; then
+        PANE_CANDIDATE=$(echo "$HERDR_OUT" | grep -oE '(tab|pane|ws)_[a-zA-Z0-9_-]+|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -n 1 || true)
+        if [[ -n "$PANE_CANDIDATE" ]]; then
+            PANE_ID="$PANE_CANDIDATE"
+        fi
+    fi
+fi
+
+if [[ -z "$PANE_ID" ]]; then
+    PANE_ID="omomeow-task-${WORK_ITEM_ID}"
+fi
+
+sqlite3 "$DB_PATH" <<'SQL'
+CREATE TABLE IF NOT EXISTS work_items (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    thread_id TEXT,
+    delegate_pane TEXT,
+    status TEXT NOT NULL DEFAULT 'in_progress',
+    last_progress_at DATETIME NOT NULL,
+    receipt_path TEXT,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_work_items_status_progress
+    ON work_items(status, last_progress_at);
+SQL
+
+NOW_ISO=$(date -u +"%Y-%m-%d %H:%M:%S")
+
+SQL_TITLE=$(printf "%s" "$TITLE" | sed "s/'/''/g")
+SQL_THREAD_ID=$(printf "%s" "$THREAD_ID" | sed "s/'/''/g")
+SQL_PANE_ID=$(printf "%s" "$PANE_ID" | sed "s/'/''/g")
+
+if [[ -n "$THREAD_ID" ]]; then
+    THREAD_VAL="'${SQL_THREAD_ID}'"
+else
+    THREAD_VAL="NULL"
+fi
+
+sqlite3 "$DB_PATH" <<SQL
+INSERT INTO work_items (
+    id,
+    title,
+    thread_id,
+    delegate_pane,
+    status,
+    last_progress_at,
+    created_at,
+    updated_at
+) VALUES (
+    '${WORK_ITEM_ID}',
+    '${SQL_TITLE}',
+    ${THREAD_VAL},
+    '${SQL_PANE_ID}',
+    'in_progress',
+    '${NOW_ISO}',
+    '${NOW_ISO}',
+    '${NOW_ISO}'
+);
+SQL
+
+echo "✅ 작업 위임이 접수되었습니다. (ID: ${WORK_ITEM_ID}, Pane: ${PANE_ID})"
