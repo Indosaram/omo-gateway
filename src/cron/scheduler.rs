@@ -525,6 +525,7 @@ struct CronClaim {
     claim_token: String,
     job: CronJob,
     advance_schedule: bool,
+    occurrence: Option<DateTime<Utc>>,
 }
 
 pub async fn has_pending_cutover_receipt(pool: &SqlitePool) -> Result<bool> {
@@ -742,6 +743,45 @@ impl CronScheduler {
                 )));
             }
         }
+        if let Some(brief_file) = payload.get("brief_file").and_then(Value::as_str) {
+            let path = std::path::Path::new(brief_file);
+            if !path.exists() {
+                return Err(OmonError::Config(format!(
+                    "brief_file does not exist: {brief_file}"
+                )));
+            }
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return Err(OmonError::Config(format!(
+                        "failed to read brief_file {brief_file}: {e}"
+                    )));
+                }
+            };
+            if let Err(err) = check_gateway_lifecycle(&content) {
+                return Err(OmonError::Config(format!(
+                    "gateway lifecycle violation in brief_file: {err}"
+                )));
+            }
+            let threats = crate::security::scan_cron_prompt(&content);
+            if !threats.is_empty() {
+                return Err(OmonError::Config(format!(
+                    "cron prompt injection detected in brief_file: {}",
+                    threats.join("; ")
+                )));
+            }
+        }
+        if let Some(tz) = payload
+            .get("schedule")
+            .and_then(|s| s.get("timezone"))
+            .and_then(Value::as_str)
+        {
+            if tz.trim().parse::<chrono_tz::Tz>().is_err() {
+                return Err(OmonError::Config(format!(
+                    "uncomputable schedule: invalid timezone `{tz}`"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -753,7 +793,12 @@ impl CronScheduler {
         Self::validate_cron_payload_lifecycle(&spec.payload)?;
         let id = id.into();
         let now = (self.clock)();
-        let next_run_at = next_run(&spec.expression, now)?;
+        let timezone = spec
+            .payload
+            .get("schedule")
+            .and_then(|s| s.get("timezone"))
+            .and_then(Value::as_str);
+        let next_run_at = next_run_tz(&spec.expression, now, timezone)?;
         let payload_json = serde_json::to_string(&spec.payload)
             .map_err(|error| OmonError::Config(error.to_string()))?;
         sqlx::query(
@@ -785,7 +830,12 @@ impl CronScheduler {
     pub async fn register(&self, spec: CronJobSpec) -> Result<CronJob> {
         Self::validate_cron_payload_lifecycle(&spec.payload)?;
         let now = (self.clock)();
-        let next_run_at = next_run(&spec.expression, now)?;
+        let timezone = spec
+            .payload
+            .get("schedule")
+            .and_then(|s| s.get("timezone"))
+            .and_then(Value::as_str);
+        let next_run_at = next_run_tz(&spec.expression, now, timezone)?;
         let id = Uuid::new_v4().to_string();
         let payload_json = serde_json::to_string(&spec.payload)
             .map_err(|error| OmonError::Config(error.to_string()))?;
@@ -1062,6 +1112,7 @@ impl CronScheduler {
             return Ok(None);
         }
 
+        let mut target_occurrence: Option<DateTime<Utc>> = None;
         if require_due {
             if !enabled {
                 return Ok(None);
@@ -1075,6 +1126,76 @@ impl CronScheduler {
                         self.retire_overdue_oneshot(id, &expression, next_run, &payload_json, now)
                             .await?;
                         return Ok(None);
+                    }
+                    target_occurrence = Some(next_run);
+                } else if next_run <= now {
+                    let catch_up_hours = parsed_payload
+                        .get("catch_up_hours")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(6);
+
+                    let timezone = parsed_payload
+                        .get("schedule")
+                        .and_then(|s| s.get("timezone"))
+                        .and_then(Value::as_str);
+
+                    if catch_up_hours == 0 {
+                        let next_future = next_run_tz(&expression, now, timezone)?;
+                        sqlx::query(
+                            "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
+                        )
+                        .bind(next_future)
+                        .bind(now)
+                        .bind(id)
+                        .bind(next_run)
+                        .execute(&self.pool)
+                        .await?;
+                        return Ok(None);
+                    }
+
+                    let window_start = now - TimeDelta::hours(catch_up_hours as i64);
+                    let newest = newest_missed_occurrence(
+                        &expression,
+                        next_run,
+                        window_start,
+                        now,
+                        timezone,
+                    )?;
+
+                    match newest {
+                        None => {
+                            let next_future = next_run_tz(&expression, now, timezone)?;
+                            sqlx::query(
+                                "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
+                            )
+                            .bind(next_future)
+                            .bind(now)
+                            .bind(id)
+                            .bind(next_run)
+                            .execute(&self.pool)
+                            .await?;
+                            return Ok(None);
+                        }
+                        Some(occ) => {
+                            let occ_key = occ.to_rfc3339();
+                            let last_occ = parsed_payload
+                                .get("last_occurrence")
+                                .and_then(Value::as_str);
+                            if last_occ == Some(&occ_key) {
+                                let next_future = next_run_tz(&expression, now, timezone)?;
+                                sqlx::query(
+                                    "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
+                                )
+                                .bind(next_future)
+                                .bind(now)
+                                .bind(id)
+                                .bind(next_run)
+                                .execute(&self.pool)
+                                .await?;
+                                return Ok(None);
+                            }
+                            target_occurrence = Some(occ);
+                        }
                     }
                 }
             } else {
@@ -1125,6 +1246,7 @@ impl CronScheduler {
             claim_token,
             job,
             advance_schedule,
+            occurrence: target_occurrence,
         }))
     }
 
@@ -1250,6 +1372,12 @@ impl CronScheduler {
                 Value::String("succeeded".to_string()),
             );
             obj.insert("last_run_at".to_string(), Value::String(now.to_rfc3339()));
+            if let Some(occ) = claim.occurrence {
+                obj.insert(
+                    "last_occurrence".to_string(),
+                    Value::String(occ.to_rfc3339()),
+                );
+            }
             obj.insert("last_error".to_string(), Value::Null);
             obj.insert("last_delivery_error".to_string(), Value::Null);
         }
@@ -1386,6 +1514,12 @@ impl CronScheduler {
                 Value::String("failed".to_string()),
             );
             obj.insert("last_run_at".to_string(), Value::String(now.to_rfc3339()));
+            if let Some(occ) = claim.occurrence {
+                obj.insert(
+                    "last_occurrence".to_string(),
+                    Value::String(occ.to_rfc3339()),
+                );
+            }
             let err_str = error.to_string();
             obj.insert("last_error".to_string(), Value::String(err_str.clone()));
             if err_str.to_lowercase().contains("deliver")
@@ -1975,12 +2109,12 @@ pub fn next_run_tz(
     let Some(tz_name) = timezone.map(str::trim).filter(|name| !name.is_empty()) else {
         return next_run(expression, after);
     };
-    if expression.starts_with("once:") || parse_interval(expression)?.is_some() {
-        return next_run(expression, after);
-    }
     let tz: chrono_tz::Tz = tz_name
         .parse()
         .map_err(|_| OmonError::Config(format!("invalid timezone `{tz_name}`")))?;
+    if expression.starts_with("once:") || parse_interval(expression)?.is_some() {
+        return next_run(expression, after);
+    }
     let normalized = normalize_cron_expression(expression);
     let schedule = Schedule::from_str(&normalized).map_err(|error| {
         OmonError::Config(format!("invalid cron expression `{expression}`: {error}"))
@@ -1990,6 +2124,93 @@ pub fn next_run_tz(
         .next()
         .map(|instant| instant.with_timezone(&Utc))
         .ok_or_else(|| OmonError::Config(format!("cron expression `{expression}` has no next run")))
+}
+
+pub fn newest_missed_occurrence(
+    expression: &str,
+    scheduled_from: DateTime<Utc>,
+    window_start: DateTime<Utc>,
+    now: DateTime<Utc>,
+    timezone: Option<&str>,
+) -> Result<Option<DateTime<Utc>>> {
+    if window_start > now {
+        return Ok(None);
+    }
+    let effective_start = std::cmp::max(scheduled_from, window_start);
+
+    if let Some(timestamp) = expression.strip_prefix("once:") {
+        let ts = DateTime::parse_from_rfc3339(timestamp)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|error| {
+                OmonError::Config(format!("invalid one-shot timestamp `{timestamp}`: {error}"))
+            })?;
+        if ts >= window_start && ts <= now && ts >= scheduled_from {
+            return Ok(Some(ts));
+        }
+        return Ok(None);
+    }
+
+    if let Some(interval) = parse_interval(expression)? {
+        let delta = TimeDelta::from_std(interval)
+            .map_err(|_| OmonError::Config("cron interval is too large".into()))?;
+        if scheduled_from > now {
+            return Ok(None);
+        }
+        let diff = now.signed_duration_since(scheduled_from);
+        let step_ms = delta.num_milliseconds();
+        if step_ms <= 0 {
+            return Ok(None);
+        }
+        let count = diff.num_milliseconds() / step_ms;
+        let latest = scheduled_from + delta * (count as i32);
+        if latest >= window_start && latest <= now {
+            return Ok(Some(latest));
+        }
+        return Ok(None);
+    }
+
+    let normalized = normalize_cron_expression(expression);
+    let schedule = Schedule::from_str(&normalized).map_err(|error| {
+        OmonError::Config(format!("invalid cron expression `{expression}`: {error}"))
+    })?;
+
+    let tz_opt: Option<chrono_tz::Tz> = match timezone.map(str::trim).filter(|tz| !tz.is_empty()) {
+        Some(tz_name) => Some(
+            tz_name
+                .parse()
+                .map_err(|_| OmonError::Config(format!("invalid timezone `{tz_name}`")))?,
+        ),
+        None => None,
+    };
+
+    let mut latest = None;
+    if let Some(tz) = tz_opt {
+        let search_start = (effective_start - TimeDelta::seconds(1)).with_timezone(&tz);
+        let now_local = now.with_timezone(&tz);
+        for inst in schedule.after(&search_start) {
+            if inst <= now_local {
+                let inst_utc = inst.with_timezone(&Utc);
+                if inst_utc >= window_start && inst_utc >= scheduled_from {
+                    latest = Some(inst_utc);
+                }
+            } else {
+                break;
+            }
+        }
+    } else {
+        let search_start = effective_start - TimeDelta::seconds(1);
+        for inst in schedule.after(&search_start) {
+            if inst <= now {
+                if inst >= window_start && inst >= scheduled_from {
+                    latest = Some(inst);
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    Ok(latest)
 }
 
 fn normalize_cron_expression(expression: &str) -> String {
@@ -2862,6 +3083,7 @@ mod tests {
             claim_token: uuid::Uuid::new_v4().to_string(),
             job: claim.job.clone(),
             advance_schedule: false,
+            occurrence: None,
         };
         let res_missing = scheduler.complete_success(&fake_claim, None).await;
         assert!(res_missing.is_err(), "missing run must return error");
@@ -2962,6 +3184,389 @@ mod tests {
             job.session_key.as_deref(),
             Some(new_session.storage_key().as_str()),
             "re-registering a job with a new session_key must update the stored session_key"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_brief_file_read_and_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let brief_path = temp.path().join("daily_brief.md");
+        std::fs::write(
+            &brief_path,
+            "# Daily Brief\nCheck system status and report.",
+        )
+        .unwrap();
+
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+
+        struct MockBackend {
+            prompts: Arc<std::sync::Mutex<Vec<String>>>,
+        }
+
+        #[async_trait]
+        impl crate::agent::AgentBackend for MockBackend {
+            async fn run(
+                &self,
+                _session: &mut crate::SessionContext,
+                event: crate::InboundEvent,
+            ) -> Result<()> {
+                self.prompts.lock().unwrap().push(event.content);
+                Ok(())
+            }
+        }
+
+        let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let backend = Arc::new(MockBackend {
+            prompts: prompts.clone(),
+        });
+
+        let executor = crate::cron::AgentCronExecutor {
+            backend: backend.clone(),
+            workspace_root: temp.path().to_path_buf(),
+            pool: database.pool().clone(),
+            cron_script_timeout_secs: 30,
+        };
+
+        // 1. brief_file read at runtime
+        let job_with_brief = CronJob {
+            id: "brief_job".into(),
+            session_key: None,
+            expression: "0 9 * * *".into(),
+            payload_json: serde_json::json!({
+                "id": "brief_job",
+                "brief_file": brief_path.to_str().unwrap(),
+                "prompt": "fallback prompt that should be ignored",
+                "schedule": {"kind": "cron", "expr": "0 9 * * *"},
+                "deliver": "local"
+            })
+            .to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: "omon_owned".into(),
+        };
+
+        executor.execute(&job_with_brief).await.unwrap();
+        let last_prompt = prompts.lock().unwrap().pop().unwrap();
+        assert!(
+            last_prompt.contains("# Daily Brief\nCheck system status and report."),
+            "executor must read brief_file at runtime as prompt, got: {last_prompt}"
+        );
+        assert!(
+            !last_prompt.contains("fallback prompt that should be ignored"),
+            "prompt must not contain fallback when brief_file is present"
+        );
+
+        // 2. Fallback to prompt when brief_file is absent
+        let job_fallback = CronJob {
+            id: "fallback_job".into(),
+            session_key: None,
+            expression: "0 9 * * *".into(),
+            payload_json: serde_json::json!({
+                "id": "fallback_job",
+                "prompt": "direct prompt fallback text",
+                "schedule": {"kind": "cron", "expr": "0 9 * * *"},
+                "deliver": "local"
+            })
+            .to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: "omon_owned".into(),
+        };
+
+        executor.execute(&job_fallback).await.unwrap();
+        let fallback_prompt = prompts.lock().unwrap().pop().unwrap();
+        assert!(
+            fallback_prompt.contains("direct prompt fallback text"),
+            "executor must fall back to prompt when brief_file is absent"
+        );
+
+        // 3. Load validation: nonexistent file error
+        let non_existent = temp.path().join("missing.md");
+        let hermes_missing: HermesJob = serde_json::from_value(serde_json::json!({
+            "id": "missing_job",
+            "brief_file": non_existent.to_str().unwrap(),
+            "schedule": {"kind": "cron", "expr": "0 9 * * *"}
+        }))
+        .unwrap();
+        let err = hermes_missing.validate(None, Utc::now()).unwrap_err();
+        assert!(
+            err.contains("brief_file does not exist"),
+            "missing brief_file must fail validation: {err}"
+        );
+
+        // 4. Load validation: lifecycle guard error in brief_file
+        let evil_path = temp.path().join("evil.md");
+        std::fs::write(&evil_path, "systemctl restart omon-gateway").unwrap();
+        let hermes_evil: HermesJob = serde_json::from_value(serde_json::json!({
+            "id": "evil_job",
+            "brief_file": evil_path.to_str().unwrap(),
+            "schedule": {"kind": "cron", "expr": "0 9 * * *"}
+        }))
+        .unwrap();
+        let evil_err = hermes_evil.validate(None, Utc::now()).unwrap_err();
+        assert!(
+            evil_err.contains("gateway lifecycle violation"),
+            "lifecycle violation in brief_file must fail validation: {evil_err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_catch_up_single_fire_after_simulated_downtime() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+
+        struct CountingExecutor {
+            count: Arc<std::sync::Mutex<usize>>,
+        }
+        #[async_trait]
+        impl CronTaskExecutor for CountingExecutor {
+            async fn execute(&self, _job: &CronJob) -> Result<Option<String>> {
+                let mut guard = self.count.lock().unwrap();
+                *guard += 1;
+                Ok(Some("catch-up execution completed".into()))
+            }
+        }
+
+        let exec_count = Arc::new(std::sync::Mutex::new(0));
+        let executor = Arc::new(CountingExecutor {
+            count: exec_count.clone(),
+        });
+        let scheduler =
+            CronScheduler::with_poll_interval(pool.clone(), executor, Duration::from_secs(1));
+
+        let now = Utc::now();
+        // Register hourly job with 72h catch-up window
+        let job_payload = serde_json::json!({
+            "id": "catch_up_hourly",
+            "name": "Catch-up Hourly",
+            "prompt": "hourly task",
+            "catch_up_hours": 72,
+            "schedule": {
+                "kind": "cron",
+                "expr": "0 * * * *"
+            }
+        });
+        let job = scheduler
+            .register_with_id(
+                "catch_up_hourly",
+                CronJobSpec::new("0 * * * *", job_payload),
+            )
+            .await
+            .unwrap();
+
+        // Simulate 2 days of downtime (48 hours overdue)
+        let two_days_ago = now - TimeDelta::days(2);
+        sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = ?")
+            .bind(two_days_ago)
+            .bind(&job.id)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        // Poll 1: Exactly ONE catch-up run fires for the simulated 2-day-old job
+        let claimed = scheduler.run_due_jobs().await.unwrap();
+        assert_eq!(
+            claimed, 1,
+            "Exactly ONE catch-up run must fire for simulated 2-day-old job"
+        );
+        scheduler.wait_idle().await;
+
+        assert_eq!(
+            *exec_count.lock().unwrap(),
+            1,
+            "Executor must have executed exactly ONCE"
+        );
+
+        // Verify cron_runs table recorded exactly ONE run
+        let run_count: i64 = sqlx::query_scalar("SELECT count(*) FROM cron_runs WHERE job_id = ?")
+            .bind(&job.id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(run_count, 1, "cron_runs table must contain exactly ONE run");
+
+        // Verify next_run_at advanced to the future and last_occurrence was recorded
+        let updated = scheduler.get(&job.id).await.unwrap().unwrap();
+        assert!(
+            updated.next_run_at.unwrap() > now,
+            "next_run_at must advance to future occurrence"
+        );
+        let payload = updated.payload().unwrap();
+        assert!(
+            payload.get("last_occurrence").is_some(),
+            "payload must persist last_occurrence for occurrence-keyed dedup"
+        );
+
+        // Poll 2: Immediate subsequent poll must claim ZERO runs (occurrence-keyed dedup + future schedule)
+        let second_claim = scheduler.run_due_jobs().await.unwrap();
+        assert_eq!(
+            second_claim, 0,
+            "No duplicate run may fire on subsequent poll"
+        );
+        assert_eq!(
+            *exec_count.lock().unwrap(),
+            1,
+            "Execution count must remain 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_thread_destination_parse_and_deliver() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+
+        let payload = serde_json::json!({
+            "id": "thread_dest_job",
+            "prompt": "status update",
+            "deliver": "origin",
+            "origin": {
+                "platform": "discord",
+                "chat_id": "11223344",
+                "thread_id": "99887766"
+            },
+            "schedule": {
+                "kind": "cron",
+                "expr": "0 * * * *"
+            }
+        });
+
+        // 1. Verify parser resolves thread_id from origin
+        let destinations = delivery_destinations(&payload).unwrap();
+        assert_eq!(
+            destinations.len(),
+            1,
+            "Must resolve exactly one destination"
+        );
+        assert_eq!(destinations[0].platform, "discord");
+        assert_eq!(destinations[0].chat_id, "11223344");
+        assert_eq!(destinations[0].thread_id.as_deref(), Some("99887766"));
+
+        // 2. Verify delivery routes to the thread
+        let dispatched = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let dispatcher = Arc::new(RecordingDispatcher {
+            sessions: dispatched.clone(),
+        });
+        let executor = Arc::new(SilentExecutor(Some("thread delivery content".into())));
+        let scheduler = CronScheduler::with_dispatcher(pool.clone(), executor, dispatcher.clone());
+
+        let cron_job = CronJob {
+            id: "thread_dest_job".into(),
+            session_key: None,
+            expression: "0 * * * *".into(),
+            payload_json: payload.to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: "omon_owned".into(),
+        };
+
+        let result = scheduler.execute_job(&cron_job).await;
+        assert!(result.is_ok(), "execute_job must succeed: {result:?}");
+
+        let sessions = dispatched.lock().await;
+        assert_eq!(sessions.len(), 1, "Must dispatch exactly one message");
+        assert_eq!(sessions[0].platform, "discord");
+        assert_eq!(sessions[0].channel_id, "11223344");
+        assert_eq!(
+            sessions[0].thread_id.as_deref(),
+            Some("99887766"),
+            "session key must carry the resolved discord thread_id"
+        );
+    }
+
+    #[test]
+    fn test_timezone_validation_accepts_and_refuses() {
+        let fixed_now = DateTime::parse_from_rfc3339("2026-10-07T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        // 1. "Asia/Seoul" accepted
+        let job_seoul: HermesJob = serde_json::from_value(serde_json::json!({
+            "id": "tz_seoul",
+            "prompt": "run",
+            "schedule": {
+                "kind": "cron",
+                "expr": "0 9 * * *",
+                "timezone": "Asia/Seoul"
+            }
+        }))
+        .unwrap();
+        let validated_seoul = job_seoul.validate(None, fixed_now);
+        assert!(
+            validated_seoul.is_ok(),
+            "Asia/Seoul must be accepted: {validated_seoul:?}"
+        );
+        let val_seoul = validated_seoul.unwrap();
+        assert_eq!(val_seoul.effective_timezone.as_deref(), Some("Asia/Seoul"));
+        assert!(val_seoul.computed_next.is_some());
+
+        // 2. "UTC" accepted
+        let job_utc: HermesJob = serde_json::from_value(serde_json::json!({
+            "id": "tz_utc",
+            "prompt": "run",
+            "schedule": {
+                "kind": "cron",
+                "expr": "0 9 * * *",
+                "timezone": "UTC"
+            }
+        }))
+        .unwrap();
+        let validated_utc = job_utc.validate(None, fixed_now);
+        assert!(
+            validated_utc.is_ok(),
+            "UTC must be accepted: {validated_utc:?}"
+        );
+        let val_utc = validated_utc.unwrap();
+        assert_eq!(val_utc.effective_timezone.as_deref(), Some("UTC"));
+        assert!(val_utc.computed_next.is_some());
+
+        // 3. Uncomputable / invalid timezone refused at load time
+        let job_bad_tz: HermesJob = serde_json::from_value(serde_json::json!({
+            "id": "tz_bad",
+            "prompt": "run",
+            "schedule": {
+                "kind": "cron",
+                "expr": "0 9 * * *",
+                "timezone": "Mars/Olympus"
+            }
+        }))
+        .unwrap();
+        let err_tz = job_bad_tz.validate(None, fixed_now);
+        assert!(
+            err_tz.is_err(),
+            "Invalid timezone must be refused as load-time error"
+        );
+        let msg = err_tz.unwrap_err();
+        assert!(
+            msg.contains("invalid timezone `Mars/Olympus`"),
+            "Expected timezone error, got: {msg}"
+        );
+
+        // 4. Uncomputable cron expression refused at load time
+        let job_bad_expr: HermesJob = serde_json::from_value(serde_json::json!({
+            "id": "expr_bad",
+            "prompt": "run",
+            "schedule": {
+                "kind": "cron",
+                "expr": "not a valid cron expression",
+                "timezone": "UTC"
+            }
+        }))
+        .unwrap();
+        let err_expr = job_bad_expr.validate(None, fixed_now);
+        assert!(
+            err_expr.is_err(),
+            "Uncomputable cron expression must be refused at load time"
+        );
+        let msg_expr = err_expr.unwrap_err();
+        assert!(
+            msg_expr.contains("uncomputable schedule"),
+            "Expected uncomputable error, got: {msg_expr}"
         );
     }
 }

@@ -68,7 +68,9 @@ impl CronTaskExecutor for AgentCronExecutor {
                 );
                 return Ok(None);
             }
-            if output.trim().is_empty() && !hermes.prompt.trim().is_empty() {
+            if output.trim().is_empty()
+                && (!hermes.prompt.trim().is_empty() || hermes.brief_file.is_some())
+            {
                 tracing::info!(
                     job_id = %hermes.id,
                     "empty script output with prompt, skipping agent execution"
@@ -176,8 +178,29 @@ impl CronTaskExecutor for AgentCronExecutor {
             .map_err(|e| OmonError::Database(e.to_string()))?;
         }
 
+        let effective_prompt = if let Some(ref brief_path) = hermes.brief_file {
+            match tokio::fs::read_to_string(brief_path).await {
+                Ok(content) => content,
+                Err(err) => {
+                    return Err(OmonError::Config(format!(
+                        "failed to read brief_file {} for job {}: {err}",
+                        brief_path.display(),
+                        hermes.id
+                    )));
+                }
+            }
+        } else {
+            hermes.prompt.clone()
+        };
+
+        if let Err(err) = crate::cron::check_gateway_lifecycle(&effective_prompt) {
+            return Err(OmonError::Config(format!(
+                "gateway lifecycle violation: {err}"
+            )));
+        }
+
         let has_skills = !hermes.skills.is_empty() || hermes.skill.is_some();
-        if hermes.prompt.trim().is_empty() && script_output.is_none() && !has_skills {
+        if effective_prompt.trim().is_empty() && script_output.is_none() && !has_skills {
             return Err(OmonError::Config(format!(
                 "Hermes job {} has neither prompt nor executable script",
                 hermes.id
@@ -236,7 +259,8 @@ impl CronTaskExecutor for AgentCronExecutor {
         }
 
         let skills = load_cron_skills(&hermes)?;
-        if hermes.prompt.trim().is_empty() && script_output.is_none() && skills.trim().is_empty() {
+        if effective_prompt.trim().is_empty() && script_output.is_none() && skills.trim().is_empty()
+        {
             return Err(OmonError::Config(format!(
                 "Hermes job {} has neither prompt nor executable script or resolved skills",
                 hermes.id
@@ -244,11 +268,11 @@ impl CronTaskExecutor for AgentCronExecutor {
         }
         if !skills.is_empty() {
             prompt.push_str(&skills);
-            if !hermes.prompt.trim().is_empty() {
+            if !effective_prompt.trim().is_empty() {
                 prompt.push_str("\n\n[Task]\n");
             }
         }
-        prompt.push_str(&hermes.prompt);
+        prompt.push_str(&effective_prompt);
         if let Some(output) = script_output.filter(|output| !output.trim().is_empty()) {
             prompt.push_str("\n\n[Script output]\n");
             prompt.push_str(&output);
@@ -462,10 +486,26 @@ pub async fn execute_native_cron(
             return Ok(None);
         }
     }
-    let prompt = payload
-        .get("prompt")
+    let prompt = if let Some(brief_path) = payload
+        .get("brief_file")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
+    {
+        match tokio::fs::read_to_string(brief_path).await {
+            Ok(content) => content,
+            Err(err) => {
+                return Err(OmonError::Config(format!(
+                    "failed to read brief_file {brief_path} for job {}: {err}",
+                    job.id
+                )));
+            }
+        }
+    } else {
+        payload
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
     if prompt.is_empty() {
         return Ok(script_output.filter(|output| !output.trim().is_empty()));
     }
@@ -540,7 +580,7 @@ pub fn load_cron_skills(job: &HermesJob) -> Result<String> {
         return Ok(String::new());
     }
     let Ok(home) = hermes_home(job) else {
-        if job.prompt.trim().is_empty() {
+        if job.prompt.trim().is_empty() && job.brief_file.is_none() {
             return Err(OmonError::Config(format!(
                 "Hermes job {} has an empty prompt and all skills are missing: {}",
                 job.id,
@@ -553,7 +593,7 @@ pub fn load_cron_skills(job: &HermesJob) -> Result<String> {
         ));
     };
     let Ok(root) = canonical_directory(&home.join("skills"), "Hermes skills root") else {
-        if job.prompt.trim().is_empty() {
+        if job.prompt.trim().is_empty() && job.brief_file.is_none() {
             return Err(OmonError::Config(format!(
                 "Hermes job {} has an empty prompt and all skills are missing: {}",
                 job.id,
@@ -604,7 +644,11 @@ pub fn load_cron_skills(job: &HermesJob) -> Result<String> {
         assembled.push_str(&format!("[Skill: {name}]\n{content}"));
     }
 
-    if assembled.is_empty() && !skipped.is_empty() && job.prompt.trim().is_empty() {
+    if assembled.is_empty()
+        && !skipped.is_empty()
+        && job.prompt.trim().is_empty()
+        && job.brief_file.is_none()
+    {
         return Err(OmonError::Config(format!(
             "Hermes job {} has an empty prompt and all skills were missing: {}",
             job.id,

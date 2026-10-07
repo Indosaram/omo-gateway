@@ -156,11 +156,60 @@ pub struct HermesSchedule {
     pub extra: HashMap<String, Value>,
 }
 
+fn deserialize_string_or_number<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StrOrNum {
+        Str(String),
+        Num(u64),
+        SignedNum(i64),
+    }
+
+    match StrOrNum::deserialize(deserializer)? {
+        StrOrNum::Str(s) => Ok(s),
+        StrOrNum::Num(n) => Ok(n.to_string()),
+        StrOrNum::SignedNum(n) => Ok(n.to_string()),
+    }
+}
+
+fn deserialize_opt_string_or_number<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StrOrNum {
+        Str(String),
+        Num(u64),
+        SignedNum(i64),
+    }
+
+    match Option::<StrOrNum>::deserialize(deserializer)? {
+        Some(StrOrNum::Str(s)) => {
+            let trimmed = s.trim().to_string();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed))
+            }
+        }
+        Some(StrOrNum::Num(n)) => Ok(Some(n.to_string())),
+        Some(StrOrNum::SignedNum(n)) => Ok(Some(n.to_string())),
+        None => Ok(None),
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct HermesOrigin {
     pub platform: String,
+    #[serde(deserialize_with = "deserialize_string_or_number")]
     pub chat_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_string_or_number")]
     pub thread_id: Option<String>,
     #[serde(default)]
     pub user_id: Option<String>,
@@ -296,6 +345,10 @@ pub struct HermesJob {
     )]
     pub timeout_secs: Option<u64>,
     #[serde(default)]
+    pub brief_file: Option<PathBuf>,
+    #[serde(default = "default_catch_up_hours")]
+    pub catch_up_hours: Option<u64>,
+    #[serde(default)]
     pub monitor_script: Option<String>,
     #[serde(default)]
     pub monitor_url: Option<String>,
@@ -303,6 +356,10 @@ pub struct HermesJob {
     pub monitor_state: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, Value>,
+}
+
+fn default_catch_up_hours() -> Option<u64> {
+    Some(6)
 }
 
 fn default_true() -> bool {
@@ -317,6 +374,10 @@ pub struct ValidatedHermesJob {
 }
 
 impl HermesJob {
+    pub fn catch_up_hours(&self) -> u64 {
+        self.catch_up_hours.unwrap_or(6)
+    }
+
     pub fn validate(
         &self,
         default_timezone: Option<&str>,
@@ -334,6 +395,25 @@ impl HermesJob {
                 "cron prompt injection detected: {}",
                 prompt_threats.join("; ")
             ));
+        }
+        if let Some(ref path) = self.brief_file {
+            if !path.exists() {
+                return Err(format!("brief_file does not exist: {}", path.display()));
+            }
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => return Err(format!("failed to read brief_file {}: {e}", path.display())),
+            };
+            if let Err(err) = crate::cron::check_gateway_lifecycle(&content) {
+                return Err(format!("gateway lifecycle violation in brief_file: {err}"));
+            }
+            let brief_threats = crate::security::scan_cron_prompt(&content);
+            if !brief_threats.is_empty() {
+                return Err(format!(
+                    "cron prompt injection detected in brief_file: {}",
+                    brief_threats.join("; ")
+                ));
+            }
         }
         if let Some(script) = self.script.as_deref() {
             if let Err(err) = crate::cron::check_gateway_lifecycle(script) {
@@ -376,6 +456,14 @@ impl HermesJob {
             }
         }
         let effective_timezone = self.schedule.timezone.as_deref().or(default_timezone);
+        if let Some(tz_str) = effective_timezone {
+            if tz_str.trim().parse::<chrono_tz::Tz>().is_err() {
+                return Err(format!(
+                    "uncomputable schedule for job {}: invalid timezone `{tz_str}`",
+                    self.id
+                ));
+            }
+        }
         let computed_next =
             match super::scheduler::next_run_tz(&expression, now, effective_timezone) {
                 Ok(next) => Some(next),
@@ -972,7 +1060,7 @@ impl HermesStoreSynchronizer {
                     _ => now,
                 };
                 let insert_result = sqlx::query(
-                    "INSERT INTO cron_jobs (id, expression, payload_json, enabled, next_run_at, created_at, updated_at, authority)\n                     VALUES (?, ?, ?, ?, ?, ?, ?, 'hermes_mirror')\n                     ON CONFLICT(id) DO UPDATE SET\n                     expression=excluded.expression,\n                     payload_json=CASE\n                         WHEN json_extract(cron_jobs.payload_json, '$.last_status') IS NOT NULL\n                         THEN json_set(\n                             CASE\n                                 WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                                      AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                                 THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                                 ELSE excluded.payload_json\n                             END,\n                             '$.last_status', json_extract(cron_jobs.payload_json, '$.last_status'),\n                             '$.last_run_at', json_extract(cron_jobs.payload_json, '$.last_run_at'),\n                             '$.last_error', json_extract(cron_jobs.payload_json, '$.last_error'),\n                             '$.last_delivery_error', json_extract(cron_jobs.payload_json, '$.last_delivery_error')\n                         )\n                         WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                              AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                         THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                         ELSE excluded.payload_json\n                     END,\n                     enabled=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN cron_jobs.enabled\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN cron_jobs.enabled\n                         ELSE excluded.enabled\n                     END,\n                     next_run_at=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN NULL\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN NULL\n                         WHEN cron_jobs.expression <> excluded.expression\n                           OR json_remove(cron_jobs.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error') <> json_remove(excluded.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error')\n                           OR cron_jobs.enabled <> excluded.enabled\n                         THEN excluded.next_run_at\n                         ELSE cron_jobs.next_run_at\n                     END,\n                     updated_at=excluded.updated_at\n                     WHERE cron_jobs.authority = 'hermes_mirror'"
+                    "INSERT INTO cron_jobs (id, expression, payload_json, enabled, next_run_at, created_at, updated_at, authority)\n                     VALUES (?, ?, ?, ?, ?, ?, ?, 'hermes_mirror')\n                     ON CONFLICT(id) DO UPDATE SET\n                     expression=excluded.expression,\n                     payload_json=CASE\n                         WHEN json_extract(cron_jobs.payload_json, '$.last_status') IS NOT NULL\n                         THEN json_set(\n                             CASE\n                                 WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                                      AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                                 THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                                 ELSE excluded.payload_json\n                             END,\n                             '$.last_status', json_extract(cron_jobs.payload_json, '$.last_status'),\n                             '$.last_run_at', json_extract(cron_jobs.payload_json, '$.last_run_at'),\n                             '$.last_error', json_extract(cron_jobs.payload_json, '$.last_error'),\n                             '$.last_delivery_error', json_extract(cron_jobs.payload_json, '$.last_delivery_error')\n                         )\n                         WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                              AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                         THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                         ELSE excluded.payload_json\n                     END,\n                     enabled=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN cron_jobs.enabled\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN cron_jobs.enabled\n                         ELSE excluded.enabled\n                     END,\n                     next_run_at=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN NULL\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN NULL\n                         WHEN cron_jobs.expression <> excluded.expression\n                           OR json_remove(cron_jobs.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error', '$.last_occurrence') <> json_remove(excluded.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error', '$.last_occurrence')\n                           OR cron_jobs.enabled <> excluded.enabled\n                         THEN excluded.next_run_at\n                         ELSE cron_jobs.next_run_at\n                     END,\n                     updated_at=excluded.updated_at\n                     WHERE cron_jobs.authority = 'hermes_mirror'"
                 )
                 .bind(&id).bind(expression).bind(payload_json).bind(job.enabled)
                 .bind(next_run_at).bind(created).bind(now).execute(&self.pool).await?;

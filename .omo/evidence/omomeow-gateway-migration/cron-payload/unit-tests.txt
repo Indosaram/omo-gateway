@@ -1,0 +1,31 @@
+cargo test --lib cron::scheduler::tests::test_ -- --nocapture
+running 24 tests
+test cron::scheduler::tests::test_format_context_from_block ... ok
+test cron::scheduler::tests::test_increment_repeat_completed ... ok
+test cron::scheduler::tests::test_is_cron_silence_response_preserves_mid_sentence_content ... ok
+test cron::scheduler::tests::test_parse_context_from_ids ... ok
+test cron::scheduler::tests::test_is_cron_silence_response_matches_sentinels_and_variants ... ok
+test cron::scheduler::tests::test_oneshot_grace_window ... ok
+test cron::scheduler::tests::test_should_disable_after ... ok
+test cron::scheduler::tests::test_should_reclaim_logic ... ok
+test cron::scheduler::tests::test_parse_wake_gate ... ok
+test cron::scheduler::tests::test_truncate_context_output ... ok
+test cron::scheduler::tests::test_delivery_fan_out_parsing ... ok
+test cron::scheduler::tests::test_brief_file_read_and_fallback ... ok
+test cron::scheduler::tests::test_register_with_id_updates_session_key_on_conflict ... ok
+test cron::scheduler::tests::test_mirror_cron_delivery_to_session ... ok
+test cron::scheduler::tests::test_idempotent_completion_when_already_finalized ... ok
+test cron::scheduler::tests::test_resolve_predecessor_output_from_db_and_disk ... ok
+test cron::scheduler::tests::test_repeat_times_disables_job_after_limit_reached ... ok
+test cron::scheduler::tests::test_thread_destination_parse_and_deliver ... ok
+test cron::scheduler::tests::test_execute_job_suppresses_delivery_for_silent_and_empty_output ... ok
+test cron::scheduler::tests::test_claim_job_stores_owner_pid_and_reclaim_skips_live_process ... ok
+test cron::scheduler::tests::test_fan_out_dispatches_each_destination_to_its_own_channel ... ok
+test cron::scheduler::tests::test_deliver_runs_ack_command_after_delivery ... ok
+test cron::scheduler::tests::test_timezone_validation_accepts_and_refuses ... ok
+test cron::scheduler::tests::test_catch_up_single_fire_after_simulated_downtime ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 387 filtered out; finished in 0.19s
+
+cargo test --lib cron
+test result: ok. 64 passed; 0 failed; 0 ignored; 0 measured; 347 filtered out; finished in 0.45s

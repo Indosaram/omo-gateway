@@ -504,11 +504,9 @@ mod tests {
     fn loads_only_the_requested_namespace() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("button-actions.json");
-        assert!(
-            load_button_action(&path, "content-intel")
-                .unwrap()
-                .is_none()
-        );
+        assert!(load_button_action(&path, "content-intel")
+            .unwrap()
+            .is_none());
 
         std::fs::write(
             &path,

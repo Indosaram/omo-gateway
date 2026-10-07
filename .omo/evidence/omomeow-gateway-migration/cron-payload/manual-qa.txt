@@ -1,0 +1,15 @@
+Manual QA & Behavior Simulation Evidence:
+1. brief_file dynamic reading and fallback:
+   - Validated that if brief_file is set, the executor reads the target file from disk at execution time and uses it as effective_prompt.
+   - Validated that if brief_file is absent, the executor falls back to hermes.prompt.
+   - Validated load-time error handling: nonexistent brief_file returns "brief_file does not exist", lifecycle violation returns "gateway lifecycle violation in brief_file".
+2. Bounded occurrence-keyed catch-up:
+   - Tested simulated 48-hour downtime for hourly job with 72h window.
+   - Poll 1 claimed exactly 1 execution, recorded occurrence in cron_runs and last_occurrence in payload, and advanced next_run_at to future.
+   - Poll 2 immediately returned 0 claimed runs due to occurrence deduplication and future schedule.
+3. Discord thread destination resolution:
+   - Tested delivery_destinations with origin { platform: "discord", chat_id: "11223344", thread_id: "99887766" }.
+   - Resolved SessionKey carrying channel_id="11223344" and thread_id=Some("99887766").
+4. Timezone validation:
+   - "Asia/Seoul" and "UTC" successfully validated and scheduled with next_run_tz.
+   - "Mars/Olympus" and uncomputable cron expressions cleanly rejected with error message at load time.
