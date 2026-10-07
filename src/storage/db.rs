@@ -958,6 +958,162 @@ pub async fn load_dead_targets(
         .collect())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow)]
+pub struct WorkItem {
+    pub id: String,
+    pub title: String,
+    pub thread_id: Option<String>,
+    pub delegate_pane: Option<String>,
+    pub status: String,
+    pub last_progress_at: String,
+    pub receipt_path: Option<String>,
+    #[sqlx(default)]
+    pub created_at: Option<String>,
+    #[sqlx(default)]
+    pub updated_at: Option<String>,
+}
+
+impl WorkItem {
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        thread_id: Option<String>,
+        delegate_pane: Option<String>,
+        last_progress_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            thread_id,
+            delegate_pane,
+            status: "in_progress".to_string(),
+            last_progress_at: last_progress_at.into(),
+            receipt_path: None,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+}
+
+pub async fn insert_work_item(pool: &SqlitePool, item: &WorkItem) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO work_items (
+            id, title, thread_id, delegate_pane, status, last_progress_at, receipt_path, created_at, updated_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?,
+            COALESCE(?, CURRENT_TIMESTAMP),
+            COALESCE(?, CURRENT_TIMESTAMP)
+        )
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            thread_id = excluded.thread_id,
+            delegate_pane = excluded.delegate_pane,
+            status = excluded.status,
+            last_progress_at = excluded.last_progress_at,
+            receipt_path = excluded.receipt_path,
+            updated_at = CURRENT_TIMESTAMP
+        "#,
+    )
+    .bind(&item.id)
+    .bind(&item.title)
+    .bind(&item.thread_id)
+    .bind(&item.delegate_pane)
+    .bind(&item.status)
+    .bind(&item.last_progress_at)
+    .bind(&item.receipt_path)
+    .bind(&item.created_at)
+    .bind(&item.updated_at)
+    .execute(pool)
+    .await
+    .map_err(OmonError::from)?;
+
+    Ok(())
+}
+
+pub async fn get_work_item(pool: &SqlitePool, id: &str) -> Result<Option<WorkItem>> {
+    let item = sqlx::query_as::<_, WorkItem>(
+        r#"
+        SELECT id, title, thread_id, delegate_pane, status, last_progress_at, receipt_path, created_at, updated_at
+        FROM work_items
+        WHERE id = ?
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(OmonError::from)?;
+
+    Ok(item)
+}
+
+pub async fn mark_work_item_done(
+    pool: &SqlitePool,
+    id: &str,
+    receipt_path: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE work_items
+        SET status = 'done',
+            receipt_path = COALESCE(?, receipt_path),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        "#,
+    )
+    .bind(receipt_path)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(OmonError::from)?;
+
+    Ok(())
+}
+
+pub async fn update_work_item_progress(
+    pool: &SqlitePool,
+    id: &str,
+    last_progress_at: &str,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE work_items
+        SET last_progress_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        "#,
+    )
+    .bind(last_progress_at)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(OmonError::from)?;
+
+    Ok(())
+}
+
+pub async fn get_stale_in_progress_work_items(
+    pool: &SqlitePool,
+    cutoff_time: &str,
+) -> Result<Vec<WorkItem>> {
+    let items = sqlx::query_as::<_, WorkItem>(
+        r#"
+        SELECT id, title, thread_id, delegate_pane, status, last_progress_at, receipt_path, created_at, updated_at
+        FROM work_items
+        WHERE status IN ('in_progress', 'running')
+          AND (last_progress_at <= ? OR datetime(last_progress_at) <= datetime(?))
+        ORDER BY last_progress_at ASC
+        "#,
+    )
+    .bind(cutoff_time)
+    .bind(cutoff_time)
+    .fetch_all(pool)
+    .await
+    .map_err(OmonError::from)?;
+
+    Ok(items)
+}
+
 #[cfg(test)]
 tokio::task_local! {
     static REPLAY_BARRIER: std::sync::Arc<tokio::sync::Barrier>;

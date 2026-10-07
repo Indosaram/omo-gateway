@@ -14,6 +14,7 @@ pub mod security;
 pub mod storage;
 pub mod tools;
 pub mod voice;
+pub mod work_heartbeat;
 
 pub use agent::*;
 pub use cron::*;
@@ -46,3 +47,4 @@ pub use tools::{
     ToolRegistry, WebFetchTool, WebSearchTool, DEFAULT_EXTRA_PATH,
 };
 pub use voice::*;
+pub use work_heartbeat::*;

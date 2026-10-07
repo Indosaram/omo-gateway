@@ -1,0 +1,10 @@
+running 7 tests
+test migration_0030_creates_work_items_table_with_expected_columns ... ok
+test heartbeat_dead_worker_escalation_posts_single_line_warning ... ok
+test heartbeat_disabled_by_config_skips_processing ... ok
+test heartbeat_scans_tasks_with_status_running ... ok
+test heartbeat_discord_rest_payload_contract_matches_serenity_spec ... ok
+test heartbeat_post_restart_recovers_without_spamming_stale_items ... ok
+test heartbeat_15_minute_threshold_triggers_single_post_and_subsequent_step_skips ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s

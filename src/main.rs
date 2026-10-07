@@ -753,6 +753,7 @@ async fn run_gateway() -> Result<()> {
     }
     let default_bot_id = default_bot_id
         .ok_or_else(|| OmonError::Config("no Discord bot identities were configured".into()))?;
+    let default_http = bot_http_clients.get(&default_bot_id).cloned();
     let dead_targets = Arc::new(
         DeadTargetRegistry::new()
             .with_pool(pool.clone())
@@ -918,6 +919,25 @@ async fn run_gateway() -> Result<()> {
         "omo-gateway listening on Discord"
     );
 
+    let (heartbeat_shutdown_tx, heartbeat_shutdown_rx) = tokio::sync::watch::channel(false);
+    let _heartbeat_handle = if let Some(http) = default_http {
+        let heartbeat_sink = Arc::new(omon_gateway::SerenityHeartbeatSink::new(http));
+        let heartbeat_clock = Arc::new(omon_gateway::SystemClock);
+        let heartbeat_checker = Arc::new(omon_gateway::HerdrCliLivenessChecker);
+        let heartbeat_config = omon_gateway::WorkHeartbeatConfig::default();
+        let runner = omon_gateway::WorkHeartbeatRunner::new(
+            pool.clone(),
+            heartbeat_config,
+            heartbeat_clock,
+            heartbeat_checker,
+            heartbeat_sink,
+        );
+        info!("work heartbeat runner spawned (interval: 60s, threshold: 15m)");
+        Some(runner.spawn(heartbeat_shutdown_rx))
+    } else {
+        None
+    };
+
     let mut join_set = tokio::task::JoinSet::new();
     for mut client in clients {
         join_set.spawn(async move { client.start().await });
@@ -982,6 +1002,7 @@ async fn run_gateway() -> Result<()> {
         }
     }
 
+    let _ = heartbeat_shutdown_tx.send(true);
     scheduler.shutdown().await;
     scale_to_zero.shutdown().await;
     pool.close().await;
@@ -1307,6 +1328,8 @@ mod runner_tests {
             workdir: None,
             attach_to_session: None,
             timeout_secs: None,
+            brief_file: None,
+            catch_up_hours: None,
             monitor_script: None,
             monitor_url: None,
             monitor_state: None,
@@ -3175,6 +3198,8 @@ mod runner_tests {
             workdir: None,
             attach_to_session: None,
             timeout_secs: None,
+            brief_file: None,
+            catch_up_hours: None,
             monitor_script: None,
             monitor_url: None,
             monitor_state: None,
@@ -3216,6 +3241,8 @@ mod runner_tests {
             workdir: None,
             attach_to_session: None,
             timeout_secs: None,
+            brief_file: None,
+            catch_up_hours: None,
             monitor_script: None,
             monitor_url: None,
             monitor_state: None,
@@ -3259,6 +3286,8 @@ mod runner_tests {
             workdir: None,
             attach_to_session: None,
             timeout_secs: None,
+            brief_file: None,
+            catch_up_hours: None,
             monitor_script: None,
             monitor_url: None,
             monitor_state: None,
@@ -3368,6 +3397,8 @@ mod runner_tests {
             workdir: None,
             attach_to_session: None,
             timeout_secs: None,
+            brief_file: None,
+            catch_up_hours: None,
             monitor_script: None,
             monitor_url: None,
             monitor_state: None,

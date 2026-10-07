@@ -8,6 +8,7 @@ mod omo_daemon;
 pub mod omo_protocol;
 pub mod workspace_migration;
 
+pub use crate::work_heartbeat::WorkHeartbeatConfig;
 pub use backend::AgentBackend;
 pub use llm::{
     ChatMessage, LlmClient, LlmConfig, LlmProvider, LlmStream, ToolCall, ToolDefinition,
