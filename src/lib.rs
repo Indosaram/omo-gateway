@@ -14,6 +14,7 @@ pub mod security;
 pub mod storage;
 pub mod tools;
 pub mod voice;
+pub mod voice_transcription;
 pub mod work_heartbeat;
 
 pub use agent::*;
@@ -47,4 +48,5 @@ pub use tools::{
     ToolRegistry, WebFetchTool, WebSearchTool, DEFAULT_EXTRA_PATH,
 };
 pub use voice::*;
+pub use voice_transcription::*;
 pub use work_heartbeat::*;

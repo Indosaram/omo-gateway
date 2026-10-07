@@ -27,8 +27,8 @@ use super::throttler::{
     SerenityMessageTransport, DISCORD_MESSAGE_LIMIT, MAX_SPLIT_MESSAGES,
 };
 use crate::{
-    DeliveryLedgerService, InboundEvent, MessageAttachment, OmonError, OutboundAction,
-    OutboundDispatcher, Result, SessionKey,
+    voice_transcription, DeliveryLedgerService, InboundEvent, MessageAttachment, OmonError,
+    OutboundAction, OutboundDispatcher, Result, SessionKey,
 };
 use chrono::{DateTime, Utc};
 
@@ -1286,6 +1286,29 @@ pub async fn route_claimed_event_with_constituents(
                     %error,
                     "failed to download Discord attachment; routing remote metadata only"
                 );
+            } else if voice_transcription::is_audio_attachment(
+                attachment.content_type.as_deref(),
+                &attachment.filename,
+            ) {
+                if let Some(local_path) = &attachment.local_path {
+                    match voice_transcription::transcribe_audio(local_path).await {
+                        Ok(transcript) => {
+                            event.content =
+                                format!("🎤 [음성 전사]: {}\n\n{}", transcript, event.content);
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                attachment_id = %attachment.id,
+                                error = %err,
+                                "failed to transcribe audio attachment"
+                            );
+                            event.content = format!(
+                                "{}\n\n-# ⚠️ 음성 전사 실패 (일반 오디오 첨부로 처리)",
+                                event.content
+                            );
+                        }
+                    }
+                }
             }
         }
     }

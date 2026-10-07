@@ -60,3 +60,7 @@ windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "test_voice_transcription"
+path = "tests/test_voice_transcription.rs"
