@@ -9,6 +9,9 @@ pub fn initialize_request() -> Message {
             "id": 1,
             "method": "initialize",
             "params": {
+                "capabilities": {
+                    "experimentalApi": true
+                },
                 "clientInfo": {
                     "name": "omo-gateway",
                     "title": "omo-gateway",
