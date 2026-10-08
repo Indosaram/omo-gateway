@@ -658,6 +658,43 @@ impl SplitMessageDebouncer {
         lock.remove(session).map(|b| b.events)
     }
 
+    /// Flushes all pending debounce batches immediately, routing any buffered events
+    /// before process shutdown or drain so no inbound messages are lost in memory.
+    pub async fn flush_all(&self, data: &PoiseData) {
+        let batches: Vec<(SessionKey, Vec<InboundEvent>)> = {
+            let mut lock = self.buffer.lock().await;
+            lock.drain().map(|(k, b)| (k, b.events)).collect()
+        };
+        for (session, events) in batches {
+            if events.is_empty() {
+                continue;
+            }
+            let mut constituent_ids: Vec<String> = Vec::new();
+            let mut seen_ids = std::collections::HashSet::new();
+            for e in &events {
+                let c_id = e
+                    .delivery_id
+                    .clone()
+                    .unwrap_or_else(|| format!("discord:{}", e.platform_message_id));
+                if seen_ids.insert(c_id.clone()) {
+                    constituent_ids.push(c_id);
+                }
+            }
+            if let Some(coalesced) = coalesce_inbound_events(events) {
+                tracing::info!(
+                    session = %coalesced.session,
+                    delivery_id = ?coalesced.delivery_id,
+                    "Flushing debounced Discord message on shutdown drain"
+                );
+                if let Err(error) =
+                    route_claimed_event_with_constituents(data, coalesced, &constituent_ids).await
+                {
+                    tracing::error!(session = %session, %error, "failed to route shutdown-flushed Discord event");
+                }
+            }
+        }
+    }
+
     pub async fn is_empty(&self) -> bool {
         let lock = self.buffer.lock().await;
         lock.is_empty()

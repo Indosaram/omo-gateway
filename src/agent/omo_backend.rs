@@ -1099,10 +1099,8 @@ impl OmoBackend {
                                 tool_name.split_whitespace().next().unwrap_or(tool_name);
                             *tool_call_counts.entry(short_name.to_string()).or_insert(0) += 1;
 
-                            // Live-stream tool activity to Discord so the user
-                            // sees progress during long turns instead of just
-                            // a typing indicator.
-                            if !is_cron_session {
+                            // Live-stream tool activity is suppressed to avoid noisy intermediate edits.
+                            if false && !is_cron_session {
                                 let breakdown: Vec<String> = tool_call_counts
                                     .iter()
                                     .map(|(k, v)| {

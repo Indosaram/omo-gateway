@@ -889,7 +889,7 @@ async fn run_gateway() -> Result<()> {
             "invalid primary Discord bot identity {default_bot_id}"
         ))
     })?);
-    let adapter = DiscordAdapter::new(poise_data).with_approval_guard(approval_guard);
+    let adapter = DiscordAdapter::new(poise_data.clone()).with_approval_guard(approval_guard);
 
     let mut clients = Vec::new();
     let mut shard_managers = Vec::new();
@@ -966,6 +966,7 @@ async fn run_gateway() -> Result<()> {
         signal = tokio::signal::ctrl_c() => {
             signal.map_err(|error| OmonError::Config(format!("failed to listen for Ctrl+C: {error}")))?;
             info!("shutdown signal received");
+            omon_gateway::global_debouncer().flush_all(&poise_data).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
@@ -974,6 +975,7 @@ async fn run_gateway() -> Result<()> {
         changed = drain_rx.changed() => {
             if changed.is_ok() && *drain_rx.borrow() {
                 warn!("drain request detected via .drain_request.json marker; shutting down gracefully");
+                omon_gateway::global_debouncer().flush_all(&poise_data).await;
                 let _ = multiplexer.mark_in_flight_resume_pending().await;
                 for sm in shard_managers {
                     sm.shutdown_all().await;
@@ -995,6 +997,7 @@ async fn run_gateway() -> Result<()> {
             }
         } => {
             info!("SIGTERM received; shutting down gracefully");
+            omon_gateway::global_debouncer().flush_all(&poise_data).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
