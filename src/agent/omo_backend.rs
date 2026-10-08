@@ -888,6 +888,7 @@ impl OmoBackend {
                         }
                     }
                 }
+                self.active_turns.lock().remove(&session.key.storage_key());
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 return Err(OmonError::Llm(format!(
                     "turn exceeded total deadline of {:?}; turn/interrupt sent",
@@ -951,6 +952,7 @@ impl OmoBackend {
                     let _ = ws.send(Message::text(interrupt.to_string())).await;
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
+                self.active_turns.lock().remove(&session.key.storage_key());
                 return Err(OmonError::Llm(format!(
                     "turn exceeded total deadline of {:?}; turn/interrupt sent",
                     effective_total_timeout
