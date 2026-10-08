@@ -791,36 +791,10 @@ impl OmoBackend {
                                     return Ok(());
                                 }
 
-                                let rendered = if is_cron_session || total_tool_calls == 0 {
-                                    if scrubbed_content.trim().is_empty() {
-                                        "✅ Done.".to_string()
-                                    } else {
-                                        scrubbed_content.clone()
-                                    }
+                                let rendered = if scrubbed_content.trim().is_empty() {
+                                    "✅ Done.".to_string()
                                 } else {
-                                    let breakdown: Vec<String> = tool_call_counts
-                                        .iter()
-                                        .map(|(tool, count)| {
-                                            if *count > 1 {
-                                                format!("`{tool}` ×{count}")
-                                            } else {
-                                                format!("`{tool}`")
-                                            }
-                                        })
-                                        .collect();
-                                    let summary_badge = if breakdown.is_empty() {
-                                        format!("-# 🛠️ 도구 {total_tool_calls}회 실행됨")
-                                    } else {
-                                        format!(
-                                            "-# 🛠️ 도구 {total_tool_calls}회 실행 ({})",
-                                            breakdown.join(", ")
-                                        )
-                                    };
-                                    if scrubbed_content.trim().is_empty() {
-                                        format!("✅ Done.\n\n{summary_badge}")
-                                    } else {
-                                        format!("{}\n\n{}", scrubbed_content, summary_badge)
-                                    }
+                                    scrubbed_content.clone()
                                 };
 
                                 session
@@ -1265,37 +1239,10 @@ impl OmoBackend {
                     }
                     self.active_turns.lock().remove(&session.key.storage_key());
 
-                    let rendered = if is_cron_session || total_tool_calls == 0 {
-                        if scrubbed_content.trim().is_empty() {
-                            "✅ Done.".to_string()
-                        } else {
-                            scrubbed_content.clone()
-                        }
+                    let rendered = if scrubbed_content.trim().is_empty() {
+                        "✅ Done.".to_string()
                     } else {
-                        let breakdown: Vec<String> = tool_call_counts
-                            .iter()
-                            .map(|(tool, count)| {
-                                if *count > 1 {
-                                    format!("`{tool}` ×{count}")
-                                } else {
-                                    format!("`{tool}`")
-                                }
-                            })
-                            .collect();
-                        let summary_badge = if breakdown.is_empty() {
-                            format!("-# 🛠️ 도구 {total_tool_calls}회 실행됨")
-                        } else {
-                            format!(
-                                "-# 🛠️ 도구 {total_tool_calls}회 실행 ({})",
-                                breakdown.join(", ")
-                            )
-                        };
-
-                        if scrubbed_content.trim().is_empty() {
-                            format!("✅ Done.\n\n{summary_badge}")
-                        } else {
-                            format!("{}\n\n{}", scrubbed_content, summary_badge)
-                        }
+                        scrubbed_content.clone()
                     };
                     session
                         .state

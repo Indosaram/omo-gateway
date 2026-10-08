@@ -1849,12 +1849,12 @@ async fn test_omo_backend_emits_hermes_activity_lines() {
     let result = backend.run(&mut session, event).await;
     assert!(result.is_ok(), "turn failed: {:?}", result.err());
 
-    // Then: the final message carries reply + clean tool summary badge instead of noisy raw logs
+    // Then: the final message carries reply cleanly without noisy raw logs or tool badges
     let chunks = dispatcher.stream_chunks();
     assert!(!chunks.is_empty(), "no chunks emitted");
 
     let last = chunks.last().map(|c| c.content.clone()).unwrap_or_default();
-    let expected = "OMOACT-OK\n\n-# 🛠️ 도구 1회 실행 (`echo`)";
+    let expected = "OMOACT-OK";
     assert_eq!(last, expected, "final chunk layout mismatch: {last:?}");
 }
 
