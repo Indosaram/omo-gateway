@@ -1153,8 +1153,6 @@ impl OmoBackend {
                                     .await;
                                 sequence = sequence.saturating_add(1);
                             }
-                        } else if item_type == "agentMessage" && total_tool_calls > 0 {
-                            full_content.clear();
                         }
                     }
 
