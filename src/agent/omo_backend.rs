@@ -557,12 +557,18 @@ impl OmoBackend {
                     .and_then(Value::as_bool)
                     .unwrap_or(false)
         }) {
+            let effort = std::env::var("OMON_DEFAULT_EFFORT")
+                .or_else(|_| std::env::var("DEFAULT_EFFORT"))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "high".to_string());
             ws.send(Message::text(
                 json!({
                     "jsonrpc": "2.0",
                     "id": 4,
                     "method": "thread/settings/update",
-                    "params": { "threadId": thread_id, "model": model }
+                    "params": { "threadId": thread_id, "model": model, "effort": effort }
                 })
                 .to_string(),
             ))
@@ -1065,7 +1071,7 @@ impl OmoBackend {
                 && (!turn_started_ack
                     || val.pointer("/params/threadId").and_then(Value::as_str)
                         != Some(thread_id.as_str())
-                    || frame_turn_id != turn_id.as_deref())
+                    || (frame_turn_id.is_some() && frame_turn_id != turn_id.as_deref()))
             {
                 continue;
             }
