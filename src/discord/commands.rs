@@ -954,11 +954,22 @@ pub async fn steer(
 ) -> Result<(), CommandError> {
     let key = session_key(ctx).await?;
     let prompt = format_steer_prompt(&text);
-    let event = crate::InboundEvent::message(key, ctx.id().to_string(), prompt);
-    ctx.data().multiplexer.route(event).await?;
+
+    // Prefer injecting into the turn that is already executing so the guidance lands
+    // immediately; only fall back to queueing a fresh turn when nothing is running.
+    let steered = ctx.data().multiplexer.steer(&key, &prompt).await?;
+    if !steered {
+        let event = crate::InboundEvent::message(key, ctx.id().to_string(), prompt);
+        ctx.data().multiplexer.route(event).await?;
+    }
+
     ctx.send(
         poise::CreateReply::default()
-            .content(format!("🎯 Steering guidance queued: `{text}`"))
+            .content(if steered {
+                format!("🎯 Steering guidance applied to the running turn: `{text}`")
+            } else {
+                format!("🎯 Steering guidance queued: `{text}`")
+            })
             .ephemeral(true),
     )
     .await?;

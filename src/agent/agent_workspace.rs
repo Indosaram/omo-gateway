@@ -104,14 +104,14 @@ mod tests {
     fn test_slug_when_cron_user_id() {
         // Given: a user_id with cron: prefix
         let platform = "discord";
-        let user_id = "cron:omon-katok-3h-group-digest-v3";
+        let user_id = "cron:omon-sample-digest-v1";
         let bot_id = None;
 
         // When: generating workspace slug
         let slug = agent_workspace_slug(platform, user_id, bot_id);
 
         // Then: uses cron category and job id without prefix
-        assert_eq!(slug, "cron-omon-katok-3h-group-digest-v3");
+        assert_eq!(slug, "cron-omon-sample-digest-v1");
     }
 
     #[test]

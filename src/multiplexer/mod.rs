@@ -4,7 +4,7 @@ pub mod profile_routing;
 pub mod restart_loop_guard;
 mod router;
 
-pub use actor::{AgentRunner, OutboundDispatcher, SessionActor};
+pub use actor::{record_inbound_transcript, AgentRunner, OutboundDispatcher, SessionActor};
 pub use gc::ScaleToZero;
 pub use profile_routing::{
     parse_channel_prompts, parse_profile_routes, ChannelPromptConfig, ProfileRoute, ProfileRouter,

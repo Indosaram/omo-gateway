@@ -38,6 +38,10 @@ pub(crate) enum ActorCommand {
     Stop {
         reply: oneshot::Sender<Result<bool>>,
     },
+    Steer {
+        guidance: String,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     EvictIfIdle {
         idle_timeout: Duration,
         reply: oneshot::Sender<Result<bool>>,
@@ -364,6 +368,16 @@ impl SessionActor {
                                     Some(ActorCommand::EvictIfIdle { reply, .. }) => {
                                         let _ = reply.send(Ok(false));
                                     }
+                                    Some(ActorCommand::Steer { guidance, reply }) => {
+                                        // Steer off the actor loop so the running turn's stream
+                                        // keeps draining while the RPC round trip is in flight.
+                                        let runner = self.runner.clone();
+                                        let context = self.context.clone();
+                                        tokio::spawn(async move {
+                                            let res = runner.steer(&context, &guidance).await;
+                                            let _ = reply.send(res);
+                                        });
+                                    }
                                     Some(ActorCommand::TouchActivity) => {
                                         self.last_active_at = tokio::time::Instant::now();
                                     }
@@ -574,6 +588,10 @@ impl SessionActor {
                 }
                 ActorCommand::TouchActivity => {
                     self.last_active_at = tokio::time::Instant::now();
+                }
+                ActorCommand::Steer { reply, .. } => {
+                    // Turn is not currently running in this branch
+                    let _ = reply.send(Ok(false));
                 }
                 ActorCommand::SetModel { model, reply } => {
                     self.last_active_at = tokio::time::Instant::now();
@@ -897,6 +915,50 @@ async fn ensure_session(pool: &SqlitePool, context: &SessionContext) -> Result<(
     Ok(())
 }
 
+/// Mirrors an inbound user message into the session transcript without running a turn.
+///
+/// The instant-steer path injects a message into a turn that is already executing, so no
+/// actor turn ever persists it. Without this the message would be absent from history for
+/// `/undo`, `/retry`, and transcript search even though the agent did see it.
+pub async fn record_inbound_transcript(pool: &SqlitePool, event: &InboundEvent) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO sessions (
+            session_key, platform, guild_id, channel_id, thread_id, user_id,
+            state_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, '{}', ?, ?)
+         ON CONFLICT(session_key) DO NOTHING",
+    )
+    .bind(event.session.storage_key())
+    .bind(&event.session.platform)
+    .bind(&event.session.guild_id)
+    .bind(&event.session.channel_id)
+    .bind(&event.session.thread_id)
+    .bind(&event.session.user_id)
+    .bind(event.received_at)
+    .bind(event.received_at)
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at, platform_message_id)
+         VALUES (?, ?, 'user', ?, ?, ?, ?)
+         ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(event.id.to_string())
+    .bind(event.session.storage_key())
+    .bind(strip_leading_message_timestamps(&render_user_prompt(event)))
+    .bind(serde_json::to_string(&event.attachments).map_err(serialization_error)?)
+    .bind(event.received_at)
+    .bind(if event.platform_message_id.is_empty() {
+        None
+    } else {
+        Some(&event.platform_message_id)
+    })
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 fn serialization_error(error: serde_json::Error) -> OmonError {
     OmonError::Multiplexer(error.to_string())
 }
@@ -927,6 +989,89 @@ mod tests {
             let _ = self.completed.send(event.content);
             Ok(())
         }
+    }
+
+    struct SteerRecordingRunner {
+        started: mpsc::UnboundedSender<String>,
+        barrier: Arc<Barrier>,
+        steered: mpsc::UnboundedSender<String>,
+    }
+
+    #[async_trait]
+    impl AgentRunner for SteerRecordingRunner {
+        async fn run(&self, _session: &mut SessionContext, event: InboundEvent) -> Result<()> {
+            let _ = self.started.send(event.content.clone());
+            if event.content == "blocking" {
+                self.barrier.wait().await;
+            }
+            Ok(())
+        }
+
+        async fn steer(&self, _session: &SessionContext, guidance: &str) -> Result<bool> {
+            let _ = self.steered.send(guidance.to_string());
+            Ok(true)
+        }
+    }
+
+    #[tokio::test]
+    async fn actor_steers_active_turn_and_reports_idle_as_not_steered() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-steer-test");
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let (steered_tx, mut steered_rx) = mpsc::unbounded_channel();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let runner = Arc::new(SteerRecordingRunner {
+            started: started_tx,
+            barrier: barrier.clone(),
+            steered: steered_tx,
+        });
+
+        let (cmd_tx, cmd_rx) = mpsc::channel(32);
+        let actor = SessionActor::load(key.clone(), cmd_rx, runner, None, db.pool().clone(), None)
+            .await
+            .unwrap();
+        let handle = tokio::spawn(actor.run());
+
+        // With no turn executing the actor reports "not steered" so the caller
+        // can fall back to the normal queued path instead of dropping the message.
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::Steer {
+                guidance: "idle-guidance".into(),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        assert!(!reply_rx.await.unwrap().unwrap());
+        assert!(steered_rx.try_recv().is_err());
+
+        // While a turn is blocked mid-flight the same command must reach the
+        // runner's steer hook without disturbing the running turn.
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::Steer {
+                guidance: "focus on tests".into(),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        assert!(reply_rx.await.unwrap().unwrap());
+        assert_eq!(steered_rx.recv().await.as_deref(), Some("focus on tests"));
+
+        barrier.wait().await;
+        drop(cmd_tx);
+        handle.await.unwrap();
     }
 
     #[tokio::test]

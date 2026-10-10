@@ -54,4 +54,11 @@ pub trait AgentBackend: Send + Sync + 'static {
     async fn cancel(&self, _session: &SessionContext) -> Result<()> {
         Ok(())
     }
+
+    /// Injects steering guidance immediately into an ongoing turn for the specified session.
+    /// Returns Ok(true) if guidance was injected into an active turn, Ok(false) if no active turn was found.
+    async fn steer(&self, _session: &SessionContext, _guidance: &str) -> Result<bool> {
+        Ok(false)
+    }
 }
+

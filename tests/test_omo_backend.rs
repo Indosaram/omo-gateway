@@ -1779,7 +1779,7 @@ async fn test_omo_backend_cron_sessions_always_start_fresh_thread() {
         None::<String>,
         "chan-1",
         None::<String>,
-        "cron:omon-katok-3h-group-digest-v3",
+        "cron:omon-sample-digest-v1",
     );
     let mut session = SessionContext::new(session_key.clone());
     session
@@ -1873,7 +1873,7 @@ async fn test_omo_backend_cron_session_suppresses_activity_lines_and_delivers_on
         Some("guild-1"),
         "chan-1",
         None::<String>,
-        "cron:omon-katok-3h-group-digest-v3",
+        "cron:omon-sample-digest-v1",
     );
     let mut session = SessionContext::new(session_key.clone());
     session.state.metadata.insert(
@@ -1884,7 +1884,7 @@ async fn test_omo_backend_cron_session_suppresses_activity_lines_and_delivers_on
     // When: a cron turn runs through tool + reasoning activity
     let event = InboundEvent::message(
         session_key.clone(),
-        "cron:omon-katok-3h-group-digest-v3",
+        "cron:omon-sample-digest-v1",
         "Run the probe command",
     );
     let result = backend.run(&mut session, event).await;

@@ -58,6 +58,9 @@ pub const CRON_APPSERVER_URL_DEFAULT: &str = "ws://127.0.0.1:19742";
 /// Default fallback model when primary model fails due to quota or daemon model rejection.
 pub const DEFAULT_FALLBACK_MODEL: &str = "inferhub/cb/deepseek-v4.1-flash";
 
+/// Default primary model when neither OMON_DEFAULT_MODEL nor DEFAULT_MODEL is set.
+pub const DEFAULT_PRIMARY_MODEL: &str = "mahoquot/nekos-claude-sonnet-5-5";
+
 impl Default for OmoBackendConfig {
     fn default() -> Self {
         Self {
@@ -193,7 +196,8 @@ impl OmoBackendConfig {
             .or_else(|_| std::env::var("DEFAULT_MODEL"))
             .ok()
             .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .or_else(|| Some(DEFAULT_PRIMARY_MODEL.to_string()));
 
         let fallback_model = std::env::var("OMON_OMO_FALLBACK_MODEL")
             .or_else(|_| std::env::var("FALLBACK_MODEL"))

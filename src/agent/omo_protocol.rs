@@ -77,12 +77,43 @@ pub fn turn_start_request(thread_id: &str, user_prompt: &str, model: Option<&str
     if let Some(m) = model {
         params["model"] = json!(m);
     }
+    let effort = std::env::var("OMON_DEFAULT_EFFORT")
+        .or_else(|_| std::env::var("DEFAULT_EFFORT"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "high".to_string());
+    params["effort"] = json!(effort);
     Message::text(
         json!({
             "jsonrpc": "2.0",
             "id": 3,
             "method": "turn/start",
             "params": params
+        })
+        .to_string(),
+    )
+}
+
+pub fn turn_steer_request(
+    id: u64,
+    thread_id: &str,
+    expected_turn_id: &str,
+    guidance: &str,
+) -> Message {
+    Message::text(
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "turn/steer",
+            "params": {
+                "threadId": thread_id,
+                "expectedTurnId": expected_turn_id,
+                "input": [{
+                    "type": "text",
+                    "text": guidance
+                }]
+            }
         })
         .to_string(),
     )

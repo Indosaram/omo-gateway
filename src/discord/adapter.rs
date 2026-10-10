@@ -1069,6 +1069,30 @@ pub async fn handle_event(
                     global_debouncer().cancel(&event.session).await;
                     tracing::info!(session = %event.session, "Routing Discord stop command immediately");
                     route_claimed_event(data, event).await?;
+                } else if event.attachments.is_empty() && !event.content.trim().is_empty() {
+                    // Instant steer: when a turn is already executing in this session, inject the
+                    // message into it via turn/steer immediately instead of waiting out the
+                    // debounce window or queueing a second turn behind the running one.
+                    match steer_claimed_event(data, &event).await {
+                        Ok(true) => {
+                            tracing::info!(
+                                session = %event.session,
+                                "steered inbound message into active turn"
+                            );
+                        }
+                        Ok(false) => {
+                            tracing::info!(session = %event.session, bot_id = %bot_user_id, "Enqueueing inbound message to debounce buffer");
+                            global_debouncer().enqueue(event, data.clone()).await;
+                        }
+                        Err(error) => {
+                            tracing::error!(
+                                session = %event.session,
+                                %error,
+                                "failed to steer inbound message into active turn"
+                            );
+                            global_debouncer().enqueue(event, data.clone()).await;
+                        }
+                    }
                 } else {
                     tracing::info!(session = %event.session, bot_id = %bot_user_id, "Enqueueing inbound message to debounce buffer");
                     global_debouncer().enqueue(event, data.clone()).await;
@@ -1284,6 +1308,42 @@ pub async fn handle_thread_delete(data: &PoiseData, thread: &serenity::PartialGu
 
 pub async fn route_claimed_event(data: &PoiseData, event: InboundEvent) -> Result<bool> {
     route_claimed_event_with_constituents(data, event, &[]).await
+}
+
+/// Injects an inbound message straight into a turn that is already executing in the
+/// session via `turn/steer`, instead of starting or queueing a second turn.
+///
+/// Returns `Ok(false)` when no turn is active, so the caller can fall back to the normal
+/// debounce/queue path. The ledger is only written once the steer actually landed: a claim
+/// taken here and then abandoned would make the fallback path treat the message as a
+/// duplicate and drop it.
+pub async fn steer_claimed_event(data: &PoiseData, event: &InboundEvent) -> Result<bool> {
+    let delivery_id = event
+        .delivery_id
+        .clone()
+        .unwrap_or_else(|| format!("discord:{}", event.platform_message_id));
+    let ledger = DeliveryLedgerService::new(data.pool.clone());
+
+    // Read-only probe: an already known delivery is a duplicate and must not be steered twice.
+    if ledger.is_duplicate(&delivery_id).await? {
+        tracing::info!(delivery_id, "Ignoring duplicate Discord delivery");
+        return Ok(true);
+    }
+
+    match data.multiplexer.steer(&event.session, &event.content).await {
+        Ok(true) => {
+            let _ = ledger.record_incoming_as(event, &delivery_id).await?;
+            if let Err(error) =
+                crate::multiplexer::record_inbound_transcript(&data.pool, event).await
+            {
+                tracing::warn!(%error, "failed to mirror steered message into transcript");
+            }
+            let _ = ledger.mark_delivered(&delivery_id).await;
+            Ok(true)
+        }
+        Ok(false) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 pub async fn route_claimed_event_with_constituents(
@@ -4309,6 +4369,96 @@ mod tests {
         assert_eq!(runs.len(), 1, "expected exactly 1 coalesced turn");
         assert_eq!(runs[0].content, "chunk 1\nchunk 2\nchunk 3");
         assert_eq!(runs[0].platform_message_id, "msg-3");
+    }
+
+    #[tokio::test]
+    async fn steer_claimed_event_injects_into_active_turn_and_falls_back_when_idle() {
+        use crate::{AgentRunner, MultiplexerConfig, SessionContext, SessionMultiplexer};
+
+        struct SteerableRunner {
+            active: Arc<Mutex<bool>>,
+            steered: Arc<Mutex<Vec<String>>>,
+            started: tokio::sync::mpsc::UnboundedSender<()>,
+            barrier: Arc<tokio::sync::Barrier>,
+        }
+
+        #[async_trait]
+        impl AgentRunner for SteerableRunner {
+            async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
+                *self.active.lock().await = true;
+                let _ = self.started.send(());
+                self.barrier.wait().await;
+                *self.active.lock().await = false;
+                Ok(())
+            }
+
+            async fn steer(&self, _session: &SessionContext, guidance: &str) -> Result<bool> {
+                let active = *self.active.lock().await;
+                if active {
+                    self.steered.lock().await.push(guidance.to_string());
+                }
+                Ok(active)
+            }
+        }
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let active = Arc::new(Mutex::new(false));
+        let steered = Arc::new(Mutex::new(Vec::new()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runner = Arc::new(SteerableRunner {
+            active: active.clone(),
+            steered: steered.clone(),
+            started: started_tx,
+            barrier: barrier.clone(),
+        });
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            runner.clone(),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer.clone(), db.pool().clone());
+        let session = test_session("steer-claimed-test-user");
+
+        // With no turn running the message must not be claimed as steered, so the
+        // caller can fall back to the normal debounce/queue path.
+        let idle = InboundEvent::message(session.clone(), "msg-idle", "idle message");
+        assert!(!steer_claimed_event(&data, &idle).await.unwrap());
+        assert!(steered.lock().await.is_empty());
+
+        // Start a blocking turn, then confirm a new message is steered into it.
+        let blocking = InboundEvent::message(session.clone(), "msg-blocking", "blocking");
+        let run_multiplexer = multiplexer.clone();
+        let turn = tokio::spawn(async move { run_multiplexer.route(blocking).await });
+
+        // Wait on the runner's own start signal instead of polling, so a regression
+        // fails the test with a timeout rather than hanging the suite.
+        tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
+            .await
+            .expect("turn should start within timeout")
+            .expect("runner start channel closed unexpectedly");
+
+        let steered_event = InboundEvent::message(session.clone(), "msg-steer", "focus on tests");
+        assert!(steer_claimed_event(&data, &steered_event).await.unwrap());
+        assert_eq!(steered.lock().await.as_slice(), ["focus on tests"]);
+
+        // The steered message is mirrored into the transcript even though no turn
+        // consumed it as a turn input.
+        let mirrored: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_key = ? AND content = ?",
+        )
+        .bind(session.storage_key())
+        .bind("focus on tests")
+        .fetch_one(&data.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            mirrored, 1,
+            "steered message should be mirrored to transcript"
+        );
+
+        barrier.wait().await;
+        turn.await.unwrap().unwrap();
     }
 
     #[tokio::test]

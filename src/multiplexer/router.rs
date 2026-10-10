@@ -115,6 +115,23 @@ impl SessionHandle {
         }
     }
 
+    pub(crate) async fn steer(&self, guidance: String) -> Result<(SendOutcome, Option<bool>)> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let outcome = self
+            .send_command(ActorCommand::Steer {
+                guidance,
+                reply: reply_tx,
+            })
+            .await?;
+        if outcome != SendOutcome::Sent {
+            return Ok((outcome, None));
+        }
+        match reply_rx.await {
+            Ok(result) => Ok((SendOutcome::Sent, Some(result?))),
+            Err(_) => Ok((SendOutcome::Closed, None)),
+        }
+    }
+
     pub(crate) async fn set_model(&self, model: String) -> Result<()> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let outcome = self
@@ -341,6 +358,19 @@ impl SessionMultiplexer {
                     handle.mark_finished();
                 }
             }
+        }
+    }
+
+    /// Injects steering guidance immediately into an ongoing turn for the specified session.
+    /// Returns `Ok(true)` if guidance was successfully steered into an active turn,
+    /// `Ok(false)` if no turn was currently active or steer was unsupported.
+    pub async fn steer(&self, key: &SessionKey, guidance: &str) -> Result<bool> {
+        let Some(handle) = self.sessions.get(key).map(|entry| entry.clone()) else {
+            return Ok(false);
+        };
+        match handle.steer(guidance.to_string()).await? {
+            (SendOutcome::Sent, Some(steered)) => Ok(steered),
+            _ => Ok(false),
         }
     }
 

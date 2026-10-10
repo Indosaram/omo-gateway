@@ -259,7 +259,7 @@ impl Config {
     pub(crate) fn resolve_default_model() -> String {
         optional_env("OMON_DEFAULT_MODEL")
             .or_else(|| optional_env("DEFAULT_MODEL"))
-            .unwrap_or_else(|| "gpt-4o".to_string())
+            .unwrap_or_else(|| "mahoquot/nekos-claude-sonnet-5-5".to_string())
     }
 
     fn llm_config(&self, model: impl Into<String>) -> LlmConfig {
@@ -602,8 +602,6 @@ fn ensure_full_disk_access() {
         format!("{home}/Library/Messages/chat.db"),
         format!("{home}/Library/Safari"),
         format!("{home}/Library/Mail"),
-        "/Volumes/T9-Mac/.Spotlight-V100".to_string(),
-        "/Volumes/T9-Mac/.fseventsd".to_string(),
     ];
     let mut denied = Vec::new();
     for path in candidates {
@@ -1480,15 +1478,15 @@ mod runner_tests {
         assert_eq!(gw_model, "model_b");
         assert_eq!(db_model, "model_b");
 
-        // Case 3: Both absent -> both resolve to documented fallback "gpt-4o"
+        // Case 3: Both absent -> both resolve to documented fallback "mahoquot/nekos-claude-sonnet-5-5"
         unsafe {
             std::env::remove_var("OMON_DEFAULT_MODEL");
             std::env::remove_var("DEFAULT_MODEL");
         }
         let gw_model = super::Config::resolve_default_model();
         let db_model = super::dashboard_runtime::effective_default_model();
-        assert_eq!(gw_model, "gpt-4o");
-        assert_eq!(db_model, "gpt-4o");
+        assert_eq!(gw_model, "mahoquot/nekos-claude-sonnet-5-5");
+        assert_eq!(db_model, "mahoquot/nekos-claude-sonnet-5-5");
     }
 
     #[tokio::test]
