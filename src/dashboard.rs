@@ -510,6 +510,24 @@ impl CompositeDispatcher {
 
 #[async_trait]
 impl OutboundDispatcher for CompositeDispatcher {
+    async fn owner_thread_is_private(&self, session: &SessionKey) -> bool {
+        self.primary.owner_thread_is_private(session).await
+    }
+    async fn dispatch_direct_reply(
+        &self,
+        session: SessionKey,
+        content: String,
+    ) -> omon_gateway::Result<()> {
+        self.dashboard
+            .dispatch_direct_reply(session.clone(), content.clone())
+            .await?;
+        if session.platform == "web" {
+            Ok(())
+        } else {
+            self.primary.dispatch_direct_reply(session, content).await
+        }
+    }
+
     async fn dispatch(&self, action: OutboundAction) -> omon_gateway::Result<()> {
         let web_only = action_session(&action).is_some_and(|session| session.platform == "web");
         self.dashboard.dispatch(action.clone()).await?;
@@ -1193,6 +1211,23 @@ async fn post_chat(
     })?;
     let key = resolve_session_key(&state.pool, &id).await?;
     let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
+    let owner = omon_gateway::sessions::status_reply::owner_id();
+    let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
+    let private_owner = private_owner
+        || (omon_gateway::sessions::status_reply::matches_intent(message)
+            && omon_gateway::sessions::status_reply::owner_thread(&key, &owner, &owner)
+            && mux.owner_thread_is_private(&key).await);
+    if mux
+        .intercept_session_status(&event, private_owner)
+        .await
+        .map_err(ApiError::from)?
+    {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({"queued": false, "direct_reply": true, "session_id": key.storage_key()})),
+        )
+            .into_response());
+    }
     mux.route(event).await.map_err(ApiError::from)?;
     Ok((
         StatusCode::ACCEPTED,
@@ -1275,6 +1310,20 @@ async fn handle_session_socket(
                                     continue;
                                 };
                                 let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), content);
+                                let owner = omon_gateway::sessions::status_reply::owner_id();
+                                let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
+                                let private_owner = private_owner || (omon_gateway::sessions::status_reply::matches_intent(content)
+                                    && omon_gateway::sessions::status_reply::owner_thread(&key, &owner, &owner)
+                                    && mux.owner_thread_is_private(&key).await);
+                                match mux.intercept_session_status(&event, private_owner).await {
+                                    Ok(true) => {
+                                        let ack = json!({"type":"accepted","direct_reply":true,"session_id":key.storage_key()});
+                                        if socket.send(WsMessage::Text(ack.to_string().into())).await.is_err() { break; }
+                                        continue;
+                                    }
+                                    Ok(false) => {}
+                                    Err(error) => { let _ = send_ws_error(&mut socket, &error.to_string()).await; continue; }
+                                }
                                 if let Err(error) = mux.route(event).await {
                                     let _ = send_ws_error(&mut socket, &error.to_string()).await;
                                 } else {
@@ -3194,9 +3243,7 @@ mod tests {
         let app = router(state);
 
         let body = || {
-            Body::from(
-                json!({"bot_id": "bot-origin-check", "name": "origin-check"}).to_string(),
-            )
+            Body::from(json!({"bot_id": "bot-origin-check", "name": "origin-check"}).to_string())
         };
 
         let cross_origin_post = app

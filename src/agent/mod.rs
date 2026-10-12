@@ -14,6 +14,10 @@ pub use llm::{
     ChatMessage, LlmClient, LlmConfig, LlmProvider, LlmStream, ToolCall, ToolDefinition,
 };
 pub use omo_backend::OmoBackend;
-pub use omo_config::{validate_agent_backend_env, validate_agent_backend_value, OmoBackendConfig};
+pub use omo_config::{
+    model_for_purpose, validate_agent_backend_env, validate_agent_backend_value, ModelPurpose,
+    OmoBackendConfig, OMON_MODEL_LARGE, OMON_MODEL_LARGE_DEFAULT, OMON_MODEL_LEAD,
+    OMON_MODEL_LEAD_DEFAULT, OMON_MODEL_SMALL, OMON_MODEL_SMALL_DEFAULT,
+};
 pub use omo_daemon::OmoDaemonSupervisor;
 pub use workspace_migration::wipe_omo_thread_bindings;

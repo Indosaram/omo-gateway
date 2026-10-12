@@ -64,3 +64,60 @@ tempfile = "3"
 [[test]]
 name = "test_voice_transcription"
 path = "tests/test_voice_transcription.rs"
+
+[[test]]
+name = "test_model_routing"
+path = "tests/test_model_routing.rs"
+
+[[test]]
+name = "test_lanes_storage"
+path = "tests/test_lanes_storage.rs"
+
+[[test]]
+name = "test_lane_runner"
+path = "tests/test_lane_runner.rs"
+
+[[test]]
+name = "test_lane_cli"
+path = "tests/test_lane_cli.rs"
+
+[[test]]
+name = "test_lane_reopen"
+path = "tests/test_lane_reopen.rs"
+
+[[test]]
+name = "test_profile_import"
+path = "tests/test_profile_import.rs"
+
+[[test]]
+name = "test_inbox_store"
+path = "tests/test_inbox_store.rs"
+
+[[test]]
+name = "test_inbox_sources"
+path = "tests/test_inbox_sources.rs"
+
+[[test]]
+name = "test_session_registry"
+path = "tests/test_session_registry.rs"
+
+[[test]]
+name = "test_lane_events"
+path = "tests/test_lane_events.rs"
+
+[[test]]
+name = "test_lane_scrub"
+path = "tests/test_lane_scrub.rs"
+
+[[test]]
+name = "test_lane_dispatch"
+path = "tests/test_lane_dispatch.rs"
+
+[[test]]
+name = "test_cron_health"
+path = "tests/test_cron_health.rs"
+
+[[test]]
+name = "test_lane_done"
+path = "tests/test_lane_done.rs"
+

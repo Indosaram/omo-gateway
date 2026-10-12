@@ -1,5 +1,6 @@
 // allow: SIZE_OK — OMO WebSocket protocol state machine
 use std::collections::{hash_map::Entry, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
 
-use super::agent_workspace::{agent_workspace_slug, resolve_workspace};
+use super::agent_workspace::{agent_workspace_slug, resolve_workspace, AgentWorkspace};
 use super::backend::AgentBackend;
 
 use super::omo_config::OmoBackendConfig;
@@ -70,6 +71,25 @@ pub struct ActiveTurn {
 #[allow(dead_code)]
 fn active_turn_entry_is_stale(age: Duration, effective_total_timeout: Duration) -> bool {
     age > effective_total_timeout + ACTIVE_TURN_STALE_MARGIN
+}
+
+/// Text of a finished agent message frame (`item/completed` of an `agentMessage`).
+fn completed_agent_message_text<'a>(method: &str, frame: &'a Value) -> Option<&'a str> {
+    if method != "item/completed"
+        || frame.pointer("/params/item/type").and_then(Value::as_str) != Some("agentMessage")
+    {
+        return None;
+    }
+    frame.pointer("/params/item/text").and_then(Value::as_str)
+}
+
+/// Whether a frame of the followed turn shows the agent working on the prompt.
+/// Turn bookkeeping and user-message echoes (including the gateway's own
+/// progress steers) do not count.
+fn is_agent_progress(method: &str, frame: &Value) -> bool {
+    let agent_frame =
+        method.starts_with("item/") || matches!(method, "turn/plan/updated" | "turn/diff/updated");
+    agent_frame && frame.pointer("/params/item/type").and_then(Value::as_str) != Some("userMessage")
 }
 
 /// Interactive (Discord) turns stop at 1800s (30m); cron turns keep their own budget.
@@ -247,6 +267,7 @@ impl OmoBackend {
                 .get("cron_scheduler_delivery")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+        let is_lane = session.key.platform == "lane";
         if is_cron {
             session.state.metadata.remove("omo_thread_id");
             self.thread_ids.lock().remove(&storage_key);
@@ -335,7 +356,45 @@ impl OmoBackend {
             .as_deref()
             .or(self.config.default_model.as_deref());
 
-        let workspace = if self.config.per_agent_workspace {
+        let workspace = if is_lane {
+            let lane_cwd_str = session
+                .state
+                .metadata
+                .get("lane_cwd")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    OmonError::Config("lane session missing required 'lane_cwd' metadata".into())
+                })?;
+            let cwd_path = PathBuf::from(lane_cwd_str);
+            if !cwd_path.is_absolute() {
+                return Err(OmonError::Config(format!(
+                    "lane_cwd must be an absolute path: {}",
+                    cwd_path.display()
+                )));
+            }
+            if !tokio::fs::try_exists(&cwd_path).await.unwrap_or(false) {
+                return Err(OmonError::Config(format!(
+                    "lane_cwd does not exist: {}",
+                    cwd_path.display()
+                )));
+            }
+            let is_dir = match tokio::fs::metadata(&cwd_path).await {
+                Ok(m) => m.is_dir(),
+                Err(e) => {
+                    return Err(OmonError::Config(format!("lane_cwd cannot be read: {e}")));
+                }
+            };
+            if !is_dir {
+                return Err(OmonError::Config(format!(
+                    "lane_cwd is not a directory: {}",
+                    cwd_path.display()
+                )));
+            }
+            Some(AgentWorkspace {
+                cwd: cwd_path.clone(),
+                roots: vec![cwd_path],
+            })
+        } else if self.config.per_agent_workspace {
             if let Some(root) = &self.config.workspace_root {
                 let slug = agent_workspace_slug(
                     &session.key.platform,
@@ -511,6 +570,37 @@ impl OmoBackend {
 }
 
 impl OmoBackend {
+    async fn capture_lane_item(
+        &self,
+        session: &SessionContext,
+        item: &Value,
+        turn: &str,
+    ) -> Result<()> {
+        if session.key.platform != "lane"
+            || item.get("type").and_then(Value::as_str) != Some("agentMessage")
+        {
+            return Ok(());
+        }
+        let Some(text) = item.get("text").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let identity = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                use sha2::{Digest, Sha256};
+                format!("{:x}", Sha256::digest(text.as_bytes()))
+            });
+        self.dispatcher
+            .dispatch(OutboundAction::EditMessage {
+                session: session.key.clone(),
+                platform_message_id: format!("lane-item:{turn}:{identity}"),
+                content: text.into(),
+            })
+            .await
+    }
+
     async fn deliver_rendered_result(
         &self,
         session: &mut SessionContext,
@@ -523,6 +613,17 @@ impl OmoBackend {
             .state
             .metadata
             .insert("cron_agent_output".into(), json!(rendered));
+
+        if session.key.platform == "lane"
+            && session
+                .state
+                .metadata
+                .get("lane_completed_item")
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            return Ok(());
+        }
 
         let suppress_emission = session
             .state
@@ -543,6 +644,7 @@ impl OmoBackend {
                 .record_obligation(&obl_id, &session.key, rendered)
                 .await?;
             ledger.mark_obligation_attempting(&obl_id).await?;
+            persist_message(pool, session, rendered, &obl_id).await?;
         }
 
         let delivered = self
@@ -557,7 +659,6 @@ impl OmoBackend {
             .await;
 
         if let Some(pool) = &self.pool {
-            persist_message(pool, session, rendered).await?;
             let ledger = crate::DeliveryLedgerService::new(pool.clone());
             if delivered.is_ok() {
                 ledger.mark_obligation_delivered(&obl_id).await?;
@@ -620,15 +721,9 @@ impl OmoBackend {
             .or(self.config.default_model.as_deref()));
         // Invariant: model changes flow only via active_model / turn/start params / thread/settings/update.
         // omo_config reads global omo.json but never writes it.
-        if let Some(model) = model.filter(|_| {
-            model_override.is_some()
-                || session
-                    .state
-                    .metadata
-                    .get("omo_fallback_model_active")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-        }) {
+        // thread/start misses custom providers and turn/start may ignore model.
+        // Await the custom-provider-aware settings RPC on every turn.
+        if let Some(model) = model {
             let effort = std::env::var("OMON_DEFAULT_EFFORT")
                 .or_else(|_| std::env::var("DEFAULT_EFFORT"))
                 .ok()
@@ -656,11 +751,16 @@ impl OmoBackend {
                     let response: Value = serde_json::from_str(&text).map_err(|e| {
                         OmonError::Llm(format!("invalid model update response: {e}"))
                     })?;
-                    if response.get("id").and_then(Value::as_u64) == Some(4) {
+                    if response.get("method").is_none()
+                        && response.get("id").and_then(Value::as_u64) == Some(4)
+                    {
                         if let Some(error) = response.get("error") {
-                            let err_str = error.to_string();
-                            *fallback_eligible = is_model_rejected_error(&err_str);
                             return Err(OmonError::Llm(format!("model update rejected: {error}")));
+                        }
+                        if response.get("result").is_none() {
+                            return Err(OmonError::Llm(
+                                "model update acknowledgement missing result".into(),
+                            ));
                         }
                         break;
                     }
@@ -739,9 +839,10 @@ impl OmoBackend {
                 .get("cron_scheduler_delivery")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+        let is_lane = session.key.platform == "lane";
 
         // Immediately notify Discord that the agent is typing while preparing/reasoning
-        if !is_cron_session {
+        if !is_cron_session && !is_lane {
             let _ = self
                 .dispatcher
                 .dispatch(OutboundAction::Typing {
@@ -758,8 +859,11 @@ impl OmoBackend {
             None
         };
         let mut sequence: u64 = 0;
+        if is_lane {
+            session.state.metadata.remove("lane_completed_item");
+        }
         let mut full_content = String::new();
-        let mut tool_call_counts: std::collections::BTreeMap<String, usize> = Default::default();
+        let mut assistant_error = None;
         let mut total_tool_calls: usize = 0;
         let mut started_ids: std::collections::HashSet<String> = Default::default();
         let mut approval_denials: u32 = 0;
@@ -772,10 +876,23 @@ impl OmoBackend {
         let mut turn_id: Option<String> = None;
         let mut turn_started_ack = false;
         let mut last_activity_at = tokio::time::Instant::now();
+        // The response watchdogs count from when our prompt starts processing (the
+        // turn/start acknowledgement), not from submission: the app-server queues
+        // the prompt behind any run already active on the thread.
+        let mut prompt_started_at = started_at;
+        // First agent output for our prompt; disarms the initial-response interrupt.
+        let mut first_progress_at: Option<tokio::time::Instant> = None;
+        // turn/started and turn/completed frames seen before the acknowledgement,
+        // in arrival order, as (is_start, turn_id).
+        let mut pre_ack_turn_events: Vec<(bool, String)> = Vec::new();
+        // Our acknowledged turn id was completed by the run our prompt was queued
+        // behind; the next turn that starts on the thread is processing our prompt.
+        let mut awaiting_successor_turn = false;
         let _no_content_grace = self.config.no_content_grace;
 
-        let ack_deadline = started_at
-            + Duration::from_secs(30).min(deadline.saturating_duration_since(started_at));
+        let ack_window = Duration::from_secs(30);
+        let mut ack_deadline =
+            started_at + ack_window.min(deadline.saturating_duration_since(started_at));
 
         let mut deadline = deadline;
         let cleanup_reserve = if effective_total_timeout >= Duration::from_secs(10) {
@@ -836,6 +953,25 @@ impl OmoBackend {
                                             {
                                                 full_content.clear();
                                                 full_content.push_str(text);
+                                                if is_lane {
+                                                    if let Some(item) = val.pointer("/params/item")
+                                                    {
+                                                        if let Err(error) = self
+                                                            .capture_lane_item(
+                                                                session, item, turn_id,
+                                                            )
+                                                            .await
+                                                        {
+                                                            return Some(
+                                                                json!({"lane_capture_error": error.to_string()}),
+                                                            );
+                                                        }
+                                                        session.state.metadata.insert(
+                                                            "lane_completed_item".into(),
+                                                            json!(true),
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
                                     } else if m == "turn/completed" {
@@ -846,6 +982,11 @@ impl OmoBackend {
                             None
                         };
                         if let Ok(Some(val)) = tokio::time::timeout(rem, drain_fut).await {
+                            if let Some(error) =
+                                val.get("lane_capture_error").and_then(Value::as_str)
+                            {
+                                return Err(OmonError::Llm(error.into()));
+                            }
                             let status = val.pointer("/params/turn/status").and_then(Value::as_str);
                             let interrupt_confirmed = val.get("method").is_none()
                                 && val.get("id").and_then(Value::as_u64) == Some(9_001)
@@ -928,13 +1069,21 @@ impl OmoBackend {
                 )));
             }
 
-            // If the agent remains completely silent without delivering ANY response/brief
-            // to the user within initial_response_timeout (default 45s), immediately interrupt
-            // the turn rather than keeping the user waiting in silence.
-            let initial_response_timeout = Duration::from_secs(45);
-            if !is_cron_session
+            // Fail fast when the agent shows no sign of working on the prompt: nothing
+            // delivered and no agent output within initial_response_timeout (45s) of
+            // the prompt starting. Once output flows, the progress steer below asks for
+            // briefs instead, and the inactivity and total deadlines remain the backstop
+            // for a turn that stalls later. The thread binding is kept: a silent model
+            // is not a wedged thread, and dropping the binding loses the conversation.
+            // Lane turns run unattended under their own budgets and are exempt.
+            let initial_response_timeout = self.config.initial_response_timeout;
+            let awaiting_first_response = !is_cron_session
+                && !is_lane
+                && turn_started_ack
                 && messages_delivered == 0
-                && now.duration_since(started_at) >= initial_response_timeout
+                && first_progress_at.is_none();
+            if awaiting_first_response
+                && now.duration_since(prompt_started_at) >= initial_response_timeout
             {
                 if let Some(turn_id) = &turn_id {
                     let interrupt = json!({
@@ -947,15 +1096,15 @@ impl OmoBackend {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
                 self.active_turns.lock().remove(&session.key.storage_key());
-                self.clear_stuck_thread(session).await;
-                return Err(OmonError::Llm(
-                    "turn interrupted: no response delivered within initial deadline".into(),
-                ));
+                return Err(OmonError::Llm(format!(
+                    "turn interrupted: agent produced no output within {}s of starting the prompt",
+                    initial_response_timeout.as_secs()
+                )));
             }
 
             // Inactivity timeout: if the server stops sending ANY streaming frames for more than 180s
             // (or request_timeout, whichever is shorter for interactive turns), interrupt the turn immediately.
-            let inactivity_timeout = if !is_cron_session {
+            let inactivity_timeout = if !is_cron_session && !is_lane {
                 self.config.request_timeout.min(Duration::from_secs(180))
             } else {
                 self.config.request_timeout
@@ -980,16 +1129,16 @@ impl OmoBackend {
                 next_timeout = next_timeout.min(ack_deadline);
             }
             next_timeout = next_timeout.min(last_activity_at + inactivity_timeout);
-            if !is_cron_session && messages_delivered == 0 {
-                next_timeout = next_timeout.min(started_at + initial_response_timeout);
+            if awaiting_first_response {
+                next_timeout = next_timeout.min(prompt_started_at + initial_response_timeout);
             }
 
             // Progress watchdog: if the agent has been quiet without delivering any
             // message to the user for longer than steer_quiet_threshold, inject a steering RPC
             // to prompt the agent to give an immediate progress brief to Discord.
-            if !is_cron_session && messages_delivered == 0 {
+            if !is_cron_session && !is_lane && messages_delivered == 0 {
                 if let Some(current_turn_id) = &turn_id {
-                    if now.duration_since(started_at) >= steer_quiet_threshold
+                    if now.duration_since(prompt_started_at) >= steer_quiet_threshold
                         && now.duration_since(last_steer_at) >= steer_quiet_threshold
                     {
                         let steer_msg = turn_steer_request(
@@ -1019,7 +1168,7 @@ impl OmoBackend {
                 Message::Text(text) => {
                     last_activity_at = tokio::time::Instant::now();
                     // Invariant: Non-cron interactive turns auto-renew their 30m deadline while actual work events arrive.
-                    if !is_cron_session {
+                    if !is_cron_session && !is_lane {
                         deadline = last_activity_at + effective_total_timeout;
                         work_deadline = deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
                     }
@@ -1081,7 +1230,31 @@ impl OmoBackend {
                     .ok_or_else(|| {
                         OmonError::Llm("turn/start acknowledgement missing turn id".into())
                     })?;
-                let turn_id_str = id.to_string();
+                let acked_turn = id.to_string();
+                // A turn/completed for our id before the acknowledgement means the run
+                // our prompt was queued behind finished under it. A turn that started
+                // after that is the one processing our prompt.
+                let taken_over_at = pre_ack_turn_events
+                    .iter()
+                    .position(|(is_start, tid)| !is_start && *tid == acked_turn);
+                let successor = taken_over_at.and_then(|at| {
+                    pre_ack_turn_events[at + 1..]
+                        .iter()
+                        .rev()
+                        .find(|(is_start, tid)| *is_start && *tid != acked_turn)
+                        .map(|(_, tid)| tid.clone())
+                });
+                pre_ack_turn_events.clear();
+                if taken_over_at.is_some() {
+                    tracing::info!(
+                        %thread_id,
+                        acked_turn = %acked_turn,
+                        successor = ?successor,
+                        "queued prompt's turn id was completed by the run ahead of it; following its successor"
+                    );
+                }
+                awaiting_successor_turn = taken_over_at.is_some() && successor.is_none();
+                let turn_id_str = successor.unwrap_or(acked_turn);
                 let mut active_turns = self.active_turns.lock();
                 let inserted_at = active_turns
                     .get(&session.key.storage_key())
@@ -1097,6 +1270,8 @@ impl OmoBackend {
                 );
                 turn_id = Some(turn_id_str);
                 turn_started_ack = true;
+                prompt_started_at = tokio::time::Instant::now();
+                last_steer_at = prompt_started_at;
                 continue;
             }
 
@@ -1186,13 +1361,71 @@ impl OmoBackend {
                 || (method == "error"
                     && (val.pointer("/params/turnId").is_some()
                         || val.pointer("/params/turn").is_some()));
-            if turn_bearing
-                && (!turn_started_ack
-                    || val.pointer("/params/threadId").and_then(Value::as_str)
-                        != Some(thread_id.as_str())
-                    || (frame_turn_id.is_some() && frame_turn_id != turn_id.as_deref()))
-            {
-                continue;
+            if turn_bearing {
+                if val.pointer("/params/threadId").and_then(Value::as_str)
+                    != Some(thread_id.as_str())
+                {
+                    continue;
+                }
+                if !turn_started_ack {
+                    // The app-server acknowledges turn/start only once our prompt is
+                    // dequeued. Until then the thread is busy with a run that is not
+                    // processing our prompt (typically one a background job completion
+                    // started), and that run may finish under our turn id. Keep waiting
+                    // while it works, record its turn boundaries, and relay its
+                    // finished messages instead of dropping them.
+                    ack_deadline = ack_deadline.max((last_activity_at + ack_window).min(deadline));
+                    if let Some(frame_turn) = frame_turn_id {
+                        match method.as_str() {
+                            "turn/started" => {
+                                pre_ack_turn_events.push((true, frame_turn.to_string()))
+                            }
+                            "turn/completed" => {
+                                pre_ack_turn_events.push((false, frame_turn.to_string()))
+                            }
+                            _ => {}
+                        }
+                    }
+                    if !is_cron_session && !is_lane {
+                        if let Some(text) = completed_agent_message_text(&method, &val) {
+                            let scrubbed = filter_reasoning(text);
+                            if !scrubbed.trim().is_empty() && !is_explicit_silence(&scrubbed) {
+                                self.deliver_rendered_result(
+                                    session, stream_id, sequence, &scrubbed, None,
+                                )
+                                .await?;
+                                sequence = sequence.saturating_add(1);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if let Some(frame_turn) = frame_turn_id {
+                    if Some(frame_turn) != turn_id.as_deref() {
+                        let successor_started = awaiting_successor_turn
+                            && first_progress_at.is_none()
+                            && method == "turn/started";
+                        if !successor_started {
+                            continue;
+                        }
+                        let successor = frame_turn.to_string();
+                        tracing::info!(
+                            %thread_id,
+                            successor = %successor,
+                            "following the turn that took over our queued prompt"
+                        );
+                        if let Some(active) =
+                            self.active_turns.lock().get_mut(&session.key.storage_key())
+                        {
+                            active.turn_id = Some(successor.clone());
+                        }
+                        turn_id = Some(successor);
+                        awaiting_successor_turn = false;
+                    }
+                }
+                if first_progress_at.is_none() && is_agent_progress(&method, &val) {
+                    first_progress_at = Some(last_activity_at);
+                }
             }
 
             match method.as_str() {
@@ -1214,15 +1447,16 @@ impl OmoBackend {
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
                             // If the agent emitted an initial status/plan message before invoking tools,
                             // immediately deliver it to Discord so the user is never left waiting in silence.
-                            if !is_cron_session && !full_content.trim().is_empty() {
+                            if !is_cron_session && !is_lane && !full_content.trim().is_empty() {
                                 let scrubbed = filter_reasoning(&full_content);
                                 if !scrubbed.trim().is_empty() && !is_explicit_silence(&scrubbed) {
                                     let _ = self
-                                        .deliver_rendered_result(
+                                        .emit_chunk(
                                             session,
                                             stream_id,
                                             sequence,
-                                            &scrubbed,
+                                            scrubbed,
+                                            false,
                                             reply_to.clone(),
                                         )
                                         .await;
@@ -1233,57 +1467,42 @@ impl OmoBackend {
                             }
 
                             total_tool_calls += 1;
-                            let tool_name = item
-                                .get("command")
-                                .or_else(|| item.get("tool"))
-                                .or_else(|| item.get("name"))
-                                .or_else(|| item.get("path"))
-                                .and_then(Value::as_str)
-                                .unwrap_or(item_type);
-                            let short_name =
-                                tool_name.split_whitespace().next().unwrap_or(tool_name);
-                            *tool_call_counts.entry(short_name.to_string()).or_insert(0) += 1;
-
-                            // Live-stream tool activity is suppressed to avoid noisy intermediate edits.
-                            if false && !is_cron_session {
-                                let breakdown: Vec<String> = tool_call_counts
-                                    .iter()
-                                    .map(|(k, v)| {
-                                        if *v > 1 {
-                                            format!("`{k}` ×{v}")
-                                        } else {
-                                            format!("`{k}`")
-                                        }
-                                    })
-                                    .collect();
-                                let progress = format!(
-                                    "-# 🔧 도구 실행 중… ({total_tool_calls}회: {})",
-                                    breakdown.join(", ")
-                                );
-                                let _ = self
-                                    .emit_chunk(
-                                        session,
-                                        stream_id,
-                                        sequence,
-                                        progress,
-                                        false,
-                                        reply_to.clone(),
-                                    )
-                                    .await;
-                                sequence = sequence.saturating_add(1);
-                            }
                         }
                     }
 
                     if !is_started {
                         if let Some("agentMessage") = item.get("type").and_then(Value::as_str) {
+                            if item.get("stopReason").and_then(Value::as_str) == Some("error") {
+                                assistant_error = Some(
+                                    item.get("errorMessage")
+                                        .and_then(Value::as_str)
+                                        .filter(|message| !message.trim().is_empty())
+                                        .unwrap_or("assistant message failed")
+                                        .to_owned(),
+                                );
+                                continue;
+                            }
                             if let Some(text) = item.get("text").and_then(Value::as_str) {
                                 full_content.clear();
                                 full_content.push_str(text);
 
+                                if is_lane {
+                                    self.capture_lane_item(
+                                        session,
+                                        item,
+                                        turn_id.as_deref().unwrap_or(&thread_id),
+                                    )
+                                    .await?;
+                                    session
+                                        .state
+                                        .metadata
+                                        .insert("lane_completed_item".into(), json!(true));
+                                }
+
                                 // If this intermediate message was produced while the user is still waiting for an initial response,
                                 // immediately deliver it to Discord and mark messages_delivered > 0.
                                 if !is_cron_session
+                                    && !is_lane
                                     && messages_delivered == 0
                                     && !text.trim().is_empty()
                                 {
@@ -1292,17 +1511,17 @@ impl OmoBackend {
                                         && !is_explicit_silence(&scrubbed)
                                     {
                                         let _ = self
-                                            .deliver_rendered_result(
+                                            .emit_chunk(
                                                 session,
                                                 stream_id,
                                                 sequence,
-                                                &scrubbed,
+                                                scrubbed,
+                                                false,
                                                 reply_to.clone(),
                                             )
                                             .await;
                                         sequence = sequence.saturating_add(1);
                                         messages_delivered += 1;
-                                        full_content.clear();
                                     }
                                 }
                             }
@@ -1336,6 +1555,10 @@ impl OmoBackend {
                     }
                 }
                 "turn/completed" => {
+                    if let Some(error) = &assistant_error {
+                        self.active_turns.lock().remove(&session.key.storage_key());
+                        return Err(OmonError::Llm(format!("omo turn failed: {error}")));
+                    }
                     match val.pointer("/params/turn/status").and_then(Value::as_str) {
                         Some("interrupted") => {
                             self.active_turns.lock().remove(&session.key.storage_key());
@@ -1397,7 +1620,11 @@ impl OmoBackend {
                         return Ok(());
                     }
 
-                    let has_content = !scrubbed_content.is_empty() || total_tool_calls > 0;
+                    // Messages relayed mid-turn count: the relay clears the buffer once
+                    // it has delivered the text.
+                    let has_content = !scrubbed_content.is_empty()
+                        || total_tool_calls > 0
+                        || messages_delivered > 0;
                     if !has_content {
                         self.active_turns.lock().remove(&session.key.storage_key());
                         *fallback_eligible = full_content.is_empty();
@@ -1407,20 +1634,23 @@ impl OmoBackend {
                     }
                     self.active_turns.lock().remove(&session.key.storage_key());
 
-                    let rendered = if scrubbed_content.trim().is_empty() {
-                        "✅ Done.".to_string()
-                    } else {
-                        scrubbed_content.clone()
-                    };
+                    // A closing placeholder only helps when the user has seen nothing.
+                    if !scrubbed_content.trim().is_empty() || messages_delivered == 0 {
+                        let rendered = if scrubbed_content.trim().is_empty() {
+                            "✅ Done.".to_string()
+                        } else {
+                            scrubbed_content.clone()
+                        };
 
-                    self.deliver_rendered_result(
-                        session,
-                        stream_id,
-                        sequence,
-                        &rendered,
-                        reply_to.clone(),
-                    )
-                    .await?;
+                        self.deliver_rendered_result(
+                            session,
+                            stream_id,
+                            sequence,
+                            &rendered,
+                            reply_to.clone(),
+                        )
+                        .await?;
+                    }
 
                     if let Some(ack_command) = session
                         .state
@@ -1477,8 +1707,52 @@ impl AgentBackend for OmoBackend {
                 .get("cron_scheduler_delivery")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+        let is_lane = session.key.platform == "lane";
+        if is_lane {
+            let lane_cwd = session
+                .state
+                .metadata
+                .get("lane_cwd")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    OmonError::Config("lane session missing required 'lane_cwd' metadata".into())
+                })?;
+            let cwd_path = PathBuf::from(lane_cwd);
+            if !cwd_path.is_absolute() {
+                return Err(OmonError::Config(format!(
+                    "lane_cwd must be an absolute path: {}",
+                    cwd_path.display()
+                )));
+            }
+            match tokio::fs::metadata(&cwd_path).await {
+                Ok(metadata) if metadata.is_dir() => {}
+                Ok(_) => {
+                    return Err(OmonError::Config(format!(
+                        "lane_cwd is not a directory: {}",
+                        cwd_path.display()
+                    )));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(OmonError::Config(format!(
+                        "lane_cwd does not exist: {}",
+                        cwd_path.display()
+                    )));
+                }
+                Err(error) => {
+                    return Err(OmonError::Config(format!(
+                        "lane_cwd cannot be read: {error}"
+                    )));
+                }
+            }
+        }
         let effective_total_timeout = if is_cron_session {
             self.config.total_timeout
+        } else if is_lane {
+            if self.config.total_timeout != Duration::from_secs(1800) {
+                self.config.total_timeout
+            } else {
+                crate::agent::omo_config::lane_turn_timeout_from_env()?
+            }
         } else {
             self.config.total_timeout.min(INTERACTIVE_TURN_CAP)
         };
@@ -1794,7 +2068,12 @@ async fn ensure_session_row(pool: &sqlx::SqlitePool, session: &SessionContext) -
     Ok(())
 }
 
-async fn persist_message(pool: &SqlitePool, session: &SessionContext, content: &str) -> Result<()> {
+async fn persist_message(
+    pool: &SqlitePool,
+    session: &SessionContext,
+    content: &str,
+    obligation_id: &str,
+) -> Result<()> {
     let now = chrono::Utc::now();
     sqlx::query(
         "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1803,7 +2082,7 @@ async fn persist_message(pool: &SqlitePool, session: &SessionContext, content: &
     .bind(session.key.storage_key())
     .bind("assistant")
     .bind(content)
-    .bind("{}")
+    .bind(json!({"delivery_obligation_id": obligation_id}).to_string())
     .bind(now)
     .execute(pool)
     .await
@@ -1839,6 +2118,20 @@ mod active_turn_staleness_tests {
         assert!(active_turn_entry_is_stale(
             budget + super::ACTIVE_TURN_STALE_MARGIN + Duration::from_secs(1),
             budget
+        ));
+    }
+
+    #[test]
+    fn agent_progress_excludes_steer_echoes_and_bookkeeping() {
+        let user = serde_json::json!({"params":{"item":{"type":"userMessage"}}});
+        assert!(!super::is_agent_progress("item/started", &user));
+        assert!(!super::is_agent_progress("item/completed", &user));
+        assert!(!super::is_agent_progress("turn/started", &user));
+        let tool = serde_json::json!({"params":{"item":{"type":"commandExecution"}}});
+        assert!(super::is_agent_progress("item/started", &tool));
+        assert!(super::is_agent_progress(
+            "item/reasoning/textDelta",
+            &serde_json::json!({})
         ));
     }
 }

@@ -13,6 +13,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::guard::check_gateway_lifecycle;
+use super::health;
 use super::store::{get_cron_authority, update_cron_authority, CronAuthority};
 use crate::{
     HermesJob, HermesStoreSynchronizer, OmonError, OutboundAction, OutboundDispatcher, Result,
@@ -426,7 +427,10 @@ pub struct ShellAndPayloadTaskExecutor;
 #[async_trait]
 impl CronTaskExecutor for ShellAndPayloadTaskExecutor {
     async fn execute(&self, job: &CronJob) -> Result<Option<String>> {
-        let payload = job.payload()?;
+        let payload = match job.payload() {
+            Ok(payload) => payload,
+            Err(error) => return Err(error),
+        };
 
         if let Some(cmd) = payload
             .get("command")
@@ -671,6 +675,7 @@ impl CronScheduler {
         }
         let scheduler = self.clone();
         let mut shutdown = self.state.shutdown.subscribe();
+        scheduler.detect_startup_missed().await;
         *task = Some(tokio::spawn(async move {
             loop {
                 if *shutdown.borrow() {
@@ -693,6 +698,57 @@ impl CronScheduler {
                 }
             }
         }));
+    }
+
+    async fn detect_startup_missed(&self) {
+        if !health::watch_enabled() {
+            return;
+        }
+        self.scan_missed_occurrences().await;
+    }
+
+    async fn scan_missed_occurrences(&self) {
+        let now = (self.clock)();
+        let jobs = match self.list_active().await {
+            Ok(jobs) => jobs,
+            Err(error) => {
+                tracing::error!(%error, "cron startup health scan read failed");
+                return;
+            }
+        };
+        for job in jobs {
+            if job.expression.starts_with("once:") {
+                continue;
+            }
+            let payload = job.payload().unwrap_or_default();
+            let timezone = payload
+                .get("schedule")
+                .and_then(|schedule| schedule.get("timezone"))
+                .and_then(Value::as_str);
+            let Some(scheduled_from) = job.next_run_at else {
+                continue;
+            };
+            let next_occurrence = match next_run_tz(&job.expression, scheduled_from, timezone) {
+                Ok(value) => value,
+                Err(error) => {
+                    tracing::error!(%error, job_id = %job.id, "failed to calculate missed cron occurrence window");
+                    continue;
+                }
+            };
+            if now < scheduled_from || now < next_occurrence {
+                continue;
+            }
+            if let Err(error) = health::record_missed_occurrence(
+                &self.pool,
+                &job.id,
+                scheduled_from,
+                next_occurrence,
+            )
+            .await
+            {
+                tracing::error!(%error, job_id = %job.id, "failed to record missed cron occurrence");
+            }
+        }
     }
 
     pub async fn shutdown(&self) {
@@ -953,6 +1009,36 @@ impl CronScheduler {
         self.trigger(id).await
     }
 
+    pub async fn trigger_wait(&self, id: &str) -> Result<super::remediate::RunReceipt> {
+        let claim = self
+            .claim_job(id, false, false)
+            .await?
+            .ok_or_else(|| OmonError::Config(format!("cron job unavailable or leased: {id}")))?;
+        let run_id = claim.run_id.clone();
+        self.execute_claim(claim).await;
+        let (status, error): (String, Option<String>) =
+            sqlx::query_as("SELECT status,error FROM cron_runs WHERE run_id=? AND job_id=?")
+                .bind(&run_id)
+                .bind(id)
+                .fetch_one(&self.pool)
+                .await?;
+        let output: Option<String> = sqlx::query_scalar(
+            "SELECT output FROM cron_outputs WHERE run_id=? AND job_id=? ORDER BY created_at DESC LIMIT 1",
+        ).bind(&run_id).bind(id).fetch_optional(&self.pool).await?;
+        let job = self
+            .get(id)
+            .await?
+            .ok_or_else(|| OmonError::Config(format!("cron job disappeared: {id}")))?;
+        Ok(super::remediate::RunReceipt {
+            job_id: id.into(),
+            run_id,
+            status,
+            error,
+            output,
+            last_delivery_error: job.last_delivery_error(),
+        })
+    }
+
     async fn retire_overdue_oneshot(
         &self,
         id: &str,
@@ -1082,7 +1168,7 @@ impl CronScheduler {
             let lease_age = now.signed_duration_since(candidate_lease_expires_at);
             let owner_pid = owner_pid_i64.and_then(|p| if p > 0 { Some(p as u32) } else { None });
             if should_reclaim(owner_pid, true, lease_age) {
-                sqlx::query(
+                let reclaimed = sqlx::query(
                     "UPDATE cron_runs
                      SET status = 'failed', completed_at = ?, error = COALESCE(error, 'lease expired before completion')
                      WHERE run_id = ? AND status = 'running'",
@@ -1091,6 +1177,9 @@ impl CronScheduler {
                 .bind(&candidate_run_id)
                 .execute(&self.pool)
                 .await?;
+                if reclaimed.rows_affected() > 0 {
+                    self.run_health_hook(id, &candidate_run_id, false).await;
+                }
             }
         }
 
@@ -1165,6 +1254,16 @@ impl CronScheduler {
                     match newest {
                         None => {
                             let next_future = next_run_tz(&expression, now, timezone)?;
+                            if let Err(error) = health::record_missed_occurrence(
+                                &self.pool,
+                                id,
+                                next_run,
+                                next_future,
+                            )
+                            .await
+                            {
+                                tracing::error!(%error, job_id = id, "failed to record out-of-window missed occurrence");
+                            }
                             sqlx::query(
                                 "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
                             )
@@ -1183,6 +1282,16 @@ impl CronScheduler {
                                 .and_then(Value::as_str);
                             if last_occ == Some(&occ_key) {
                                 let next_future = next_run_tz(&expression, now, timezone)?;
+                                if let Err(error) = health::record_missed_occurrence(
+                                    &self.pool,
+                                    id,
+                                    occ,
+                                    next_future,
+                                )
+                                .await
+                                {
+                                    tracing::error!(%error, job_id = id, "failed to record unclaimed catch-up occurrence");
+                                }
                                 sqlx::query(
                                     "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
                                 )
@@ -1281,7 +1390,10 @@ impl CronScheduler {
             }
         });
 
-        let result = self.execute_job(&claim.job).await;
+        let mut delivery_failed = false;
+        let result = self
+            .execute_job_with_outcome(&claim.job, &mut delivery_failed)
+            .await;
         let _ = heartbeat_stop.send(true);
         let _ = heartbeat.await;
 
@@ -1289,13 +1401,35 @@ impl CronScheduler {
             Ok(output) => {
                 if let Err(error) = self.complete_success(&claim, output.as_deref()).await {
                     tracing::error!(%error, job_id = %claim.job.id, run_id = %claim.run_id, "failed to commit successful cron run");
+                } else {
+                    self.run_health_hook(&claim.job.id, &claim.run_id, false)
+                        .await;
                 }
             }
             Err(error) => {
                 if let Err(record_error) = self.complete_failure(&claim, &error).await {
                     tracing::error!(%record_error, job_id = %claim.job.id, run_id = %claim.run_id, "failed to record cron failure");
+                } else {
+                    self.run_health_hook(&claim.job.id, &claim.run_id, delivery_failed)
+                        .await;
                 }
                 tracing::error!(%error, job_id = %claim.job.id, run_id = %claim.run_id, "cron job execution failed");
+            }
+        }
+    }
+
+    async fn run_health_hook(&self, job_id: &str, run_id: &str, delivery_failed: bool) {
+        if let Err(error) =
+            health::on_run_finished(&self.pool, job_id, run_id, delivery_failed).await
+        {
+            tracing::error!(%error, job_id, run_id, "cron health hook failed after run outcome committed");
+        }
+        if let Err(error) = super::remediate::reconcile_fixed(&self.pool, job_id).await {
+            tracing::warn!(%error, job_id, "cron fixed-lane reconciliation failed");
+        }
+        if job_id == crate::inbox::digest::JOB_ID {
+            if let Err(error) = super::report::acknowledge_digest(&self.pool, run_id).await {
+                tracing::warn!(%error, "cron digest outcome acknowledgement failed");
             }
         }
     }
@@ -1639,7 +1773,18 @@ impl CronScheduler {
     }
 
     pub async fn execute_job(&self, job: &CronJob) -> Result<Option<String>> {
-        let payload = job.payload()?;
+        self.execute_job_with_outcome(job, &mut false).await
+    }
+
+    async fn execute_job_with_outcome(
+        &self,
+        job: &CronJob,
+        delivery_failed: &mut bool,
+    ) -> Result<Option<String>> {
+        let payload = match job.payload() {
+            Ok(payload) => payload,
+            Err(error) => return Err(error),
+        };
         let destinations = delivery_destination(&payload)?;
 
         if self.dispatcher.is_none() {
@@ -1683,6 +1828,7 @@ impl CronScheduler {
                             for destination in &destinations {
                                 if let Err(err) = self.deliver(job, destination, content_str).await
                                 {
+                                    *delivery_failed = true;
                                     delivery_errors.push(err);
                                 }
                             }

@@ -16,6 +16,38 @@ use tokio_tungstenite::tungstenite::Message;
 // Public backend entry point over a real loopback WebSocket. Each script is a
 // new subscription to r1, so completed t1 frames can replay while t2 is active.
 async fn run_correlated_frames(frames: Vec<Value>) -> (omon_gateway::Result<()>, Vec<StreamChunk>) {
+    run_correlated_frames_checked(frames, None).await
+}
+
+async fn run_correlated_frames_checked(
+    frames: Vec<Value>,
+    expected: Option<&str>,
+) -> (omon_gateway::Result<()>, Vec<StreamChunk>) {
+    let pool = if expected.is_some() {
+        Some(
+            omon_gateway::storage::init_pool("sqlite::memory:")
+                .await
+                .unwrap(),
+        )
+    } else {
+        None
+    };
+    if expected.is_some() {
+        for frame in &frames {
+            println!(
+                "TASK14_FRAME method={} item={} turn={}",
+                frame["method"],
+                frame
+                    .pointer("/params/item/id")
+                    .or_else(|| frame.pointer("/params/itemId"))
+                    .unwrap_or(&Value::Null),
+                frame
+                    .pointer("/params/turnId")
+                    .or_else(|| frame.pointer("/params/turn/id"))
+                    .unwrap_or(&Value::Null)
+            );
+        }
+    }
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -46,10 +78,13 @@ async fn run_correlated_frames(frames: Vec<Value>) -> (omon_gateway::Result<()>,
         stop_rx.await.unwrap();
     });
     let dispatcher = Arc::new(CapturingDispatcher::new());
-    let backend = OmoBackend::new(
+    let mut backend = OmoBackend::new(
         OmoBackendConfig::new(format!("ws://{address}")),
         dispatcher.clone(),
     );
+    if let Some(pool) = &pool {
+        backend = backend.with_pool(pool.clone());
+    }
     let key = SessionKey::new("local", None::<String>, "u12", None::<String>, "user");
     let mut session = SessionContext::new(key.clone());
     session
@@ -61,6 +96,32 @@ async fn run_correlated_frames(frames: Vec<Value>) -> (omon_gateway::Result<()>,
         backend.run(&mut session, InboundEvent::message(key, "u12", "probe")),
     )
     .await;
+    if let Some(expected) = expected {
+        assert!(result.as_ref().unwrap().is_ok());
+        assert_eq!(session.state.metadata["cron_agent_output"], json!(expected));
+        let pool = pool.as_ref().unwrap();
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT content FROM messages WHERE role='assistant'")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(rows, vec![(expected.to_string(),)]);
+        let obligations: Vec<(String, String)> =
+            sqlx::query_as("SELECT state,content FROM delivery_obligations")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            obligations,
+            vec![("delivered".to_string(), expected.to_string())]
+        );
+        for chunk in dispatcher.stream_chunks().iter().filter(|c| c.is_final) {
+            println!(
+                "TASK14_FINAL stream={} body={}",
+                chunk.stream_id, chunk.content
+            );
+        }
+    }
     stop_tx.send(()).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), peer)
         .await
@@ -77,6 +138,197 @@ fn correlation_ack() -> Value {
 }
 
 #[tokio::test]
+async fn intended_model_is_applied_before_each_turn() {
+    // Given: startup selects a different model, and turn/start ignores model.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        for (thread_method, model) in [
+            ("thread/start", "inferhub/cb/deepseek-v4.1-flash"),
+            ("thread/resume", "mahoquot/claude-opus-5-5"),
+        ] {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let mut applied_model = "openai/gpt-6-astra".to_string();
+            for method in [
+                "initialize",
+                thread_method,
+                "thread/settings/update",
+                "turn/start",
+            ] {
+                let message = ws.next().await.unwrap().unwrap();
+                let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+                assert_eq!(request["method"], method);
+                let result = match method {
+                    "initialize" => json!({}),
+                    "thread/settings/update" => {
+                        assert_eq!(request["params"]["threadId"], "r1");
+                        assert_eq!(request["params"]["model"], model);
+                        applied_model = model.to_string();
+                        json!({})
+                    }
+                    "turn/start" => {
+                        assert_eq!(applied_model, model);
+                        json!({"turn":{"id":"t2","status":"inProgress"}})
+                    }
+                    _ => json!({"thread":{"id":"r1","model":applied_model}}),
+                };
+                ws.send(Message::text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+            ws.send(Message::text(
+                correlation_delta("r1", "t2", "PONG").to_string(),
+            ))
+            .await
+            .unwrap();
+            ws.send(Message::text(
+                correlation_terminal("t2", "completed").to_string(),
+            ))
+            .await
+            .unwrap();
+        }
+    });
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let config = OmoBackendConfig::new(format!("ws://{address}"))
+        .with_default_model(Some("inferhub/cb/deepseek-v4.1-flash"));
+    let backend = OmoBackend::new(config, dispatcher.clone());
+    let key = SessionKey::new(
+        "local",
+        None::<String>,
+        "model-settings",
+        None::<String>,
+        "user",
+    );
+    let mut session = SessionContext::new(key.clone());
+
+    // When: a normal first turn (primary equals fallback) and a changed-model resumed turn run.
+    for model in [None, Some("mahoquot/claude-opus-5-5")] {
+        session.state.active_model = model.map(str::to_owned);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            backend.run(
+                &mut session,
+                InboundEvent::message(key.clone(), "probe", "probe"),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(session.state.metadata["cron_agent_output"], "PONG");
+    }
+    // Then: both turns used the acknowledged settings instead of the startup model.
+    tokio::time::timeout(std::time::Duration::from_secs(5), peer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        dispatcher
+            .stream_chunks()
+            .iter()
+            .filter(|chunk| chunk.is_final)
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn rejected_model_settings_return_typed_error_without_starting_turn() {
+    // Given: the intended custom model is rejected by the settings RPC.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        for method in ["initialize", "thread/resume", "thread/settings/update"] {
+            let message = ws.next().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            let response = if method == "thread/settings/update" {
+                json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32603,"message":"model not found: custom/rejected"}})
+            } else {
+                json!({"jsonrpc":"2.0","id":request["id"],"result":{"thread":{"id":"r1"}}})
+            };
+            ws.send(Message::text(response.to_string())).await.unwrap();
+        }
+        tokio::select! {
+            _ = stop_rx => {}
+            frame = ws.next() => {
+                if let Some(Ok(Message::Text(text))) = frame {
+                    let request: Value = serde_json::from_str(&text).unwrap();
+                    assert_ne!(request["method"], "turn/start");
+                }
+            }
+        }
+    });
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address}")),
+        dispatcher.clone(),
+    );
+    let key = SessionKey::new(
+        "local",
+        None::<String>,
+        "settings-rejected",
+        None::<String>,
+        "user",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session.state.active_model = Some("custom/rejected".into());
+    session
+        .state
+        .metadata
+        .insert("omo_thread_id".into(), json!("r1"));
+
+    // When: a turn tries to apply the rejected model.
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(&mut session, InboundEvent::message(key, "probe", "probe")),
+    )
+    .await
+    .unwrap();
+    // Then: the actual rejection is returned, without fallback or output.
+    match result {
+        Err(OmonError::Llm(message)) => {
+            assert!(message.contains("model not found: custom/rejected"))
+        }
+        other => panic!("expected typed settings rejection, got {other:?}"),
+    }
+    assert!(dispatcher.stream_chunks().is_empty());
+    let _ = stop_tx.send(());
+    tokio::time::timeout(std::time::Duration::from_secs(5), peer)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn error_assistant_message_surfaces_provider_error_on_completed_turn() {
+    // Given: an assistant error item followed by a nominally successful terminal.
+    let frames = vec![
+        correlation_ack(),
+        json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2",
+            "item":{"id":"m-error","type":"agentMessage","text":"","stopReason":"error",
+                "errorMessage":"OpenAI API error (401): invalid_api_key"}}}),
+        correlation_terminal("t2", "completed"),
+    ];
+    // When: the backend consumes the completed turn.
+    let (result, chunks) = run_correlated_frames(frames).await;
+    // Then: the provider error, rather than no-content, reaches the caller.
+    match result {
+        Err(OmonError::Llm(message)) => {
+            assert!(message.contains("OpenAI API error (401): invalid_api_key"));
+            assert!(!message.contains("no content"));
+        }
+        other => panic!("expected typed provider error, got {other:?}"),
+    }
+    assert!(chunks.is_empty());
+}
+
+#[tokio::test]
 async fn model_rejected_failure_triggers_fallback_to_deepseek_and_persists_marker() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -84,7 +336,12 @@ async fn model_rejected_failure_triggers_fallback_to_deepseek_and_persists_marke
         // Attempt 0: Primary model fails turn/start with "model not found"
         let (socket1, _) = listener.accept().await.unwrap();
         let mut ws1 = tokio_tungstenite::accept_async(socket1).await.unwrap();
-        for method in ["initialize", "thread/resume", "turn/start"] {
+        for method in [
+            "initialize",
+            "thread/resume",
+            "thread/settings/update",
+            "turn/start",
+        ] {
             let msg = ws1.next().await.unwrap().unwrap();
             let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
             assert_eq!(req["method"], method);
@@ -289,7 +546,12 @@ async fn fallback_one_shot_guard_never_refalls_back_from_fallback() {
         // It must NOT trigger another fallback!
         let (socket, _) = listener.accept().await.unwrap();
         let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
-        for method in ["initialize", "thread/resume", "turn/start"] {
+        for method in [
+            "initialize",
+            "thread/resume",
+            "thread/settings/update",
+            "turn/start",
+        ] {
             let msg = ws.next().await.unwrap().unwrap();
             let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
             assert_eq!(req["method"], method);
@@ -359,6 +621,134 @@ fn correlation_delta(thread: &str, turn: &str, text: &str) -> Value {
 fn correlation_terminal(turn: &str, status: &str) -> Value {
     json!({"jsonrpc":"2.0","method":"turn/completed",
         "params":{"threadId":"r1","turn":{"id":turn,"status":status,"error":{"message":"failure-sentinel"}}}})
+}
+
+#[tokio::test]
+async fn completed_item_finalizes_once_at_turn_terminal() {
+    let (result, chunks) = run_correlated_frames_checked(vec![
+        correlation_ack(),
+        json!({"method":"item/started","params":{"threadId":"r1","turnId":"t2","item":{"id":"tool-final","type":"commandExecution"}}}),
+        json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2","item":{"id":"m-progress","type":"agentMessage","text":"TASK14_PROGRESS"}}}),
+        correlation_delta("r1", "t2", "TASK14_ACTUAL_REPLY"),
+        json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2","item":{"id":"m1","type":"agentMessage","text":"TASK14_ACTUAL_REPLY"}}}),
+        json!({"method":"thread/status/changed","params":{"threadId":"r1","turnId":"t2","status":{"type":"idle"}}}),
+        correlation_terminal("t2", "completed"),
+    ], Some("TASK14_ACTUAL_REPLY")).await;
+    result.unwrap();
+    let finals: Vec<_> = chunks.iter().filter(|chunk| chunk.is_final).collect();
+    assert_eq!(finals.len(), 1);
+    assert_eq!(finals[0].content, "TASK14_ACTUAL_REPLY");
+}
+
+#[tokio::test]
+async fn completed_tool_only_finalizes_once_with_empty_result_fallback() {
+    let (result, chunks) = run_correlated_frames(vec![
+        correlation_ack(),
+        json!({"method":"item/started","params":{"threadId":"r1","turnId":"t2","item":{"id":"tool-empty","type":"commandExecution"}}}),
+        correlation_terminal("t2", "completed"),
+    ]).await;
+    result.unwrap();
+    let finals: Vec<_> = chunks.iter().filter(|chunk| chunk.is_final).collect();
+    assert_eq!(finals.len(), 1);
+    assert!(finals[0].content.ends_with("Done."));
+}
+
+#[tokio::test]
+async fn queued_prompt_follows_successor_after_pre_ack_completion() {
+    for successor_before_ack in [false, true] {
+        let successor =
+            json!({"method":"turn/started","params":{"threadId":"r1","turn":{"id":"t3"}}});
+        let mut frames = vec![correlation_terminal("t2", "completed")];
+        if successor_before_ack {
+            frames.push(successor.clone());
+        }
+        frames.push(correlation_ack());
+        if !successor_before_ack {
+            frames.push(successor);
+        }
+        frames.extend([
+            correlation_delta("r1", "t3", "Answer"),
+            correlation_terminal("t3", "completed"),
+        ]);
+        let (result, chunks) = run_correlated_frames(frames).await;
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            chunks
+                .iter()
+                .filter(|c| c.is_final)
+                .map(|c| c.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Answer"]
+        );
+    }
+}
+
+#[tokio::test]
+async fn already_delivered_agent_message_completes_without_placeholder_or_retry() {
+    let (result, chunks) = run_correlated_frames(vec![
+        correlation_ack(),
+        json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2","item":{"id":"answer","type":"agentMessage","text":"Answer"}}}),
+        correlation_terminal("t2", "completed"),
+    ]).await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(
+        chunks
+            .iter()
+            .filter(|c| c.is_final)
+            .map(|c| c.content.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Answer"]
+    );
+}
+
+#[tokio::test]
+async fn initial_silence_interrupts_remote_turn_without_losing_thread_binding() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        while let Some(Ok(Message::Text(text))) = ws.next().await {
+            let request: Value = serde_json::from_str(text.as_str()).unwrap();
+            let id = request["id"].clone();
+            let response = match request["method"].as_str() {
+                Some("initialize") => json!({"id":id,"result":{}}),
+                Some("thread/start") => json!({"id":id,"result":{"thread":{"id":"silent-thread"}}}),
+                Some("turn/start") => json!({"id":id,"result":{"turn":{"id":"silent-turn"}}}),
+                Some("turn/interrupt") => {
+                    assert_eq!(request["params"]["threadId"], "silent-thread");
+                    assert_eq!(request["params"]["turnId"], "silent-turn");
+                    return;
+                }
+                _ => continue,
+            };
+            ws.send(Message::text(response.to_string())).await.unwrap();
+        }
+        panic!("connection ended without interrupt");
+    });
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
+            .with_initial_response_timeout(std::time::Duration::from_millis(100))
+            .with_total_timeout(std::time::Duration::from_secs(5)),
+        Arc::new(CapturingDispatcher::new()),
+    );
+    let key = SessionKey::new("discord", None::<String>, "chan", None::<String>, "user");
+    let mut session = SessionContext::new(key.clone());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        backend.run(&mut session, InboundEvent::message(key, "msg", "hello")),
+    )
+    .await
+    .unwrap();
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("agent produced no output"));
+    assert_eq!(session.state.metadata["omo_thread_id"], "silent-thread");
+    tokio::time::timeout(std::time::Duration::from_secs(1), peer)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -712,6 +1102,11 @@ impl FakeAppServer {
                                         }
                                     });
                                     let _ = outgoing_tx.send(Message::text(resp.to_string())).await;
+                                }
+                                "thread/settings/update" => {
+                                    let response = json!({"jsonrpc":"2.0","id":id,"result":{}});
+                                    let _ =
+                                        outgoing_tx.send(Message::text(response.to_string())).await;
                                 }
                                 "turn/start" => {
                                     let params =
@@ -5124,4 +5519,659 @@ async fn failed_final_delivery_is_not_acknowledged() {
         "delivery obligation must be recorded in DB"
     );
     assert_eq!(obl_rows[0].1, "failed", "obligation state must be failed");
+}
+
+#[tokio::test]
+async fn lane_thread_start_carries_cwd_and_no_typing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path().to_str().unwrap().to_string();
+    let tmp_clone = tmp_path.clone();
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+
+        // 1. initialize
+        let msg = ws.next().await.unwrap().unwrap();
+        let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+        assert_eq!(req["method"], "initialize");
+        ws.send(Message::text(
+            json!({"jsonrpc": "2.0", "id": req["id"], "result": {}}).to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // 2. thread/start
+        let msg = ws.next().await.unwrap().unwrap();
+        let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+        assert_eq!(req["method"], "thread/start");
+        assert_eq!(
+            req["params"]["cwd"], tmp_clone,
+            "thread/start must carry lane_cwd as cwd"
+        );
+        assert_eq!(
+            req["params"]["runtimeWorkspaceRoots"],
+            json!([tmp_clone]),
+            "thread/start must set runtimeWorkspaceRoots to [lane_cwd]"
+        );
+        ws.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {"thread": {"id": "lane-thread-test-1"}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // 3. turn/start
+        let msg = ws.next().await.unwrap().unwrap();
+        let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+        assert_eq!(req["method"], "turn/start");
+        assert_eq!(req["params"]["threadId"], "lane-thread-test-1");
+        ws.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": {"turn": {"id": "t1", "status": "inProgress"}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Send completed agent message
+        let msg_completed = json!({
+            "jsonrpc": "2.0",
+            "method": "item/completed",
+            "params": {
+                "threadId": "lane-thread-test-1",
+                "turnId": "t1",
+                "item": {
+                    "type": "agentMessage",
+                    "text": "[REPORT] test-lane | milestone | initialization done"
+                }
+            }
+        });
+        ws.send(Message::text(msg_completed.to_string()))
+            .await
+            .unwrap();
+
+        let turn_completed = json!({
+            "jsonrpc": "2.0",
+            "method": "turn/completed",
+            "params": {
+                "threadId": "lane-thread-test-1",
+                "turn": {
+                    "id": "t1",
+                    "status": "completed"
+                }
+            }
+        });
+        ws.send(Message::text(turn_completed.to_string()))
+            .await
+            .unwrap();
+    });
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let config = OmoBackendConfig::new(format!("ws://{addr}"));
+    let backend = OmoBackend::new(config, dispatcher.clone());
+
+    let key = SessionKey::new(
+        "lane",
+        None::<String>,
+        "test-lane-1",
+        None::<String>,
+        "lane:test-lane-1",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session
+        .state
+        .metadata
+        .insert("lane_cwd".into(), json!(tmp_path));
+
+    let res = backend
+        .run(&mut session, InboundEvent::message(key, "msg-1", "start"))
+        .await;
+    assert!(res.is_ok(), "lane turn must succeed: {:?}", res.err());
+    peer.await.unwrap();
+
+    // Acceptance criterion: thread id persisted
+    assert_eq!(
+        session
+            .state
+            .metadata
+            .get("omo_thread_id")
+            .and_then(Value::as_str),
+        Some("lane-thread-test-1"),
+        "threadId must be persisted in session state metadata"
+    );
+
+    // Acceptance criterion: no Typing action dispatched
+    let has_typing = dispatcher
+        .actions
+        .lock()
+        .iter()
+        .any(|a| matches!(a, OutboundAction::Typing { .. }));
+    assert!(
+        !has_typing,
+        "no Typing action must be dispatched for lane sessions"
+    );
+}
+
+#[tokio::test]
+async fn lane_thread_resumes_on_subsequent_turn() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path().to_str().unwrap().to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let peer = tokio::spawn(async move {
+        // Connection 1 (first turn: start thread)
+        let (socket1, _) = listener.accept().await.unwrap();
+        let mut ws1 = tokio_tungstenite::accept_async(socket1).await.unwrap();
+
+        for expected in ["initialize", "thread/start", "turn/start"] {
+            let msg = ws1.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], expected);
+            if expected == "turn/start" {
+                ws1.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"turn": {"id": "t1", "status": "inProgress"}}}).to_string()
+                )).await.unwrap();
+            } else {
+                ws1.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"thread": {"id": "lane-resumed-thread-77"}}}).to_string()
+                )).await.unwrap();
+            }
+        }
+        ws1.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": "lane-resumed-thread-77",
+                    "turnId": "t1",
+                    "item": {"type": "agentMessage", "text": "Turn 1 done"}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws1.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "turn/completed",
+                "params": {"threadId": "lane-resumed-thread-77", "turn": {"id": "t1", "status": "completed"}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Connection 2 (second turn: MUST send thread/resume with lane-resumed-thread-77)
+        let (socket2, _) = listener.accept().await.unwrap();
+        let mut ws2 = tokio_tungstenite::accept_async(socket2).await.unwrap();
+
+        for expected in ["initialize", "thread/resume", "turn/start"] {
+            let msg = ws2.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(
+                req["method"], expected,
+                "Second turn must send thread/resume instead of thread/start"
+            );
+            if expected == "thread/resume" {
+                assert_eq!(
+                    req["params"]["threadId"], "lane-resumed-thread-77",
+                    "thread/resume must reference persisted thread id"
+                );
+                ws2.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"thread": {"id": "lane-resumed-thread-77"}}}).to_string()
+                )).await.unwrap();
+            } else if expected == "turn/start" {
+                assert_eq!(req["params"]["threadId"], "lane-resumed-thread-77");
+                ws2.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"turn": {"id": "t2", "status": "inProgress"}}}).to_string()
+                )).await.unwrap();
+            } else {
+                ws2.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {}}).to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+        }
+        ws2.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": "lane-resumed-thread-77",
+                    "turnId": "t2",
+                    "item": {"type": "agentMessage", "text": "Turn 2 done"}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        ws2.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "turn/completed",
+                "params": {"threadId": "lane-resumed-thread-77", "turn": {"id": "t2", "status": "completed"}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    });
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let config = OmoBackendConfig::new(format!("ws://{addr}"));
+    let backend = OmoBackend::new(config, dispatcher.clone());
+
+    let key = SessionKey::new(
+        "lane",
+        None::<String>,
+        "test-lane-resume",
+        None::<String>,
+        "lane:test-lane-resume",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session
+        .state
+        .metadata
+        .insert("lane_cwd".into(), json!(tmp_path));
+
+    // Turn 1
+    let res1 = backend
+        .run(
+            &mut session,
+            InboundEvent::message(key.clone(), "msg-1", "first"),
+        )
+        .await;
+    assert!(res1.is_ok(), "turn 1 must succeed: {:?}", res1.err());
+
+    // Turn 2
+    let res2 = backend
+        .run(&mut session, InboundEvent::message(key, "msg-2", "second"))
+        .await;
+    assert!(res2.is_ok(), "turn 2 must succeed: {:?}", res2.err());
+
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn lane_silent_turn_not_interrupted_after_50s() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path().to_str().unwrap().to_string();
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let (turn_started_tx, turn_started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (complete_tx, complete_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+
+        for method in ["initialize", "thread/start", "turn/start"] {
+            let msg = ws.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], method);
+            if method == "turn/start" {
+                ws.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"turn": {"id": "t-silent", "status": "inProgress"}}}).to_string()
+                )).await.unwrap();
+            } else {
+                ws.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"thread": {"id": "lane-thread-silent"}}}).to_string()
+                )).await.unwrap();
+            }
+        }
+
+        // A response to a subsequent RPC proves the backend consumed the start ACK.
+        ws.send(Message::text(
+            json!({"jsonrpc": "2.0", "id": 777, "method": "execCommandApproval",
+                "params": {"command": "echo barrier"}})
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let response = ws.next().await.unwrap().unwrap();
+        let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(response["id"], 777);
+        assert_eq!(response["result"]["allow"], false);
+        turn_started_tx.send(()).unwrap();
+
+        // Wait until test advances virtual time past 50s and signals completion
+        complete_rx.await.unwrap();
+
+        // Complete the turn cleanly without being interrupted
+        ws.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "item/completed",
+                "params": {
+                    "threadId": "lane-thread-silent",
+                    "turnId": "t-silent",
+                    "item": {"type": "agentMessage", "text": "Silent work finished"}
+                }
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        ws.send(Message::text(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "turn/completed",
+                "params": {"threadId": "lane-thread-silent", "turn": {"id": "t-silent", "status": "completed"}}
+            })
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+    });
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    // Give generous total timeout (default 3600s)
+    let config = OmoBackendConfig::new(format!("ws://{addr}"));
+    let backend = OmoBackend::new(config, dispatcher);
+
+    let key = SessionKey::new(
+        "lane",
+        None::<String>,
+        "lane-silent",
+        None::<String>,
+        "lane:lane-silent",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session.state.enabled_toolsets = Some(Vec::new());
+    session
+        .state
+        .metadata
+        .insert("lane_cwd".into(), json!(tmp_path));
+
+    let run_fut = backend.run(
+        &mut session,
+        InboundEvent::message(key.clone(), "msg-silent", "long task"),
+    );
+    tokio::pin!(run_fut);
+
+    // Keep real socket I/O running until the backend has consumed the ACK.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::select! {
+            res = &mut run_fut => panic!("turn completed prematurely: {res:?}"),
+            ack = turn_started_rx => ack.unwrap(),
+        }
+    })
+    .await
+    .expect("backend consumes start ACK within timeout");
+
+    // Pause time after WebSocket handshake has occurred
+    tokio::time::pause();
+    // Advance virtual time past the 45s initial-response fail-fast threshold
+    tokio::time::advance(std::time::Duration::from_secs(50)).await;
+
+    // Verify backend is still running (NOT interrupted by 45s fail-fast)
+    let poll_res = futures_util::poll!(&mut run_fut);
+    assert!(
+        poll_res.is_pending(),
+        "lane turn must NOT be interrupted after 50s of silence"
+    );
+
+    // Signal peer to send completion
+    tokio::time::resume();
+    complete_tx.send(()).unwrap();
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(5), run_fut)
+        .await
+        .expect("turn completes within timeout");
+    assert!(
+        result.is_ok(),
+        "lane turn must finish successfully: {:?}",
+        result.err()
+    );
+    peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn discord_silent_turn_interrupted_after_45s() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    let (turn_started_tx, turn_started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (interrupt_tx, mut interrupt_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+
+        for method in ["initialize", "thread/start", "turn/start"] {
+            let msg = ws.next().await.unwrap().unwrap();
+            let req: Value = serde_json::from_str(msg.to_text().unwrap()).unwrap();
+            assert_eq!(req["method"], method);
+            if method == "turn/start" {
+                ws.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"turn": {"id": "t-silent", "status": "inProgress"}}}).to_string()
+                )).await.unwrap();
+            } else {
+                ws.send(Message::text(
+                    json!({"jsonrpc": "2.0", "id": req["id"], "result": {"thread": {"id": "discord-thread-silent"}}}).to_string()
+                )).await.unwrap();
+            }
+        }
+
+        // A response to a subsequent RPC proves the backend consumed the start ACK.
+        ws.send(Message::text(
+            json!({"jsonrpc": "2.0", "id": 777, "method": "execCommandApproval",
+                "params": {"command": "echo barrier"}})
+            .to_string(),
+        ))
+        .await
+        .unwrap();
+        let response = ws.next().await.unwrap().unwrap();
+        let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+        assert_eq!(response["id"], 777);
+        assert_eq!(response["result"]["allow"], false);
+        turn_started_tx.send(()).unwrap();
+
+        // While remaining completely silent (no agent deltas/messages), receive any backend messages
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(text) = msg {
+                let req: Value = serde_json::from_str(&text).unwrap();
+                let method = req.get("method").and_then(Value::as_str);
+                let id = req.get("id").and_then(Value::as_u64);
+                if method == Some("turn/interrupt") {
+                    interrupt_tx.send(req.clone()).unwrap();
+                    if let Some(req_id) = id {
+                        let resp = json!({"jsonrpc": "2.0", "id": req_id, "result": {}});
+                        let _ = ws.send(Message::text(resp.to_string())).await;
+                    }
+                    break;
+                } else if method == Some("turn/steer") {
+                    if let Some(req_id) = id {
+                        let resp = json!({"jsonrpc": "2.0", "id": req_id, "result": {}});
+                        let _ = ws.send(Message::text(resp.to_string())).await;
+                    }
+                }
+            }
+        }
+    });
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let config = OmoBackendConfig::new(format!("ws://{addr}"));
+    let backend = OmoBackend::new(config, dispatcher.clone());
+
+    let key = SessionKey::new(
+        "discord",
+        None::<String>,
+        "discord-silent-channel",
+        None::<String>,
+        "user-1",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session.state.enabled_toolsets = Some(Vec::new());
+
+    let run_fut = backend.run(
+        &mut session,
+        InboundEvent::message(key.clone(), "msg-silent", "long task"),
+    );
+    tokio::pin!(run_fut);
+
+    // Keep real socket I/O running until the backend has consumed the ACK.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::select! {
+            res = &mut run_fut => panic!("turn completed prematurely: {res:?}"),
+            ack = turn_started_rx => ack.unwrap(),
+        }
+    })
+    .await
+    .expect("backend consumes start ACK within timeout");
+
+    // Pause virtual time and advance past the 45s initial-response fail-fast threshold
+    tokio::time::pause();
+    tokio::time::advance(std::time::Duration::from_secs(50)).await;
+
+    // Await the deadline result, including the backend's virtual cleanup timer.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut run_fut)
+        .await
+        .expect("discord turn must fail-fast after 45s silence");
+    tokio::time::resume();
+
+    match result {
+        Err(err) => {
+            let err_msg = err.to_string();
+            assert!(
+                err_msg.contains("turn interrupted: agent produced no output within 45s"),
+                "error message must mention initial deadline interruption, got: {err_msg}"
+            );
+        }
+        Ok(_) => panic!("silent turn without response must not succeed"),
+    }
+
+    // Verify peer received turn/interrupt
+    let interrupt = tokio::time::timeout(std::time::Duration::from_secs(5), interrupt_rx.recv())
+        .await
+        .expect("peer receives interrupt within timeout")
+        .expect("peer must receive turn/interrupt");
+    assert_eq!(
+        interrupt["method"], "turn/interrupt",
+        "peer message must be turn/interrupt"
+    );
+    assert_eq!(
+        interrupt["params"]["turnId"], "t-silent",
+        "interrupt turnId must match"
+    );
+
+    peer.await.unwrap();
+
+    // Verify no actual Discord messages were dispatched
+    let messages_dispatched = dispatcher
+        .actions
+        .lock()
+        .iter()
+        .any(|a| matches!(a, OutboundAction::SendMessage { .. }));
+    assert!(
+        !messages_dispatched,
+        "no actual Discord messages must be dispatched for silent fail-fast"
+    );
+    assert!(
+        dispatcher.stream_chunks().is_empty(),
+        "no stream chunks must be dispatched for silent fail-fast"
+    );
+}
+
+#[tokio::test]
+async fn lane_missing_cwd_returns_error() {
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let config = OmoBackendConfig::new("ws://127.0.0.1:1");
+    let backend = OmoBackend::new(config, dispatcher);
+
+    let key = SessionKey::new(
+        "lane",
+        None::<String>,
+        "lane-bad-cwd",
+        None::<String>,
+        "lane:lane-bad-cwd",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session.state.metadata.insert(
+        "lane_cwd".into(),
+        json!("/nonexistent-dir-for-lane-session-test-404"),
+    );
+
+    let res = backend
+        .run(&mut session, InboundEvent::message(key, "msg-1", "start"))
+        .await;
+    assert!(res.is_err(), "missing lane_cwd directory must fail");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("does not exist") || err_msg.contains("lane_cwd"),
+        "error message must mention lane_cwd or not exist, got: {err_msg}"
+    );
+}
+
+#[tokio::test]
+#[ignore]
+async fn lane_live_daemon_turn_against_mktemp_repo() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tmp_path = tmp.path().to_str().unwrap().to_string();
+
+    // Initialize git repo in mktemp directory
+    let git_init = std::process::Command::new("git")
+        .arg("init")
+        .current_dir(tmp.path())
+        .output()
+        .expect("git init in mktemp repo");
+    assert!(git_init.status.success(), "git init must succeed");
+
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let config = OmoBackendConfig::lane_from_env().unwrap();
+    let backend = OmoBackend::new(config, dispatcher.clone());
+
+    let key = SessionKey::new(
+        "lane",
+        None::<String>,
+        "qa-live-lane",
+        None::<String>,
+        "lane:qa-live-lane",
+    );
+    let mut session = SessionContext::new(key.clone());
+    session
+        .state
+        .metadata
+        .insert("lane_cwd".into(), json!(tmp_path));
+
+    let res = backend
+        .run(
+            &mut session,
+            InboundEvent::message(key, "msg-pwd", "run pwd and reply with the output"),
+        )
+        .await;
+    assert!(
+        res.is_ok(),
+        "live lane turn against daemon must succeed: {:?}",
+        res.err()
+    );
+
+    let chunks = dispatcher.stream_chunks();
+    let full_reply = chunks
+        .iter()
+        .map(|c| c.content.as_str())
+        .collect::<String>();
+    assert!(
+        full_reply.contains(&tmp_path),
+        "reply from live daemon must contain the mktemp path '{tmp_path}', got: {full_reply}"
+    );
 }

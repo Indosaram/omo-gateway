@@ -46,6 +46,9 @@ pub struct OmoBackendConfig {
     /// the premature-completion race and ignored. Past it, an empty terminal
     /// fails the turn (an upstream LLM failure recorded as an empty success).
     pub no_content_grace: Duration,
+    /// Interactive turns are interrupted when the agent produces no output at all
+    /// within this window of the prompt starting (turn/start acknowledgement).
+    pub initial_response_timeout: Duration,
     pub default_model: Option<String>,
     pub fallback_model: String,
     pub per_agent_workspace: bool,
@@ -55,11 +58,74 @@ pub struct OmoBackendConfig {
 /// Default local daemon URL when neither lane configures an endpoint.
 pub const CRON_APPSERVER_URL_DEFAULT: &str = "ws://127.0.0.1:19742";
 
+/// Default turn budget for lane sessions when OMON_LANE_TURN_SECS is unset.
+pub const DEFAULT_LANE_TURN_SECS: u64 = 3600;
+
 /// Default fallback model when primary model fails due to quota or daemon model rejection.
 pub const DEFAULT_FALLBACK_MODEL: &str = "inferhub/cb/deepseek-v4.1-flash";
 
+/// Fail-fast window for an interactive turn whose agent produces no output.
+pub const DEFAULT_INITIAL_RESPONSE_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// Default primary model when neither OMON_DEFAULT_MODEL nor DEFAULT_MODEL is set.
 pub const DEFAULT_PRIMARY_MODEL: &str = "mahoquot/nekos-claude-sonnet-5-5";
+
+/// Default model for the owner-facing lead session.
+pub const OMON_MODEL_LEAD: &str = "mahoquot/claude-opus-5-5";
+
+/// Default model for large work and large lanes.
+pub const OMON_MODEL_LARGE: &str = "mahoquot/claude-opus-5-5";
+
+/// Default model for small work, small lanes, kibitzer, triage writing, digests, judge fallback.
+pub const OMON_MODEL_SMALL: &str = "inferhub/cb/deepseek-v4.1-flash";
+
+pub const OMON_MODEL_LEAD_DEFAULT: &str = OMON_MODEL_LEAD;
+pub const OMON_MODEL_LARGE_DEFAULT: &str = OMON_MODEL_LARGE;
+pub const OMON_MODEL_SMALL_DEFAULT: &str = OMON_MODEL_SMALL;
+
+/// Purpose for which a model is requested in the gateway architecture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelPurpose {
+    Lead,
+    Large,
+    Small,
+    LaneLarge,
+    LaneSmall,
+    Kibitzer,
+    InboxWrite,
+    Digest,
+    JudgeFallback,
+    CronFix,
+}
+
+/// Resolves the model identifier for a given purpose, honoring environment overrides
+/// (OMON_MODEL_LEAD, OMON_MODEL_LARGE, OMON_MODEL_SMALL) or falling back to compiled-in defaults.
+pub fn model_for_purpose(purpose: ModelPurpose) -> String {
+    match purpose {
+        ModelPurpose::Lead => std::env::var("OMON_MODEL_LEAD")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| OMON_MODEL_LEAD.to_string()),
+        ModelPurpose::Large | ModelPurpose::LaneLarge => std::env::var("OMON_MODEL_LARGE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| OMON_MODEL_LARGE.to_string()),
+        ModelPurpose::Small
+        | ModelPurpose::LaneSmall
+        | ModelPurpose::Kibitzer
+        | ModelPurpose::InboxWrite
+        | ModelPurpose::Digest
+        | ModelPurpose::JudgeFallback
+        | ModelPurpose::CronFix => std::env::var("OMON_MODEL_SMALL")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| OMON_MODEL_SMALL.to_string()),
+    }
+}
 
 impl Default for OmoBackendConfig {
     fn default() -> Self {
@@ -70,6 +136,7 @@ impl Default for OmoBackendConfig {
             request_timeout: Duration::from_secs(1800),
             total_timeout: Duration::from_secs(1800),
             no_content_grace: Duration::from_secs(15),
+            initial_response_timeout: DEFAULT_INITIAL_RESPONSE_TIMEOUT,
             default_model: None,
             fallback_model: DEFAULT_FALLBACK_MODEL.to_string(),
             per_agent_workspace: true,
@@ -108,6 +175,11 @@ impl OmoBackendConfig {
 
     pub fn with_no_content_grace(mut self, grace: Duration) -> Self {
         self.no_content_grace = grace;
+        self
+    }
+
+    pub fn with_initial_response_timeout(mut self, timeout: Duration) -> Self {
+        self.initial_response_timeout = timeout;
         self
     }
 
@@ -227,6 +299,7 @@ impl OmoBackendConfig {
             request_timeout,
             total_timeout,
             no_content_grace: Duration::from_secs(15),
+            initial_response_timeout: DEFAULT_INITIAL_RESPONSE_TIMEOUT,
             default_model,
             fallback_model,
             per_agent_workspace,
@@ -261,6 +334,31 @@ impl OmoBackendConfig {
         };
 
         Ok(config)
+    }
+
+    /// Configuration for the **lane runner**.
+    ///
+    /// Lane turns inherit the interactive daemon credentials and model, with
+    /// a dedicated total timeout parsed from `OMON_LANE_TURN_SECS` (default 3600s).
+    pub fn lane_from_env() -> Result<Self> {
+        let mut config = Self::from_env()?;
+        config.total_timeout = lane_turn_timeout_from_env()?;
+        Ok(config)
+    }
+}
+
+/// Parse `OMON_LANE_TURN_SECS` with zero-config default of 3600s (1 hour).
+pub fn lane_turn_timeout_from_env() -> Result<Duration> {
+    match std::env::var("OMON_LANE_TURN_SECS") {
+        Ok(v) if !v.trim().is_empty() => {
+            let secs = v.trim().parse::<u64>().map_err(|_| {
+                OmonError::Config(format!(
+                    "invalid OMON_LANE_TURN_SECS: '{v}', expected a positive integer"
+                ))
+            })?;
+            Ok(Duration::from_secs(secs))
+        }
+        _ => Ok(Duration::from_secs(DEFAULT_LANE_TURN_SECS)),
     }
 }
 
@@ -473,5 +571,30 @@ mod tests {
 
         std::env::remove_var("OMON_PER_AGENT_WORKSPACE");
         std::env::remove_var("OMON_WORKSPACE_ROOT");
+    }
+
+    #[test]
+    fn test_lane_turn_timeout_env_contract() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("OMON_LANE_TURN_SECS");
+        assert_eq!(
+            lane_turn_timeout_from_env().unwrap(),
+            Duration::from_secs(3600)
+        );
+
+        std::env::set_var("OMON_LANE_TURN_SECS", "7200");
+        assert_eq!(
+            lane_turn_timeout_from_env().unwrap(),
+            Duration::from_secs(7200)
+        );
+
+        let lane_cfg = OmoBackendConfig::lane_from_env().unwrap();
+        assert_eq!(lane_cfg.total_timeout, Duration::from_secs(7200));
+
+        std::env::set_var("OMON_LANE_TURN_SECS", "not_a_number");
+        assert!(lane_turn_timeout_from_env().is_err());
+        assert!(OmoBackendConfig::lane_from_env().is_err());
+
+        std::env::remove_var("OMON_LANE_TURN_SECS");
     }
 }

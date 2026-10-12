@@ -169,6 +169,13 @@ pub fn format_inlined_text(filename: &str, content: &str) -> String {
     format!("\n\n[Content of {filename}]:\n\n{content}")
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EventOrigin {
+    #[default]
+    User,
+    System,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboundEvent {
     pub id: Uuid,
@@ -178,6 +185,12 @@ pub struct InboundEvent {
     /// deduplication is enabled for the transport.
     #[serde(default)]
     pub delivery_id: Option<String>,
+    #[serde(default)]
+    pub referenced_message_id: Option<String>,
+    #[serde(default)]
+    pub author_id: Option<String>,
+    #[serde(default)]
+    pub origin: EventOrigin,
     pub content: String,
     #[serde(default)]
     pub attachments: Vec<MessageAttachment>,
@@ -263,6 +276,9 @@ impl InboundEvent {
             session,
             platform_message_id: platform_message_id.into(),
             delivery_id: None,
+            referenced_message_id: None,
+            author_id: None,
+            origin: EventOrigin::User,
             content: content.into(),
             attachments: Vec::new(),
             received_at: Utc::now(),
@@ -281,6 +297,16 @@ impl InboundEvent {
 
     pub fn with_delivery_id(mut self, delivery_id: impl Into<String>) -> Self {
         self.delivery_id = Some(delivery_id.into());
+        self
+    }
+
+    pub fn with_referenced_message_id(mut self, referenced_message_id: impl Into<String>) -> Self {
+        self.referenced_message_id = Some(referenced_message_id.into());
+        self
+    }
+
+    pub fn with_author_id(mut self, author_id: impl Into<String>) -> Self {
+        self.author_id = Some(author_id.into());
         self
     }
 

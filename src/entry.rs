@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use omon_gateway::migrate::MigrateArgs;
+use omon_gateway::profiles::{apply_block, export_json, export_profile};
 use omon_gateway::{OmonError, Result};
 use tokio_util::sync::CancellationToken;
 
@@ -50,6 +51,33 @@ enum Command {
     Serve(legacy::dashboard::DashboardArgs),
     /// Run database migration utilities.
     Migrate(MigrateArgs),
+    /// Control persistent worker lanes.
+    Lane(omon_gateway::lanes::cli::LaneArgs),
+    Inbox(omon_gateway::inbox::cli::InboxArgs),
+    InboxPropose(omon_gateway::inbox::proposals::ProposalArgs),
+    Profile(ProfileArgs),
+    Sessions(omon_gateway::sessions::cli::SessionsArgs),
+    Usage(omon_gateway::usage::UsageArgs),
+    Cron(omon_gateway::cron::report::CronArgs),
+}
+
+#[derive(Debug, clap::Args)]
+struct ProfileArgs {
+    #[command(subcommand)]
+    command: ProfileCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum ProfileCommand {
+    Export {
+        bot_id: String,
+    },
+    ApplyBlock {
+        #[arg(long)]
+        bot_id: String,
+        #[arg(long)]
+        block_file: std::path::PathBuf,
+    },
 }
 
 impl Cli {
@@ -61,9 +89,31 @@ impl Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
+    let command = Cli::parse().into_command();
+    if let Command::Cron(args) = command {
+        std::process::exit(omon_gateway::cron::report::run(args).await);
+    }
+    if let Command::InboxPropose(args) = command {
+        std::process::exit(omon_gateway::inbox::proposals::run_proposal(args).await);
+    }
+    if let Command::Usage(args) = command {
+        std::process::exit(omon_gateway::usage::run(args).await);
+    }
+    if let Command::Lane(args) = command {
+        std::process::exit(omon_gateway::lanes::cli::run(args).await);
+    }
+    if let Command::Inbox(args) = command {
+        std::process::exit(omon_gateway::inbox::cli::run(args).await);
+    }
+    if let Command::Profile(args) = command {
+        std::process::exit(run_profile(args).await);
+    }
+    if let Command::Sessions(args) = command {
+        std::process::exit(omon_gateway::sessions::cli::run(args).await);
+    }
     legacy::dashboard::init_tracing();
 
-    match Cli::parse().into_command() {
+    match command {
         Command::Run => run_gateway_with_optional_dashboard().await,
         Command::Dashboard(args) | Command::Serve(args) => {
             legacy::dashboard_runtime::run_standalone_cli(
@@ -72,6 +122,70 @@ async fn main() -> Result<()> {
             .await
         }
         Command::Migrate(args) => omon_gateway::migrate::run_migrate(args).await,
+        Command::Lane(args) => std::process::exit(omon_gateway::lanes::cli::run(args).await),
+        Command::Inbox(args) => std::process::exit(omon_gateway::inbox::cli::run(args).await),
+        Command::InboxPropose(args) => {
+            std::process::exit(omon_gateway::inbox::proposals::run_proposal(args).await)
+        }
+        Command::Profile(args) => std::process::exit(run_profile(args).await),
+        Command::Sessions(args) => std::process::exit(omon_gateway::sessions::cli::run(args).await),
+        Command::Usage(args) => std::process::exit(omon_gateway::usage::run(args).await),
+        Command::Cron(args) => std::process::exit(omon_gateway::cron::report::run(args).await),
+    }
+}
+
+async fn connect_profile_database() -> std::result::Result<omon_gateway::Database, String> {
+    let url =
+        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://omon_gateway.db".to_owned());
+    omon_gateway::Database::connect(&url)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn run_profile(args: ProfileArgs) -> i32 {
+    let result = async {
+        let database = connect_profile_database().await?;
+        let result = match args.command {
+            ProfileCommand::Export { bot_id } => {
+                let profile = export_profile(database.pool(), &bot_id)
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("unknown bot id: {bot_id}"))?;
+                export_json(&profile).map_err(|error| error.to_string())
+            }
+            ProfileCommand::ApplyBlock { bot_id, block_file } => {
+                let block = tokio::fs::read_to_string(block_file)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let applied = apply_block(database.pool(), &bot_id, &block)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "bot_id": bot_id,
+                    "before": {"characters": applied.before.length, "sha256": applied.before.sha256},
+                    "after": {"characters": applied.after.length, "sha256": applied.after.sha256}
+                }))
+                .map_err(|error| error.to_string())
+            }
+        };
+        database.close().await;
+        result
+    }
+    .await;
+    match result {
+        Ok(json) => {
+            println!("{json}");
+            0
+        }
+        Err(error) => {
+            let code = if error.starts_with("unknown bot id:") {
+                2
+            } else {
+                1
+            };
+            eprintln!("{}", serde_json::json!({"ok": false, "error": error}));
+            code
+        }
     }
 }
 
@@ -150,6 +264,34 @@ mod tests {
     use clap::Parser;
 
     use super::{Cli, Command, RuntimeOwnershipLock};
+
+    #[tokio::test]
+    async fn session_cli_output_preserves_aggregate_exit_and_projection() {
+        use omon_gateway::sessions::registry::{CommandOutput, CommandRunner, SessionRegistry};
+        struct Runner(i32);
+        #[async_trait::async_trait]
+        impl CommandRunner for Runner {
+            async fn run(&self, _machine: &str, _argv: &[String]) -> Result<CommandOutput, String> {
+                Ok(CommandOutput {
+                    code: self.0,
+                    stdout: br#"[{"sessionId":"fixture","name":"QA","cwd":"/tmp","private":"not output"}]"#.to_vec(),
+                    stderr: vec![],
+                })
+            }
+        }
+        for expected in [0, 1, 2, 3, 4, 5] {
+            let registry = SessionRegistry::new(std::sync::Arc::new(Runner(expected)), vec![]);
+            let listed = registry.list_all().await;
+            let code = listed.exit_code;
+            let output = serde_json::to_string(&listed).unwrap();
+            assert_eq!(code, expected);
+            assert!(!output.contains("not output"));
+            let value: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert!(value.get("sessions").is_some());
+            assert!(value.get("errors").is_some());
+        }
+        assert!(Cli::try_parse_from(["omo-gateway", "sessions", "list", "--json"]).is_ok());
+    }
 
     #[test]
     fn duplicate_gateway_start_is_rejected() {

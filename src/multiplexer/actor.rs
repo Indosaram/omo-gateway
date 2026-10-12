@@ -25,10 +25,33 @@ pub use crate::agent::AgentBackend as AgentRunner;
 #[async_trait]
 pub trait OutboundDispatcher: Send + Sync + 'static {
     async fn dispatch(&self, action: OutboundAction) -> Result<()>;
+
+    async fn owner_thread_is_private(&self, _session: &SessionKey) -> bool {
+        false
+    }
+
+    async fn dispatch_direct_reply(&self, session: SessionKey, content: String) -> Result<()> {
+        self.dispatch(OutboundAction::SendMessage {
+            session,
+            content,
+            reply_to: None,
+        })
+        .await
+    }
 }
 
 pub(crate) enum ActorCommand {
     Event(Box<InboundEvent>),
+    EventIfIdle {
+        event: Box<InboundEvent>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    IsIdle {
+        reply: oneshot::Sender<bool>,
+    },
+    WaitIdle {
+        reply: oneshot::Sender<()>,
+    },
     /// An event whose turn outcome is reported back once the turn reaches a terminal state.
     /// Startup backfill uses this to advance its durability cursor only after real success.
     EventWithAck {
@@ -78,9 +101,29 @@ pub struct SessionActor {
     binding_cleared: bool,
     /// Outcome channel for the turn currently being executed, when the sender asked for one.
     pending_ack: Option<oneshot::Sender<Result<()>>>,
+    inbox_event_tx: Option<crate::inbox::watchers::InboxEventSender>,
 }
 
 impl SessionActor {
+    /// Returns a reference to the actor's session context.
+    pub fn context(&self) -> &SessionContext {
+        &self.context
+    }
+
+    /// Evaluates whether the given session qualifies as the owner-facing lead session.
+    pub fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
+        is_owner_lead_session(key, bot_name)
+    }
+
+    /// Loads context for a session, determining active model and profile attributes.
+    pub async fn load_context(
+        pool: &SqlitePool,
+        key: SessionKey,
+        profile_router: Option<&ProfileRouter>,
+    ) -> Result<SessionContext> {
+        load_context(pool, key, profile_router).await
+    }
+
     /// Recovers sessions marked `resume_pending` from previous runs or failed flushes,
     /// re-dispatching unfinished user turns or marking completed deliveries.
     pub async fn recover_resume_pending_sessions(
@@ -137,6 +180,9 @@ impl SessionActor {
                     session: session_key.clone(),
                     platform_message_id: String::new(),
                     delivery_id,
+                    referenced_message_id: None,
+                    author_id: None,
+                    origin: crate::EventOrigin::User,
                     content: unfinished.content,
                     attachments,
                     received_at: unfinished.created_at,
@@ -180,6 +226,7 @@ impl SessionActor {
         dispatcher: Option<Arc<dyn OutboundDispatcher>>,
         pool: SqlitePool,
         profile_router: Option<Arc<ProfileRouter>>,
+        inbox_event_tx: Option<crate::inbox::watchers::InboxEventSender>,
     ) -> Result<Self> {
         let context = load_context(&pool, key, profile_router.as_deref()).await?;
         Ok(Self {
@@ -192,16 +239,34 @@ impl SessionActor {
             dirty: false,
             binding_cleared: false,
             pending_ack: None,
+            inbox_event_tx,
         })
     }
 
-    pub(crate) async fn run(mut self) {
+    #[cfg(test)]
+    pub(crate) async fn run(self) {
+        if let Err(error) = self.run_with_shutdown(CancellationToken::new()).await {
+            tracing::error!(%error, "session actor shutdown failed");
+        }
+    }
+
+    pub(crate) async fn run_with_shutdown(
+        mut self,
+        service_shutdown: CancellationToken,
+    ) -> Result<()> {
         let mut pending_events: VecDeque<ActorCommand> = VecDeque::new();
         loop {
+            if service_shutdown.is_cancelled() {
+                break;
+            }
             let command = if let Some(cmd) = pending_events.pop_front() {
                 cmd
             } else {
-                match self.receiver.recv().await {
+                match tokio::select! {
+                    biased;
+                    _ = service_shutdown.cancelled() => None,
+                    command = self.receiver.recv() => command,
+                } {
                     Some(command) => command,
                     None => break,
                 }
@@ -210,6 +275,15 @@ impl SessionActor {
             // An acked event is handled exactly like a plain event; the ack rides along on the
             // actor so every terminal outcome below can report the turn result to the sender.
             let command = match command {
+                ActorCommand::EventIfIdle { event, reply } => {
+                    if !pending_events.is_empty() {
+                        let _ =
+                            reply.send(Err(OmonError::Multiplexer("lead session is busy".into())));
+                        continue;
+                    }
+                    let _ = reply.send(Ok(()));
+                    ActorCommand::Event(event)
+                }
                 ActorCommand::EventWithAck { event, ack } => {
                     self.resolve_pending_ack(Err(OmonError::Multiplexer(
                         "superseded by a newer acked turn".into(),
@@ -280,7 +354,11 @@ impl SessionActor {
 
                     let event_id = event.id;
                     let reply_to = event.platform_message_id.clone();
-                    let platform_message_id = reply_to.clone();
+                    let platform_message_id = if event.origin == crate::EventOrigin::System {
+                        String::new()
+                    } else {
+                        reply_to.clone()
+                    };
                     let delivery_id = event.delivery_id.clone();
                     let cancellation = CancellationToken::new();
                     let mut turn_context = self.context.clone();
@@ -306,8 +384,29 @@ impl SessionActor {
                     let outcome = loop {
                         tokio::select! {
                             biased;
+                            _ = service_shutdown.cancelled() => {
+                                cancellation.cancel();
+                                match tokio::time::timeout(std::time::Duration::from_secs(20), &mut run).await {
+                                    Ok(result) => {
+                                        if let Err(error) = result {
+                                            tracing::debug!(session = %self.context.key, %error, "active turn canceled for service shutdown");
+                                        }
+                                    }
+                                    Err(error) => tracing::error!(session = %self.context.key, %error, "backend cancellation did not finish before shutdown deadline"),
+                                }
+                                break TurnOutcome::Shutdown;
+                            }
                             command = self.receiver.recv() => {
                                 match command {
+                                    Some(ActorCommand::EventIfIdle { reply, .. }) => {
+                                        let _ = reply.send(Err(OmonError::Multiplexer("lead session is busy".into())));
+                                    }
+                                    Some(ActorCommand::IsIdle { reply }) => {
+                                        let _ = reply.send(false);
+                                    }
+                                    Some(command @ ActorCommand::WaitIdle { .. }) => {
+                                        pending_events.push_back(command);
+                                    }
                                     Some(ActorCommand::Event(next)) => {
                                         if pending_events.len() < MAX_PENDING_EVENTS {
                                             pending_events.push_back(ActorCommand::Event(next));
@@ -553,6 +652,7 @@ impl SessionActor {
                             self.resolve_pending_ack(Err(OmonError::Multiplexer(
                                 "session actor shutting down".into(),
                             )));
+                            break;
                         }
                     }
                     self.context.updated_at = Utc::now();
@@ -612,6 +712,17 @@ impl SessionActor {
                 ActorCommand::GetContext { reply } => {
                     let _ = reply.send(self.context.clone());
                 }
+                ActorCommand::IsIdle { reply } => {
+                    let _ = reply.send(pending_events.is_empty() && self.receiver.is_empty());
+                }
+                ActorCommand::WaitIdle { reply } => {
+                    let _ = reply.send(());
+                }
+                ActorCommand::EventIfIdle { reply, .. } => {
+                    let _ = reply.send(Err(OmonError::Multiplexer(
+                        "idle event was not dispatched".into(),
+                    )));
+                }
                 ActorCommand::EvictIfIdle {
                     idle_timeout,
                     reply,
@@ -648,6 +759,10 @@ impl SessionActor {
         // Dropping the multiplexer closes all strong senders. Flush dirty state
         // on that graceful channel shutdown so actor memory can be reclaimed
         // without silently discarding the last in-memory session mutation.
+        self.receiver.close();
+        while let Ok(command) = self.receiver.try_recv() {
+            pending_events.push_back(command);
+        }
         if !pending_events.is_empty() {
             if let Err(error) = crate::storage::mark_session_resume_pending(
                 &self.pool,
@@ -658,6 +773,21 @@ impl SessionActor {
                 tracing::error!(session = %self.context.key, %error, "failed to mark resume_pending for remaining pending events");
             }
         }
+        for command in pending_events {
+            match command {
+                ActorCommand::EventWithAck { ack, .. } => {
+                    let _ = ack.send(Err(OmonError::Multiplexer(
+                        "session actor shutting down".into(),
+                    )));
+                }
+                ActorCommand::EventIfIdle { reply, .. } => {
+                    let _ = reply.send(Err(OmonError::Multiplexer(
+                        "session actor shutting down".into(),
+                    )));
+                }
+                _ => {}
+            }
+        }
         if let Err(error) = self.flush_if_dirty().await {
             tracing::error!(session = %self.context.key, %error, "failed to flush session actor during shutdown");
             let _ = crate::storage::mark_session_resume_pending(
@@ -665,7 +795,9 @@ impl SessionActor {
                 &self.context.key.storage_key(),
             )
             .await;
+            return Err(error);
         }
+        Ok(())
     }
 
     async fn interrupt_turn(
@@ -709,6 +841,10 @@ impl SessionActor {
             "DELETE FROM messages
              WHERE session_key = ? AND sequence > (
                  SELECT sequence FROM messages WHERE id = ? AND session_key = ?
+             ) AND NOT EXISTS (
+                 SELECT 1 FROM delivery_obligations
+                 WHERE id = json_extract(messages.metadata_json, '$.delivery_obligation_id')
+                   AND state IN ('attempting', 'delivered')
              )",
         )
         .bind(self.context.key.storage_key())
@@ -749,7 +885,7 @@ impl SessionActor {
         )
         .bind(event.id.to_string())
         .bind(self.context.key.storage_key())
-        .bind(strip_leading_message_timestamps(&render_user_prompt(event)))
+        .bind(inbound_transcript_content(event))
         .bind(serde_json::to_string(&event.attachments).map_err(serialization_error)?)
         .bind(event.received_at)
         .bind(if event.platform_message_id.is_empty() {
@@ -759,6 +895,18 @@ impl SessionActor {
         })
         .execute(&self.pool)
         .await?;
+        if event.origin == crate::EventOrigin::User
+            && event.session.platform == "discord"
+            && !event.platform_message_id.is_empty()
+        {
+            let index = crate::MessageSearchIndex::new(self.pool.clone());
+            index.index_inbound(&event.session, event).await?;
+            if let Some(sender) = &self.inbox_event_tx {
+                if let Err(error) = crate::inbox::watchers::on_gateway_message(sender).await {
+                    tracing::warn!(%error, "Discord inbox event receiver is closed after message index commit");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -803,6 +951,82 @@ impl SessionActor {
     }
 }
 
+fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
+    if key.platform != "discord" {
+        return false;
+    }
+
+    let is_omomeow = match key.bot_id.as_deref() {
+        None => true,
+        Some(id) => {
+            if id == "1465631383862120451"
+                || id.eq_ignore_ascii_case("omomeow")
+                || id.eq_ignore_ascii_case("wawabot")
+            {
+                true
+            } else if let Ok(configured) = std::env::var("OMON_OMOMEOW_BOT_ID") {
+                id == configured.trim()
+            } else if let Some(name) = bot_name {
+                name.eq_ignore_ascii_case("omomeow") || name.eq_ignore_ascii_case("wawabot")
+            } else {
+                false
+            }
+        }
+    };
+
+    if !is_omomeow {
+        return false;
+    }
+
+    let owner_id = std::env::var("DISCORD_ALLOWED_USERS")
+        .ok()
+        .and_then(|val| {
+            val.split(',')
+                .map(str::trim)
+                .find(|s| !s.is_empty())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "414011632306618368".to_string());
+
+    let is_owner_dm = key.guild_id.is_none() && key.user_id == owner_id;
+    if is_owner_dm {
+        return true;
+    }
+
+    if let Ok(home_val) = std::env::var("DISCORD_HOME_CHANNEL") {
+        let home_channels: Vec<&str> = home_val
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if home_channels.iter().any(|&h| h == key.channel_id) {
+            return true;
+        }
+        if let Some(tid) = key.thread_id.as_deref() {
+            if home_channels.contains(&tid) {
+                return true;
+            }
+        }
+    }
+    if let Ok(thread_val) = std::env::var("DISCORD_HOME_CHANNEL_THREAD_ID") {
+        let home_threads: Vec<&str> = thread_val
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if let Some(tid) = key.thread_id.as_deref() {
+            if home_threads.contains(&tid) {
+                return true;
+            }
+        }
+        if home_threads.iter().any(|&h| h == key.channel_id) {
+            return true;
+        }
+    }
+
+    false
+}
+
 async fn load_context(
     pool: &SqlitePool,
     key: SessionKey,
@@ -820,22 +1044,33 @@ async fn load_context(
                 serde_json::from_str(&state_json).map_err(serialization_error)?;
 
             // Check for bot-specific profile override first if bot_id is present
+            let mut bot_profile_model: Option<String> = None;
+            let mut bot_name: Option<String> = None;
             if let Some(bot_id) = key.bot_id.as_deref() {
-                if let Ok(Some((model, prompt, toolsets))) = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-                    "SELECT model, system_prompt, enabled_toolsets FROM bot_profiles WHERE bot_id = ?"
+                if let Ok(Some((name, model, prompt, toolsets))) = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
+                    "SELECT name, model, system_prompt, enabled_toolsets FROM bot_profiles WHERE bot_id = ?"
                 )
                 .bind(bot_id)
                 .fetch_optional(pool)
                 .await {
-                    if state.active_model.is_none() && model.is_some() {
-                        state.active_model = model;
-                    }
+                    bot_name = name;
+                    bot_profile_model = model;
                     if state.system_prompt.is_none() && prompt.is_some() {
                         state.system_prompt = prompt;
                     }
                     if state.enabled_toolsets.is_none() && toolsets.is_some() {
                         state.enabled_toolsets = toolsets.map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
                     }
+                }
+            }
+
+            if state.active_model.is_none() {
+                if is_owner_lead_session(&key, bot_name.as_deref()) {
+                    state.active_model = Some(crate::agent::model_for_purpose(
+                        crate::agent::ModelPurpose::Lead,
+                    ));
+                } else if let Some(model) = bot_profile_model {
+                    state.active_model = Some(model);
                 }
             }
 
@@ -867,16 +1102,17 @@ async fn load_context(
         }
         None => {
             let mut context = SessionContext::new(key);
+            let mut bot_profile_model: Option<String> = None;
+            let mut bot_name: Option<String> = None;
             if let Some(bot_id) = context.key.bot_id.as_deref() {
-                if let Ok(Some((model, prompt, toolsets))) = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>)>(
-                    "SELECT model, system_prompt, enabled_toolsets FROM bot_profiles WHERE bot_id = ?"
+                if let Ok(Some((name, model, prompt, toolsets))) = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
+                    "SELECT name, model, system_prompt, enabled_toolsets FROM bot_profiles WHERE bot_id = ?"
                 )
                 .bind(bot_id)
                 .fetch_optional(pool)
                 .await {
-                    if model.is_some() {
-                        context.state.active_model = model;
-                    }
+                    bot_name = name;
+                    bot_profile_model = model;
                     if prompt.is_some() {
                         context.state.system_prompt = prompt;
                     }
@@ -885,6 +1121,17 @@ async fn load_context(
                     }
                 }
             }
+
+            if context.state.active_model.is_none() {
+                if is_owner_lead_session(&context.key, bot_name.as_deref()) {
+                    context.state.active_model = Some(crate::agent::model_for_purpose(
+                        crate::agent::ModelPurpose::Lead,
+                    ));
+                } else if let Some(model) = bot_profile_model {
+                    context.state.active_model = Some(model);
+                }
+            }
+
             if let Some(router) = profile_router {
                 router.apply_to_session(&mut context);
             }
@@ -946,7 +1193,7 @@ pub async fn record_inbound_transcript(pool: &SqlitePool, event: &InboundEvent) 
     )
     .bind(event.id.to_string())
     .bind(event.session.storage_key())
-    .bind(strip_leading_message_timestamps(&render_user_prompt(event)))
+    .bind(inbound_transcript_content(event))
     .bind(serde_json::to_string(&event.attachments).map_err(serialization_error)?)
     .bind(event.received_at)
     .bind(if event.platform_message_id.is_empty() {
@@ -957,6 +1204,14 @@ pub async fn record_inbound_transcript(pool: &SqlitePool, event: &InboundEvent) 
     .execute(pool)
     .await?;
     Ok(())
+}
+
+fn inbound_transcript_content(event: &InboundEvent) -> String {
+    let content = strip_leading_message_timestamps(&render_user_prompt(event));
+    match event.origin {
+        crate::EventOrigin::User => content,
+        crate::EventOrigin::System => format!("[system] {content}"),
+    }
 }
 
 fn serialization_error(error: serde_json::Error) -> OmonError {
@@ -1028,9 +1283,17 @@ mod tests {
         });
 
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
-        let actor = SessionActor::load(key.clone(), cmd_rx, runner, None, db.pool().clone(), None)
-            .await
-            .unwrap();
+        let actor = SessionActor::load(
+            key.clone(),
+            cmd_rx,
+            runner,
+            None,
+            db.pool().clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let handle = tokio::spawn(actor.run());
 
         // With no turn executing the actor reports "not steered" so the caller
@@ -1089,9 +1352,17 @@ mod tests {
         });
 
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
-        let actor = SessionActor::load(key.clone(), cmd_rx, runner, None, db.pool().clone(), None)
-            .await
-            .unwrap();
+        let actor = SessionActor::load(
+            key.clone(),
+            cmd_rx,
+            runner,
+            None,
+            db.pool().clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let handle = tokio::spawn(actor.run());
 
         // Send first blocking turn
@@ -1152,9 +1423,17 @@ mod tests {
         });
 
         let (cmd_tx, cmd_rx) = mpsc::channel(32);
-        let actor = SessionActor::load(key.clone(), cmd_rx, runner, None, db.pool().clone(), None)
-            .await
-            .unwrap();
+        let actor = SessionActor::load(
+            key.clone(),
+            cmd_rx,
+            runner,
+            None,
+            db.pool().clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let handle = tokio::spawn(actor.run());
 
         // Send blocking turn
@@ -1225,6 +1504,7 @@ mod tests {
             None,
             db.pool().clone(),
             Some(router.clone()),
+            None,
         )
         .await
         .unwrap();
@@ -1273,6 +1553,7 @@ mod tests {
             None,
             db.pool().clone(),
             Some(router.clone()),
+            None,
         )
         .await
         .unwrap();
@@ -1383,6 +1664,7 @@ mod tests {
             Some(dispatcher.clone()),
             pool.clone(),
             None,
+            None,
         )
         .await
         .unwrap();
@@ -1484,6 +1766,7 @@ mod tests {
                 Some(dispatcher.clone()),
                 db.pool().clone(),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1540,6 +1823,7 @@ mod tests {
                 Arc::new(FailingRunner),
                 Some(dispatcher.clone()),
                 db.pool().clone(),
+                None,
                 None,
             )
             .await
@@ -1598,6 +1882,7 @@ mod tests {
                 runner,
                 Some(dispatcher.clone()),
                 db.pool().clone(),
+                None,
                 None,
             )
             .await
@@ -1659,6 +1944,7 @@ mod tests {
                 runner,
                 Some(dispatcher.clone()),
                 db.pool().clone(),
+                None,
                 None,
             )
             .await
@@ -1737,6 +2023,7 @@ mod tests {
                 Some(dispatcher.clone()),
                 db.pool().clone(),
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1747,6 +2034,7 @@ mod tests {
                 runner_b,
                 Some(dispatcher.clone()),
                 db.pool().clone(),
+                None,
                 None,
             )
             .await

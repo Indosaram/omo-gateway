@@ -187,7 +187,12 @@ impl MessageSearchIndex {
         Ok(count)
     }
 
-    pub async fn index_inbound(&self, session: &SessionKey, event: &InboundEvent) -> Result<bool> {
+    pub async fn index_inbound_with_metadata(
+        &self,
+        session: &SessionKey,
+        event: &InboundEvent,
+        metadata: serde_json::Value,
+    ) -> Result<bool> {
         if event.platform_message_id.trim().is_empty() {
             return Ok(false);
         }
@@ -196,24 +201,44 @@ impl MessageSearchIndex {
             .iter()
             .map(|attachment| attachment.filename.clone())
             .collect::<Vec<_>>();
+        let mut meta_map = match metadata {
+            serde_json::Value::Object(map) => map,
+            _ => serde_json::Map::new(),
+        };
+        meta_map.insert("source".into(), json!("ingress"));
+        if let Some(delivery_id) = &event.delivery_id {
+            meta_map.insert("delivery_id".into(), json!(delivery_id));
+        }
+        let author_id = event
+            .author_id
+            .as_ref()
+            .filter(|a| !a.is_empty())
+            .cloned()
+            .unwrap_or_else(|| session.user_id.clone());
         let document = MessageSearchDocument {
             platform: session.platform.clone(),
             guild_id: session.guild_id.clone(),
             channel_id: session.channel_id.clone(),
             thread_id: session.thread_id.clone(),
             message_id: event.platform_message_id.clone(),
-            author_id: session.user_id.clone(),
+            author_id,
             author_name: session.user_id.clone(),
             content: event.content.clone(),
             attachment_names,
             timestamp: event.received_at,
-            metadata: json!({
-                "source": "ingress",
-                "delivery_id": event.delivery_id,
-            }),
+            metadata: serde_json::Value::Object(meta_map),
         };
         self.upsert(&document).await?;
         Ok(true)
+    }
+
+    pub async fn index_inbound(&self, session: &SessionKey, event: &InboundEvent) -> Result<bool> {
+        let mut metadata = json!({});
+        if let Some(ref_id) = &event.referenced_message_id {
+            metadata["referenced_message_id"] = json!(ref_id);
+        }
+        self.index_inbound_with_metadata(session, event, metadata)
+            .await
     }
 }
 

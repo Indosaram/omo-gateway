@@ -18,6 +18,7 @@ pub type PoiseContext<'a> = poise::Context<'a, PoiseData, CommandError>;
 pub struct PoiseData {
     pub multiplexer: SessionMultiplexer,
     pub pool: SqlitePool,
+    pub inbox_actions: Option<Arc<dyn crate::inbox::proposals::Actions>>,
     pub started_at: Instant,
     pub tools: Vec<String>,
     pub mcp_endpoints: Vec<String>,
@@ -69,6 +70,7 @@ impl PoiseData {
         Self {
             multiplexer,
             pool,
+            inbox_actions: None,
             started_at: Instant::now(),
             tools: Vec::new(),
             mcp_endpoints: Vec::new(),

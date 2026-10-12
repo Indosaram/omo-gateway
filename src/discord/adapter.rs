@@ -818,6 +818,92 @@ pub async fn handle_event(
     LAST_DISCORD_EVENT_MS.store(now_ms(), Ordering::Relaxed);
     match event {
         FullEvent::Message { new_message } => {
+            if crate::inbox::triage::enabled()
+                && !new_message.author.bot
+                && new_message.webhook_id.is_none()
+                && new_message.author.id.to_string() == crate::inbox::proposals::OWNER_ID
+                && new_message.guild_id.is_none()
+                && data.primary_bot_id == Some(ctx.cache.current_user().id.get())
+            {
+                use crate::inbox::proposals::{
+                    approval_number, ApprovalResult, Proposals, Reply, OWNER_ID,
+                };
+                let proposals = Proposals::new(data.pool.clone(), OWNER_ID).await?;
+                let channel = new_message.channel_id.to_string();
+                if new_message.content.trim() == "제안" {
+                    let pending = proposals.pending(&channel).await?;
+                    if !pending.is_empty() {
+                        let text = pending
+                            .iter()
+                            .map(|p| p.display())
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+                        let message = new_message.channel_id.send_message(&ctx.http,
+                            serenity::CreateMessage::new().content(format!("{text}\n\n이 메시지에 답장으로 '<번호> 해'를 보내 승인하세요."))
+                                .allowed_mentions(crate::lanes::discord_threads::lane_allowed_mentions())).await?;
+                        for proposal in pending {
+                            proposals
+                                .presented(proposal.number, &channel, &message.id.to_string())
+                                .await?;
+                        }
+                    }
+                    return Ok(());
+                }
+                if approval_number(&new_message.content).is_some() {
+                    let reference = new_message
+                        .message_reference
+                        .as_ref()
+                        .and_then(|r| r.message_id)
+                        .map(|id| id.to_string());
+                    let result = match data.inbox_actions.as_ref() {
+                        Some(actions) => {
+                            proposals
+                                .approve(
+                                    Reply {
+                                        author_id: OWNER_ID,
+                                        is_bot: new_message.author.bot,
+                                        channel_id: &channel,
+                                        message_id: &new_message.id.to_string(),
+                                        referenced_message_id: reference.as_deref(),
+                                        content: &new_message.content,
+                                    },
+                                    actions.as_ref(),
+                                )
+                                .await
+                        }
+                        None => Err(OmonError::Config("proposal executor unavailable".into())),
+                    };
+                    let text = match result {
+                        Ok(ApprovalResult::Executed {
+                            owner_text: Some(text),
+                            ..
+                        }) => text,
+                        Ok(ApprovalResult::Executed { lane_key, .. }) => format!(
+                            "승인된 작업을 시작했습니다: {}",
+                            lane_key.unwrap_or_default()
+                        ),
+                        Ok(ApprovalResult::AlreadyClaimed) => {
+                            "이미 처리됐거나 변경된 제안입니다. 재실행하지 않았습니다.".into()
+                        }
+                        Ok(ApprovalResult::NotMatched) => {
+                            "승인할 제안 메시지에 답장으로 '<번호> 해'를 보내주세요.".into()
+                        }
+                        Err(error) => format!("제안 실행 실패: {error}"),
+                    };
+                    new_message
+                        .channel_id
+                        .send_message(
+                            &ctx.http,
+                            serenity::CreateMessage::new()
+                                .content(text)
+                                .allowed_mentions(
+                                    crate::lanes::discord_threads::lane_allowed_mentions(),
+                                ),
+                        )
+                        .await?;
+                    return Ok(());
+                }
+            }
             let _ = update_channel_cursor(
                 &data.pool,
                 &new_message.channel_id.to_string(),
@@ -910,6 +996,50 @@ pub async fn handle_event(
                 paired_users: &paired_users,
                 parent_channel_id,
             };
+            if let Some(event) =
+                message_to_inbound_with_config(new_message, bot_user_id, channel_type, &config)
+            {
+                let owner = crate::sessions::status_reply::owner_id();
+                let owner_thread = crate::sessions::status_reply::owner_thread(
+                    &event.session,
+                    &new_message.author.id.to_string(),
+                    &owner,
+                ) && channel_type == Some(ChannelType::PrivateThread)
+                    && crate::sessions::status_reply::matches_intent(&event.content);
+                let thread_private = if owner_thread {
+                    data.multiplexer
+                        .owner_thread_is_private(&event.session)
+                        .await
+                } else {
+                    false
+                };
+                let private_owner = !new_message.author.bot
+                    && new_message.message_snapshots.is_empty()
+                    && (crate::sessions::status_reply::owner_dm(
+                        &event.session,
+                        &new_message.author.id.to_string(),
+                        &owner,
+                    ) || thread_private);
+                if data
+                    .multiplexer
+                    .intercept_session_status(&event, private_owner)
+                    .await?
+                {
+                    return Ok(());
+                }
+            }
+            if intercept_lane_owner_reply(
+                &data.pool,
+                new_message,
+                bot_user_id,
+                channel_type,
+                &config,
+            )
+            .await?
+            {
+                crate::lanes::runner::wake(&data.pool).await?;
+                return Ok(());
+            }
             if let Some(mut event) =
                 message_to_inbound_with_config(new_message, bot_user_id, channel_type, &config)
             {
@@ -1337,6 +1467,21 @@ pub async fn steer_claimed_event(data: &PoiseData, event: &InboundEvent) -> Resu
                 crate::multiplexer::record_inbound_transcript(&data.pool, event).await
             {
                 tracing::warn!(%error, "failed to mirror steered message into transcript");
+            } else if !event.platform_message_id.is_empty() {
+                let index = crate::MessageSearchIndex::new(data.pool.clone());
+                match index.index_inbound(&event.session, event).await {
+                    Ok(true) => {
+                        if let Some(sender) = data.multiplexer.inbox_event_sender() {
+                            if let Err(error) =
+                                crate::inbox::watchers::on_gateway_message(&sender).await
+                            {
+                                tracing::warn!(%error, "Discord inbox event receiver is closed after message index commit");
+                            }
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!(%error, "failed to index steered Discord message"),
+                }
             }
             let _ = ledger.mark_delivered(&delivery_id).await;
             Ok(true)
@@ -1536,6 +1681,78 @@ pub async fn decide_unauthorized_dm(
             None
         }
     }
+}
+
+pub async fn intercept_lane_owner_reply(
+    pool: &sqlx::SqlitePool,
+    message: &Message,
+    bot_user_id: serenity::UserId,
+    channel_type: Option<ChannelType>,
+    config: &InboundFilterConfig<'_>,
+) -> Result<bool> {
+    let owner = std::env::var("DISCORD_ALLOWED_USERS")
+        .ok()
+        .and_then(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .find(|id| !id.is_empty())
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "414011632306618368".to_string());
+    if message.author.id.to_string() != owner
+        || message.author.bot
+        || message.webhook_id.is_some()
+        || !channel_type.is_some_and(is_thread)
+        || message.content.trim().is_empty()
+        || strip_bot_mention(&message.content, bot_user_id)
+            .trim()
+            .eq_ignore_ascii_case("/stop")
+        || !message.attachments.is_empty()
+        || !message.message_snapshots.is_empty()
+        || !matches!(
+            message.kind,
+            serenity::model::channel::MessageType::Regular
+                | serenity::model::channel::MessageType::InlineReply
+        )
+    {
+        return Ok(false);
+    }
+    if !is_channel_authorized(
+        message.channel_id.get(),
+        config.parent_channel_id,
+        config.allowed_channels,
+        config.ignored_channels,
+        false,
+    ) || (!config.paired_users.contains(&message.author.id.get())
+        && !is_user_authorized(
+            message.author.id.get(),
+            config.user_roles,
+            config.allowed_users,
+            config.allowed_roles,
+            config.allow_all_users,
+        ))
+    {
+        return Ok(false);
+    }
+    if let Some(lane) =
+        crate::storage::get_lane_by_thread(pool, &message.channel_id.to_string()).await?
+    {
+        if let Some(bot) = crate::Database::get_thread_owner(pool, message.channel_id.get()).await?
+        {
+            crate::storage::lanes::bind_lane_thread(pool, &lane.key, &bot.to_string()).await?;
+        }
+    }
+    crate::storage::lanes::record_owner_reply(
+        pool,
+        &message.channel_id.to_string(),
+        &bot_user_id.to_string(),
+        &message.author.id.to_string(),
+        &owner,
+        &message.id.to_string(),
+        &message.content,
+    )
+    .await
 }
 
 pub fn message_to_inbound_with_config(
@@ -1782,6 +1999,19 @@ pub fn message_to_inbound_with_config(
         format!("discord:{}", message.id)
     };
     event.delivery_id = Some(delivery_id);
+    event.author_id = Some(message.author.id.to_string());
+    let ref_msg_id = message
+        .message_reference
+        .as_ref()
+        .and_then(|r| r.message_id)
+        .map(|id| id.to_string())
+        .or_else(|| {
+            message
+                .referenced_message
+                .as_ref()
+                .map(|m| m.id.to_string())
+        });
+    event.referenced_message_id = ref_msg_id;
     Some(event)
 }
 
@@ -2890,6 +3120,54 @@ fn completed_stream_content(content: &str, is_final: bool) -> Option<&str> {
 
 #[async_trait]
 impl OutboundDispatcher for DiscordEgress {
+    async fn owner_thread_is_private(&self, session: &SessionKey) -> bool {
+        let owner = crate::sessions::status_reply::owner_id();
+        if !crate::sessions::status_reply::owner_thread(session, &owner, &owner) {
+            return false;
+        }
+        let (Ok(http), Ok(channel)) = (self.http_for(session), Self::target(session)) else {
+            return false;
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            let Ok(serenity::Channel::Guild(thread)) = channel.to_channel(&http).await else {
+                return false;
+            };
+            if thread.kind != ChannelType::PrivateThread {
+                return false;
+            }
+            match channel.get_thread_members(&http).await {
+                Ok(members) => {
+                    !members.is_empty()
+                        && members.iter().all(|member| {
+                            member.user_id.to_string() == owner
+                                || member.user_id.to_string() == self.identity(session)
+                        })
+                }
+                Err(_) => false,
+            }
+        })
+        .await
+        .unwrap_or(false)
+    }
+
+    async fn dispatch_direct_reply(&self, session: SessionKey, content: String) -> Result<()> {
+        let http = self.http_for(&session)?;
+        let channel = Self::target(&session)?;
+        if let Some(transport) = &self.message_transport {
+            transport.send_message(channel, content).await?;
+        } else {
+            channel
+                .send_message(
+                    &http,
+                    CreateMessage::new()
+                        .content(content)
+                        .allowed_mentions(crate::lanes::discord_threads::lane_allowed_mentions()),
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn dispatch(&self, action: OutboundAction) -> Result<()> {
         match action {
             OutboundAction::SendMessage {

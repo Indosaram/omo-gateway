@@ -1,6 +1,9 @@
 pub mod ack;
 pub mod executor;
 pub mod guard;
+pub mod health;
+pub mod remediate;
+pub mod report;
 mod scheduler;
 mod store;
 

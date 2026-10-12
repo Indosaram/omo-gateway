@@ -120,53 +120,6 @@ pub trait DelegateLivenessChecker: Send + Sync {
 }
 
 #[derive(Clone, Default)]
-pub struct HerdrCliLivenessChecker;
-
-#[async_trait]
-impl DelegateLivenessChecker for HerdrCliLivenessChecker {
-    async fn check_liveness(&self, pane: &str) -> DelegateLiveness {
-        let child = tokio::process::Command::new("herdr")
-            .arg("agent")
-            .arg("list")
-            .output();
-
-        let output = match tokio::time::timeout(Duration::from_secs(3), child).await {
-            Ok(Ok(output)) if output.status.success() => output,
-            _ => return DelegateLiveness::Unknown,
-        };
-
-        let parsed: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-            Ok(value) => value,
-            Err(_) => return DelegateLiveness::Unknown,
-        };
-
-        let agents = match parsed
-            .get("result")
-            .and_then(|r| r.get("agents"))
-            .and_then(|a| a.as_array())
-        {
-            Some(list) => list,
-            None => return DelegateLiveness::Unknown,
-        };
-
-        for agent in agents {
-            if agent.get("pane_id").and_then(|p| p.as_str()) == Some(pane) {
-                let status = agent
-                    .get("agent_status")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
-                return match status.to_ascii_lowercase().as_str() {
-                    "dead" | "failed" | "crashed" | "exited" => DelegateLiveness::Dead,
-                    _ => DelegateLiveness::Alive,
-                };
-            }
-        }
-
-        DelegateLiveness::Unknown
-    }
-}
-
-#[derive(Clone, Default)]
 pub struct MockLivenessChecker {
     statuses: Arc<parking_lot::Mutex<HashMap<String, DelegateLiveness>>>,
 }

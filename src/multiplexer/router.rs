@@ -50,6 +50,7 @@ pub(crate) struct SessionHandle {
     in_flight_drained: Notify,
     state_changed: Notify,
     startup: watch::Receiver<ActorStartup>,
+    shutdown_error: parking_lot::Mutex<Option<String>>,
 }
 
 impl SessionHandle {
@@ -62,6 +63,7 @@ impl SessionHandle {
             in_flight_drained: Notify::new(),
             state_changed: Notify::new(),
             startup,
+            shutdown_error: parking_lot::Mutex::new(None),
         }
     }
 
@@ -261,6 +263,9 @@ pub struct SessionMultiplexer {
     config: MultiplexerConfig,
     profile_router: Arc<ProfileRouter>,
     drain_rx: Option<tokio::sync::watch::Receiver<bool>>,
+    inbox_event_tx: Option<crate::inbox::watchers::InboxEventSender>,
+    service_shutdown: tokio_util::sync::CancellationToken,
+    admission: Arc<tokio::sync::RwLock<()>>,
 }
 
 impl SessionMultiplexer {
@@ -292,12 +297,27 @@ impl SessionMultiplexer {
             config,
             profile_router: Arc::new(profile_router),
             drain_rx: None,
+            inbox_event_tx: None,
+            service_shutdown: tokio_util::sync::CancellationToken::new(),
+            admission: Arc::new(tokio::sync::RwLock::new(())),
         }
     }
 
     pub fn with_drain_receiver(mut self, rx: tokio::sync::watch::Receiver<bool>) -> Self {
         self.drain_rx = Some(rx);
         self
+    }
+
+    pub fn with_inbox_event_sender(
+        mut self,
+        sender: crate::inbox::watchers::InboxEventSender,
+    ) -> Self {
+        self.inbox_event_tx = Some(sender);
+        self
+    }
+
+    pub(crate) fn inbox_event_sender(&self) -> Option<crate::inbox::watchers::InboxEventSender> {
+        self.inbox_event_tx.clone()
     }
 
     pub fn with_router(mut self, profile_router: ProfileRouter) -> Self {
@@ -309,17 +329,46 @@ impl SessionMultiplexer {
         &self.profile_router
     }
 
+    pub fn is_draining(&self) -> bool {
+        self.service_shutdown.is_cancelled()
+            || self.drain_rx.as_ref().is_some_and(|rx| *rx.borrow())
+    }
+
     pub async fn route(&self, event: InboundEvent) -> Result<()> {
-        if let Some(ref rx) = self.drain_rx {
-            if *rx.borrow() {
-                return Err(OmonError::Config(
-                    "gateway is draining; new turns are refused".into(),
-                ));
-            }
+        let _admission = self.admission.read().await;
+        if self.is_draining() {
+            return Err(OmonError::Config(
+                "gateway is draining; new turns are refused".into(),
+            ));
         }
         let key = event.session.clone();
         loop {
+            if self.is_draining() {
+                return Err(OmonError::Multiplexer("gateway admission closed".into()));
+            }
             let handle = self.handle_for(&key);
+            if event.origin == crate::EventOrigin::System {
+                let (reply, result) = tokio::sync::oneshot::channel();
+                match handle
+                    .send_command(ActorCommand::EventIfIdle {
+                        event: Box::new(event.clone()),
+                        reply,
+                    })
+                    .await?
+                {
+                    SendOutcome::Sent => {
+                        return result.await.map_err(|_| {
+                            OmonError::Multiplexer("actor closed during system admission".into())
+                        })?
+                    }
+                    SendOutcome::Retiring => handle.wait_until_reusable().await,
+                    SendOutcome::Closed => {
+                        self.remove_handle(&key, &handle);
+                        handle.mark_finished();
+                    }
+                }
+                continue;
+            }
             match handle.send_event(event.clone()).await? {
                 SendOutcome::Sent => return Ok(()),
                 SendOutcome::Retiring => {
@@ -331,6 +380,73 @@ impl SessionMultiplexer {
                 }
             }
         }
+    }
+
+    pub async fn direct_reply(&self, event: &InboundEvent, content: &str) -> Result<()> {
+        let dispatcher = self
+            .dispatcher
+            .as_ref()
+            .ok_or_else(|| OmonError::Config("direct reply delivery is not configured".into()))?;
+        super::record_inbound_transcript(&self.pool, event).await?;
+        let ledger = crate::DeliveryLedgerService::new(self.pool.clone());
+        let id = uuid::Uuid::new_v4().to_string();
+        ledger
+            .record_obligation(&id, &event.session, content)
+            .await?;
+        sqlx::query("INSERT INTO messages (id, session_key, role, content, metadata_json, created_at) VALUES (?, ?, 'assistant', ?, ?, ?)")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(event.session.storage_key())
+            .bind(content)
+            .bind(serde_json::json!({"delivery_obligation_id": id, "direct_reply": true}).to_string())
+            .bind(chrono::Utc::now())
+            .execute(&self.pool).await?;
+        ledger.mark_obligation_attempting(&id).await?;
+        match dispatcher
+            .dispatch_direct_reply(event.session.clone(), content.to_owned())
+            .await
+        {
+            Ok(()) => ledger.mark_obligation_delivered(&id).await,
+            Err(error) => {
+                ledger
+                    .mark_obligation_failed(&id, &error.to_string())
+                    .await?;
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn owner_thread_is_private(&self, session: &SessionKey) -> bool {
+        match &self.dispatcher {
+            Some(dispatcher) => dispatcher.owner_thread_is_private(session).await,
+            None => false,
+        }
+    }
+
+    pub async fn intercept_session_status(
+        &self,
+        event: &InboundEvent,
+        private_owner: bool,
+    ) -> Result<bool> {
+        self.intercept_session_status_with(
+            event,
+            private_owner,
+            crate::sessions::status_reply::reply(),
+        )
+        .await
+    }
+
+    pub async fn intercept_session_status_with(
+        &self,
+        event: &InboundEvent,
+        private_owner: bool,
+        reply: impl std::future::Future<Output = String>,
+    ) -> Result<bool> {
+        if !crate::sessions::status_reply::eligible(event, private_owner) {
+            return Ok(false);
+        }
+        let content = reply.await;
+        self.direct_reply(event, &content).await?;
+        Ok(true)
     }
 
     /// Cancels the active turn for an existing session. Returns `false` when
@@ -378,6 +494,38 @@ impl SessionMultiplexer {
         self.sessions.len()
     }
 
+    pub async fn session_is_idle(&self, key: &SessionKey) -> Result<bool> {
+        let Some(handle) = self.sessions.get(key).map(|entry| entry.clone()) else {
+            return Ok(true);
+        };
+        let (reply, result) = tokio::sync::oneshot::channel();
+        match handle.send_command(ActorCommand::IsIdle { reply }).await? {
+            SendOutcome::Sent => result
+                .await
+                .map_err(|_| OmonError::Multiplexer("actor closed during idle probe".into())),
+            SendOutcome::Retiring => Ok(false),
+            SendOutcome::Closed => Ok(true),
+        }
+    }
+
+    pub async fn wait_for_session_idle(&self, key: &SessionKey) -> Result<()> {
+        let Some(handle) = self.sessions.get(key).map(|entry| entry.clone()) else {
+            return Ok(());
+        };
+        let (reply, result) = tokio::sync::oneshot::channel();
+        match handle
+            .send_command(ActorCommand::WaitIdle { reply })
+            .await?
+        {
+            SendOutcome::Sent => result
+                .await
+                .map_err(|_| OmonError::Multiplexer("actor closed before idle barrier".into())),
+            SendOutcome::Retiring | SendOutcome::Closed => Err(OmonError::Multiplexer(
+                "actor unavailable for idle barrier".into(),
+            )),
+        }
+    }
+
     pub fn contains_session(&self, key: &SessionKey) -> bool {
         self.sessions.contains_key(key)
     }
@@ -389,10 +537,15 @@ impl SessionMultiplexer {
     pub async fn route_awaiting_turn(&self, event: InboundEvent) -> Result<()> {
         let key = event.session.clone();
         loop {
+            let admission = self.admission.read().await;
+            if self.is_draining() {
+                return Err(OmonError::Multiplexer("gateway admission closed".into()));
+            }
             let handle = self.handle_for(&key);
             let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
             match handle.send_event_with_ack(event.clone(), ack_tx).await? {
                 SendOutcome::Sent => {
+                    drop(admission);
                     return match ack_rx.await {
                         Ok(outcome) => outcome,
                         Err(_) => Err(OmonError::Multiplexer(
@@ -498,6 +651,35 @@ impl SessionMultiplexer {
         super::gc::collect(self).await
     }
 
+    pub async fn shutdown(&self) -> Result<()> {
+        self.service_shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let _admission = self.admission.write().await;
+            let handles: Vec<_> = self
+                .sessions
+                .iter()
+                .map(|entry| entry.value().clone())
+                .collect();
+            for handle in handles {
+                handle.try_retire();
+                handle.wait_for_in_flight().await;
+                loop {
+                    let finished = handle.state_changed.notified();
+                    if handle.finished.load(Ordering::Acquire) {
+                        break;
+                    }
+                    finished.await;
+                }
+                if let Some(error) = handle.shutdown_error.lock().as_ref() {
+                    return Err(OmonError::Multiplexer(error.clone()));
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| OmonError::Multiplexer("actor shutdown exceeded 30 seconds".into()))?
+    }
+
     fn handle_for(&self, key: &SessionKey) -> Arc<SessionHandle> {
         if let Some(handle) = self.sessions.get(key) {
             return handle.clone();
@@ -528,6 +710,8 @@ impl SessionMultiplexer {
         let dispatcher = self.dispatcher.clone();
         let pool = self.pool.clone();
         let profile_router = self.profile_router.clone();
+        let inbox_event_tx = self.inbox_event_tx.clone();
+        let service_shutdown = self.service_shutdown.clone();
         tokio::spawn(async move {
             match SessionActor::load(
                 key.clone(),
@@ -536,12 +720,18 @@ impl SessionMultiplexer {
                 dispatcher,
                 pool,
                 Some(profile_router),
+                inbox_event_tx,
             )
             .await
             {
                 Ok(actor) => {
                     let _ = startup.send(ActorStartup::Ready);
-                    actor.run().await;
+                    if let Err(error) = actor.run_with_shutdown(service_shutdown).await {
+                        if let Some(handle) = handle.upgrade() {
+                            *handle.shutdown_error.lock() = Some(error.to_string());
+                        }
+                        tracing::error!(session = %key, %error, "session actor final flush failed");
+                    }
                 }
                 Err(error) => {
                     let _ = startup.send(ActorStartup::Failed(error.to_string()));

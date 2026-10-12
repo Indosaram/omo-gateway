@@ -258,14 +258,18 @@ impl DrainWatcher {
     }
 
     pub fn spawn(self) -> tokio::task::JoinHandle<()> {
-        let epoch = current_instantiation_epoch().to_string();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(self.interval);
-            loop {
-                ticker.tick().await;
-                self.scan_at(&epoch, Utc::now());
+        tokio::spawn(self.serve(tokio_util::sync::CancellationToken::new()))
+    }
+
+    pub async fn serve(self, shutdown: tokio_util::sync::CancellationToken) {
+        let mut ticker = tokio::time::interval(self.interval);
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => return,
+                _ = ticker.tick() => { self.scan_at(current_instantiation_epoch(), Utc::now()); }
             }
-        })
+        }
     }
 
     /// One completed file scan; the caller owns the existing watcher lifecycle.

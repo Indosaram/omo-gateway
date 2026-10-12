@@ -1,0 +1,19 @@
+[
+  {
+    "id": 812345,
+    "created_at": "2026-10-11T10:57:55.385Z",
+    "is_from_me": false,
+    "chat_id": 4653,
+    "sender": "[REDACTED SENDER]",
+    "text": "[REDACTED TEXT]"
+  },
+  {
+    "id": 812346,
+    "created_at": "2026-05-05T01:10:39.385Z",
+    "is_from_me": false,
+    "chat_id": 4653,
+    "sender": "[REDACTED SENDER]",
+    "text": "[REDACTED TEXT]"
+  }
+]
+

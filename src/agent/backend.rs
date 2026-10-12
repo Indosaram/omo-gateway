@@ -61,4 +61,3 @@ pub trait AgentBackend: Send + Sync + 'static {
         Ok(false)
     }
 }
-

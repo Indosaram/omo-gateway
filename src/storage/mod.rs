@@ -1,4 +1,5 @@
 mod db;
+pub mod lanes;
 mod message_search;
 mod messenger_policy;
 
@@ -15,6 +16,12 @@ pub use db::{
     reject_pending_write, reject_pending_write_scoped, remove_dead_target,
     remove_dead_targets_for_channel, stage_pending_write, update_work_item_progress,
     write_approval_enabled, Database, PendingWrite, PendingWriteScope, UnfinishedTurn, WorkItem,
+};
+pub use lanes::{
+    append_transcript, enqueue_lane_event, get_lane, get_lane_by_thread, get_lane_history,
+    insert_lane, list_lanes, mark_events_delivered, read_transcript, set_lane_fields,
+    take_undelivered_events, transition_lane, IntoReason, Lane, LaneEvent, LaneFieldsUpdate,
+    LaneHistoryEntry, LaneTranscriptEntry, LaneUpdate,
 };
 pub use message_search::{MessageSearchDocument, MessageSearchHit, MessageSearchIndex};
 pub use messenger_policy::MessengerPolicyStore;

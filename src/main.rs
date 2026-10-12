@@ -457,6 +457,9 @@ pub async fn recover_resume_pending_sessions_with_auth(
                 session: session_key.clone(),
                 platform_message_id: String::new(),
                 delivery_id: None,
+                referenced_message_id: None,
+                author_id: None,
+                origin: omon_gateway::EventOrigin::User,
                 content: unfinished.content,
                 attachments,
                 received_at: chrono::Utc::now(),
@@ -573,6 +576,13 @@ fn hermes_skill_dirs(hermes_root: &Path, home: &Path) -> Vec<PathBuf> {
     ]
 }
 
+/// Owner home DM that leads lanes, proposals and inbox triage. Zero-config:
+/// OMON_LANE_DEFAULT_LEAD overrides the built-in OmOMeow owner DM.
+fn default_lead() -> String {
+    std::env::var("OMON_LANE_DEFAULT_LEAD")
+        .unwrap_or_else(|_| omon_gateway::lanes::kibitzer::DEFAULT_LEAD.to_owned())
+}
+
 #[tokio::main]
 #[allow(dead_code)]
 async fn main() -> Result<()> {
@@ -641,9 +651,123 @@ fn ensure_full_disk_access() {
 }
 
 async fn run_gateway() -> Result<()> {
+    if !parse_bool_from(optional_env("OMON_DISCORD_ENABLED").as_deref(), true) {
+        if !parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
+            return Err(OmonError::Config(
+                "Discord-free gateway requires OMON_LANES_ENABLED".into(),
+            ));
+        }
+        let url = required_env("DATABASE_URL")?;
+        let pool = init_pool(&url).await?;
+        let paths: Vec<(i64, String, String)> = sqlx::query_as("PRAGMA database_list")
+            .fetch_all(&pool)
+            .await?;
+        info!(databases = ?paths, "gateway database opened");
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let workspace = env::var_os("OMON_WORKSPACE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".omon/workspace")
+            });
+        validate_agent_backend_env()?;
+        let backend_config = OmoBackendConfig::from_env()?.with_workspace_root(workspace.clone());
+        let mut routes =
+            parse_profile_routes(&optional_env("DISCORD_PROFILE_ROUTES").unwrap_or_default());
+        routes.extend(omon_gateway::parse_channel_prompts(
+            &optional_env("DISCORD_CHANNEL_PROMPTS").unwrap_or_default(),
+        ));
+        let (multiplexer, watcher) = headless_lead(
+            &pool,
+            backend_config,
+            ProfileRouter::new(routes),
+            workspace.clone(),
+        );
+        let cron_backend = Arc::new(
+            OmoBackend::new(
+                OmoBackendConfig::cron_from_env()?.with_workspace_root(workspace.clone()),
+                Arc::new(LocalTranscriptOutput),
+            )
+            .with_pool(pool.clone()),
+        );
+        let scheduler = CronScheduler::new(
+            pool.clone(),
+            Arc::new(AgentCronExecutor {
+                backend: cron_backend,
+                workspace_root: workspace.clone(),
+                pool: pool.clone(),
+                cron_script_timeout_secs: cron_script_timeout_secs_from(
+                    optional_env("OMON_CRON_SCRIPT_TIMEOUT_SECS").as_deref(),
+                ),
+            }),
+        );
+        omon_gateway::cron::remediate::install(Arc::new(
+            omon_gateway::cron::remediate::Remediator {
+                pool: pool.clone(),
+                judge: Arc::new(omon_gateway::judge::JevCli::new(
+                    None,
+                    Some(pool.clone()),
+                    None,
+                    None,
+                )),
+                runtime: Arc::new(omon_gateway::cron::remediate::GatewayRuntime {
+                    pool: pool.clone(),
+                    scheduler: scheduler.clone(),
+                    briefs: workspace.join(".omo/cron-fix/briefs"),
+                }),
+            },
+        ))?;
+        let native_cron = omon_gateway::cron::report::bind_native().await?;
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .map_err(|error| OmonError::Config(error.to_string()))?;
+        let kibitzer = initialize_kibitzer(&pool).await?;
+        let mut lanes = spawn_lane_service(&pool, &shutdown, kibitzer)?;
+        scheduler.start().await;
+        lanes.spawn(native_cron.serve(pool.clone(), scheduler.clone(), shutdown.clone()));
+        let dispatcher = omon_gateway::lanes::dispatch::EventDispatcher::new(
+            pool.clone(),
+            multiplexer.clone(),
+            Arc::new(omon_gateway::judge::JevCli::new(
+                None,
+                Some(pool.clone()),
+                None,
+                None,
+            )),
+        );
+        lanes.spawn(dispatcher.serve(shutdown.clone()));
+        let watcher_shutdown = shutdown.clone();
+        lanes.spawn(async move {
+            watcher.serve(watcher_shutdown).await;
+            Ok(())
+        });
+        let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx)?;
+        info!(
+            "headless gateway lead runtime ready; output delivery is local transcript acceptance"
+        );
+        let outcome = tokio::select! {
+            result = lanes.join_next() => lane_service_exit(result),
+            result = tokio::signal::ctrl_c() => result.map_err(|error| OmonError::Config(error.to_string())),
+            _ = terminate.recv() => Ok(()),
+        };
+        shutdown.cancel();
+        scheduler.shutdown().await;
+        stop_inbox_collector(&mut inbox, inbox_shutdown).await;
+        let cleanup = stop_lead_runtime(&multiplexer, &mut lanes).await;
+        if let Err(error) = cleanup {
+            return outcome.and(Err(error));
+        }
+        pool.close().await;
+        info!("gateway lane service stopped");
+        return outcome;
+    }
     let config = Config::from_env()?;
     ensure_full_disk_access();
     let pool = init_pool(&config.database_url).await?;
+    let kibitzer = initialize_kibitzer(&pool).await?;
 
     let approval_guard = SmartApprovalGuard::new().with_pool(pool.clone());
     let loaded_allowlist = approval_guard.load_persisted_allowlist().await?;
@@ -657,6 +781,8 @@ async fn run_gateway() -> Result<()> {
         approval_guard.clone(),
         std::time::Duration::from_secs(config.approval_timeout_secs),
     ));
+    let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
+    let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx)?;
     let mut tools = ToolRegistry::new().with_approval_requester(
         approval_requester.clone(),
         std::time::Duration::from_secs(config.approval_timeout_secs + 5),
@@ -726,13 +852,26 @@ async fn run_gateway() -> Result<()> {
     );
     let runner: Arc<dyn AgentBackend> = omo_backend.clone();
     let profile_router = ProfileRouter::new(config.profile_routes.clone());
-    let multiplexer = SessionMultiplexer::with_profile_router(
+    let drain_watcher = omon_gateway::DrainWatcher::new(
+        config.workspace_root.clone(),
+        std::time::Duration::from_secs(3),
+    );
+    drain_watcher.scan_at(
+        omon_gateway::current_instantiation_epoch(),
+        chrono::Utc::now(),
+    );
+    let mut drain_rx = drain_watcher.receiver();
+    let mut multiplexer = SessionMultiplexer::with_profile_router(
         pool.clone(),
         runner.clone(),
         Some(shared_dispatcher.clone()),
         MultiplexerConfig::default(),
         profile_router.clone(),
-    );
+    )
+    .with_drain_receiver(drain_rx.clone());
+    if let Some((_, sender)) = &inbox {
+        multiplexer = multiplexer.with_inbox_event_sender(sender.clone());
+    }
     let scale_to_zero = ScaleToZero::start(multiplexer.clone());
 
     let mut bot_http_clients = HashMap::new();
@@ -751,7 +890,6 @@ async fn run_gateway() -> Result<()> {
     }
     let default_bot_id = default_bot_id
         .ok_or_else(|| OmonError::Config("no Discord bot identities were configured".into()))?;
-    let default_http = bot_http_clients.get(&default_bot_id).cloned();
     let dead_targets = Arc::new(
         DeadTargetRegistry::new()
             .with_pool(pool.clone())
@@ -835,15 +973,35 @@ async fn run_gateway() -> Result<()> {
 
     let scheduler = CronScheduler::with_dispatcher(
         pool.clone(),
-        Arc::new(AgentCronExecutor {
-            backend: cron_backend,
-            workspace_root: config.workspace_root.clone(),
+        Arc::new(omon_gateway::inbox::digest::DigestExecutor {
             pool: pool.clone(),
-            cron_script_timeout_secs: config.cron_script_timeout_secs,
+            inner: Arc::new(AgentCronExecutor {
+                backend: cron_backend,
+                workspace_root: config.workspace_root.clone(),
+                pool: pool.clone(),
+                cron_script_timeout_secs: config.cron_script_timeout_secs,
+            }),
         }),
         discord_egress,
     )
     .with_hermes_sync(cron_sync);
+    // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
+    let owner = "414011632306618368";
+    // The lead DM belongs to the OmOMeow bot; other bots' DMs with the owner do not count.
+    let home: Option<String> = sqlx::query_scalar(
+        "SELECT session_key FROM sessions WHERE session_key=? AND platform='discord' \
+         AND guild_id IS NULL AND thread_id IS NULL AND user_id=?",
+    )
+    .bind(default_lead())
+    .bind(owner)
+    .fetch_optional(&pool)
+    .await?;
+    if let Some(home) = home {
+        let home = home.parse::<SessionKey>()?;
+        omon_gateway::inbox::digest::register(&pool, &scheduler, &home, owner).await?;
+    } else {
+        warn!("inbox digest not registered: owner home DM is not yet persisted");
+    }
     scheduler.start().await;
     cron_tool.bind_scheduler(Arc::new(scheduler.clone()));
 
@@ -856,6 +1014,27 @@ async fn run_gateway() -> Result<()> {
     poise_data.missed_backfill = config.discord_missed_backfill;
     poise_data.llm = LlmClient::new(config.llm_config(config.default_model.clone())).ok();
     poise_data.tools = tool_names;
+    if omon_gateway::inbox::triage::enabled() {
+        use omon_gateway::inbox::proposals::{GatewayActions, Proposals, ReadOnlyDirect, OWNER_ID};
+        Proposals::new(pool.clone(), OWNER_ID).await?;
+        let lead = default_lead();
+        SessionKey::from_storage_key(&lead)?;
+        let model =
+            omon_gateway::agent::model_for_purpose(omon_gateway::agent::ModelPurpose::InboxWrite);
+        let direct = ReadOnlyDirect {
+            llm: LlmClient::new(config.llm_config(model))?,
+        };
+        poise_data.inbox_actions = Some(Arc::new(GatewayActions {
+            pool: pool.clone(),
+            judge: Arc::new(omon_gateway::inbox::triage::production_judge(pool.clone())),
+            direct: Arc::new(direct),
+            brief_directory: std::env::current_dir()
+                .map_err(|e| OmonError::Config(e.to_string()))?
+                .join(".omo/inbox-proposals"),
+            lead_session_key: lead,
+            parent_channel_id: None,
+        }));
+    }
     poise_data.tool_registry = tools.clone();
     poise_data.free_response_channels = config.free_response_channels.clone();
     poise_data.allowed_users = config.allowed_users.clone();
@@ -917,44 +1096,64 @@ async fn run_gateway() -> Result<()> {
         "omo-gateway listening on Discord"
     );
 
-    let (heartbeat_shutdown_tx, heartbeat_shutdown_rx) = tokio::sync::watch::channel(false);
-    let _heartbeat_handle = if let Some(http) = default_http {
-        let heartbeat_sink = Arc::new(omon_gateway::SerenityHeartbeatSink::new(http));
-        let heartbeat_clock = Arc::new(omon_gateway::SystemClock);
-        let heartbeat_checker = Arc::new(omon_gateway::HerdrCliLivenessChecker);
-        let heartbeat_config = omon_gateway::WorkHeartbeatConfig::default();
-        let runner = omon_gateway::WorkHeartbeatRunner::new(
+    let lane_shutdown = tokio_util::sync::CancellationToken::new();
+    omon_gateway::cron::remediate::install(Arc::new(omon_gateway::cron::remediate::Remediator {
+        pool: pool.clone(),
+        judge: Arc::new(omon_gateway::judge::JevCli::new(
+            None,
+            Some(pool.clone()),
+            None,
+            None,
+        )),
+        runtime: Arc::new(omon_gateway::cron::remediate::GatewayRuntime {
+            pool: pool.clone(),
+            scheduler: scheduler.clone(),
+            briefs: config.workspace_root.join(".omo/cron-fix/briefs"),
+        }),
+    }))?;
+    let mut lane_tasks = spawn_lane_service(&pool, &lane_shutdown, kibitzer)?;
+    lane_tasks.spawn(omon_gateway::cron::report::serve_native(
+        pool.clone(),
+        scheduler.clone(),
+        lane_shutdown.clone(),
+    ));
+    if parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
+        let dispatcher = omon_gateway::lanes::dispatch::EventDispatcher::new(
             pool.clone(),
-            heartbeat_config,
-            heartbeat_clock,
-            heartbeat_checker,
-            heartbeat_sink,
+            multiplexer.clone(),
+            Arc::new(omon_gateway::judge::JevCli::new(
+                None,
+                Some(pool.clone()),
+                None,
+                None,
+            )),
         );
-        info!("work heartbeat runner spawned (interval: 60s, threshold: 15m)");
-        Some(runner.spawn(heartbeat_shutdown_rx))
-    } else {
-        None
-    };
+        lane_tasks.spawn(dispatcher.serve(lane_shutdown.clone()));
+    }
+    let watcher_shutdown = lane_shutdown.clone();
+    lane_tasks.spawn(async move {
+        drain_watcher.serve(watcher_shutdown).await;
+        Ok(())
+    });
 
     let mut join_set = tokio::task::JoinSet::new();
     for mut client in clients {
         join_set.spawn(async move { client.start().await });
     }
 
-    let drain_watcher = omon_gateway::DrainWatcher::new(
-        config.workspace_root.clone(),
-        std::time::Duration::from_secs(3),
-    );
-    let mut drain_rx = drain_watcher.receiver();
-    let _drain_handle = drain_watcher.spawn();
-
     #[cfg(unix)]
     let mut sigterm_stream =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .map_err(|error| OmonError::Config(format!("failed to listen for SIGTERM: {error}")))?;
     let mut discord_task_failed = false;
-
+    let mut lane_failure = None;
     tokio::select! {
+        result = lane_tasks.join_next(), if !lane_tasks.is_empty() => {
+            lane_failure = lane_service_exit(result).err();
+            for sm in shard_managers {
+                sm.shutdown_all().await;
+            }
+        }
         Some(res) = join_set.join_next() => {
             if let Ok(Err(err)) = res {
                 discord_task_failed = true;
@@ -1003,10 +1202,16 @@ async fn run_gateway() -> Result<()> {
         }
     }
 
-    let _ = heartbeat_shutdown_tx.send(true);
+    lane_shutdown.cancel();
+    stop_inbox_collector(&mut inbox, inbox_shutdown).await;
     scheduler.shutdown().await;
     scale_to_zero.shutdown().await;
+    let cleanup = stop_lead_runtime(&multiplexer, &mut lane_tasks).await;
+    cleanup?;
     pool.close().await;
+    if let Some(error) = lane_failure {
+        return Err(error);
+    }
     if discord_task_failed {
         // A crashed Discord task must not look like a successful run to the
         // supervisor; exit non-zero so systemd/launchd restarts us.
@@ -1014,6 +1219,1031 @@ async fn run_gateway() -> Result<()> {
     }
     warn!("omo-gateway stopped");
     Ok(())
+}
+
+struct LocalTranscriptOutput;
+
+#[cfg(test)]
+mod headless_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use serde_json::{json, Value};
+    use tokio_tungstenite::tungstenite::Message;
+
+    #[tokio::test]
+    async fn qa_gaps_headless_inbox_starts_when_enabled_and_joins() {
+        let (shutdown, mut receiver) = tokio::sync::watch::channel(false);
+        let (started, observed) = tokio::sync::oneshot::channel();
+        let mut inbox = start_inbox_when_enabled(true, || {
+            let (sender, _events) = omon_gateway::inbox::watchers::event_channel(1);
+            Ok((
+                tokio::spawn(async move {
+                    started.send(()).unwrap();
+                    receiver.wait_for(|stopped| *stopped).await.unwrap();
+                }),
+                sender,
+            ))
+        })
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), observed)
+            .await
+            .unwrap()
+            .unwrap();
+        stop_inbox_collector(&mut inbox, shutdown).await;
+        assert!(inbox.as_ref().unwrap().0.is_finished());
+    }
+
+    #[tokio::test]
+    async fn qa_gaps_headless_cron_socket_is_bound_and_removed_on_shutdown() {
+        struct Executor;
+        #[async_trait]
+        impl omon_gateway::cron::CronTaskExecutor for Executor {
+            async fn execute(&self, _: &omon_gateway::CronJob) -> Result<Option<String>> {
+                unreachable!()
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("cron.sock");
+        let db = omon_gateway::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let scheduler = CronScheduler::new(db.pool().clone(), Arc::new(Executor));
+        let server = omon_gateway::cron::report::NativeServer::bind(path.clone())
+            .await
+            .unwrap();
+        assert!(tokio::net::UnixStream::connect(&path).await.is_ok());
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        tasks.spawn(server.serve(db.pool().clone(), scheduler, shutdown.clone()));
+        shutdown.cancel();
+        tasks.join_next().await.unwrap().unwrap().unwrap();
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn qa_gaps_headless_inbox_does_not_start_when_disabled() {
+        let (shutdown, _receiver) = tokio::sync::watch::channel(false);
+        let mut inbox: Option<InboxRuntime> = start_inbox_when_enabled(false, || {
+            panic!("disabled inbox must not construct collectors or triage");
+        })
+        .unwrap();
+        stop_inbox_collector(&mut inbox, shutdown).await;
+        assert!(inbox.is_none());
+    }
+
+    struct StartupOnlyBackend;
+
+    #[async_trait]
+    impl AgentBackend for StartupOnlyBackend {
+        async fn run(&self, _: &mut SessionContext, _: InboundEvent) -> Result<()> {
+            panic!("startup must not invoke a model");
+        }
+    }
+
+    #[tokio::test]
+    async fn qa_gaps_kibitzer_enabled_initializes_before_spawning() {
+        let database = omon_gateway::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let pool = database.pool();
+        let worker = initialize_kibitzer_when_enabled(true, || {
+            omon_gateway::lanes::kibitzer::Kibitzer::new(
+                pool.clone(),
+                SessionKey::from_storage_key(omon_gateway::lanes::kibitzer::DEFAULT_LEAD).unwrap(),
+                Arc::new(omon_gateway::judge::JevCli::new(None, None, None, None)),
+                Arc::new(StartupOnlyBackend),
+                Arc::new(omon_gateway::lanes::kibitzer::Capture::default()),
+                Arc::new(omon_gateway::work_heartbeat::SystemClock),
+                true,
+            )
+        })
+        .await
+        .unwrap();
+        let objects: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name IN ('kibitzer_state','kibitzer_inbox_insert','kibitzer_lane_insert')")
+            .fetch_one(pool).await.unwrap();
+        assert_eq!(objects, 3);
+        let states: i64 = sqlx::query_scalar("SELECT count(*) FROM kibitzer_state")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(states, 1);
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        let hint = spawn_kibitzer(&mut tasks, worker, &shutdown);
+        assert!(hint.is_some());
+        assert_eq!(tasks.len(), 1);
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(1), tasks.join_next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn qa_gaps_kibitzer_disabled_has_no_schema_or_task() {
+        let database = omon_gateway::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let worker = initialize_kibitzer_when_enabled(false, || {
+            panic!("disabled kibitzer must not be constructed");
+        })
+        .await
+        .unwrap();
+        let objects: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name IN ('kibitzer_state','kibitzer_inbox_insert','kibitzer_lane_insert')")
+            .fetch_one(database.pool()).await.unwrap();
+        assert_eq!(objects, 0);
+        let mut tasks = tokio::task::JoinSet::new();
+        assert!(spawn_kibitzer(
+            &mut tasks,
+            worker,
+            &tokio_util::sync::CancellationToken::new()
+        )
+        .is_none());
+        assert!(tasks.is_empty());
+    }
+
+    struct DeliveryBarrier {
+        delivered: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    struct BackendDeliveryBarrier {
+        backend: OmoBackend,
+        delivered: tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    }
+
+    #[async_trait]
+    impl omon_gateway::AgentBackend for BackendDeliveryBarrier {
+        async fn run(&self, session: &mut SessionContext, event: InboundEvent) -> Result<()> {
+            omon_gateway::AgentBackend::run(&self.backend, session, event).await?;
+            self.delivered
+                .lock()
+                .await
+                .take()
+                .unwrap()
+                .send(())
+                .unwrap();
+            std::future::pending().await
+        }
+    }
+
+    #[async_trait]
+    impl OutboundDispatcher for DeliveryBarrier {
+        async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+            let final_chunk =
+                matches!(&action, OutboundAction::Stream { chunk, .. } if chunk.is_final);
+            LocalTranscriptOutput.dispatch(action).await?;
+            if final_chunk {
+                self.delivered
+                    .lock()
+                    .await
+                    .take()
+                    .unwrap()
+                    .send(())
+                    .unwrap();
+                std::future::pending::<()>().await;
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn headless_early_shutdown_preserves_accepted_reply() {
+        early_shutdown_preserves_reply(false).await;
+        early_shutdown_preserves_reply(true).await;
+    }
+
+    async fn early_shutdown_preserves_reply(delivery_returned: bool) {
+        let root = tempfile::tempdir().unwrap();
+        let pool = init_pool(&format!(
+            "sqlite://{}",
+            root.path().join("early.db").display()
+        ))
+        .await
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let peer = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            for method in ["initialize", "thread/start", "turn/start"] {
+                let request: Value =
+                    serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(request["method"], method);
+                let result = if method == "turn/start" {
+                    json!({"turn":{"id":"early-turn","status":"inProgress"}})
+                } else {
+                    json!({"thread":{"id":"early-thread"}})
+                };
+                ws.send(Message::text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+            ws.send(Message::text(json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"early-thread","turnId":"early-turn","itemId":"early-item","delta":"EARLY_DURABLE_REPLY"}}).to_string())).await.unwrap();
+            ws.send(Message::text(json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"early-thread","turn":{"id":"early-turn","status":"completed"}}}).to_string())).await.unwrap();
+        });
+        let (delivered, accepted) = tokio::sync::oneshot::channel();
+        let backend: Arc<dyn omon_gateway::AgentBackend> = if delivery_returned {
+            Arc::new(BackendDeliveryBarrier {
+                backend: OmoBackend::new(
+                    OmoBackendConfig::new(format!("ws://{address}")),
+                    Arc::new(LocalTranscriptOutput),
+                )
+                .with_pool(pool.clone()),
+                delivered: tokio::sync::Mutex::new(Some(delivered)),
+            })
+        } else {
+            let output = Arc::new(DeliveryBarrier {
+                delivered: tokio::sync::Mutex::new(Some(delivered)),
+            });
+            Arc::new(
+                OmoBackend::new(OmoBackendConfig::new(format!("ws://{address}")), output)
+                    .with_pool(pool.clone()),
+            )
+        };
+        let mux = SessionMultiplexer::new(pool.clone(), backend, MultiplexerConfig::default());
+        let lead = SessionKey::new("local", None::<String>, "early14", None::<String>, "owner");
+        mux.route(InboundEvent::message(lead.clone(), "early14", "reply"))
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), accepted)
+            .await
+            .unwrap()
+            .unwrap();
+        // Acceptance happened, but the real backend remains inside dispatch until cancellation.
+        mux.shutdown().await.unwrap();
+        peer.await.unwrap();
+        let replies: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_key = ? AND role = 'assistant' AND content = 'EARLY_DURABLE_REPLY'").bind(lead.storage_key()).fetch_one(&pool).await.unwrap();
+        assert_eq!(replies, 1);
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM delivery_obligations WHERE session_key = ?")
+                .bind(lead.storage_key())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            state,
+            if delivery_returned {
+                "delivered"
+            } else {
+                "attempting"
+            }
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn headless_marker_reply_and_joined_shutdown() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = init_pool(&format!("sqlite://{}", root.path().join("qa.db").display()))
+            .await
+            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            for method in ["initialize", "thread/start", "turn/start"] {
+                let request: Value =
+                    serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(request["method"], method);
+                if method == "turn/start" {
+                    assert!(request["params"]["input"]
+                        .to_string()
+                        .contains("[LANE_EVENT]"));
+                }
+                let result = if method == "turn/start" {
+                    json!({"turn":{"id":"t14","status":"inProgress"}})
+                } else {
+                    json!({"thread":{"id":"r14"}})
+                };
+                ws.send(Message::text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+            ws.send(Message::text(json!({"jsonrpc":"2.0","method":"item/agentMessage/delta","params":{"threadId":"r14","turnId":"t14","itemId":"m14","delta":"TASK14_REPLY_SENTINEL"}}).to_string())).await.unwrap();
+            ws.send(Message::text(json!({"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"r14","turn":{"id":"t14","status":"completed"}}}).to_string())).await.unwrap();
+            finish_rx.await.unwrap();
+        });
+        omon_gateway::write_drain_request(root.path(), Some("task14-test"), true).unwrap();
+        let config = OmoBackendConfig::new(format!("ws://{address}"))
+            .with_workspace_root(root.path().to_path_buf());
+        let (mux, watcher) = headless_lead(
+            &pool,
+            config,
+            ProfileRouter::default(),
+            root.path().to_path_buf(),
+        );
+        let mut drain = watcher.receiver();
+        assert!(mux.is_draining());
+        let lead = SessionKey::new(
+            "local",
+            None::<String>,
+            "headless14",
+            None::<String>,
+            "owner",
+        );
+        let id = sqlx::query("INSERT INTO lane_events (lead_session_key, kind, body, created_at) VALUES (?, 'done_claimed', 'TASK14_INPUT', ?)")
+            .bind(lead.storage_key()).bind(chrono::Utc::now()).execute(&pool).await.unwrap().last_insert_rowid();
+        let dispatcher = omon_gateway::lanes::dispatch::EventDispatcher::new(
+            pool.clone(),
+            mux.clone(),
+            Arc::new(omon_gateway::judge::JevCli::new(
+                None,
+                Some(pool.clone()),
+                None,
+                None,
+            )),
+        );
+        dispatcher.tick(chrono::Utc::now()).await.unwrap();
+        let receipt: Option<String> =
+            sqlx::query_scalar("SELECT delivery_reason FROM lane_events WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(receipt.is_none());
+        let mut refused = InboundEvent::message(lead.clone(), "probe", "TASK14_INPUT");
+        refused.origin = omon_gateway::EventOrigin::System;
+        assert!(mux.route(refused).await.is_err());
+        omon_gateway::clear_drain_request(root.path()).unwrap();
+        watcher.scan_at(
+            omon_gateway::current_instantiation_epoch(),
+            chrono::Utc::now(),
+        );
+        drain.changed().await.unwrap();
+        assert!(!*drain.borrow());
+        dispatcher.tick(chrono::Utc::now()).await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            mux.wait_for_session_idle(&lead),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let context = mux.session_context(&lead).await.unwrap().unwrap();
+        assert_eq!(
+            context.state.metadata.get("omo_thread_id"),
+            Some(&json!("r14"))
+        );
+        finish_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        mux.shutdown().await.unwrap();
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT role, content FROM messages WHERE session_key = ? ORDER BY sequence",
+        )
+        .bind(lead.storage_key())
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(rows
+            .iter()
+            .any(|(role, content)| role == "user" && content.starts_with("[system] ")));
+        assert!(rows
+            .iter()
+            .any(|(role, content)| role == "assistant" && content == "TASK14_REPLY_SENTINEL"));
+        let receipt: String =
+            sqlx::query_scalar("SELECT delivery_reason FROM lane_events WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(receipt, "lead_turn");
+        let delivered: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM delivery_obligations WHERE session_key = ? AND state = 'delivered'")
+            .bind(lead.storage_key()).fetch_one(&pool).await.unwrap();
+        assert_eq!(delivered, 1);
+        assert_eq!(mux.active_sessions(), 0);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn headless_output_rejects_upload_and_approval() {
+        let session = SessionKey::new("local", None::<String>, "output14", None::<String>, "owner");
+        assert!(LocalTranscriptOutput
+            .dispatch(OutboundAction::UploadFile {
+                session: session.clone(),
+                path: PathBuf::from("local.txt"),
+            })
+            .await
+            .is_err());
+        assert!(LocalTranscriptOutput
+            .dispatch(OutboundAction::ApprovalRequest {
+                session,
+                request_id: Uuid::new_v4(),
+                command: "command".into(),
+                reason: "approval".into(),
+            })
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn headless_active_shutdown_joins_interrupt_and_preserves_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let pool = init_pool(&format!(
+            "sqlite://{}",
+            root.path().join("shutdown.db").display()
+        ))
+        .await
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let peer = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            for method in ["initialize", "thread/start", "turn/start"] {
+                let request: Value =
+                    serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(request["method"], method);
+                let result = if method == "turn/start" {
+                    json!({"turn":{"id":"t14-stop","status":"inProgress"}})
+                } else {
+                    json!({"thread":{"id":"r14-stop"}})
+                };
+                ws.send(Message::text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+                ))
+                .await
+                .unwrap();
+            }
+            ws.send(Message::Ping(vec![14].into())).await.unwrap();
+            assert!(matches!(
+                ws.next().await.unwrap().unwrap(),
+                Message::Pong(_)
+            ));
+            started_tx.send(()).unwrap();
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut control = tokio_tungstenite::accept_async(socket).await.unwrap();
+            for method in ["initialize", "turn/interrupt"] {
+                let request: Value =
+                    serde_json::from_str(control.next().await.unwrap().unwrap().to_text().unwrap())
+                        .unwrap();
+                assert_eq!(request["method"], method);
+                if method == "turn/interrupt" {
+                    assert_eq!(request["params"]["threadId"], "r14-stop");
+                }
+                control
+                    .send(Message::text(
+                        json!({"jsonrpc":"2.0","id":request["id"],"result":{}}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+            }
+        });
+        let config = OmoBackendConfig::new(format!("ws://{address}"))
+            .with_workspace_root(root.path().to_path_buf());
+        let (mux, _) = headless_lead(
+            &pool,
+            config,
+            ProfileRouter::default(),
+            root.path().to_path_buf(),
+        );
+        let lead = SessionKey::new("local", None::<String>, "stop14", None::<String>, "owner");
+        mux.route(InboundEvent::message(lead.clone(), "stop14", "TASK14_STOP"))
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        mux.shutdown().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), peer)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(mux
+            .route(InboundEvent::message(lead.clone(), "late14", "late"))
+            .await
+            .is_err());
+        let (pending, state): (i64, String) =
+            sqlx::query_as("SELECT resume_pending, state_json FROM sessions WHERE session_key = ?")
+                .bind(lead.storage_key())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pending, 1);
+        let state: Value = serde_json::from_str(&state).unwrap();
+        assert_eq!(state["metadata"]["omo_thread_id"], "r14-stop");
+        assert_eq!(state["suspended"], false);
+        assert_eq!(mux.active_sessions(), 0);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn headless_watcher_cancels_and_joins() {
+        let root = tempfile::tempdir().unwrap();
+        omon_gateway::write_drain_request(root.path(), Some("task14-test"), true).unwrap();
+        let watcher = omon_gateway::DrainWatcher::new(
+            root.path().to_path_buf(),
+            std::time::Duration::from_secs(3),
+        );
+        let mut receiver = watcher.receiver();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let task = tokio::spawn(watcher.serve(shutdown.clone()));
+        tokio::time::timeout(std::time::Duration::from_secs(5), receiver.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(*receiver.borrow());
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+}
+
+#[async_trait]
+impl OutboundDispatcher for LocalTranscriptOutput {
+    async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+        match action {
+            OutboundAction::Stream { session, chunk } => {
+                if chunk.is_final {
+                    info!(session = %session, stream_id = %chunk.stream_id, delivery = "local_transcript", "headless local output accepted");
+                }
+                Ok(())
+            }
+            OutboundAction::UploadFile { .. } => Err(OmonError::Multiplexer(
+                "headless output cannot perform external uploads".into(),
+            )),
+            OutboundAction::ApprovalRequest { .. } => Err(OmonError::Multiplexer(
+                "headless output has no approval recipient".into(),
+            )),
+            OutboundAction::SendMessage { .. }
+            | OutboundAction::EditMessage { .. }
+            | OutboundAction::DeleteMessage { .. }
+            | OutboundAction::Typing { .. }
+            | OutboundAction::React { .. }
+            | OutboundAction::ExpireApproval { .. } => Err(OmonError::Multiplexer(
+                "headless local output requires Stream".into(),
+            )),
+        }
+    }
+}
+
+fn headless_lead(
+    pool: &SqlitePool,
+    config: OmoBackendConfig,
+    router: ProfileRouter,
+    workspace: PathBuf,
+) -> (SessionMultiplexer, omon_gateway::DrainWatcher) {
+    let watcher = omon_gateway::DrainWatcher::new(workspace, std::time::Duration::from_secs(3));
+    watcher.scan_at(
+        omon_gateway::current_instantiation_epoch(),
+        chrono::Utc::now(),
+    );
+    let backend =
+        Arc::new(OmoBackend::new(config, Arc::new(LocalTranscriptOutput)).with_pool(pool.clone()));
+    let mux = SessionMultiplexer::with_profile_router(
+        pool.clone(),
+        backend,
+        None,
+        MultiplexerConfig::default(),
+        router,
+    )
+    .with_drain_receiver(watcher.receiver());
+    (mux, watcher)
+}
+
+async fn stop_lead_runtime(
+    mux: &SessionMultiplexer,
+    tasks: &mut tokio::task::JoinSet<Result<()>>,
+) -> Result<()> {
+    let (actors, services) = tokio::join!(mux.shutdown(), async {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let mut failure = None;
+            while let Some(result) = tasks.join_next().await {
+                let result = result
+                    .map_err(|error| OmonError::Multiplexer(error.to_string()))
+                    .and_then(|result| result);
+                if let Err(error) = result {
+                    failure.get_or_insert(error);
+                }
+            }
+            failure.map_or(Ok(()), Err)
+        })
+        .await
+        .map_err(|_| OmonError::Multiplexer("runtime shutdown exceeded 30 seconds".into()))?
+    });
+    actors.and(services)
+}
+
+async fn initialize_kibitzer(
+    pool: &SqlitePool,
+) -> Result<Option<omon_gateway::lanes::kibitzer::Kibitzer>> {
+    initialize_kibitzer_when_enabled(
+        parse_bool_from(optional_env("OMON_KIBITZER_ENABLED").as_deref(), true),
+        || omon_gateway::lanes::kibitzer::Kibitzer::from_env(pool.clone()),
+    )
+    .await
+}
+
+async fn initialize_kibitzer_when_enabled(
+    enabled: bool,
+    build: impl FnOnce() -> Result<omon_gateway::lanes::kibitzer::Kibitzer>,
+) -> Result<Option<omon_gateway::lanes::kibitzer::Kibitzer>> {
+    if !enabled {
+        info!("kibitzer disabled; no worker started");
+        return Ok(None);
+    }
+    let worker = build()?;
+    worker.initialize().await?;
+    info!("kibitzer initialized before producers");
+    Ok(Some(worker))
+}
+
+fn spawn_kibitzer(
+    tasks: &mut tokio::task::JoinSet<Result<()>>,
+    worker: Option<omon_gateway::lanes::kibitzer::Kibitzer>,
+    shutdown: &tokio_util::sync::CancellationToken,
+) -> Option<Arc<tokio::sync::Notify>> {
+    worker.map(|worker| {
+        let hint = Arc::new(tokio::sync::Notify::new());
+        let serve_hint = hint.clone();
+        let shutdown = shutdown.clone();
+        tasks.spawn(async move { worker.serve(serve_hint, shutdown).await });
+        hint
+    })
+}
+
+fn spawn_lane_service(
+    pool: &sqlx::SqlitePool,
+    shutdown: &tokio_util::sync::CancellationToken,
+    kibitzer: Option<omon_gateway::lanes::kibitzer::Kibitzer>,
+) -> Result<tokio::task::JoinSet<Result<()>>> {
+    let mut tasks = tokio::task::JoinSet::new();
+    let kibitzer_hint = spawn_kibitzer(&mut tasks, kibitzer, shutdown);
+    if parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
+        let mut runner = omon_gateway::lanes::runner::LaneRunner::from_env(pool.clone())?;
+        if let Some(hint) = kibitzer_hint {
+            runner = runner.with_kibitzer_hint(hint);
+        }
+        tasks.spawn(runner.serve(shutdown.clone()));
+    }
+    Ok(tasks)
+}
+
+type InboxRuntime = (
+    tokio::task::JoinHandle<()>,
+    omon_gateway::inbox::watchers::InboxEventSender,
+);
+
+fn start_inbox_when_enabled<T>(
+    enabled: bool,
+    start: impl FnOnce() -> Result<T>,
+) -> Result<Option<T>> {
+    if enabled {
+        start().map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn spawn_inbox_collector(
+    pool: &SqlitePool,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<Option<InboxRuntime>> {
+    start_inbox_when_enabled(omon_gateway::inbox::triage::enabled(), || {
+        spawn_enabled_inbox_collector(pool, shutdown)
+    })
+}
+
+fn spawn_enabled_inbox_collector(
+    pool: &SqlitePool,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) -> Result<InboxRuntime> {
+    let rules = omon_gateway::inbox::default_filters()?;
+    let (event_tx, event_rx) = omon_gateway::inbox::watchers::event_channel(
+        omon_gateway::inbox::watchers::DEFAULT_EVENT_CHANNEL_CAPACITY,
+    );
+    event_tx
+        .try_send(omon_gateway::inbox::watchers::InboxWatcherEvent::Startup)
+        .map_err(|error| OmonError::Config(error.to_string()))?;
+    let pool = pool.clone();
+    let watcher_tx = event_tx.clone();
+    let triage = omon_gateway::inbox::triage::Triage::new(
+        pool.clone(),
+        Arc::new(omon_gateway::inbox::triage::production_judge(pool.clone())),
+        Arc::new(
+            omon_gateway::inbox::triage::SmallModelWriter::new(
+                omon_gateway::agent::OmoBackendConfig::from_env()?,
+            )
+            .with_pool(pool.clone()),
+        ),
+        default_lead(),
+    );
+    let triage_shutdown = shutdown.clone();
+    let task = tokio::spawn(async move {
+        let mut tasks = tokio::task::JoinSet::new();
+
+        let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(16);
+        tasks.spawn(
+            omon_gateway::inbox::watchers::run_event_watch_with_shutdown(
+                pool.clone(),
+                inbox_sources(&pool),
+                rules,
+                event_rx,
+                Some(progress_tx),
+                Some(shutdown.clone()),
+            ),
+        );
+        tasks.spawn(triage.serve(progress_rx, triage_shutdown));
+        tasks.spawn(run_imessage_event_watcher(
+            pool.clone(),
+            watcher_tx.clone(),
+            shutdown.clone(),
+        ));
+        tasks.spawn(run_mail_event_watcher(watcher_tx.clone(), shutdown.clone()));
+        tasks.spawn(run_kakao_event_timer(watcher_tx, shutdown.clone()));
+
+        let mut shutdown = shutdown;
+        tokio::select! {
+            _ = async {
+                while let Some(result) = tasks.join_next().await {
+                    if let Err(error) = result {
+                        warn!(%error, "inbox watcher task stopped");
+                    }
+                }
+            } => {}
+            _ = async {
+                loop {
+                    if *shutdown.borrow() || shutdown.changed().await.is_err() {
+                        break;
+                    }
+                }
+            } => {}
+        }
+        while tasks.join_next().await.is_some() {}
+    });
+    Ok((task, event_tx))
+}
+
+fn inbox_sources(pool: &SqlitePool) -> Vec<Box<dyn omon_gateway::inbox::InboxSource>> {
+    vec![
+        Box::new(omon_gateway::inbox::sources::mail::MailSource),
+        Box::new(omon_gateway::inbox::sources::kakao::KakaoSource::default()),
+        Box::new(omon_gateway::inbox::sources::imessage::IMessageSource),
+        Box::new(omon_gateway::inbox::sources::discord::DiscordSource::new(
+            pool.clone(),
+        )),
+    ]
+}
+
+fn log_inbox_results(results: Vec<omon_gateway::inbox::SourceCollectResult>) {
+    for result in results {
+        if let Some(error) = result.error {
+            let auth_error = error.contains("auth_expired")
+                || error.to_ascii_lowercase().contains("unauthorized")
+                || error.to_ascii_lowercase().contains("credential");
+            warn!(
+                source = result.source.as_str(),
+                auth_error,
+                "inbox source collection failed; check local CLI and credential readiness"
+            );
+        } else {
+            info!(
+                source = result.source.as_str(),
+                inserted = result.stats.inserted,
+                duplicates = result.stats.duplicates,
+                dropped = result.stats.dropped,
+                "inbox source collection completed"
+            );
+        }
+    }
+}
+
+async fn run_kakao_event_timer(
+    sender: omon_gateway::inbox::watchers::InboxEventSender,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let first_tick = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut interval = tokio::time::interval_at(first_tick, std::time::Duration::from_secs(120));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            _ = interval.tick() => {},
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { break; }
+            }
+        }
+        tokio::select! {
+            result = omon_gateway::inbox::watchers::on_periodic(&sender) => {
+                if result.is_err() { break; }
+            }
+            _ = shutdown.changed() => break,
+        }
+    }
+}
+
+async fn run_imessage_event_watcher(
+    pool: SqlitePool,
+    sender: omon_gateway::inbox::watchers::InboxEventSender,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    use std::process::Stdio;
+    use tokio::io::AsyncBufReadExt;
+    use tokio::process::Command;
+
+    let since_rowid = match omon_gateway::inbox::watchers::latest_imessage_rowid(&pool).await {
+        Ok(rowid) => rowid,
+        Err(error) => {
+            warn!(%error, "could not read numeric iMessage watcher rowid; starting without --since-rowid");
+            None
+        }
+    };
+    let mut child = match Command::new("imsg")
+        .args(omon_gateway::inbox::watchers::imsg_watch_args(since_rowid))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            warn!(%error, "imsg watch could not start; check Full Disk Access and local CLI readiness");
+            return;
+        }
+    };
+    let Some(stdout) = child.stdout.take() else {
+        warn!("imsg watch has no stdout pipe");
+        return;
+    };
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { break; }
+            }
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => {
+                    if let Some(rowid) = omon_gateway::inbox::watchers::parse_imsg_watch_line(&line) {
+                        tokio::select! {
+                            result = omon_gateway::inbox::watchers::on_imessage_event(&sender, Some(rowid)) => {
+                                if result.is_err() { break; }
+                            }
+                            _ = shutdown.changed() => break,
+                        }
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    warn!(%error, "failed reading imsg watch output");
+                    break;
+                }
+            },
+            status = child.wait() => {
+                match status {
+                    Ok(status) => warn!(?status, "imsg watch exited; check local permissions and CLI readiness"),
+                    Err(error) => warn!(%error, "waiting for imsg watch failed"),
+                }
+                return;
+            }
+        }
+    }
+    if let Err(error) = child.kill().await {
+        warn!(%error, "failed to stop imsg watch child");
+    }
+    let _ = child.wait().await;
+}
+
+async fn run_mail_event_watcher(
+    sender: omon_gateway::inbox::watchers::InboxEventSender,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    use std::process::Stdio;
+    use tokio::io::AsyncBufReadExt;
+    use tokio::process::Command;
+
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        let mut child = match Command::new("zele")
+            .args([
+                "mail",
+                "watch",
+                "--interval",
+                "60",
+                "--folder",
+                "inbox",
+                "--account",
+                "freedomzero91@gmail.com",
+                "--filter",
+                "is:unread -category:promotions -category:social -category:updates",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => {
+                warn!(%error, "zele mail watch could not start; check local CLI and credential readiness");
+                return;
+            }
+        };
+        let Some(stdout) = child.stdout.take() else {
+            warn!("zele mail watch has no stdout pipe");
+            return;
+        };
+        let mut lines = tokio::io::BufReader::new(stdout).lines();
+        let mut produced_event = false;
+        loop {
+            tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    let _ = child.kill().await;
+                    let _ = child.wait().await;
+                    return;
+                }
+            }
+            line = lines.next_line() => match line {
+                Ok(Some(line)) if !line.trim().is_empty() => produced_event = true,
+                Ok(Some(_)) => {}
+                Ok(None) => break,
+                Err(error) => {
+                    warn!(%error, "failed reading zele mail watch output");
+                    break;
+                }
+            }
+            }
+        }
+        let status = match child.wait().await {
+            Ok(status) => status,
+            Err(error) => {
+                warn!(%error, "waiting for zele mail watch failed");
+                return;
+            }
+        };
+        if !status.success() {
+            warn!(
+                ?status,
+                "zele mail watch exited; check local account credential readiness"
+            );
+            return;
+        }
+        if !produced_event {
+            warn!("zele mail watch exited without a message event");
+            return;
+        }
+        tokio::select! {
+            result = omon_gateway::inbox::watchers::on_mail_event(&sender) => {
+                if result.is_err() { return; }
+            }
+            _ = shutdown.changed() => return,
+        }
+    }
+}
+
+async fn stop_inbox_collector(
+    inbox: &mut Option<InboxRuntime>,
+    shutdown: tokio::sync::watch::Sender<bool>,
+) {
+    let Some((task, _)) = inbox.as_mut() else {
+        return;
+    };
+    let _ = shutdown.send(true);
+    match tokio::time::timeout(std::time::Duration::from_secs(5), &mut *task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(%error, "inbox collector task failed while stopping"),
+        Err(_) => {
+            task.abort();
+            let _ = task.await;
+        }
+    }
+}
+
+fn lane_service_exit(
+    result: Option<std::result::Result<Result<()>, tokio::task::JoinError>>,
+) -> Result<()> {
+    match result {
+        Some(Ok(Err(error))) => Err(error),
+        Some(Err(error)) => Err(OmonError::Multiplexer(error.to_string())),
+        Some(Ok(Ok(()))) | None => Err(OmonError::Multiplexer(
+            "lane service stopped unexpectedly".into(),
+        )),
+    }
 }
 
 fn required_env(name: &str) -> Result<String> {

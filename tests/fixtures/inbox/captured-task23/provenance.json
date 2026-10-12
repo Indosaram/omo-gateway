@@ -1,0 +1,106 @@
+{
+  "fixtures": [
+    {
+      "file": "mail-empty.json",
+      "source": "mail",
+      "operation": "mail-list",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-capture-20261011T161359754Z/mail-lineage.json",
+      "rawSha256": "669be172bb76339384d403c2f0b87b6ee9ba694ca8863a4423a8c04f2d8f3db1",
+      "capturedAt": "2026-10-11T16:18:53.516Z",
+      "status": 0,
+      "sanitizedSha256": "5cdbe9fb42368950639ffcccdd290245d610998e531e2830e6d4f54e79d58ebb",
+      "consumer": "mail_parses_authenticated_empty_capture_without_populated_substitution",
+      "mapping": "Actual empty YAML response normalized to JSON; no populated rows invented."
+    },
+    {
+      "file": "imessage-chats.json",
+      "source": "imessage",
+      "operation": "chats",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-capture-20261011T161359754Z/lineage.json",
+      "rawSha256": "882cd109e4c449b2419b2695ded44200c4e50d8831059822bcec3635043f9885",
+      "capturedAt": "2026-10-11T16:15:19.207Z",
+      "status": 0,
+      "sanitizedSha256": "0b5fe088186e5ac0e9335ffac8409d77af6483b069b40c189ddacb3fc1017464",
+      "consumer": "imessage_parses_authenticated_sanitized_chat_and_history",
+      "mapping": "Exact sanitized capture projection; identifiers substituted and personal strings redacted; original field types retained."
+    },
+    {
+      "file": "imessage-history.json",
+      "source": "imessage",
+      "operation": "history",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-capture-20261011T161359754Z/lineage.json",
+      "rawSha256": "3f7f4ca1563759cc8d108a4f11f67d79bfea29fc8a8cb5804781da50d2b2e243",
+      "capturedAt": "2026-10-11T16:15:39.163Z",
+      "status": 0,
+      "sanitizedSha256": "314eddaa6fdaa8dc423f9465c48d5607ec49b182bb0b96b1bee0df05b421a65a",
+      "consumer": "imessage_parses_authenticated_sanitized_chat_and_history",
+      "mapping": "Actual selected incoming rows normalized from observed NDJSON; identifiers substituted and personal strings redacted."
+    },
+    {
+      "file": "discord-indexed-row.json",
+      "source": "discord",
+      "operation": "indexed-row-select",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-capture-20261011T161359754Z/lineage.json",
+      "rawSha256": "607a586b57e92010f3f34984c2d2785df7be0c9bf2f60b8b689478cf79302eee",
+      "capturedAt": "2026-10-11T16:16:35.872Z",
+      "status": 0,
+      "sanitizedSha256": "a24c33f29caca7b54381acfb24b03094b9abe8f4bf22c4e8ae475130b4d358cf",
+      "consumer": "discord_parses_authenticated_sanitized_indexed_row",
+      "mapping": "Exact sanitized capture projection; identifiers substituted and personal strings redacted; original field types retained."
+    },
+    {
+      "file": "kakao-rooms-historical.json",
+      "source": "kakao",
+      "operation": "rooms",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-capture-20261011T161359754Z/lineage.json",
+      "rawSha256": "86c436b0bdc962a99949a76146e1624a225ea93c1aafdbb7c24bc8c15e398215",
+      "capturedAt": "2026-10-11T16:15:52.115Z",
+      "status": 200,
+      "sanitizedSha256": "014f2f102ac0c0dc5d48deddf3cbe4a22a7bb75d31cdefc42896208cfd9878e0",
+      "consumer": "kakao_fetches_authenticated_historical_room_on_owned_loopback",
+      "mapping": "Exact sanitized capture projection; identifiers substituted and personal strings redacted; original field types retained."
+    },
+    {
+      "file": "kakao-rooms.json",
+      "source": "kakao",
+      "operation": "rooms",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-kakao-numeric-20261011T175050750Z/lineage.json",
+      "rawSha256": "3e47e2961ad01ab82cf8493dd5cf049cda0ed1f6eb622764cc5d4c9204a12774",
+      "capturedAt": "2026-10-11T17:50:50.880Z",
+      "status": 200,
+      "sanitizedSha256": "5f5d2eaf4ec13aacc924c8898ad61e0283ece6abfe48311776fdb747e0ea4f9e",
+      "consumer": "kakao_fetches_authenticated_room_and_numeric_page_on_owned_loopback",
+      "mapping": "Exact sanitized capture projection; identifiers substituted and personal strings redacted; original field types retained."
+    },
+    {
+      "file": "kakao-messages-numeric.json",
+      "source": "kakao",
+      "operation": "messages",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-kakao-numeric-20261011T175050750Z/lineage.json",
+      "rawSha256": "30ae716d1c386f2cc00b1386d9a785f8673a03694e765efde1093a963592443e",
+      "capturedAt": "2026-10-11T17:51:10.936Z",
+      "status": 200,
+      "sanitizedSha256": "936b20cd30da29510a1332a2d0a1202e6eb1b13e6a9fcaf9c1eb3302a2f0c65b",
+      "consumer": "kakao_parses_authenticated_numeric_seconds_capture",
+      "mapping": "Exact observed integral Unix seconds retained; identifiers substituted and personal strings redacted; no sendAt/logId timestamp derivation."
+    },
+    {
+      "file": "imessage-history.ndjson",
+      "source": "imessage",
+      "operation": "history",
+      "derivedFrom": "imessage-history.json",
+      "capturedAt": "2026-10-11T16:15:39.163Z",
+      "status": 0,
+      "sanitizedSha256": "a6b80e89e23b7d0a5330f5c72c3e72e48628c4b3ba5d300569e3de4559cb21d2",
+      "rawSha256": "3f7f4ca1563759cc8d108a4f11f67d79bfea29fc8a8cb5804781da50d2b2e243",
+      "receipt": ".omo/evidence/dori-grade-agent-env/task23-capture-20261011T161359754Z/lineage.json",
+      "mapping": "Re-serialized SAME sanitized selected rows into originally observed NDJSON framing; not original raw bytes, no new capture, values unchanged.",
+      "consumer": "imessage_decodes_captured_rows_in_observed_ndjson_framing"
+    }
+  ],
+  "limitations": [
+    "Existing synthetic populated mail and framing fixtures remain separate.",
+    "Historical Kakao rooms are not mixed with fresh numeric page; empty loopback page terminators are synthetic control only.",
+    "Discord row exercises actual SQL adapter on owned fixture DB, not synthetic producer or current live Discord."
+  ]
+}

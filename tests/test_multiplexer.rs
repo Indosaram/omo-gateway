@@ -1186,11 +1186,14 @@ async fn thread_inherits_parent_profile() {
 async fn terminal_outcomes_release_typing() {
     struct CapturingDispatcher {
         actions: Arc<Mutex<Vec<OutboundAction>>>,
+        dispatched: Arc<tokio::sync::Notify>,
     }
     #[async_trait]
     impl OutboundDispatcher for CapturingDispatcher {
         async fn dispatch(&self, action: OutboundAction) -> Result<(), OmonError> {
             self.actions.lock().await.push(action);
+            // notify_one keeps a permit, so a waiter that arrives late still wakes.
+            self.dispatched.notify_one();
             Ok(())
         }
     }
@@ -1222,8 +1225,10 @@ async fn terminal_outcomes_release_typing() {
     }
 
     let actions = Arc::new(Mutex::new(Vec::new()));
+    let dispatched = Arc::new(tokio::sync::Notify::new());
     let dispatcher = Arc::new(CapturingDispatcher {
         actions: actions.clone(),
+        dispatched: dispatched.clone(),
     });
 
     let (done_tx, mut done_rx) = mpsc::unbounded_channel();
@@ -1265,7 +1270,9 @@ async fn terminal_outcomes_release_typing() {
             break;
         }
         drop(acts);
-        tokio::task::yield_now().await;
+        // Wait for the next dispatched action instead of a scheduler-dependent yield.
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(5), dispatched.notified()).await;
     }
     {
         let acts = actions.lock().await;
@@ -1306,7 +1313,9 @@ async fn terminal_outcomes_release_typing() {
             break;
         }
         drop(acts);
-        tokio::task::yield_now().await;
+        // Wait for the next dispatched action instead of a scheduler-dependent yield.
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(5), dispatched.notified()).await;
     }
     {
         let acts = actions.lock().await;
@@ -1354,7 +1363,9 @@ async fn terminal_outcomes_release_typing() {
             break;
         }
         drop(acts);
-        tokio::task::yield_now().await;
+        // Wait for the next dispatched action instead of a scheduler-dependent yield.
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(5), dispatched.notified()).await;
     }
 
     // Verify session_block is still active (active: true) and has NOT released typing yet
@@ -1395,7 +1406,9 @@ async fn terminal_outcomes_release_typing() {
             break;
         }
         drop(acts);
-        tokio::task::yield_now().await;
+        // Wait for the next dispatched action instead of a scheduler-dependent yield.
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_secs(5), dispatched.notified()).await;
     }
     {
         let acts = actions.lock().await;
