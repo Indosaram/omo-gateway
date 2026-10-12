@@ -174,14 +174,17 @@ async fn milestones_status_replacement_and_restart_use_owned_loopback() {
         let rows: Vec<String> = sqlx::query_scalar("SELECT text FROM lane_transcript WHERE role='thread_post'").fetch_all(db.pool()).await.unwrap();
         assert_eq!(rows.len(), 2);
         for text in rows { let post: Post = serde_json::from_str(&text).unwrap(); assert_eq!(post.state, PostState::Sent); assert!(post.message_id.is_some()); }
-        for status in ["verified_done", "closed"] {
-            sqlx::query("UPDATE lanes SET status=? WHERE key=?").bind(status).bind(&lane.key).execute(db.pool()).await.unwrap();
-            posts::refresh_statuses(db.pool(), &sink, now + chrono::Duration::minutes(18)).await.unwrap();
-            let rename = timeout(BOUND, observed.recv()).await.unwrap().unwrap();
-            assert!(rename["body"]["name"].as_str().unwrap().starts_with("✅ "));
-            trace.push(rename);
-            trace.push(timeout(BOUND, observed.recv()).await.unwrap().unwrap());
-        }
+        sqlx::query("UPDATE lanes SET status='verified_done' WHERE key=?").bind(&lane.key).execute(db.pool()).await.unwrap();
+        posts::refresh_statuses(db.pool(), &sink, now + chrono::Duration::minutes(18)).await.unwrap();
+        let rename = timeout(BOUND, observed.recv()).await.unwrap().unwrap();
+        assert!(rename["body"]["name"].as_str().unwrap().starts_with("✅ "));
+        trace.push(rename);
+        trace.push(timeout(BOUND, observed.recv()).await.unwrap().unwrap());
+        // A closed lane's thread is archived by close; Discord rejects edits there
+        // (50083), so the status refresh leaves closed lanes alone.
+        sqlx::query("UPDATE lanes SET status='closed' WHERE key=?").bind(&lane.key).execute(db.pool()).await.unwrap();
+        posts::refresh_statuses(db.pool(), &sink, now + chrono::Duration::minutes(18)).await.unwrap();
+        assert!(observed.try_recv().is_err());
         posts::refresh_statuses(db.pool(), &sink, now + chrono::Duration::minutes(40)).await.unwrap();
         assert!(observed.try_recv().is_err());
         peer.lock().await.deleted = true;

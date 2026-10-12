@@ -870,6 +870,24 @@ fn current_kst_date() -> NaiveDate {
     kst_dt.date_naive()
 }
 
+/// `typesafe-judge` from PATH, else the cargo install location. launchd's PATH
+/// has no ~/.cargo/bin, so a bare name fails to spawn under the service.
+fn default_judge_bin() -> PathBuf {
+    let on_path = std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join("typesafe-judge").is_file())
+    });
+    match std::env::var_os("HOME") {
+        Some(home) if !on_path => {
+            let cargo = Path::new(&home).join(".cargo/bin/typesafe-judge");
+            if cargo.is_file() {
+                return cargo;
+            }
+            PathBuf::from("typesafe-judge")
+        }
+        _ => PathBuf::from("typesafe-judge"),
+    }
+}
+
 pub fn ensure_typesafe_env() {
     load_typesafe_env();
 }
@@ -1040,10 +1058,7 @@ impl Judge for JevCli {
         }
 
         let state_arg = prepare_state_arg(&scrubbed_state)?;
-        let bin = self
-            .binary_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("typesafe-judge"));
+        let bin = self.binary_path.clone().unwrap_or_else(default_judge_bin);
 
         let mut cmd = tokio::process::Command::new(bin);
         cmd.arg("choice");
@@ -1198,10 +1213,7 @@ impl Judge for JevCli {
         }
 
         let state_arg = prepare_state_arg(&scrubbed_state)?;
-        let bin = self
-            .binary_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("typesafe-judge"));
+        let bin = self.binary_path.clone().unwrap_or_else(default_judge_bin);
 
         let mut cmd = tokio::process::Command::new(bin);
         cmd.arg("noul");
@@ -1426,10 +1438,7 @@ impl Judge for JevCli {
 
         let scrubbed_diff = scrub_for_external(trimmed_diff);
 
-        let bin = self
-            .binary_path
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("typesafe-judge"));
+        let bin = self.binary_path.clone().unwrap_or_else(default_judge_bin);
         let mut cmd = tokio::process::Command::new(bin);
         cmd.arg("diff");
         cmd.arg("--prompt").arg(prompt);

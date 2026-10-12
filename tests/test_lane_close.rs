@@ -24,6 +24,7 @@ impl AgentBackend for Backend {
 struct Transport {
     calls: Mutex<Vec<String>>,
     fail: bool,
+    hang_status: bool,
 }
 #[async_trait]
 impl LaneLifecycle for Transport {
@@ -36,6 +37,9 @@ impl LaneLifecycle for Transport {
         status: ThreadStatus,
     ) -> std::result::Result<(), DiscordThreadError> {
         self.calls.lock().unwrap().push(format!("{status:?}"));
+        if self.hang_status {
+            std::future::pending::<()>().await;
+        }
         if self.fail {
             return Err(DiscordThreadError::MissingToken);
         }
@@ -580,6 +584,7 @@ async fn transport_failure_never_commits_closed_or_removes_cwd() {
         Transport {
             calls: Mutex::new(Vec::new()),
             fail: true,
+            hang_status: false,
         },
     ));
     let id = request_close(f.db.pool(), "close-qa", false, None)
@@ -743,4 +748,30 @@ async fn service_cancels_and_joins_before_thread_and_git_effects() {
         f.runner().close_intent(id).await.unwrap();
     }
     assert_eq!(f.status().await, "closed");
+}
+
+#[tokio::test]
+async fn held_thread_rename_does_not_block_close() {
+    // Discord holds a third thread rename within ten minutes; close must still finish.
+    let f = Fixture::new("verified_done", true).await;
+    let transport = Arc::new(Transport {
+        calls: Mutex::new(Vec::new()),
+        fail: false,
+        hang_status: true,
+    });
+    let runner = LaneRunner::new(f.db.pool().clone(), Arc::new(Backend))
+        .with_lifecycle(transport.clone())
+        .with_lifecycle_timeout(std::time::Duration::from_millis(200));
+    let id = request_close(f.db.pool(), "close-qa", false, None)
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), runner.close_intent(id))
+        .await
+        .expect("close must not wait on a held rename")
+        .unwrap();
+    assert_eq!(f.status().await, "closed");
+    assert_eq!(
+        *transport.calls.lock().unwrap(),
+        vec!["Done", "archived:true"]
+    );
 }

@@ -56,6 +56,7 @@ impl InboxSource for DiscordSource {
                AND d.message_id > ? \
                AND d.author_id <> ? \
                AND (? IS NULL OR d.author_id <> ?) \
+               AND d.author_id NOT IN (SELECT bot_id FROM bot_profiles) \
                AND ( \
                  (d.guild_id IS NULL OR d.guild_id = '') \
                  OR instr(d.content, ?) > 0 \

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -57,7 +58,7 @@ pub async fn reopen(pool: &SqlitePool, key: &str, text: Option<&str>) -> Result<
     if lane.thread_channel_id.is_some() {
         let transport = super::discord_threads::DiscordThreads::from_env()
             .map_err(|error| OmonError::Config(error.to_string()))?;
-        thread_effect(pool, &lane, Some(&transport), false).await?;
+        thread_effect(pool, &lane, Some(&transport), false, LIFECYCLE_TIMEOUT).await?;
     }
     apply_reopen(pool, key, text, None).await
 }
@@ -165,6 +166,7 @@ async fn thread_effect(
     lane: &Lane,
     transport: Option<&dyn LaneLifecycle>,
     close: bool,
+    timeout: Duration,
 ) -> Result<()> {
     let Some(thread) = &lane.thread_channel_id else {
         return Ok(());
@@ -188,28 +190,29 @@ async fn thread_effect(
         .ok_or_else(|| OmonError::Config("invalid lane thread".into()))?;
     let transport = transport
         .ok_or_else(|| OmonError::Config("lane lifecycle transport unavailable".into()))?;
-    if transport
-        .bot_id()
+    if tokio::time::timeout(timeout, transport.bot_id())
         .await
+        .map_err(|_| OmonError::Config("lane lifecycle bot lookup timed out".into()))?
         .map_err(|error| OmonError::Config(error.to_string()))?
         != bound
     {
         return Err(OmonError::Config("lane lifecycle bot mismatch".into()));
     }
-    transport
-        .status(
-            thread,
-            if close {
-                super::discord_threads::ThreadStatus::Done
-            } else {
-                super::discord_threads::ThreadStatus::Working
-            },
-        )
+    let status = if close {
+        super::discord_threads::ThreadStatus::Done
+    } else {
+        super::discord_threads::ThreadStatus::Working
+    };
+    // Discord allows two thread renames per ten minutes and holds the request
+    // until the window resets. The title marker is cosmetic, so a held rename is
+    // skipped instead of stalling close/reopen and the lane loop behind it.
+    match tokio::time::timeout(timeout, transport.status(thread, status)).await {
+        Ok(result) => result.map_err(|error| OmonError::Config(error.to_string()))?,
+        Err(_) => tracing::warn!(lane = %lane.key, "lane thread rename held by Discord; skipped"),
+    }
+    tokio::time::timeout(timeout, transport.archived(thread, close))
         .await
-        .map_err(|error| OmonError::Config(error.to_string()))?;
-    transport
-        .archived(thread, close)
-        .await
+        .map_err(|_| OmonError::Config("lane thread archive timed out".into()))?
         .map_err(|error| OmonError::Config(error.to_string()))
 }
 
@@ -731,7 +734,11 @@ pub struct LaneRunner {
     settler: super::settle::Settler,
     kibitzer_hint: Option<Arc<Notify>>,
     lifecycle: Option<Arc<dyn LaneLifecycle>>,
+    lifecycle_timeout: Duration,
 }
+
+/// Bound on each Discord lane-thread call (bot lookup, rename, archive).
+pub const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl LaneRunner {
     pub fn new(pool: SqlitePool, backend: Arc<dyn AgentBackend>) -> Self {
@@ -751,6 +758,7 @@ impl LaneRunner {
             capture: None,
             kibitzer_hint: None,
             lifecycle: None,
+            lifecycle_timeout: LIFECYCLE_TIMEOUT,
         }
     }
 
@@ -761,6 +769,11 @@ impl LaneRunner {
 
     pub fn with_lifecycle(mut self, lifecycle: Arc<dyn LaneLifecycle>) -> Self {
         self.lifecycle = Some(lifecycle);
+        self
+    }
+
+    pub fn with_lifecycle_timeout(mut self, timeout: Duration) -> Self {
+        self.lifecycle_timeout = timeout;
         self
     }
 
@@ -785,7 +798,7 @@ impl LaneRunner {
                 return Err(OmonError::Config("stale close intent".into()));
             }
             if intent.phase==0 {
-                thread_effect(&self.pool,&lane,self.lifecycle.as_deref(),true).await?;
+                thread_effect(&self.pool,&lane,self.lifecycle.as_deref(),true,self.lifecycle_timeout).await?;
                 sqlx::query("UPDATE lane_close_intents SET phase=1 WHERE id=? AND state='running'").bind(id).execute(&self.pool).await?;
             }
             remove_owned(&self.pool,&intent).await?;
@@ -838,7 +851,7 @@ impl LaneRunner {
                 if lane.status=="closed" || lane.status=="failed" {
                     if current!=generation { return Err(OmonError::Config("stale reopen reply".into())); }
                     restore_cwd(&self.pool,&lane).await?;
-                    thread_effect(&self.pool,&lane,self.lifecycle.as_deref(),false).await?;
+                    thread_effect(&self.pool,&lane,self.lifecycle.as_deref(),false,self.lifecycle_timeout).await?;
                     apply_reopen(&self.pool,&key,text.as_deref(),Some(&id)).await?;
                 } else if lane.status=="working" && current!=generation {
                     let mut tx=self.pool.begin_with("BEGIN IMMEDIATE").await?;

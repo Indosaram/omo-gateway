@@ -262,11 +262,17 @@ pub async fn refresh_statuses(
     now: DateTime<Utc>,
 ) -> Result<()> {
     let keys: Vec<String> =
-        sqlx::query_scalar("SELECT key FROM lanes WHERE thread_channel_id IS NOT NULL")
-            .fetch_all(pool)
-            .await?;
+        // Closed lanes have archived threads; Discord rejects edits there (50083).
+        sqlx::query_scalar(
+            "SELECT key FROM lanes WHERE thread_channel_id IS NOT NULL AND status != 'closed'",
+        )
+        .fetch_all(pool)
+        .await?;
     for key in keys {
-        refresh_lane_status(pool, sink, &key, now, false).await?;
+        // One lane's Discord failure must not stop the lane service (or startup).
+        if let Err(error) = refresh_lane_status(pool, sink, &key, now, false).await {
+            tracing::warn!(%key, %error, "lane status refresh failed");
+        }
     }
     Ok(())
 }
