@@ -12,7 +12,7 @@ use crate::{OmonError, Result, SessionKey};
 use super::guard::{self, GuardThresholds, LaunchDecision};
 use super::runner::{lane_key, wake};
 use super::signals::parse_signals;
-use super::state::{transition, LaneStatus};
+use super::state::{safe_reason, transition, LaneStatus, LaneTransitionError};
 
 #[derive(Debug, Args)]
 pub struct LaneArgs {
@@ -104,10 +104,18 @@ fn invalid(message: impl Into<String>) -> OmonError {
     OmonError::Config(message.into())
 }
 
+/// A cwd-relative default would silently create an empty database next to the lane
+/// agent and then target the wrong wake socket, so the URL must be explicit.
+fn database_url(value: std::result::Result<String, std::env::VarError>) -> Result<String> {
+    value
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+        .ok_or_else(|| invalid("DATABASE_URL is required for lane commands"))
+}
+
 pub async fn run(args: LaneArgs) -> i32 {
     let result = async {
-        let url =
-            std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://omon_gateway.db".into());
+        let url = database_url(std::env::var("DATABASE_URL"))?;
         let database = Database::connect(&url).await?;
         let judge = JevCli::new(None, Some(database.pool().clone()), None, None)
             .init()
@@ -167,9 +175,16 @@ pub async fn execute(
             }
             enqueue(pool, &key, &text).await?;
             if lane.status == "blocked" {
-                transition(pool, &key, LaneStatus::Working, Some("lead message"))
-                    .await
-                    .map_err(|error| invalid(error.to_string()))?;
+                // The message is already queued: a lane that left blocked in the
+                // meantime must not turn into an error that makes the caller resend.
+                match transition(pool, &key, LaneStatus::Working, Some("lead message")).await {
+                    Ok(())
+                    | Err(
+                        LaneTransitionError::IllegalTransition { .. }
+                        | LaneTransitionError::ConcurrentConflict(_),
+                    ) => {}
+                    Err(error) => return Err(invalid(error.to_string())),
+                }
             }
             wake(pool).await?;
             Ok((0, json!({"key": key, "queued": true})))
@@ -365,6 +380,8 @@ pub async fn start(
         args.done,
     );
     lane.model = Some(model_for_purpose(purpose));
+    // Discord calls run before the write transaction: holding BEGIN IMMEDIATE
+    // across network I/O would block every other user of the 1-connection pool.
     let mut created_bot = None;
     if !decision.is_hold() {
         if let Some(parent) = args.thread {
@@ -391,8 +408,59 @@ pub async fn start(
         lane.status = "working".into();
     }
     lane.parent_channel_id = args.thread.map(|id| id.to_string());
-    insert_lane(pool, &lane).await?;
-    crate::usage::capture_lane_start(
+    // Cap re-check and insert share one write transaction so concurrent starts
+    // cannot both pass a stale launch decision.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let mut decision = decision;
+    if !decision.is_hold() {
+        let active: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM lanes WHERE status IN ('working','blocked','not_done','done_claimed')",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let max = GuardThresholds::from_env().lanes_max;
+        if u64::try_from(active).unwrap_or(0) >= max {
+            decision = LaunchDecision::Hold(vec![format!(
+                "active lanes ({active}) reached maximum limit ({max})"
+            )]);
+            lane.status = "queued".into();
+        }
+    }
+    let orphan_thread = if decision.is_hold() {
+        created_bot = None;
+        lane.thread_channel_id.take()
+    } else {
+        None
+    };
+    let inserted = insert_lane(&mut *tx, &lane).await;
+    if inserted.is_ok() {
+        tx.commit().await?;
+    } else {
+        // Release the write lock before any Discord call below.
+        if let Err(rollback_error) = tx.rollback().await {
+            tracing::warn!(key = %lane.key, %rollback_error, "lane insert rollback failed");
+        }
+    }
+    let orphan_thread = match &inserted {
+        Err(_) => lane.thread_channel_id.clone().or(orphan_thread),
+        Ok(()) => orphan_thread,
+    };
+    if let Some(thread) = orphan_thread {
+        tracing::warn!(key = %lane.key, %thread, "lane thread not kept (cap re-check or insert failed); archiving");
+        if let Ok(threads) = super::discord_threads::DiscordThreads::from_env() {
+            if let Ok(id) = thread.parse::<u64>() {
+                if let Err(archive_error) = threads.archive(serenity::all::ChannelId::new(id)).await
+                {
+                    tracing::warn!(%thread, %archive_error, "orphan lane thread archive failed");
+                }
+            }
+        }
+    }
+    inserted?;
+    // The lane row is committed: a failure below must not report the start as
+    // failed (a retry would hit "lane key already exists"), and the wake must still go out.
+    let mut warnings = Vec::new();
+    if let Err(error) = crate::usage::capture_lane_start(
         pool,
         &lane.key,
         &cwd,
@@ -402,17 +470,28 @@ pub async fn start(
             _ => unreachable!("lane selection only yields lane purposes"),
         },
     )
-    .await?;
+    .await
+    {
+        tracing::warn!(key = %lane.key, %error, "lane start commit capture failed");
+        warnings.push(format!("start commit not captured: {error}"));
+    }
     if let Some(bot) = created_bot {
-        crate::storage::lanes::bind_lane_thread(pool, &lane.key, &bot).await?;
+        if let Err(error) = crate::storage::lanes::bind_lane_thread(pool, &lane.key, &bot).await {
+            tracing::warn!(key = %lane.key, %error, "lane thread binding failed");
+            warnings.push(format!("thread binding failed: {error}"));
+        }
     }
     if !decision.is_hold() {
-        wake(pool).await?;
+        if let Err(error) = wake(pool).await {
+            tracing::warn!(key = %lane.key, %error, "lane wake failed");
+            warnings.push(format!("wake failed: {error}"));
+        }
     }
-    Ok((
-        if decision.is_hold() { 4 } else { 0 },
-        json!({"lane": lane, "reasons": decision.reasons()}),
-    ))
+    let mut body = json!({"lane": lane, "reasons": decision.reasons()});
+    if !warnings.is_empty() {
+        body["warnings"] = json!(warnings);
+    }
+    Ok((if decision.is_hold() { 4 } else { 0 }, body))
 }
 
 async fn require_lane(pool: &SqlitePool, key: &str) -> Result<Lane> {
@@ -474,6 +553,13 @@ pub async fn change_claim_at(
             "illegal lane transition: {from} -> {target}"
         )));
     }
+    // Internal evidence stays exact (the settlement checks read it); only the event body,
+    // which leaves the lane, is scrubbed and capped.
+    let event_body: String = if claim {
+        super::scrub::scrub(text).chars().take(2000).collect()
+    } else {
+        text.to_owned()
+    };
     let query = if claim {
         "UPDATE lanes SET status = ?, claim_at = ?, claim_evidence = ?, updated_at = ?, objection = NULL WHERE key = ? AND status = ? AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?"
     } else {
@@ -494,18 +580,10 @@ pub async fn change_claim_at(
         return Err(invalid("concurrent lane transition"));
     }
     sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, ?, ?)")
-        .bind(key).bind(now).bind(&from).bind(target.as_str()).bind(text).execute(&mut *tx).await?;
+        .bind(key).bind(now).bind(&from).bind(target.as_str()).bind(safe_reason(text)).execute(&mut *tx).await?;
     if !blocked_answer {
-        let body = if claim {
-            super::scrub::scrub(text)
-                .chars()
-                .take(2000)
-                .collect::<String>()
-        } else {
-            text.to_owned()
-        };
         sqlx::query("INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) VALUES (?, ?, ?, ?, ?)")
-        .bind(key).bind(lead).bind(target.as_str()).bind(body).bind(now).execute(&mut *tx).await?;
+        .bind(key).bind(lead).bind(target.as_str()).bind(&event_body).bind(now).execute(&mut *tx).await?;
     }
     let guidance = if claim {
         let deadline = (now + chrono::Duration::minutes(5)).with_timezone(&chrono_tz::Asia::Seoul);
@@ -525,4 +603,50 @@ pub async fn change_claim_at(
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_url_must_be_explicit() {
+        assert!(database_url(Err(std::env::VarError::NotPresent)).is_err());
+        assert!(database_url(Ok("  ".into())).is_err());
+        assert_eq!(
+            database_url(Ok("sqlite:///x.db".into())).unwrap(),
+            "sqlite:///x.db"
+        );
+    }
+
+    async fn working_lane() -> Database {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let mut lane = Lane::new(
+            "cli-lane",
+            "Cli",
+            "lead",
+            "/tmp",
+            "/tmp/brief",
+            "lane",
+            "file x",
+        );
+        lane.status = "working".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn claim_evidence_cannot_forge_the_reopen_generation_marker() {
+        let db = working_lane().await;
+        change_claim(db.pool(), "cli-lane", true, "reopened")
+            .await
+            .unwrap();
+        let generation: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = 'cli-lane' AND reason = 'reopened'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(generation, 0);
+    }
 }

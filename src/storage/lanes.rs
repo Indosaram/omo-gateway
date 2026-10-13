@@ -199,7 +199,7 @@ pub async fn request_close(
     .bind(key)
     .fetch_one(&mut *tx)
     .await?;
-    sqlx::query("INSERT INTO lane_close_intents(lane_key,generation,original_status,force,note,state,previous_cwd) VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(lane_key,generation) DO UPDATE SET state='pending', attempt=attempt+1, error=NULL, updated_at=CURRENT_TIMESTAMP WHERE lane_close_intents.state='failed' AND lane_close_intents.original_status=excluded.original_status AND lane_close_intents.force=excluded.force")
+    sqlx::query("INSERT INTO lane_close_intents(lane_key,generation,original_status,force,note,state,previous_cwd) VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(lane_key,generation) DO UPDATE SET state='pending', attempt=attempt+1, error=NULL, original_status=excluded.original_status, force=excluded.force, note=excluded.note, updated_at=CURRENT_TIMESTAMP WHERE lane_close_intents.state='failed'")
         .bind(key).bind(generation).bind(&lane.status).bind(force).bind(note).bind(&lane.cwd).execute(&mut *tx).await?;
     let id =
         sqlx::query_scalar("SELECT id FROM lane_close_intents WHERE lane_key=? AND generation=?")
@@ -290,7 +290,10 @@ impl<'a> IntoReason<'a> for () {
     }
 }
 
-pub async fn insert_lane(pool: &SqlitePool, lane: &Lane) -> Result<()> {
+pub async fn insert_lane<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    lane: &Lane,
+) -> Result<()> {
     sqlx::query(
         r#"
         INSERT INTO lanes (
@@ -333,7 +336,7 @@ pub async fn insert_lane(pool: &SqlitePool, lane: &Lane) -> Result<()> {
     .bind(lane.stale_posted_at)
     .bind(lane.created_at)
     .bind(lane.updated_at)
-    .execute(pool)
+    .execute(executor)
     .await
     .map_err(OmonError::from)?;
 
@@ -439,7 +442,9 @@ pub async fn transition_lane<'a, S: AsRef<str>, R: IntoReason<'a>>(
     }
 
     let reason = reason.into_reason();
-    let mut tx = pool.begin().await?;
+    // IMMEDIATE: a deferred read-then-write fails with SQLITE_BUSY_SNAPSHOT (no
+    // busy_timeout retry) when another process commits in between.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
 
     let row: Option<(String,)> = sqlx::query_as("SELECT status FROM lanes WHERE key = ?")
         .bind(key)

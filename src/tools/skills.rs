@@ -85,8 +85,20 @@ impl SkillsTool {
             if !base.exists() {
                 continue;
             }
-            Self::scan_dir(base, &mut results);
+            // read_dir order is arbitrary: within one root the shallowest, then
+            // lexicographically first, path must win a name clash. Roots keep their
+            // configured order, so an earlier root shadows a later one.
+            let mut local = Vec::new();
+            Self::scan_dir(base, &mut local);
+            local.sort_by(|a, b| {
+                a.1.components()
+                    .count()
+                    .cmp(&b.1.components().count())
+                    .then_with(|| a.1.cmp(&b.1))
+            });
+            results.extend(local);
         }
+        // Stable: equal names keep the precedence order established above.
         results.sort_by(|a, b| a.0.cmp(&b.0));
         results.dedup_by(|a, b| a.0 == b.0);
         results
@@ -276,6 +288,28 @@ impl Tool for SkillsTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shadowed_skill_resolves_to_shallowest_path_in_first_root() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let deep = first.path().join("a/b/dup");
+        let shallow = first.path().join("dup");
+        let other_root = second.path().join("dup");
+        for dir in [&deep, &shallow, &other_root] {
+            std::fs::create_dir_all(dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), "x").unwrap();
+        }
+        let tool = SkillsTool::new(vec![
+            first.path().to_path_buf(),
+            second.path().to_path_buf(),
+        ]);
+
+        let skills = tool.find_all_skills();
+
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].1, shallow.join("SKILL.md"));
+    }
 
     #[cfg(unix)]
     use std::os::unix::fs::symlink;

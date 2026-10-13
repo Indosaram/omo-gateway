@@ -52,9 +52,7 @@ pub fn agent_workspace_slug(platform: &str, user_id: &str, bot_id: Option<&str>)
 
     let sanitized = sanitize(raw_value);
     let initial_slug = format!("{category}-{sanitized}");
-    let raw_lower = raw_value.to_lowercase();
-
-    if sanitized != raw_lower || initial_slug.len() > 48 {
+    if sanitized != raw_value || initial_slug.len() > 48 {
         let hash_suffix = sha256_hex_8(raw_value);
         let overhead = category.len() + 10;
         let max_sanitized_len = 48usize.saturating_sub(overhead);
@@ -157,6 +155,18 @@ mod tests {
         let hash_tail = parts.last().unwrap();
         assert_eq!(hash_tail.len(), 8);
         assert!(hash_tail.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn fixr1_case_folded_ids_do_not_collide() {
+        let upper = agent_workspace_slug("discord", "Alice", None);
+        let lower = agent_workspace_slug("discord", "alice", None);
+
+        // Already-canonical ids keep their existing hash-free slug.
+        assert_eq!(lower, "user-alice");
+        assert_ne!(upper, lower);
+        assert!(upper.starts_with("user-alice-"), "{upper}");
+        assert_eq!(upper.rsplit('-').next().unwrap().len(), 8);
     }
 
     #[test]

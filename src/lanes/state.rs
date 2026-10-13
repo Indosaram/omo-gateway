@@ -120,6 +120,15 @@ pub enum LaneTransitionError {
     Storage(#[from] crate::OmonError),
 }
 
+/// Free text must never equal a reason that generation fences or settlement
+/// bookkeeping match on; a collision is prefixed so it stays distinguishable.
+pub(super) fn safe_reason(text: &str) -> String {
+    match text {
+        "reopened" | "settlement_started" | "escalated" => format!("note: {text}"),
+        _ => text.to_owned(),
+    }
+}
+
 pub async fn transition(
     pool: &SqlitePool,
     key: &str,

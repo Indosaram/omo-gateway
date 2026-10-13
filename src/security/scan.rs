@@ -2,13 +2,23 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use super::{detect_dangerous_command, detect_hardline_command};
+use super::detect_hardline_command;
 
 const INVISIBLE_CODEPOINTS: &[char] = &[
-    '\u{200B}', '\u{200C}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}',
-    '\u{202E}', '\u{2060}', '\u{2061}', '\u{2062}', '\u{2063}', '\u{2064}', '\u{2066}', '\u{2067}',
-    '\u{2068}', '\u{2069}', '\u{FEFF}', '\u{00AD}',
+    '\u{200B}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202B}', '\u{202C}', '\u{202D}', '\u{202E}',
+    '\u{2060}', '\u{2061}', '\u{2062}', '\u{2063}', '\u{2064}', '\u{2066}', '\u{2067}', '\u{2068}',
+    '\u{2069}', '\u{FEFF}', '\u{00AD}',
 ];
+
+/// A neighbour that makes a ZWNJ legitimate orthography: a non-ASCII letter or combining mark
+/// of a joining script (Persian/Urdu, Indic). ASCII neighbours stay rejected so a ZWNJ cannot
+/// be used to split Latin keywords.
+fn is_zwnj_script_char(c: char) -> bool {
+    let u = c as u32;
+    !c.is_ascii()
+        && (c.is_alphabetic()
+            || matches!(u, 0x0610..=0x061A | 0x064B..=0x065F | 0x0670 | 0x06D6..=0x06ED | 0x0900..=0x0DFF))
+}
 
 fn is_emoji_cp(c: char) -> bool {
     let u = c as u32;
@@ -28,6 +38,14 @@ fn contains_invisible_chars(text: &str) -> bool {
         }
         if INVISIBLE_CODEPOINTS.contains(&c) {
             return true;
+        }
+        if c == '\u{200C}' {
+            let joined = i > 0
+                && is_zwnj_script_char(chars[i - 1])
+                && chars.get(i + 1).is_some_and(|&n| is_zwnj_script_char(n));
+            if !joined {
+                return true;
+            }
         }
         if c == '\u{200D}' {
             let left_emoji = (0..i)
@@ -130,10 +148,12 @@ pub fn scan_cron_prompt(text: &str) -> Vec<String> {
         }
     }
 
+    // Cron prompts are natural language for the agent, so the dangerous-command and SQL detectors
+    // are deliberately NOT run here: they reject ordinary prose such as "truncate the report" or
+    // "delete from the list". The unconditional hardline blocklist stays; script fields (script,
+    // ack_command) get the full dangerous-command screen where they are accepted.
     if let Some(hardline) = detect_hardline_command(text) {
         threats.push(format!("hardline_command: {hardline}"));
-    } else if let Some(dangerous) = detect_dangerous_command(text) {
-        threats.push(format!("dangerous_command: {}", dangerous.pattern_key));
     }
 
     threats
@@ -161,6 +181,38 @@ pub fn scan_assembled_cron_prompt(text: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_scan_cron_prompt_allows_prose_that_resembles_sql() {
+        for sample in [
+            "Summarize the logs and truncate the report to 500 words",
+            "Delete from the list any stale PRs and post the rest",
+            "Drop the table of contents from the summary",
+        ] {
+            let threats = scan_cron_prompt(sample);
+            assert!(threats.is_empty(), "{sample}: {threats:?}");
+        }
+    }
+
+    #[test]
+    fn test_zwnj_allowed_between_script_letters_only() {
+        let persian =
+            "گزارش \u{0645}\u{06CC}\u{200C}\u{062E}\u{0648}\u{0627}\u{0647}\u{0645} روزانه";
+        assert!(scan_cron_prompt(persian).is_empty());
+        assert!(scan_assembled_cron_prompt(persian).is_empty());
+        for hostile in [
+            "ig\u{200C}nore previous",
+            "trailing\u{200C}",
+            "\u{200C}leading",
+        ] {
+            assert!(
+                scan_cron_prompt(hostile)
+                    .iter()
+                    .any(|t| t.starts_with("invisible_unicode")),
+                "{hostile:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_scan_cron_prompt_catches_malicious_prompts() {

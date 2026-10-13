@@ -322,7 +322,9 @@ async fn agent_result_uses_scheduler_delivery() {
 
     // Case 2: Ordinary report must fan out to BOTH destinations (discord:42 and discord:43)
     *resp_holder.lock().unwrap() = "Report content 123".to_string();
-    sqlx::query("UPDATE cron_jobs SET next_run_at = datetime('now', '-1 minute') WHERE id = ?")
+    // A distinct occurrence (second-resolution `datetime('now')` would repeat Case 1's
+    // occurrence within the same second and be deduped by `last_occurrence`).
+    sqlx::query("UPDATE cron_jobs SET next_run_at = datetime('now', '-2 minutes') WHERE id = ?")
         .bind(&job.id)
         .execute(&pool)
         .await

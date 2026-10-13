@@ -179,8 +179,12 @@ pub fn write_drain_request(
 
     fs::write(&tmp_path, payload)
         .map_err(|e| OmonError::Config(format!("failed to write drain request temp file: {e}")))?;
-    fs::rename(&tmp_path, &path)
-        .map_err(|e| OmonError::Config(format!("failed to commit drain request marker: {e}")))?;
+    if let Err(error) = fs::rename(&tmp_path, &path) {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(OmonError::Config(format!(
+            "failed to commit drain request marker: {error}"
+        )));
+    }
 
     Ok(req)
 }
@@ -188,13 +192,13 @@ pub fn write_drain_request(
 /// Removes the `.drain_request.json` marker file (cancel drain). Returns true if one was present.
 pub fn clear_drain_request(dir: &Path) -> Result<bool> {
     let path = drain_request_path(dir);
-    if path.exists() {
-        fs::remove_file(&path).map_err(|e| {
-            OmonError::Config(format!("failed to remove drain request marker: {e}"))
-        })?;
-        Ok(true)
-    } else {
-        Ok(false)
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(true),
+        // Already gone (never written, or removed by another process).
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(OmonError::Config(format!(
+            "failed to remove drain request marker: {error}"
+        ))),
     }
 }
 
@@ -209,11 +213,10 @@ fn check_drain_requested_at(
     now: DateTime<Utc>,
 ) -> Option<DrainRequest> {
     let path = drain_request_path(dir);
-    if !path.exists() {
-        return None;
-    }
     match fs::read_to_string(&path) {
         Ok(content) => validate_marker_at(&content, current_epoch, now),
+        // Absent, including a marker removed by a cancel between two filesystem calls.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             // The marker exists but cannot be read (permissions, transient IO,
             // wrong file type). Absent means "not draining"; unreadable must
@@ -305,6 +308,12 @@ impl DrainWatcher {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn missing_marker_reads_as_not_draining() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(super::check_drain_requested_at(dir.path(), "", chrono::Utc::now()).is_none());
+    }
+
     use super::*;
 
     #[test]
@@ -707,5 +716,31 @@ mod tests {
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn failed_marker_commit_leaves_no_temp_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        // A directory at the marker path makes the final rename fail.
+        fs::create_dir(drain_request_path(dir)).unwrap();
+
+        assert!(write_drain_request(dir, Some("op"), false).is_err());
+
+        let leftovers: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
+    }
+
+    #[test]
+    fn clearing_an_absent_marker_is_not_an_error() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(!clear_drain_request(temp.path()).unwrap());
+        write_drain_request(temp.path(), None, false).unwrap();
+        assert!(clear_drain_request(temp.path()).unwrap());
+        assert!(!clear_drain_request(temp.path()).unwrap());
     }
 }

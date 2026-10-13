@@ -403,7 +403,10 @@ impl DiscordApprovalRequester {
             }
         }
         drop(terminal);
-        if let Err(error) = delivery.await {
+        // The expiry edit is cosmetic and the task finishes on its own once
+        // `terminal` is dropped; bound how long the decision waits for it so a
+        // slow Discord API cannot delay an already-made decision by 10s.
+        if let Ok(Err(error)) = tokio::time::timeout(Duration::from_secs(2), delivery).await {
             tracing::warn!(%error, "approval delivery task failed");
         }
         result
@@ -707,6 +710,52 @@ mod tests {
             self.0.send(action).unwrap();
             Ok(())
         }
+    }
+
+    struct HangingExpiryDispatcher(tokio::sync::mpsc::UnboundedSender<OutboundAction>);
+
+    #[async_trait]
+    impl OutboundDispatcher for HangingExpiryDispatcher {
+        async fn dispatch(&self, action: OutboundAction) -> crate::Result<()> {
+            if matches!(action, OutboundAction::ExpireApproval { .. }) {
+                std::future::pending::<()>().await;
+            }
+            self.0.send(action).unwrap();
+            Ok(())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn decision_is_not_delayed_by_a_hanging_expiry_edit() {
+        let guard = SmartApprovalGuard::new();
+        let requester = DiscordApprovalRequester::new(guard.clone(), Duration::from_secs(60));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        requester
+            .set_dispatcher(Arc::new(HangingExpiryDispatcher(tx)))
+            .await;
+        let session = SessionKey::new("discord", None::<String>, "42", None::<String>, "7");
+        let request = tokio::spawn({
+            let requester = requester.clone();
+            async move {
+                requester
+                    .request_approval(&session, "rm -rf fixture", "test")
+                    .await
+            }
+        });
+        let Some(OutboundAction::ApprovalRequest { request_id, .. }) = rx.recv().await else {
+            panic!("approval request expected");
+        };
+        assert!(
+            guard
+                .resolve_custom_id(&format!("omon:approval:{request_id}:once"))
+                .await
+        );
+        // The expiry dispatch hangs for its full 10s timeout; the decision must come back sooner.
+        let decision = tokio::time::timeout(Duration::from_secs(5), request)
+            .await
+            .expect("decision must not wait for the expiry edit")
+            .unwrap();
+        assert_eq!(decision, Ok(ApprovalDecision::Once));
     }
 
     #[tokio::test]

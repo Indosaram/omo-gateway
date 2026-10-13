@@ -116,7 +116,12 @@ impl McpClientTool {
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
+        // Own process group so wrapper launchers (npx, uv run, sh -c) and their
+        // children are killed together with the server.
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command.spawn().map_err(mcp_error)?;
+        let group_id = child.id();
         let mut stdin = child
             .stdin
             .take()
@@ -145,14 +150,25 @@ impl McpClientTool {
         });
 
         let read = read_stdio_response(stdout);
+        // A timeout must not return early: the child is killed on every exit path.
         let result = tokio::time::timeout(self.timeout, read)
             .await
-            .map_err(|_| mcp_error("MCP stdio request timed out"))?;
+            .unwrap_or_else(|_| Err(mcp_error("MCP stdio request timed out")));
 
         // Each request owns a fresh stdio server process. Terminate anything
         // that remains after the response so helpers/servers cannot accumulate.
+        // A grandchild may still hold the stderr pipe open, so the drain task is
+        // aborted rather than awaited (awaiting could hang while holding stdio_lock).
+        #[cfg(unix)]
+        if let Some(pgid) = group_id {
+            // SAFETY: killpg only sends a signal; the group was created above.
+            unsafe {
+                libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+            }
+        }
+        let _ = group_id;
         let _ = child.kill().await;
-        let _ = stderr_task.await;
+        stderr_task.abort();
         result
     }
 

@@ -23,6 +23,9 @@ pub const DEFAULT_LEAD: &str =
 const SPACING: TimeDelta = TimeDelta::minutes(30);
 const KST: TimeDelta = TimeDelta::hours(9);
 const TURN_TIMEOUT: Duration = Duration::from_secs(60);
+// The judge truncates its input to 4000 chars (judge::scrub_for_external).
+const DOC_CAP: usize = 4000;
+const DM_BUDGET: usize = 1600;
 // SQL triggers can arm from another process, which cannot signal our Notify.
 // This is a local durable-state check, never an idle judge/model invocation.
 const ARM_SCAN_INTERVAL: Duration = Duration::from_secs(5);
@@ -53,7 +56,16 @@ pub struct Decision {
 }
 
 pub fn parse_decision(raw: &str) -> std::result::Result<Decision, serde_json::Error> {
-    serde_json::from_str(raw.trim())
+    serde_json::from_str(strip_code_fence(raw.trim()))
+}
+
+/// A model often wraps its JSON in a Markdown fence; only a whole-reply fence is removed.
+fn strip_code_fence(text: &str) -> &str {
+    let Some(inner) = text.strip_prefix("```").and_then(|t| t.strip_suffix("```")) else {
+        return text;
+    };
+    let inner = inner.strip_prefix("json").unwrap_or(inner);
+    inner.trim()
 }
 
 /// Task-local sink: completed stream snapshots only, never a Discord transport.
@@ -242,7 +254,15 @@ impl Kibitzer {
             return Ok(false);
         }
         tracing::info!(lead = %self.lead.storage_key(), admitted_ms = now.timestamp_millis(), "kibitzer armed generation admitted");
-        let state = self.state_document().await?;
+        // The generation is already consumed: a failure here must re-arm it.
+        let state = match self.state_document().await {
+            Ok(state) => state,
+            Err(error) => {
+                tracing::warn!(%error, "kibitzer state unavailable");
+                self.restore_admitted(now).await?;
+                return Ok(false);
+            }
+        };
         let score = match self
             .judge
             .noul(
@@ -255,6 +275,7 @@ impl Kibitzer {
             Ok(score) => score,
             Err(error) => {
                 tracing::warn!(%error, "kibitzer judge failed");
+                self.restore_admitted(now).await?;
                 return Ok(false);
             }
         };
@@ -291,6 +312,7 @@ impl Kibitzer {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 tracing::warn!(%error, "kibitzer turn failed");
+                self.restore_admitted(now).await?;
                 return Ok(false);
             }
             Err(_) => {
@@ -299,13 +321,17 @@ impl Kibitzer {
                     tracing::warn!(%error, "kibitzer cancellation failed");
                 }
                 tracing::warn!("kibitzer turn timed out");
+                self.restore_admitted(now).await?;
                 return Ok(false);
             }
         }
-        let decision = match parse_decision(&self.capture.text.lock()) {
+        // Bind first so the capture lock is released before any await below.
+        let parsed = parse_decision(&self.capture.text.lock());
+        let decision = match parsed {
             Ok(decision) => decision,
             Err(_) => {
                 tracing::warn!("kibitzer reply is not strict decision JSON");
+                self.restore_admitted(now).await?;
                 return Ok(false);
             }
         };
@@ -337,6 +363,16 @@ impl Kibitzer {
         Ok(inserted.rows_affected() == 1)
     }
 
+    /// Re-arms a generation whose evaluation failed (not a decision); SPACING still applies.
+    async fn restore_admitted(&self, admitted: DateTime<Utc>) -> Result<()> {
+        sqlx::query("UPDATE kibitzer_state SET consumed = consumed - 1 WHERE lead = ? AND admitted_ms = ? AND consumed = generation")
+            .bind(self.lead.storage_key())
+            .bind(admitted.timestamp_millis())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn state_document(&self) -> Result<String> {
         let lead = self.lead.storage_key();
         let lanes: Vec<(String, String, Option<String>)> = sqlx::query_as("SELECT key, status, last_report FROM lanes WHERE lead_session_key = ? AND status IN ('queued','working','blocked','done_claimed','not_done','verified_done') ORDER BY created_at, key")
@@ -362,22 +398,33 @@ impl Kibitzer {
             other.push_str(&memory.content);
             other.push('\n');
         }
-        let suffix = "Home DM messages:\n";
-        let base: String = other.chars().take(6000 - suffix.chars().count()).collect();
-        let budget = 6000 - base.chars().count() - suffix.chars().count();
+        // The judge input is capped at DOC_CAP chars from the front, so the owner's
+        // recent DMs come first and the lanes/events/memories take the remainder.
+        let header = "Home DM messages:\n";
+        let dm_budget = DM_BUDGET - header.chars().count();
         let mut entries: Vec<String> = messages
             .into_iter()
-            .map(|(role, content)| format!("{role}: {content}\n"))
+            .map(|(role, content)| {
+                format!("{role}: {content}\n")
+                    .chars()
+                    .take(dm_budget)
+                    .collect()
+            })
             .collect();
         while entries
             .iter()
-            .map(|entry| entry.chars().count())
+            .map(|entry: &String| entry.chars().count())
             .sum::<usize>()
-            > budget
+            > dm_budget
         {
             entries.remove(0);
         }
-        Ok(format!("{base}{suffix}{}", entries.concat()))
+        let dm = format!("{header}{}", entries.concat());
+        let rest: String = other
+            .chars()
+            .take(DOC_CAP.saturating_sub(dm.chars().count()))
+            .collect();
+        Ok(format!("{dm}{rest}"))
     }
 
     pub async fn serve(&self, hint: Arc<Notify>, shutdown: CancellationToken) -> Result<()> {
@@ -391,8 +438,15 @@ impl Kibitzer {
             }
             // notify_one retains a permit between the durable scan and this wait.
             // Bound the wait as external SQLite writers have no in-process hint.
-            self.evaluate().await?;
-            match self.next_due().await? {
+            // A transient DB error must not take the whole lane service down.
+            if let Err(error) = self.evaluate().await {
+                tracing::warn!(%error, "kibitzer evaluation failed; will retry");
+            }
+            let due = self.next_due().await.unwrap_or_else(|error| {
+                tracing::warn!(%error, "kibitzer due check failed; will retry");
+                None
+            });
+            match due {
                 Some(due) => {
                     let delay = (due - self.clock.now())
                         .to_std()
@@ -425,6 +479,16 @@ fn day_start(now: DateTime<Utc>) -> DateTime<Utc> {
 /// Call only for a genuinely new, identity-qualified owner/User insert, inside
 /// its transcript transaction; after commit call runner::wake, even if indexing fails.
 pub async fn arm_owner(tx: &mut Transaction<'_, Sqlite>, lead: &SessionKey) -> Result<()> {
+    // The table exists only after `initialize`, which a disabled kibitzer skips; an
+    // owner's transcript transaction must not fail because of it.
+    let present: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kibitzer_state')",
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    if !present {
+        return Ok(());
+    }
     sqlx::query("UPDATE kibitzer_state SET generation = generation + 1 WHERE lead = ?")
         .bind(lead.storage_key())
         .execute(&mut **tx)
@@ -494,6 +558,27 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn arm_owner_is_a_no_op_before_the_state_table_exists() {
+        let db = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let mut tx = db.pool().begin().await.unwrap();
+        arm_owner(
+            &mut tx,
+            &SessionKey::from_storage_key(DEFAULT_LEAD).unwrap(),
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+
+    #[test]
+    fn decision_json_in_a_whole_reply_fence_is_accepted() {
+        let raw = "```json\n{\"wake\":true,\"reason\":\"r\",\"suggested\":\"s\",\"target_lane\":null}\n```";
+        assert!(parse_decision(raw).unwrap().wake);
+        assert!(parse_decision("```json\n{} trailing\n```").is_err());
+        assert!(parse_decision("prose ```{}```").is_err());
+    }
+
     struct NoTurn;
 
     #[async_trait]
@@ -548,6 +633,102 @@ mod tests {
                 .unwrap();
         assert_eq!((generation, consumed), (1, 1));
         assert_eq!(gate.calls.load(Ordering::SeqCst), 1);
+    }
+
+    struct FailingJudge;
+
+    #[async_trait]
+    impl Judge for FailingJudge {
+        async fn noul(&self, _: Purpose, _: &str, _: &str) -> std::result::Result<f64, JudgeError> {
+            Err(JudgeError::Timeout { timeout_secs: 1 })
+        }
+
+        async fn choice(
+            &self,
+            _: Purpose,
+            _: &str,
+            _: &str,
+            _: &[&str],
+        ) -> std::result::Result<Choice, JudgeError> {
+            panic!("unexpected choice")
+        }
+
+        async fn diff(
+            &self,
+            _: Purpose,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+        ) -> std::result::Result<DiffVerdict, JudgeError> {
+            panic!("unexpected diff")
+        }
+    }
+
+    #[tokio::test]
+    async fn state_document_keeps_owner_dms_inside_the_judge_cap() {
+        let scratch = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", scratch.path().join("qa.db").display());
+        let db = crate::Database::connect(&url).await.unwrap();
+        let worker = Kibitzer::new(
+            db.pool().clone(),
+            SessionKey::from_storage_key(DEFAULT_LEAD).unwrap(),
+            Arc::new(FailingJudge),
+            Arc::new(NoTurn),
+            Arc::new(Capture::default()),
+            Arc::new(AdvancingClock(AtomicUsize::new(0))),
+            true,
+        )
+        .unwrap();
+        worker.initialize().await.unwrap();
+        for index in 0..10 {
+            sqlx::query("INSERT INTO lane_events(lead_session_key,kind,body,created_at) VALUES (?, 'question', ?, CURRENT_TIMESTAMP)")
+                .bind(DEFAULT_LEAD)
+                .bind(format!("{index}{}", "x".repeat(1900)))
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        sqlx::query("INSERT INTO sessions(session_key, platform, channel_id, user_id) VALUES (?, 'discord', 'c', 'u')")
+            .bind(DEFAULT_LEAD)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO messages(id, session_key, role, content) VALUES ('m1', ?, 'user', 'OWNER_DM_MARKER please call me')")
+            .bind(DEFAULT_LEAD)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let document = worker.state_document().await.unwrap();
+        assert!(document.chars().count() <= 4000);
+        let capped = crate::judge::scrub_for_external(&document);
+        assert!(capped.contains("OWNER_DM_MARKER"));
+    }
+
+    #[tokio::test]
+    async fn judge_failure_keeps_generation_armed() {
+        let scratch = tempfile::tempdir().unwrap();
+        let url = format!("sqlite://{}", scratch.path().join("qa.db").display());
+        let db = crate::Database::connect(&url).await.unwrap();
+        let worker = Kibitzer::new(
+            db.pool().clone(),
+            SessionKey::from_storage_key(DEFAULT_LEAD).unwrap(),
+            Arc::new(FailingJudge),
+            Arc::new(NoTurn),
+            Arc::new(Capture::default()),
+            Arc::new(AdvancingClock(AtomicUsize::new(0))),
+            true,
+        )
+        .unwrap();
+        worker.initialize().await.unwrap();
+        sqlx::query("INSERT INTO inbox_items(id,source,source_ref,snippet,received_at,raw_hash,collected_at) VALUES ('armed','mail','armed','due',CURRENT_TIMESTAMP,'hash',CURRENT_TIMESTAMP)")
+            .execute(db.pool()).await.unwrap();
+        assert!(!worker.evaluate().await.unwrap());
+        let (generation, consumed): (i64, i64) =
+            sqlx::query_as("SELECT generation, consumed FROM kibitzer_state")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!((generation, consumed), (1, 0));
     }
 
     #[tokio::test]

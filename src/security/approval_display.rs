@@ -9,7 +9,7 @@ static CREDENTIAL_PATTERNS: LazyLock<
 > = LazyLock::new(|| {
     [
             (
-                r#"(?i)(authorization\s*:\s*(?:(?:bearer|basic)\s+)?)[^\s"']+"#,
+                r#"(?i)(authorization["']?\s*:\s*)(?:[^\s"']+\s+)?(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s"']+)"#,
                 "${1}[REDACTED]",
             ),
             (

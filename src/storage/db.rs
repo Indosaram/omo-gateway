@@ -177,11 +177,15 @@ impl Database {
         // collide at SQLite and fail with SQLITE_BUSY. It also keeps a plain
         // `sqlite::memory:` database coherent because each connection would
         // otherwise receive a private database.
-        let pool = SqlitePoolOptions::new()
+        let mut pool_options = SqlitePoolOptions::new()
             .min_connections(1)
-            .max_connections(1)
-            .connect_with(options)
-            .await?;
+            .max_connections(1);
+        if in_memory {
+            // Recycling the only connection of an in-memory database (sqlx's default
+            // max_lifetime/idle_timeout) would replace it with a new, empty database.
+            pool_options = pool_options.max_lifetime(None).idle_timeout(None);
+        }
+        let pool = pool_options.connect_with(options).await?;
 
         MIGRATOR.run(&pool).await?;
         if let Err(error) = upgrade_legacy_guild_session_keys(&pool).await {
@@ -380,25 +384,19 @@ pub async fn mark_session_suspended(
     session_key: &str,
     suspended: bool,
 ) -> Result<()> {
-    let row: Option<(String,)> =
-        sqlx::query_as("SELECT state_json FROM sessions WHERE session_key = ?")
-            .bind(session_key)
-            .fetch_optional(pool)
-            .await?;
-    if let Some((state_json,)) = row {
-        let mut state: crate::SessionState = serde_json::from_str(&state_json)
-            .map_err(|error| crate::OmonError::Database(error.to_string()))?;
-        state.suspended = suspended;
-        let new_json = serde_json::to_string(&state)
-            .map_err(|error| crate::OmonError::Database(error.to_string()))?;
-        sqlx::query(
-            "UPDATE sessions SET state_json = ?, updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')) WHERE session_key = ?",
-        )
-        .bind(new_json)
-        .bind(session_key)
-        .execute(pool)
-        .await?;
-    }
+    // Single atomic statement: a read-modify-write of the whole state document
+    // would lose a concurrent writer's changes (flush, set_model). Malformed
+    // state_json makes json_set error out, so a corrupt row is never overwritten.
+    sqlx::query(
+        "UPDATE sessions
+         SET state_json = json_set(COALESCE(NULLIF(state_json, ''), '{}'), '$.suspended', json(?)),
+             updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+         WHERE session_key = ?",
+    )
+    .bind(if suspended { "true" } else { "false" })
+    .bind(session_key)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -410,8 +408,17 @@ pub async fn is_session_suspended(pool: &SqlitePool, session_key: &str) -> Resul
             .fetch_optional(pool)
             .await?;
     if let Some((state_json,)) = row {
-        let state: crate::SessionState = serde_json::from_str(&state_json).unwrap_or_default();
-        return Ok(state.suspended);
+        // Fail closed: an operator-suspended session whose state is unreadable must
+        // not be resumed on restart.
+        return Ok(
+            match serde_json::from_str::<crate::SessionState>(&state_json) {
+                Ok(state) => state.suspended,
+                Err(error) => {
+                    tracing::warn!(session_key, %error, "unreadable session state; treating session as suspended");
+                    true
+                }
+            },
+        );
     }
     Ok(false)
 }
@@ -424,23 +431,12 @@ pub async fn count_resume_pending_sessions(pool: &SqlitePool) -> Result<i64> {
     Ok(count)
 }
 
-#[derive(sqlx::FromRow)]
-struct ResumePendingSessionRow {
-    #[allow(dead_code)]
-    session_key: String,
-    platform: String,
-    guild_id: Option<String>,
-    channel_id: String,
-    thread_id: Option<String>,
-    user_id: String,
-}
-
 /// Queries all session keys that currently have resume_pending = 1.
 pub async fn fetch_resume_pending_session_keys(
     pool: &SqlitePool,
 ) -> Result<Vec<crate::SessionKey>> {
-    let rows: Vec<ResumePendingSessionRow> = sqlx::query_as(
-        "SELECT session_key, platform, guild_id, channel_id, thread_id, user_id
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT session_key
          FROM sessions WHERE resume_pending = 1 AND NOT EXISTS (
              SELECT 1 FROM legacy_guild_session_conflicts c
              WHERE c.raw_key = sessions.session_key OR c.canonical_key = sessions.session_key
@@ -449,19 +445,24 @@ pub async fn fetch_resume_pending_session_keys(
     .fetch_all(pool)
     .await?;
 
+    // A key that does not parse cannot be re-encoded to the stored row's key, so
+    // every later SQL step (suspended check, clear marker, transcript lookup) would
+    // act on a nonexistent key. Skip it loudly instead of fabricating a different one.
     Ok(rows
         .into_iter()
-        .map(|row| {
-            crate::SessionKey::from_storage_key(&row.session_key).unwrap_or_else(|_| {
-                crate::SessionKey::new(
-                    row.platform,
-                    row.guild_id,
-                    row.channel_id,
-                    row.thread_id,
-                    row.user_id,
-                )
-            })
-        })
+        .filter_map(
+            |raw_key| match crate::SessionKey::from_storage_key(&raw_key) {
+                Ok(key) => Some(key),
+                Err(error) => {
+                    tracing::warn!(
+                        %raw_key,
+                        %error,
+                        "skipping resume_pending session with noncanonical key"
+                    );
+                    None
+                }
+            },
+        )
         .collect())
 }
 
@@ -485,6 +486,7 @@ struct LastMessageRow {
 }
 
 /// Finds the last unfinished user turn for a session if the most recent transcript row is a user message.
+/// Out-of-band mirror rows (cron/system deliveries) are not part of the conversation and are skipped.
 pub async fn find_last_unfinished_user_turn(
     pool: &SqlitePool,
     session_key: &str,
@@ -493,6 +495,9 @@ pub async fn find_last_unfinished_user_turn(
         "SELECT id, role, content, metadata_json, created_at, platform_message_id
          FROM messages
          WHERE session_key = ?
+           AND NOT (CASE WHEN json_valid(metadata_json)
+                    THEN COALESCE(json_extract(metadata_json, '$.mirror'), 0) = 1
+                    ELSE 0 END)
          ORDER BY sequence DESC
          LIMIT 1",
     )
@@ -670,8 +675,13 @@ pub async fn list_pending_writes_scoped(
 ) -> Result<Vec<PendingWrite>> {
     let mut matching = Vec::new();
     for item in list_pending_writes(pool, Some(scope.kind())).await? {
-        if scope.permits(&item)? {
-            matching.push(item);
+        // One malformed payload must not hide every other pending write from review.
+        match scope.permits(&item) {
+            Ok(true) => matching.push(item),
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!(id = %item.id, %error, "skipping unreadable pending write")
+            }
         }
     }
     Ok(matching)
@@ -1717,11 +1727,17 @@ mod tests {
             .expect("database should initialize");
         let pool = database.pool();
 
+        let key_1 = crate::SessionKey::new("discord", None::<String>, "c1", None::<String>, "u1")
+            .storage_key();
+        let key_2 = crate::SessionKey::new("discord", None::<String>, "c2", None::<String>, "u2")
+            .storage_key();
         sqlx::query(
             "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json)
-             VALUES ('sess-1', 'discord', 'c1', 'u1', '{}'),
-                    ('sess-2', 'discord', 'c2', 'u2', '{}')",
+             VALUES (?, 'discord', 'c1', 'u1', '{}'),
+                    (?, 'discord', 'c2', 'u2', '{}')",
         )
+        .bind(&key_1)
+        .bind(&key_2)
         .execute(pool)
         .await
         .unwrap();
@@ -1734,7 +1750,7 @@ mod tests {
         assert_eq!(super::count_resume_pending_sessions(pool).await.unwrap(), 0);
 
         // Mark sess-1 as resume_pending
-        super::mark_session_resume_pending(pool, "sess-1")
+        super::mark_session_resume_pending(pool, &key_1)
             .await
             .unwrap();
         let pending = super::fetch_resume_pending_session_keys(pool)
@@ -1745,11 +1761,11 @@ mod tests {
         assert_eq!(super::count_resume_pending_sessions(pool).await.unwrap(), 1);
 
         // Clear sess-1
-        let cleared = super::clear_session_resume_pending(pool, "sess-1")
+        let cleared = super::clear_session_resume_pending(pool, &key_1)
             .await
             .unwrap();
         assert!(cleared);
-        let cleared_again = super::clear_session_resume_pending(pool, "sess-1")
+        let cleared_again = super::clear_session_resume_pending(pool, &key_1)
             .await
             .unwrap();
         assert!(!cleared_again); // already cleared
@@ -1806,6 +1822,144 @@ mod tests {
             .await
             .unwrap();
         assert!(turn.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_last_unfinished_user_turn_skips_mirror_rows() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("database should initialize");
+        let pool = database.pool();
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json)
+             VALUES ('sess-mirror', 'discord', 'c1', 'u1', '{}')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, session_key, role, content, metadata_json)
+             VALUES ('msg-user', 'sess-mirror', 'user', 'real question', '[]'),
+                    ('msg-mirror-a', 'sess-mirror', 'assistant', 'cron output', '{\"mirror\":true,\"mirror_source\":\"cron:x\"}'),
+                    ('msg-mirror-u', 'sess-mirror', 'user', 'system alert', '{\"mirror\":true,\"mirror_source\":\"system\"}'),
+                    ('msg-bad-meta', 'sess-mirror', 'assistant', 'done', 'not json')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        // The trailing non-JSON-metadata assistant row is a genuine reply: turn finished.
+        assert!(super::find_last_unfinished_user_turn(pool, "sess-mirror")
+            .await
+            .unwrap()
+            .is_none());
+        sqlx::query("DELETE FROM messages WHERE id = 'msg-bad-meta'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        let turn = super::find_last_unfinished_user_turn(pool, "sess-mirror")
+            .await
+            .unwrap()
+            .expect("mirror rows must not mask or impersonate the user turn");
+        assert_eq!(turn.message_id, "msg-user");
+        assert_eq!(turn.content, "real question");
+    }
+
+    #[tokio::test]
+    async fn is_session_suspended_fails_closed_on_malformed_state() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("database should initialize");
+        let pool = database.pool();
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json)
+             VALUES ('corrupt-state', 'discord', 'c1', 'u1', 'INVALID_JSON_CORRUPT'),
+                    ('ok-state', 'discord', 'c2', 'u2', '{}')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        assert!(super::is_session_suspended(pool, "corrupt-state")
+            .await
+            .unwrap());
+        assert!(!super::is_session_suspended(pool, "ok-state").await.unwrap());
+        assert!(!super::is_session_suspended(pool, "missing").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn mark_session_suspended_preserves_other_state_fields() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("database should initialize");
+        let pool = database.pool();
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json)
+             VALUES ('sess-state', 'discord', 'c1', 'u1',
+                     '{\"active_model\":\"m1\",\"yolo\":true,\"metadata\":{\"k\":1}}')",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        super::mark_session_suspended(pool, "sess-state", true)
+            .await
+            .unwrap();
+        assert!(super::is_session_suspended(pool, "sess-state")
+            .await
+            .unwrap());
+        let raw: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = 'sess-state'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        let state: crate::SessionState = serde_json::from_str(&raw).unwrap();
+        assert_eq!(state.active_model.as_deref(), Some("m1"));
+        assert!(state.yolo);
+        assert_eq!(state.metadata.get("k"), Some(&serde_json::json!(1)));
+
+        super::mark_session_suspended(pool, "sess-state", false)
+            .await
+            .unwrap();
+        assert!(!super::is_session_suspended(pool, "sess-state")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn fetch_resume_pending_skips_unparsable_keys() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("database should initialize");
+        let pool = database.pool();
+        let good = crate::SessionKey::new("discord", None::<String>, "c1", None::<String>, "u1")
+            .storage_key();
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json, resume_pending)
+             VALUES ('legacy-noncanonical', 'discord', 'c9', 'u9', '{}', 1),
+                    (?, 'discord', 'c1', 'u1', '{}', 1)",
+        )
+        .bind(&good)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let keys = super::fetch_resume_pending_session_keys(pool)
+            .await
+            .unwrap();
+        assert_eq!(keys.len(), 1, "unparsable key must not be re-encoded");
+        assert_eq!(keys[0].storage_key(), good);
+    }
+
+    #[tokio::test]
+    async fn in_memory_pool_never_recycles_its_only_connection() {
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("database should initialize");
+        let options = database.pool().options();
+        assert_eq!(options.get_max_lifetime(), None);
+        assert_eq!(options.get_idle_timeout(), None);
     }
 
     #[tokio::test]

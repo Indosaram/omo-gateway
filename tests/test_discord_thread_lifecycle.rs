@@ -6,8 +6,11 @@ use omon_gateway::{
 };
 use poise::serenity_prelude as serenity;
 use serenity::all::{GuildChannel, PartialGuildChannel};
-use sqlx::{Row, SqlitePool};
+use sqlx::SqlitePool;
 use std::sync::Arc;
+
+const BOT_ID: u64 = 999;
+const GUILD_ID: &str = "111";
 
 struct NoopRunner;
 
@@ -23,162 +26,129 @@ impl AgentRunner for NoopRunner {
 }
 
 async fn setup_test_db() -> SqlitePool {
-    let pool = omon_gateway::storage::init_pool("sqlite::memory:")
+    omon_gateway::storage::init_pool("sqlite::memory:")
         .await
-        .expect("in-memory db init");
-
-    let _ = sqlx::query("ALTER TABLE sessions ADD COLUMN metadata TEXT DEFAULT '{}'")
-        .execute(&pool)
-        .await;
-
-    pool
+        .expect("in-memory db init")
 }
 
-fn make_session_key(thread_id: &str) -> SessionKey {
-    SessionKey::new("discord", None::<String>, thread_id, None::<String>, "")
+fn thread_key(thread_id: &str, parent_id: Option<&str>) -> SessionKey {
+    SessionKey::new(
+        "discord",
+        Some(GUILD_ID),
+        parent_id.unwrap_or(thread_id),
+        Some(thread_id),
+        "",
+    )
+    .with_bot_id(BOT_ID.to_string())
+}
+
+async fn insert_session(pool: &SqlitePool, key: &SessionKey, state_json: &str) {
+    sqlx::query(
+        "INSERT INTO sessions (session_key, platform, guild_id, channel_id, thread_id, user_id, state_json)
+         VALUES (?, 'discord', ?, ?, ?, '', ?)",
+    )
+    .bind(key.storage_key())
+    .bind(&key.guild_id)
+    .bind(&key.channel_id)
+    .bind(&key.thread_id)
+    .bind(state_json)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn session_state(pool: &SqlitePool, key: &SessionKey) -> serde_json::Value {
+    let state: String = sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+        .bind(key.storage_key())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    serde_json::from_str(&state).unwrap()
+}
+
+fn thread_channel(thread_id: &str, archived: bool) -> GuildChannel {
+    serde_json::from_value(serde_json::json!({
+        "id": thread_id,
+        "name": "test-thread",
+        "type": 11,
+        "guild_id": GUILD_ID,
+        "position": 0,
+        "permission_overwrites": [],
+        "thread_metadata": {
+            "archived": archived,
+            "auto_archive_duration": 60,
+            "archive_timestamp": "2026-10-07T00:00:00Z",
+            "locked": false
+        }
+    }))
+    .unwrap()
+}
+
+fn test_data(pool: &SqlitePool) -> PoiseData {
+    let multiplexer = SessionMultiplexer::new(
+        pool.clone(),
+        Arc::new(NoopRunner),
+        MultiplexerConfig::default(),
+    );
+    PoiseData::new(multiplexer, pool.clone())
 }
 
 #[tokio::test]
 async fn test_thread_archive_updates_metadata_and_stops_multiplexer() {
     let pool = setup_test_db().await;
-    let runner = Arc::new(NoopRunner);
-    let multiplexer = SessionMultiplexer::new(pool.clone(), runner, MultiplexerConfig::default());
-    let data = PoiseData::new(multiplexer.clone(), pool.clone());
+    let data = test_data(&pool);
+    let key = thread_key("1234567890", None);
+    insert_session(&pool, &key, r#"{"metadata":{"thread_archived":false}}"#).await;
 
-    let thread_id = "1234567890";
-    let session_key = make_session_key(thread_id);
+    handle_thread_update(&data, &thread_channel("1234567890", true), BOT_ID).await;
 
-    sqlx::query(
-        "INSERT INTO sessions (session_key, platform, channel_id, user_id, metadata, state_json)
-         VALUES (?, 'discord', ?, '', '{\"thread_archived\": false}', '{}')",
-    )
-    .bind(session_key.storage_key())
-    .bind(thread_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let thread_channel: GuildChannel = serde_json::from_value(serde_json::json!({
-        "id": thread_id,
-        "name": "test-thread",
-        "type": 11,
-        "guild_id": "111",
-        "position": 0,
-        "permission_overwrites": [],
-        "thread_metadata": {
-            "archived": true,
-            "auto_archive_duration": 60,
-            "archive_timestamp": "2026-10-07T00:00:00Z",
-            "locked": false
-        }
-    }))
-    .unwrap();
-
-    handle_thread_update(&data, &thread_channel).await;
-
-    let row = sqlx::query("SELECT metadata FROM sessions WHERE session_key = ?")
-        .bind(session_key.storage_key())
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-    let metadata_str: String = row.get("metadata");
-    let metadata_val: serde_json::Value = serde_json::from_str(&metadata_str).unwrap();
-    // SQLite json_set stores booleans as 1/0 or booleans depending on JSON representation.
-    assert!(metadata_val["thread_archived"] == true || metadata_val["thread_archived"] == 1);
+    let state = session_state(&pool, &key).await;
+    assert_eq!(
+        state["metadata"]["thread_archived"],
+        serde_json::json!(true)
+    );
 }
 
 #[tokio::test]
 async fn test_thread_unarchive_updates_metadata() {
     let pool = setup_test_db().await;
-    let runner = Arc::new(NoopRunner);
-    let multiplexer = SessionMultiplexer::new(pool.clone(), runner, MultiplexerConfig::default());
-    let data = PoiseData::new(multiplexer.clone(), pool.clone());
+    let data = test_data(&pool);
+    let key = thread_key("2345678901", None);
+    insert_session(&pool, &key, r#"{"metadata":{"thread_archived":true}}"#).await;
 
-    let thread_id = "2345678901";
-    let session_key = make_session_key(thread_id);
+    handle_thread_update(&data, &thread_channel("2345678901", false), BOT_ID).await;
 
-    sqlx::query(
-        "INSERT INTO sessions (session_key, platform, channel_id, user_id, metadata, state_json)
-         VALUES (?, 'discord', ?, '', '{\"thread_archived\": true}', '{}')",
-    )
-    .bind(session_key.storage_key())
-    .bind(thread_id)
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let thread_channel: GuildChannel = serde_json::from_value(serde_json::json!({
-        "id": thread_id,
-        "name": "test-thread",
-        "type": 11,
-        "guild_id": "111",
-        "position": 0,
-        "permission_overwrites": [],
-        "thread_metadata": {
-            "archived": false,
-            "auto_archive_duration": 60,
-            "archive_timestamp": "2026-10-07T00:00:00Z",
-            "locked": false
-        }
-    }))
-    .unwrap();
-
-    handle_thread_update(&data, &thread_channel).await;
-
-    let row = sqlx::query("SELECT metadata FROM sessions WHERE session_key = ?")
-        .bind(session_key.storage_key())
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-    let metadata_str: String = row.get("metadata");
-    let metadata_val: serde_json::Value = serde_json::from_str(&metadata_str).unwrap();
-    assert!(metadata_val["thread_archived"] == false || metadata_val["thread_archived"] == 0);
+    let state = session_state(&pool, &key).await;
+    assert_eq!(
+        state["metadata"]["thread_archived"],
+        serde_json::json!(false)
+    );
 }
 
 #[tokio::test]
 async fn test_thread_delete_cleans_up_omo_thread_id_preserving_session() {
     let pool = setup_test_db().await;
-    let runner = Arc::new(NoopRunner);
-    let multiplexer = SessionMultiplexer::new(pool.clone(), runner, MultiplexerConfig::default());
-    let data = PoiseData::new(multiplexer.clone(), pool.clone());
-
-    let thread_id = "3456789012";
-    let session_key = make_session_key(thread_id);
-
-    sqlx::query(
-        "INSERT INTO sessions (session_key, platform, channel_id, user_id, metadata, state_json)
-         VALUES (?, 'discord', ?, '', '{\"omo_thread_id\": \"omo-thread-xyz\", \"custom_keep\": \"keep_val\"}', '{}')",
+    let data = test_data(&pool);
+    let key = thread_key("3456789012", Some("111000"));
+    insert_session(
+        &pool,
+        &key,
+        r#"{"metadata":{"omo_thread_id":"omo-thread-xyz","custom_keep":"keep_val"}}"#,
     )
-    .bind(session_key.storage_key())
-    .bind(thread_id)
-    .execute(&pool)
-    .await
-    .unwrap();
+    .await;
 
     let partial_channel: PartialGuildChannel = serde_json::from_value(serde_json::json!({
-        "id": thread_id,
+        "id": "3456789012",
         "name": "deleted-thread",
         "type": 11,
-        "guild_id": "111",
+        "guild_id": GUILD_ID,
         "parent_id": "111000"
     }))
     .unwrap();
 
-    handle_thread_delete(&data, &partial_channel).await;
+    handle_thread_delete(&data, &partial_channel, BOT_ID).await;
 
-    let row = sqlx::query("SELECT session_key, metadata FROM sessions WHERE session_key = ?")
-        .bind(session_key.storage_key())
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-
-    let stored_key: String = row.get("session_key");
-    assert_eq!(stored_key, session_key.storage_key());
-
-    let metadata_str: String = row.get("metadata");
-    let metadata_val: serde_json::Value = serde_json::from_str(&metadata_str).unwrap();
-    assert!(metadata_val.get("omo_thread_id").is_none());
-    assert_eq!(metadata_val["custom_keep"], "keep_val");
+    let state = session_state(&pool, &key).await;
+    assert!(state["metadata"].get("omo_thread_id").is_none());
+    assert_eq!(state["metadata"]["custom_keep"], "keep_val");
 }

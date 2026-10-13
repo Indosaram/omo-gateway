@@ -85,10 +85,12 @@ impl KakaoSource {
                 || message_id.to_owned(),
                 |new| new.max(message_id.to_owned()),
             ));
-            let text = optional_string(message, &["text", "message", "content", "msg"])
-                .ok_or_else(|| {
-                    OmonError::ToolExecution("PirateTalk message missing text".into())
-                })?;
+            // Attachment-only messages have no text; skip them (paging bounds were
+            // already advanced above) instead of failing the whole room fetch.
+            let Some(text) = optional_string(message, &["text", "message", "content", "msg"])
+            else {
+                continue;
+            };
             // kakao-archive.ts defines `time` as Unix seconds, not sendAt or logId.
             let received = if let Some(time) = message.get("time") {
                 let seconds = time.as_i64().ok_or_else(|| {
@@ -196,12 +198,8 @@ impl KakaoSource {
                 if let Some(top) = page_top {
                     room_newest = room_newest.max(top);
                 }
-                let count = page_items.len();
                 all_items.extend(page_items);
                 let Some(oldest) = page_oldest else { break };
-                if count == 0 {
-                    break;
-                }
                 if oldest >= before && !before.is_empty() {
                     return Err(OmonError::ToolExecution(
                         "PirateTalk paging cursor did not move backwards".into(),

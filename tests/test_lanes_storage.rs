@@ -224,7 +224,7 @@ async fn concurrent_transitions_exactly_one_succeeds_and_history_recorded() {
         "file done.txt",
     );
     lane.status = "working".to_string();
-    insert_lane(&pool, &lane)
+    insert_lane(&*pool, &lane)
         .await
         .expect("insert must succeed");
 

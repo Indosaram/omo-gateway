@@ -17,7 +17,16 @@ pub enum PostState {
     Sending,
     Sent,
     Uncertain,
+    /// Terminal: no send was attempted because the post can never be delivered.
+    Failed,
 }
+
+/// An unacknowledged status receipt blocks replacement only this long.
+const STATUS_UNCERTAIN_BOUND_MINUTES: i64 = 15;
+
+/// Bound on each Discord status call. A held rename (rate limit sleep) or a hung
+/// HTTP request must not stall the single lane service loop.
+const STATUS_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Post {
@@ -190,6 +199,7 @@ async fn drain_inner(
             .filter(|id| *id != 0)
             .is_none()
         {
+            post.state = PostState::Failed;
             post.error = Some("missing or invalid thread destination; no send attempted".into());
             sqlx::query("UPDATE lane_transcript SET text = ? WHERE id = ? AND text = ?")
                 .bind(serde_json::to_string(&post).map_err(json_error)?)
@@ -241,7 +251,10 @@ async fn drain_inner(
                         .bind(id)
                         .fetch_one(pool)
                         .await?;
-                refresh_lane_status(pool, sink, &key, now, true).await?;
+                // One lane's Discord failure must not stop the drain for every lane.
+                if let Err(error) = refresh_lane_status(pool, sink, &key, now, true).await {
+                    tracing::warn!(%key, %error, "lane milestone status refresh failed");
+                }
             }
         }
     }
@@ -286,6 +299,17 @@ pub async fn refresh_lane_status(
     now: DateTime<Utc>,
     milestone: bool,
 ) -> Result<()> {
+    refresh_lane_status_bounded(pool, sink, key, now, milestone, STATUS_CALL_TIMEOUT).await
+}
+
+async fn refresh_lane_status_bounded(
+    pool: &SqlitePool,
+    sink: &dyn PostSink,
+    key: &str,
+    now: DateTime<Utc>,
+    milestone: bool,
+    call_timeout: std::time::Duration,
+) -> Result<()> {
     let Some(lane) = crate::storage::get_lane(pool, key).await? else {
         return Ok(());
     };
@@ -303,14 +327,22 @@ pub async fn refresh_lane_status(
         .map(|text| serde_json::from_str::<StatusReceipt>(&text))
         .transpose()
         .map_err(json_error)?;
-    if prior.as_ref().is_some_and(|receipt| {
-        matches!(
-            receipt.post.state,
-            PostState::Sending | PostState::Uncertain
-        )
-    }) {
-        return Ok(());
-    }
+    // An unacknowledged receipt blocks a blind resend, but only for a bounded
+    // interval; afterwards it is treated as unconfirmed so status flow resumes.
+    let prior = match prior {
+        Some(receipt)
+            if matches!(
+                receipt.post.state,
+                PostState::Sending | PostState::Uncertain
+            ) =>
+        {
+            if now - receipt.at < chrono::Duration::minutes(STATUS_UNCERTAIN_BOUND_MINUTES) {
+                return Ok(());
+            }
+            None
+        }
+        prior => prior,
+    };
     let changed = prior
         .as_ref()
         .is_none_or(|receipt| receipt.status != lane.status);
@@ -335,7 +367,17 @@ pub async fn refresh_lane_status(
         _ => super::discord_threads::ThreadStatus::Working,
     };
     if changed {
-        sink.rename_status(thread, status, &lane.title).await?;
+        // The title marker is cosmetic: a rename Discord is holding is skipped,
+        // and the receipt below still records the status as handled.
+        match tokio::time::timeout(
+            call_timeout,
+            sink.rename_status(thread, status, &lane.title),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(_) => tracing::warn!(%key, "lane status rename held by Discord; skipped"),
+        }
     }
     let elapsed = (now - lane.created_at.unwrap_or(now)).num_minutes().max(0);
     let body: String = scrub(&format!(
@@ -364,9 +406,24 @@ pub async fn refresh_lane_status(
         .map(|id| id.parse::<u64>())
         .transpose()
         .map_err(|error| OmonError::Config(format!("invalid lane status message id: {error}")))?;
+    let mut edit_timed_out = false;
     let edited = if let Some(message) = existing {
-        sink.edit_status(thread, message, &receipt.post.body)
-            .await?
+        match tokio::time::timeout(
+            call_timeout,
+            sink.edit_status(thread, message, &receipt.post.body),
+        )
+        .await
+        {
+            Ok(result) => result?,
+            Err(error) => {
+                // An unacknowledged edit may still land: record it as uncertain
+                // instead of sending a duplicate status message.
+                edit_timed_out = true;
+                receipt.post.state = PostState::Uncertain;
+                receipt.post.error = Some(scrub(&error.to_string()));
+                false
+            }
+        }
     } else {
         false
     };
@@ -383,7 +440,7 @@ pub async fn refresh_lane_status(
     .execute(pool)
     .await?
     .last_insert_rowid();
-    if !edited {
+    if !edited && !edit_timed_out {
         match tokio::time::timeout(std::time::Duration::from_secs(30), sink.send(&receipt.post))
             .await
         {
@@ -416,4 +473,117 @@ pub async fn refresh_lane_status(
         .await?;
     tx.commit().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use super::*;
+
+    /// Rename and edit never complete (a held Discord rate limit); send works.
+    struct HeldSink {
+        sends: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PostSink for HeldSink {
+        async fn send(&self, _: &Post) -> Result<String> {
+            self.sends.fetch_add(1, Ordering::SeqCst);
+            Ok("777".into())
+        }
+
+        async fn edit_status(&self, _: u64, _: u64, _: &str) -> Result<bool> {
+            std::future::pending::<Result<bool>>().await
+        }
+
+        async fn rename_status(
+            &self,
+            _: u64,
+            _: super::super::discord_threads::ThreadStatus,
+            _: &str,
+        ) -> Result<()> {
+            std::future::pending::<Result<()>>().await
+        }
+    }
+
+    async fn lane_fixture(message_id: Option<&str>) -> crate::storage::Database {
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut lane = Lane::new(
+            "held",
+            "Held",
+            "lead",
+            "/tmp",
+            "/tmp/brief",
+            "lane",
+            "file x",
+        );
+        lane.status = "working".into();
+        lane.thread_channel_id = Some("123".into());
+        lane.status_message_id = message_id.map(str::to_owned);
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        db
+    }
+
+    #[tokio::test]
+    async fn held_rename_is_skipped_and_status_still_posts() {
+        let db = lane_fixture(None).await;
+        let sink = HeldSink {
+            sends: AtomicUsize::new(0),
+        };
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            refresh_lane_status_bounded(
+                db.pool(),
+                &sink,
+                "held",
+                Utc::now(),
+                false,
+                Duration::from_millis(50),
+            ),
+        )
+        .await
+        .expect("a held rename must not stall the refresh")
+        .unwrap();
+        assert_eq!(sink.sends.load(Ordering::SeqCst), 1);
+        let stored = crate::storage::get_lane(db.pool(), "held")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status_message_id.as_deref(), Some("777"));
+    }
+
+    #[tokio::test]
+    async fn held_edit_is_recorded_uncertain_without_a_duplicate_send() {
+        let db = lane_fixture(Some("55")).await;
+        let sink = HeldSink {
+            sends: AtomicUsize::new(0),
+        };
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            refresh_lane_status_bounded(
+                db.pool(),
+                &sink,
+                "held",
+                Utc::now(),
+                true,
+                Duration::from_millis(50),
+            ),
+        )
+        .await
+        .expect("a held edit must not stall the refresh")
+        .unwrap();
+        assert_eq!(sink.sends.load(Ordering::SeqCst), 0);
+        let receipt: String = sqlx::query_scalar(
+            "SELECT text FROM lane_transcript WHERE lane_key = 'held' AND role = 'status_receipt'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+        assert_eq!(receipt["post"]["state"], "uncertain");
+    }
 }

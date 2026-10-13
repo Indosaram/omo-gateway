@@ -11,6 +11,9 @@ use crate::lanes::signals::{DoneSignal, SignalResult};
 use crate::{CronJob, CronScheduler, OmonError, Result};
 
 pub const MAX_RERUNS: u64 = 3;
+/// A `remediating` row with no live lane that has not moved for this long is stranded
+/// (the gateway restarted mid-rerun) and is escalated to the owner.
+pub const STALE_REMEDIATING_SECS: i64 = 3600;
 pub const PUBLISHING_JOBS: [&str; 3] = [
     "omon-playstore-daily-publish",
     "omon-vpn-mall-daily-publish-v2",
@@ -38,6 +41,32 @@ pub struct Detail {
     pub last_run_id: Option<String>,
     #[serde(default)]
     pub evidence: Option<String>,
+    /// sha256 (hex) of the one-time owner approval token. The plaintext token only
+    /// travels in the owner-facing message; it is never stored.
+    #[serde(default)]
+    pub approval_hash: Option<String>,
+}
+
+fn mint_owner_token() -> String {
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+pub fn hash_owner_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(token.trim().as_bytes()))
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
+            == 0
 }
 
 impl Detail {
@@ -119,18 +148,30 @@ pub async fn handle_event(body: &str, lead: &str) -> Result<bool> {
         .get("problem_id")
         .and_then(Value::as_i64)
         .ok_or_else(|| OmonError::Config("cron_problem lacks problem_id".into()))?;
+    // Every cron_problem event also sweeps rows stranded in `remediating` by an earlier crash.
+    if let Err(error) = remediator.sweep_stale_remediating().await {
+        tracing::warn!(%error, "stale cron remediation sweep failed");
+    }
     remediator.on_problem(id, lead).await?;
     Ok(true)
 }
 
-pub async fn approve_rerun(id: i64) -> Result<RunReceipt> {
+pub async fn approve_rerun(id: i64, owner_token: &str) -> Result<RunReceipt> {
     let remediator = REMEDIATOR
         .get()
         .ok_or_else(|| OmonError::Config("cron remediator not installed".into()))?;
     remediator
-        .approve_rerun(id)
+        .approve_rerun_with_token(id, owner_token)
         .await?
         .ok_or_else(|| OmonError::Config("cron rerun budget exhausted or already fixed".into()))
+}
+
+/// Escalates problems stranded in `remediating` to the owner. Safe to call repeatedly.
+pub async fn sweep_stale_remediating() -> Result<usize> {
+    match REMEDIATOR.get() {
+        Some(remediator) => remediator.sweep_stale_remediating().await,
+        None => Ok(0),
+    }
 }
 
 pub async fn settle_lane(key: &str) -> Result<Option<Vec<SignalResult>>> {
@@ -283,11 +324,8 @@ impl Remediator {
                 self.needs_owner(&problem, &action).await?;
             }
             "transient_retry_once" if !publishing(&job.id, &payload) => {
-                if let Some(receipt) = self.verify_once(id).await? {
-                    if !receipt.verified(&payload)? {
-                        self.needs_owner(&problem, "The single transient rerun failed; inspect the recorded error and approve further remediation").await?;
-                    }
-                }
+                // `verify_once` already escalates to the owner when the rerun is unverified.
+                self.verify_once(id).await?;
             }
             "script_bug_needs_fix" | "transient_retry_once" => {
                 let runs: Vec<(String, Option<String>)> = sqlx::query_as("SELECT status,error FROM cron_runs WHERE job_id=? ORDER BY started_at DESC LIMIT 3")
@@ -312,21 +350,76 @@ impl Remediator {
 
     pub async fn needs_owner(&self, problem: &Problem, action: &str) -> Result<()> {
         let now = chrono::Utc::now();
+        let action = crate::lanes::scrub::scrub(action);
+        let action = action.as_str();
         let item = format!("cron:{}", problem.id);
+        let token = mint_owner_token();
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE cron_problems SET status='needs_owner',updated_at=? WHERE id=? AND status!='fixed'")
+        let escalated = sqlx::query("UPDATE cron_problems SET status='needs_owner',updated_at=? WHERE id=? AND status!='fixed'")
             .bind(now).bind(problem.id).execute(&mut *tx).await?;
+        if escalated.rows_affected() == 0 {
+            // Fixed concurrently: no inbox row, no outcome, and no token that could
+            // never match anything.
+            tx.rollback().await?;
+            return Ok(());
+        }
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT detail FROM cron_problems WHERE id=? AND status='needs_owner'",
+        )
+        .bind(problem.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(stored) = stored {
+            let mut detail = Detail::parse(&stored);
+            detail.approval_hash = Some(hash_owner_token(&token));
+            sqlx::query("UPDATE cron_problems SET detail=? WHERE id=?")
+                .bind(serde_json::to_string(&detail).map_err(|e| OmonError::Config(e.to_string()))?)
+                .bind(problem.id)
+                .execute(&mut *tx)
+                .await?;
+        }
         sqlx::query("INSERT INTO inbox_items(id,source,source_ref,title,snippet,received_at,raw_hash,collected_at) VALUES(?,'cron',?,?,?,?,'cron',?) ON CONFLICT(id) DO NOTHING")
             .bind(&item).bind(problem.id.to_string()).bind(&problem.job_id).bind(action).bind(now).bind(now).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO inbox_decisions(item_id,class,reason,proposed_action,lane_key,status,decided_at) VALUES(?,'owner',?,?,?,'open',?) ON CONFLICT(item_id) DO UPDATE SET proposed_action=excluded.proposed_action,lane_key=excluded.lane_key")
+        sqlx::query("INSERT INTO inbox_decisions(item_id,class,reason,proposed_action,lane_key,status,decided_at) VALUES(?,'owner',?,?,?,'open',?) ON CONFLICT(item_id) DO UPDATE SET proposed_action=excluded.proposed_action,lane_key=excluded.lane_key,status='open',decided_at=excluded.decided_at")
             .bind(&item).bind(&problem.kind).bind(action).bind(&problem.lane_key).bind(now).execute(&mut *tx).await?;
         tx.commit().await?;
         self.runtime
             .outcome(
                 problem,
-                &super::report::owner_message(&problem.job_id, action),
+                &format!(
+                    "{}\nTo approve a rerun, run: omo-gateway cron approve-rerun {} --owner-approved --owner-token {token}",
+                    super::report::owner_message(&problem.job_id, action),
+                    problem.id
+                ),
             )
             .await
+    }
+
+    /// Escalates `remediating` rows that no live lane or rerun can still settle.
+    pub async fn sweep_stale_remediating(&self) -> Result<usize> {
+        let cutoff = chrono::Utc::now() - chrono::TimeDelta::seconds(STALE_REMEDIATING_SECS);
+        let stale: Vec<Problem> = sqlx::query_as(
+            "SELECT id,job_id,kind,detail,status,lane_key FROM cron_problems
+             WHERE status='remediating' AND julianday(updated_at) < julianday(?)
+             AND (lane_key IS NULL OR NOT EXISTS (SELECT 1 FROM lanes WHERE lanes.key=cron_problems.lane_key AND lanes.status NOT IN ('verified_done','closed')))",
+        )
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut swept = 0;
+        for problem in stale {
+            let action = format!(
+                "Remediation stalled in 'remediating' (the gateway likely restarted mid-rerun); inspect the job and approve another attempt: {}",
+                Detail::parse(&problem.detail).cause
+            );
+            match self.needs_owner(&problem, &action).await {
+                Ok(()) => swept += 1,
+                Err(error) => {
+                    tracing::warn!(%error, problem = problem.id, "stale cron problem escalation failed");
+                }
+            }
+        }
+        Ok(swept)
     }
 
     pub async fn verify_once(&self, id: i64) -> Result<Option<RunReceipt>> {
@@ -407,6 +500,34 @@ impl Remediator {
         Ok(Some(receipt))
     }
 
+    /// Approval entry point for untrusted callers: requires the one-time token that
+    /// `needs_owner` delivered to the owner.
+    pub async fn approve_rerun_with_token(
+        &self,
+        id: i64,
+        owner_token: &str,
+    ) -> Result<Option<RunReceipt>> {
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT detail FROM cron_problems WHERE id=? AND status='needs_owner'",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let stored = stored.ok_or_else(|| {
+            OmonError::Config("cron problem is not awaiting owner approval".into())
+        })?;
+        let accepted = Detail::parse(&stored)
+            .approval_hash
+            .as_deref()
+            .is_some_and(|hash| {
+                constant_time_eq(hash.as_bytes(), hash_owner_token(owner_token).as_bytes())
+            });
+        if !accepted {
+            return Err(OmonError::Config("owner approval token rejected".into()));
+        }
+        self.approve_rerun(id).await
+    }
+
     pub async fn approve_rerun(&self, id: i64) -> Result<Option<RunReceipt>> {
         let mut tx = self.pool.begin().await?;
         sqlx::query("UPDATE cron_problems SET updated_at=updated_at WHERE id=?")
@@ -421,6 +542,9 @@ impl Remediator {
         .await?;
         let mut detail = Detail::parse(&text);
         detail.owner_approved = true;
+        // Approval after an exhausted budget grants exactly one more attempt.
+        detail.reruns = detail.reruns.min(MAX_RERUNS.saturating_sub(1));
+        detail.approval_hash = None;
         sqlx::query(
             "UPDATE cron_problems SET detail=?,status='remediating',updated_at=? WHERE id=?",
         )
@@ -471,7 +595,11 @@ pub fn make_lane(
                 .filter(|p| !p.as_os_str().is_empty())
                 .map(PathBuf::from)
         })
-        .unwrap_or_else(|| PathBuf::from("/Users/indo/code/project/omon-gateway"));
+        .unwrap_or_else(|| {
+            std::env::var_os("OMON_WORKSPACE_ROOT")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir)
+        });
     let done = if publishing(&job.id, &payload) {
         DoneSignal::File {
             path: PathBuf::from(format!(".omo/cron-fix/{key}.ready")),
@@ -495,7 +623,7 @@ pub fn make_lane(
         .to_string()
     };
     let brief = format!("Job: {} / {}\nExpression: {}\nProblem: {} / {}\nLast 3 runs: {}\nLast output: {}\nScript or prompt: {}\nGateway log (UTC):\n{}\nRules: no .env edits; no model changes; no job disable/delete; quota claims require direct mahoquot 127.0.0.1:18801 check; katok forbidden. Diagnose, fix the root cause in the script/config/repo, then claim done. Do not execute the Done command yourself: gateway settlement owns the single verification rerun and validates output regex and delivery receipt.\nDone = {}\n",
-        job.id, payload.get("name").and_then(Value::as_str).unwrap_or(&job.id), job.expression, problem.kind, Detail::parse(&problem.detail).cause, serde_json::to_string(runs).map_err(|e| OmonError::Config(e.to_string()))?, output.unwrap_or("").chars().take(4000).collect::<String>(), payload.get("script").or_else(|| payload.get("prompt")).unwrap_or(&Value::Null), logs.lines().take(80).collect::<Vec<_>>().join("\n").chars().take(4000).collect::<String>(), done);
+        job.id, payload.get("name").and_then(Value::as_str).unwrap_or(&job.id), job.expression, problem.kind, crate::lanes::scrub::scrub(&Detail::parse(&problem.detail).cause), crate::lanes::scrub::scrub(&serde_json::to_string(runs).map_err(|e| OmonError::Config(e.to_string()))?), crate::lanes::scrub::scrub(&output.unwrap_or("").chars().take(4000).collect::<String>()), payload.get("script").or_else(|| payload.get("prompt")).unwrap_or(&Value::Null), crate::lanes::scrub::scrub(&logs.lines().take(80).collect::<Vec<_>>().join("\n").chars().take(4000).collect::<String>()), done);
     Ok(LaneRequest {
         key: key.into(),
         cwd,
@@ -565,14 +693,18 @@ impl Runtime for GatewayRuntime {
         .await?;
         // A missing log (fresh install, rotation) must not abort remediation:
         // the brief still carries the recorded error and run ids.
-        let log =
-            match tokio::fs::read_to_string(PathBuf::from(home).join(".omon/gateway.log")).await {
-                Ok(log) => log,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Ok("(gateway log not found; no excerpt)".to_owned());
-                }
-                Err(error) => return Err(OmonError::Config(error.to_string())),
-            };
+        let log = match read_log_tail(
+            &PathBuf::from(home).join(".omon/gateway.log"),
+            LOG_TAIL_BYTES,
+        )
+        .await
+        {
+            Ok(log) => log,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok("(gateway log not found; no excerpt)".to_owned());
+            }
+            Err(error) => return Err(OmonError::Config(error.to_string())),
+        };
         let mut lines: Vec<&str> = log
             .lines()
             .rev()
@@ -592,6 +724,29 @@ impl Runtime for GatewayRuntime {
         )
         .await
     }
+}
+
+/// Upper bound on how much of the gateway log a remediation brief reads.
+pub const LOG_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Reads at most the last `max_bytes` of `path` as lossy UTF-8.
+pub async fn read_log_tail(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+    let mut file = tokio::fs::File::open(path).await?;
+    let len = file.metadata().await?.len();
+    let truncated = len > max_bytes;
+    if truncated {
+        file.seek(std::io::SeekFrom::Start(len - max_bytes)).await?;
+    }
+    let mut bytes = Vec::new();
+    file.take(max_bytes).read_to_end(&mut bytes).await?;
+    if truncated {
+        // The cut usually lands mid-line; drop the partial first line.
+        if let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=newline);
+        }
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 pub async fn reconcile_fixed(pool: &SqlitePool, job: &str) -> Result<()> {
@@ -619,4 +774,100 @@ pub async fn reconcile_fixed(pool: &SqlitePool, job: &str) -> Result<()> {
         tx.commit().await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::judge::{Choice, DiffVerdict, JudgeError};
+
+    struct NoJudge;
+    #[async_trait]
+    impl Judge for NoJudge {
+        async fn choice(
+            &self,
+            _: Purpose,
+            _: &str,
+            _: &str,
+            _: &[&str],
+        ) -> std::result::Result<Choice, JudgeError> {
+            unreachable!("needs_owner does not judge")
+        }
+        async fn noul(&self, _: Purpose, _: &str, _: &str) -> std::result::Result<f64, JudgeError> {
+            unreachable!("needs_owner does not judge")
+        }
+        async fn diff(
+            &self,
+            _: Purpose,
+            _: &str,
+            _: &Path,
+            _: Option<&str>,
+        ) -> std::result::Result<DiffVerdict, JudgeError> {
+            unreachable!("needs_owner does not judge")
+        }
+    }
+
+    #[derive(Default)]
+    struct OutcomeRuntime {
+        outcomes: std::sync::Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl Runtime for OutcomeRuntime {
+        async fn open_lane(&self, _: LaneRequest, _: &dyn Judge) -> Result<()> {
+            unreachable!()
+        }
+        async fn rerun(&self, _: &str) -> Result<RunReceipt> {
+            unreachable!()
+        }
+        async fn quota_check(&self) -> Result<Value> {
+            unreachable!()
+        }
+        async fn log_excerpt(&self, _: &str) -> Result<String> {
+            unreachable!()
+        }
+        async fn outcome(&self, _: &Problem, message: &str) -> Result<()> {
+            self.outcomes.lock().unwrap().push(message.to_owned());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn needs_owner_mints_no_token_for_an_already_fixed_problem() {
+        let db = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let id = sqlx::query("INSERT INTO cron_problems(job_id,kind,signature,detail,status,created_at,updated_at) VALUES('job','failed','sig','boom','fixed',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)")
+            .execute(&pool)
+            .await
+            .unwrap()
+            .last_insert_rowid();
+        let runtime = Arc::new(OutcomeRuntime::default());
+        let remediator = Remediator {
+            pool: pool.clone(),
+            judge: Arc::new(NoJudge),
+            runtime: runtime.clone(),
+        };
+        let problem = Problem {
+            id,
+            job_id: "job".into(),
+            kind: "failed".into(),
+            detail: "boom".into(),
+            status: "fixed".into(),
+            lane_key: None,
+        };
+
+        remediator.needs_owner(&problem, "act").await.unwrap();
+
+        assert!(runtime.outcomes.lock().unwrap().is_empty());
+        let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM inbox_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(items, 0);
+        let status: String = sqlx::query_scalar("SELECT status FROM cron_problems WHERE id=?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "fixed");
+    }
 }

@@ -41,7 +41,7 @@ echo ">>> Step 1: Terminating legacy OmOMeow daemon process..."
 if [ "${DRY_RUN}" = "1" ]; then
   echo "[DRY-RUN] Would unload and bootout legacy daemon: ${OMOMEOW_SERVICE}"
   echo "[DRY-RUN] Would disable plist: ${OMOMEOW_PLIST} -> ${OMOMEOW_PLIST}.disabled"
-  echo "[DRY-RUN] Would pkill -f 'omomeow' if process remains"
+  echo "[DRY-RUN] Would pkill -x omomeow if the daemon remains"
 else
   if command -v launchctl >/dev/null 2>&1; then
     if launchctl list | grep -q "com.omomeow" 2>/dev/null; then
@@ -55,13 +55,13 @@ else
     mv "${OMOMEOW_PLIST}" "${OMOMEOW_PLIST}.disabled"
   fi
 
-  if pgrep -f "omomeow" >/dev/null 2>&1; then
-    echo "Sending SIGTERM to existing omomeow processes..."
-    pkill -f "omomeow" 2>/dev/null || true
+  if pgrep -x "omomeow" >/dev/null 2>&1; then
+    echo "Sending SIGTERM to existing omomeow daemon..."
+    pkill -x "omomeow" 2>/dev/null || true
     sleep 1
-    if pgrep -f "omomeow" >/dev/null 2>&1; then
-      echo "Sending SIGKILL to remaining omomeow processes..."
-      pkill -9 -f "omomeow" 2>/dev/null || true
+    if pgrep -x "omomeow" >/dev/null 2>&1; then
+      echo "Sending SIGKILL to remaining omomeow daemon..."
+      pkill -9 -x "omomeow" 2>/dev/null || true
     fi
   fi
 fi
@@ -82,9 +82,46 @@ else
     echo "Extracting production token from ${OMOMEOW_ENV_SRC}..."
     EXTRACTED_TOKEN=$(python3 -c "import json; data=json.load(open('${OMOMEOW_ENV_SRC}')); print(data.get('token', data.get('discord_token', '')))" 2>/dev/null || echo "")
     if [ -n "${EXTRACTED_TOKEN}" ]; then
-      sed -i.bak "s|^DISCORD_BOT_TOKENS=.*|DISCORD_BOT_TOKENS=${EXTRACTED_TOKEN}|" "${ENV_FILE}" || true
-      rm -f "${ENV_FILE}.bak"
-      echo "Injected production token into ${ENV_FILE}."
+      if [ -f "${ENV_FILE}" ]; then
+        ENV_BACKUP="${ENV_FILE}.backup.$(date +%Y%m%dT%H%M%S)"
+        cp -p "${ENV_FILE}" "${ENV_BACKUP}"
+        echo "Backed up ${ENV_FILE} to ${ENV_BACKUP}"
+      fi
+      python3 - "${ENV_FILE}" "${EXTRACTED_TOKEN}" <<'PY'
+import os, sys, tempfile
+path, token = sys.argv[1], sys.argv[2]
+mode = "add"
+lines = open(path).read().split("\n") if os.path.exists(path) else []
+out, found = [], False
+for line in lines:
+    if line.startswith("DISCORD_BOT_TOKENS="):
+        found = True
+        tokens = [t for t in line.split("=", 1)[1].split(",") if t.strip()]
+        if mode == "add" and token not in tokens:
+            tokens.append(token)
+        if mode == "remove":
+            tokens = [t for t in tokens if t != token]
+        line = "DISCORD_BOT_TOKENS=" + ",".join(tokens)
+    out.append(line)
+if mode == "add" and not found:
+    if out and out[-1] == "":
+        out.pop()
+    out.append("DISCORD_BOT_TOKENS=" + token)
+    out.append("")
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)))
+with os.fdopen(fd, "w") as handle:
+    handle.write("\n".join(out))
+os.chmod(tmp, os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o600)
+os.replace(tmp, path)
+PY
+      if ! grep -F "DISCORD_BOT_TOKENS=" "${ENV_FILE}" | grep -qF "${EXTRACTED_TOKEN}"; then
+        echo "ERROR: token was not written to ${ENV_FILE}; restore from ${ENV_BACKUP:-backup}" >&2
+        exit 1
+      fi
+      echo "Added production token to the DISCORD_BOT_TOKENS list in ${ENV_FILE} (other tokens kept)."
+    else
+      echo "ERROR: no token found in ${OMOMEOW_ENV_SRC}; ${ENV_FILE} not modified" >&2
+      exit 1
     fi
   fi
 fi
@@ -101,7 +138,7 @@ else
     }
   else
     echo "Launchd plist not registered; restarting via pkill if running..."
-    pkill -f "omon-gateway" 2>/dev/null || true
+    pkill -x "omo-gateway" 2>/dev/null || true
   fi
 fi
 

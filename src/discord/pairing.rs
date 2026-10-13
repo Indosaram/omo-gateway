@@ -1,10 +1,9 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{Sqlite, SqlitePool, Transaction};
-use tokio::sync::RwLock;
 
 use crate::error::{OmonError, Result};
 
@@ -54,7 +53,10 @@ impl PairingStore {
         let rows: Vec<(String,)> = sqlx::query_as("SELECT user_id FROM paired_users")
             .fetch_all(&self.pool)
             .await?;
-        let mut set = self.paired_cache.write().await;
+        let mut set = self
+            .paired_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         set.clear();
         for (uid_str,) in rows {
             if let Ok(uid) = uid_str.parse::<u64>() {
@@ -66,28 +68,32 @@ impl PairingStore {
 
     /// Fast in-memory check if a user is paired.
     pub async fn is_user_paired(&self, user_id: u64) -> bool {
-        self.paired_cache.read().await.contains(&user_id)
+        self.is_user_paired_sync(user_id)
     }
 
-    /// Synchronous read check against the paired cache.
+    /// Synchronous read check against the paired cache. The lock is a std
+    /// `RwLock` that is never held across an await, so this cannot spuriously
+    /// fail while a pairing approval updates the cache.
     pub fn is_user_paired_sync(&self, user_id: u64) -> bool {
         self.paired_cache
-            .try_read()
-            .map(|set| set.contains(&user_id))
-            .unwrap_or(false)
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(&user_id)
     }
 
     /// Returns a list of all currently paired user IDs (async).
     pub async fn get_paired_user_ids(&self) -> Vec<u64> {
-        self.paired_cache.read().await.iter().copied().collect()
+        self.get_paired_user_ids_sync()
     }
 
-    /// Returns a list of all currently paired user IDs (sync/non-blocking).
+    /// Returns a list of all currently paired user IDs (sync).
     pub fn get_paired_user_ids_sync(&self) -> Vec<u64> {
         self.paired_cache
-            .try_read()
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .copied()
+            .collect()
     }
 
     /// Normalizes code formatting (removes dashes/spaces, uppercase).
@@ -457,11 +463,9 @@ impl PairingStore {
         .await?;
 
         let Some(row) = record else {
+            // An unknown code only feeds the platform-wide lockout; it must not
+            // burn attempts on unrelated pending codes.
             Self::record_failed_attempt_tx(&mut tx, now).await?;
-            sqlx::query("UPDATE pairing_codes SET attempts = attempts + 1 WHERE attempts < ?")
-                .bind(MAX_FAILED_ATTEMPTS)
-                .execute(&mut *tx)
-                .await?;
             tx.commit().await?;
             return Ok(PairingOutcome::InvalidCode);
         };
@@ -522,7 +526,10 @@ impl PairingStore {
         tx.commit().await?;
 
         // Cache callbacks only after commit
-        self.paired_cache.write().await.insert(user_id);
+        self.paired_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(user_id);
 
         // The rate-limit row for this user served its purpose; drop it so the
         // notification table does not accumulate one row per paired user.
@@ -701,13 +708,34 @@ mod tests {
                 .unwrap_or(0);
 
         assert_eq!(
-            attempts,
-            5,
-            "five invalid operator approvals then fresh DM must remain locked until deadline; baseline reset lockout with fresh code attempts=0"
+            attempts, 0,
+            "unknown-code failures must not burn attempts on unrelated pending codes"
         );
         assert!(
             store.is_platform_locked_at(t1).await.unwrap(),
             "platform must remain locked until deadline"
+        );
+    }
+
+    #[tokio::test]
+    async fn operator_typos_do_not_invalidate_pending_codes_after_lockout() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let store = PairingStore::new(pool);
+        store.init_cache().await.unwrap();
+
+        let user_id = 31337_u64;
+        let t0 = Utc::now();
+        let code = store.request_pairing_code_at(user_id, t0).await.unwrap();
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            assert_eq!(
+                store.approve_code_at("TYPO2222", 1, t0).await.unwrap(),
+                PairingOutcome::InvalidCode
+            );
+        }
+        let after = t0 + chrono::Duration::seconds(LOCKOUT_DURATION_SECONDS + 1);
+        assert_eq!(
+            store.approve_code_at(&code, 1, after).await.unwrap(),
+            PairingOutcome::Success { user_id }
         );
     }
 
@@ -804,8 +832,8 @@ mod tests {
                 .unwrap_or(0);
 
         assert_eq!(
-            attempts, 5,
-            "lockout must be preserved; fresh DM must not reset attempts to 0"
+            attempts, 0,
+            "unknown-code failures must not burn attempts on the pending code"
         );
         assert!(
             store.is_platform_locked_at(t_dm).await.unwrap(),

@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{FromRow, SqlitePool};
 
+use super::terminal::ApprovalPolicy;
 use super::Tool;
 use crate::{
     check_gateway_lifecycle, next_run, scan_cron_prompt, CronJobSpec, CronScheduler, OmonError,
@@ -26,7 +27,6 @@ pub struct DbCronJob {
 pub struct DbCronRun {
     pub run_id: String,
     pub job_id: String,
-    pub claim_token: String,
     pub lease_expires_at: String,
     pub started_at: String,
     pub completed_at: Option<String>,
@@ -39,6 +39,8 @@ pub struct DbCronRun {
 pub struct CronTool {
     pool: SqlitePool,
     scheduler: Arc<parking_lot::RwLock<Option<Arc<CronScheduler>>>>,
+    deny_globs: Vec<String>,
+    approval_policy: Option<ApprovalPolicy>,
 }
 
 async fn check_imported_read_only(pool: &SqlitePool, id: &str) -> Result<(), OmonError> {
@@ -63,11 +65,54 @@ async fn check_imported_read_only(pool: &SqlitePool, id: &str) -> Result<(), Omo
     Ok(())
 }
 
+/// Agent-authored cron scripts run unattended through a shell, so they get the
+/// terminal tool's policy: hardline and dangerous commands and user deny globs
+/// (`APPROVALS_DENY`) are refused outright; everything else needs the same
+/// interactive approval gate as the terminal (see `CronTool::requires_approval`).
+fn check_cron_script(script: &str, deny_globs: &[String]) -> Result<(), OmonError> {
+    check_gateway_lifecycle(script).map_err(OmonError::ToolExecution)?;
+    if let Some(reason) = crate::security::detect_hardline_command(script) {
+        return Err(OmonError::ToolExecution(format!(
+            "cron script rejected (hardline): {reason}"
+        )));
+    }
+    if let Some(pattern) = crate::security::match_user_deny_rule(script, deny_globs) {
+        return Err(OmonError::ToolExecution(format!(
+            "cron script rejected: it matches the user-defined deny rule '{pattern}' (APPROVALS_DENY)"
+        )));
+    }
+    if let Some(finding) = crate::security::detect_dangerous_command(script) {
+        return Err(OmonError::ToolExecution(format!(
+            "cron script rejected (dangerous command): {}",
+            finding.description
+        )));
+    }
+    Ok(())
+}
+
+/// Deny globs configured through the environment, as the runtime reads them.
+fn env_deny_globs() -> Vec<String> {
+    std::env::var("APPROVALS_DENY")
+        .or_else(|_| std::env::var("OMON_APPROVALS_DENY"))
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl CronTool {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
             pool,
             scheduler: Arc::new(parking_lot::RwLock::new(None)),
+            deny_globs: Vec::new(),
+            approval_policy: None,
         }
     }
 
@@ -75,7 +120,37 @@ impl CronTool {
         Self {
             pool,
             scheduler: Arc::new(parking_lot::RwLock::new(Some(scheduler))),
+            deny_globs: Vec::new(),
+            approval_policy: None,
         }
+    }
+
+    /// Extra deny globs, applied on top of the `APPROVALS_DENY` environment value.
+    pub fn with_deny_globs(mut self, globs: Vec<String>) -> Self {
+        self.deny_globs = globs;
+        self
+    }
+
+    /// Overrides the policy otherwise read from `APPROVAL_MODE`.
+    pub fn with_approval_policy(mut self, policy: ApprovalPolicy) -> Self {
+        self.approval_policy = Some(policy);
+        self
+    }
+
+    fn effective_deny_globs(&self) -> Vec<String> {
+        let mut globs = env_deny_globs();
+        for glob in &self.deny_globs {
+            if !globs.contains(glob) {
+                globs.push(glob.clone());
+            }
+        }
+        globs
+    }
+
+    fn effective_approval_policy(&self) -> ApprovalPolicy {
+        self.approval_policy.unwrap_or_else(|| {
+            ApprovalPolicy::parse(std::env::var("APPROVAL_MODE").ok().as_deref())
+        })
     }
 
     pub fn bind_scheduler(&self, scheduler: Arc<CronScheduler>) {
@@ -169,6 +244,36 @@ impl Tool for CronTool {
         })
     }
 
+    fn requires_approval(&self, args: &Value) -> Option<String> {
+        let action = args.get("action").and_then(Value::as_str)?;
+        if !matches!(action, "add" | "create" | "update") {
+            return None;
+        }
+        if self.effective_approval_policy() == ApprovalPolicy::Never {
+            return None;
+        }
+        // Every stored shell field runs unattended, and the approval key is derived from this
+        // text, so it must name all of them in full: a preview would let one grant cover a
+        // different command.
+        let mut parts = Vec::new();
+        for key in ["script", "ack_command"] {
+            if let Some(command) = args
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|command| !command.trim().is_empty())
+            {
+                parts.push(format!("{key}={command}"));
+            }
+        }
+        if parts.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "schedule an unattended shell command via cron: {}",
+            parts.join("; ")
+        ))
+    }
+
     async fn execute_with_context(
         &self,
         mut args: Value,
@@ -188,8 +293,14 @@ impl Tool for CronTool {
                         || args.get("deliver").and_then(Value::as_str) == Some("local")
                     {
                         if let Some(ref tid) = session.thread_id {
-                            args["deliver"] =
-                                Value::String(format!("discord:{}:{}", session.channel_id, tid));
+                            // Native payloads parse `discord:<a>:<b>` as one chat id, so a
+                            // thread target is expressed through `origin` instead.
+                            args["deliver"] = Value::String("origin".into());
+                            args["origin"] = json!({
+                                "platform": "discord",
+                                "chat_id": session.channel_id,
+                                "thread_id": tid,
+                            });
                         } else {
                             args["deliver"] =
                                 Value::String(format!("discord:{}", session.channel_id));
@@ -393,6 +504,7 @@ impl Tool for CronTool {
             }
             "update" => {
                 let id = id_param.ok_or_else(|| OmonError::ToolExecution("missing 'id'".into()))?;
+                check_imported_read_only(&self.pool, id).await?;
 
                 let job: Option<DbCronJob> = sqlx::query_as(
                     "SELECT id, session_key, expression, payload_json, enabled, next_run_at, created_at, updated_at FROM cron_jobs WHERE id = ?",
@@ -420,9 +532,18 @@ impl Tool for CronTool {
                     payload["prompt"] = Value::String(p.to_string());
                 }
 
+                let deny_globs = self.effective_deny_globs();
                 if let Some(s) = args.get("script").and_then(Value::as_str) {
-                    check_gateway_lifecycle(s).map_err(OmonError::ToolExecution)?;
+                    check_cron_script(s, &deny_globs)?;
                     payload["script"] = Value::String(s.to_string());
+                }
+
+                if let Some(ack) = args.get("ack_command") {
+                    // Same unattended `sh -c` as a script: screen it identically.
+                    if let Some(command) = ack.as_str() {
+                        check_cron_script(command, &deny_globs)?;
+                    }
+                    payload["ack_command"] = ack.clone();
                 }
 
                 if let Some(desc) = args
@@ -464,6 +585,10 @@ impl Tool for CronTool {
                     .is_some_and(|new_enabled| new_enabled != job.enabled);
 
                 let now = chrono::Utc::now();
+                if expression_changed {
+                    // Reject an invalid new expression even when the job is disabled.
+                    next_run(expression, now)?;
+                }
                 let next_run_at: Option<String> = if !enabled {
                     None
                 } else if expression_changed || (enabled_changed && job.next_run_at.is_none()) {
@@ -500,6 +625,18 @@ impl Tool for CronTool {
             }
             "add" | "create" => {
                 let id = id_param.ok_or_else(|| OmonError::ToolExecution("missing 'id'".into()))?;
+                check_imported_read_only(&self.pool, id).await?;
+                let existing: Option<(String,)> =
+                    sqlx::query_as("SELECT id FROM cron_jobs WHERE id = ?")
+                        .bind(id)
+                        .fetch_optional(&self.pool)
+                        .await
+                        .map_err(|e| OmonError::Database(e.to_string()))?;
+                if existing.is_some() {
+                    return Err(OmonError::ToolExecution(format!(
+                        "cron job '{id}' already exists; use 'update' to change it"
+                    )));
+                }
                 let now = chrono::Utc::now();
                 let expression = if let Some(once_at) = args.get("once_at").and_then(Value::as_str)
                 {
@@ -538,8 +675,9 @@ impl Tool for CronTool {
                         )));
                     }
                 }
+                let deny_globs = self.effective_deny_globs();
                 if let Some(s) = script {
-                    check_gateway_lifecycle(s).map_err(OmonError::ToolExecution)?;
+                    check_cron_script(s, &deny_globs)?;
                 }
                 let desc = args
                     .get("description")
@@ -554,6 +692,9 @@ impl Tool for CronTool {
                     "bot_id": args.get("bot_id").and_then(Value::as_str),
                     "enabled_toolsets": args.get("enabled_toolsets").cloned().unwrap_or(Value::Null)
                 });
+                if let Some(origin) = args.get("origin") {
+                    payload["origin"] = origin.clone();
+                }
                 if let Some(repeat) = args.get("repeat") {
                     payload["repeat"] = repeat.clone();
                 }
@@ -570,6 +711,11 @@ impl Tool for CronTool {
                     payload["no_agent"] = no_agent.clone();
                 }
                 if let Some(ack) = args.get("ack_command") {
+                    // The ack runs unattended through `sh -c` after delivery, so it gets the
+                    // same hardline/dangerous screening as a cron script.
+                    if let Some(command) = ack.as_str() {
+                        check_cron_script(command, &deny_globs)?;
+                    }
                     payload["ack_command"] = ack.clone();
                 }
                 if let Some(timeout) = args.get("timeout").or_else(|| args.get("timeout_secs")) {
@@ -648,7 +794,7 @@ impl Tool for CronTool {
 
                 let rows: Vec<DbCronRun> = if let Some(job_id) = id_param {
                     sqlx::query_as(
-                        "SELECT run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error
+                        "SELECT run_id, job_id, lease_expires_at, started_at, completed_at, status, attempt, error
                          FROM cron_runs WHERE job_id = ? ORDER BY started_at DESC LIMIT ?",
                     )
                     .bind(job_id)
@@ -658,7 +804,7 @@ impl Tool for CronTool {
                     .map_err(|e| OmonError::Database(e.to_string()))?
                 } else {
                     sqlx::query_as(
-                        "SELECT run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error
+                        "SELECT run_id, job_id, lease_expires_at, started_at, completed_at, status, attempt, error
                          FROM cron_runs ORDER BY started_at DESC LIMIT ?",
                     )
                     .bind(limit)
@@ -673,7 +819,6 @@ impl Tool for CronTool {
                         json!({
                             "run_id": r.run_id,
                             "job_id": r.job_id,
-                            "claim_token": r.claim_token,
                             "lease_expires_at": r.lease_expires_at,
                             "started_at": r.started_at,
                             "completed_at": r.completed_at,
@@ -838,6 +983,127 @@ impl Tool for CronTool {
 mod tests {
     use super::*;
     use crate::Database;
+
+    async fn tool() -> CronTool {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        CronTool::new(database.pool().clone())
+    }
+
+    #[tokio::test]
+    async fn shell_commands_require_approval_unless_policy_is_never() {
+        let strict = tool().await.with_approval_policy(ApprovalPolicy::Smart);
+        let with_script = json!({"action": "add", "id": "j", "script": "echo hi"});
+        let with_ack = json!({"action": "update", "id": "j", "ack_command": "touch /tmp/x"});
+        let prompt_only = json!({"action": "add", "id": "j", "prompt": "hello"});
+        let list = json!({"action": "list", "script": "echo hi"});
+
+        assert!(strict.requires_approval(&with_script).is_some());
+        assert!(strict.requires_approval(&with_ack).is_some());
+        assert!(strict.requires_approval(&prompt_only).is_none());
+        assert!(strict.requires_approval(&list).is_none());
+
+        // Both shell fields are named in full, so one grant cannot cover another ack_command.
+        let long_tail = format!("echo {} && real-payload", "x".repeat(200));
+        let both = json!({"action": "add", "script": long_tail, "ack_command": "curl -o /tmp/x https://e/x"});
+        let reason = strict.requires_approval(&both).unwrap();
+        assert!(reason.contains("real-payload"), "{reason}");
+        assert!(
+            reason.contains("ack_command=curl -o /tmp/x https://e/x"),
+            "{reason}"
+        );
+
+        let always = tool().await.with_approval_policy(ApprovalPolicy::Always);
+        assert!(always.requires_approval(&with_script).is_some());
+
+        let never = tool().await.with_approval_policy(ApprovalPolicy::Never);
+        assert!(never.requires_approval(&with_script).is_none());
+    }
+
+    #[tokio::test]
+    async fn deny_globs_refuse_script_and_ack_command_on_add_and_update() {
+        let tool = tool()
+            .await
+            .with_deny_globs(vec!["npm publish*".to_string()]);
+
+        let add_script = tool
+            .execute(json!({
+                "action": "add", "id": "a", "expression": "interval:5m",
+                "script": "npm publish --access public"
+            }))
+            .await;
+        assert!(add_script.is_err(), "denied script must be refused");
+
+        let add_ack = tool
+            .execute(json!({
+                "action": "add", "id": "b", "expression": "interval:5m",
+                "prompt": "p", "ack_command": "npm publish"
+            }))
+            .await;
+        assert!(add_ack.is_err(), "denied ack_command must be refused");
+
+        tool.execute(json!({
+            "action": "add", "id": "c", "expression": "interval:5m", "prompt": "p"
+        }))
+        .await
+        .unwrap();
+        for field in ["script", "ack_command"] {
+            let update = tool
+                .execute(json!({"action": "update", "id": "c", field: "npm publish"}))
+                .await;
+            assert!(update.is_err(), "update must refuse a denied {field}");
+        }
+        tool.execute(json!({"action": "update", "id": "c", "ack_command": "echo done"}))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_rejects_dangerous_ack_command_and_invalid_expression() {
+        let tool = tool().await;
+        tool.execute(json!({
+            "action": "add", "id": "d", "expression": "interval:5m", "prompt": "p"
+        }))
+        .await
+        .unwrap();
+
+        assert!(tool
+            .execute(json!({"action": "update", "id": "d", "ack_command": "rm -rf /"}))
+            .await
+            .is_err());
+        assert!(tool
+            .execute(json!({"action": "update", "id": "d", "expression": "not a schedule"}))
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn runs_output_omits_claim_token() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool().clone();
+        let tool = CronTool::new(pool.clone());
+        sqlx::query(
+            "INSERT INTO cron_jobs (id, expression, payload_json, enabled, created_at, updated_at)
+             VALUES ('j', 'interval:5m', '{}', 1, datetime('now'), datetime('now'))",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO cron_runs (run_id, job_id, claim_token, lease_expires_at, started_at, status, attempt)
+             VALUES ('r1', 'j', 'secret-claim', datetime('now'), datetime('now'), 'running', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let runs = tool
+            .execute(json!({"action": "runs", "id": "j"}))
+            .await
+            .unwrap();
+
+        assert_eq!(runs["runs"][0]["run_id"], "r1");
+        assert!(runs["runs"][0].get("claim_token").is_none(), "{runs}");
+    }
 
     #[tokio::test]
     async fn test_cron_tool_lifecycle_actions() {

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DRY_RUN="${DRY_RUN:-0}"
-DB_PATH="${GATEWAY_DB_PATH:-${REPO_ROOT}/data/gateway.db}"
+DB_PATH="${GATEWAY_DB_PATH:-${REPO_ROOT}/omon_gateway.db}"
 LEGACY_PLIST="${LEGACY_PLIST:-${HOME}/Library/LaunchAgents/com.omomeow.cron.plist}"
 LEGACY_SERVICE="${LEGACY_SERVICE:-gui/$(id -u)/com.omomeow.cron}"
 
@@ -38,15 +38,16 @@ if [ "${DRY_RUN}" = "1" ]; then
     echo "[DRY-RUN] Verified ${MATCHED} matching omomeow cron records in ${DB_PATH}"
   fi
 else
+  # A rollback is an emergency path: a missing or locked gateway DB must not stop
+  # Step 2 from restoring the legacy scheduler.
   if [ ! -f "${DB_PATH}" ]; then
-    echo "ERROR: Target database file not found at ${DB_PATH}" >&2
-    exit 1
+    echo "WARNING: Target database file not found at ${DB_PATH}; skipping gateway disable" >&2
+  elif sqlite3 -cmd ".timeout 10000" "${DB_PATH}" "UPDATE cron_jobs SET enabled = 0 WHERE id LIKE 'omomeow:%';"; then
+    ACTIVE_COUNT=$(sqlite3 -cmd ".timeout 10000" "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%' AND enabled = 1;" || echo "?")
+    echo "Verified: ${ACTIVE_COUNT} active omomeow jobs remaining in omon-gateway (expected 0)."
+  else
+    echo "WARNING: could not disable gateway omomeow jobs in ${DB_PATH}; disable them manually" >&2
   fi
-
-  sqlite3 "${DB_PATH}" "UPDATE cron_jobs SET enabled = 0 WHERE id LIKE 'omomeow:%';"
-  
-  ACTIVE_COUNT=$(sqlite3 "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%' AND enabled = 1;")
-  echo "Verified: ${ACTIVE_COUNT} active omomeow jobs remaining in omon-gateway (expected 0)."
 fi
 
 echo ">>> Step 2: Restoring legacy OmOMeow cron jobs..."
@@ -67,7 +68,7 @@ else
 
   if crontab -l 2>/dev/null | grep -q "DISABLED_BY_CUTOVER" 2>/dev/null; then
     echo "Restoring crontab entries..."
-    crontab -l | sed 's/^# DISABLED_BY_CUTOVER //' | crontab -
+    crontab -l | sed 's/^\(# DISABLED_BY_CUTOVER \)\{1,\}//' | crontab -
   fi
 fi
 

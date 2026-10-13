@@ -11,6 +11,13 @@ use crate::{MessageAttachment, OmonError, Result};
 
 pub const DISCORD_ATTACHMENT_MAX_BYTES: u64 = 25 * 1024 * 1024;
 pub const DISCORD_ATTACHMENT_TIMEOUT: Duration = Duration::from_secs(15);
+/// Wall-clock cap for one whole attachment download (the 15s timeout above bounds connect
+/// and each read, so a slow-but-progressing 25 MB transfer is not cut off).
+pub const DISCORD_ATTACHMENT_TOTAL_TIMEOUT: Duration = Duration::from_secs(300);
+/// Cached attachments older than this are removed at startup.
+const ATTACHMENT_CACHE_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+/// Leftover `.part` files from interrupted downloads are removed after this long.
+const ATTACHMENT_PART_TTL: Duration = Duration::from_secs(60 * 60);
 pub const MAX_INLINED_ATTACHMENT_BYTES: u64 = 100 * 1024;
 const ATTACHMENT_DIR: &str = ".discord-attachments";
 
@@ -26,13 +33,26 @@ pub fn decode_wav_pcm(bytes: &[u8]) -> Option<(u32, u16, Vec<i16>)> {
 
     while pos + 8 <= bytes.len() {
         let chunk_id = &bytes[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().ok()?) as usize;
+        let declared = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().ok()?) as usize;
         pos += 8;
-        if pos + chunk_size > bytes.len() {
+        let remaining = bytes.len() - pos;
+        // Streamed WAVs declare 0xFFFFFFFF for `data`; clamp it to the bytes present.
+        let chunk_size = if chunk_id == b"data" {
+            declared.min(remaining)
+        } else if declared > remaining {
             break;
-        }
+        } else {
+            declared
+        };
         let chunk_data = &bytes[pos..pos + chunk_size];
         if chunk_id == b"fmt " && chunk_data.len() >= 16 {
+            let format_tag = u16::from_le_bytes(chunk_data[0..2].try_into().ok()?);
+            let bits_per_sample = u16::from_le_bytes(chunk_data[14..16].try_into().ok()?);
+            // Only 16-bit integer PCM (plain or WAVE_FORMAT_EXTENSIBLE) can be reinterpreted
+            // as i16 samples.
+            if !matches!(format_tag, 1 | 0xFFFE) || bits_per_sample != 16 {
+                return None;
+            }
             channels = u16::from_le_bytes(chunk_data[2..4].try_into().ok()?);
             sample_rate = u32::from_le_bytes(chunk_data[4..8].try_into().ok()?);
         } else if chunk_id == b"data" {
@@ -41,7 +61,8 @@ pub fn decode_wav_pcm(bytes: &[u8]) -> Option<(u32, u16, Vec<i16>)> {
                 pcm.push(i16::from_le_bytes(*pair));
             }
         }
-        pos += chunk_size;
+        // RIFF chunks are word-aligned: odd-sized chunks are followed by a pad byte.
+        pos += chunk_size + (chunk_size & 1);
     }
 
     if !pcm.is_empty() {
@@ -167,7 +188,8 @@ pub struct AttachmentDownloader {
 impl AttachmentDownloader {
     pub fn new(workspace_root: impl AsRef<Path>) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .timeout(DISCORD_ATTACHMENT_TIMEOUT)
+            .connect_timeout(DISCORD_ATTACHMENT_TIMEOUT)
+            .read_timeout(DISCORD_ATTACHMENT_TIMEOUT)
             .build()
             .map_err(|error| attachment_error(format!("failed to build HTTP client: {error}")))?;
         Self::with_client(workspace_root, http)
@@ -206,6 +228,8 @@ impl AttachmentDownloader {
                 attachment_root.display()
             )));
         }
+
+        prune_attachment_cache(&attachment_root, std::time::SystemTime::now());
 
         Ok(Self {
             workspace_root,
@@ -373,7 +397,12 @@ impl AttachmentDownloader {
         let temp = self
             .attachment_root
             .join(format!(".{}.part", Uuid::new_v4()));
-        let result = self.stream_to_file(response, &temp).await;
+        let result = tokio::time::timeout(
+            DISCORD_ATTACHMENT_TOTAL_TIMEOUT,
+            self.stream_to_file(response, &temp),
+        )
+        .await
+        .unwrap_or_else(|_| Err(attachment_error("attachment download timed out")));
         if let Err(error) = result {
             let _ = tokio::fs::remove_file(&temp).await;
             return Err(error);
@@ -512,6 +541,37 @@ impl AttachmentDownloader {
     }
 }
 
+/// Removes cached attachments past their TTL and stale `.part` leftovers. Best effort: a
+/// file that cannot be inspected or removed is skipped.
+fn prune_attachment_cache(root: &Path, now: std::time::SystemTime) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        let Ok(age) = metadata
+            .modified()
+            .and_then(|modified| now.duration_since(modified).map_err(std::io::Error::other))
+        else {
+            continue;
+        };
+        let is_part = entry.file_name().to_string_lossy().ends_with(".part");
+        let ttl = if is_part {
+            ATTACHMENT_PART_TTL
+        } else {
+            ATTACHMENT_CACHE_TTL
+        };
+        if age > ttl {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 fn sanitize_component(value: &str, fallback: &str) -> String {
     let sanitized = value
         .chars()
@@ -538,6 +598,85 @@ fn attachment_error(message: impl Into<String>) -> OmonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wav(format_tag: u16, bits: u16, pre_data: &[u8], data: &[u8], data_len: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"RIFF");
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(b"WAVE");
+        out.extend_from_slice(b"fmt ");
+        out.extend_from_slice(&16u32.to_le_bytes());
+        out.extend_from_slice(&format_tag.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&16_000u32.to_le_bytes());
+        out.extend_from_slice(&32_000u32.to_le_bytes());
+        out.extend_from_slice(&2u16.to_le_bytes());
+        out.extend_from_slice(&bits.to_le_bytes());
+        out.extend_from_slice(pre_data);
+        out.extend_from_slice(b"data");
+        out.extend_from_slice(&data_len.to_le_bytes());
+        out.extend_from_slice(data);
+        out
+    }
+
+    #[test]
+    fn wav_decoder_skips_pad_byte_after_odd_sized_chunk() {
+        // An odd-length LIST chunk (3 bytes) is followed by one pad byte.
+        let mut list = Vec::new();
+        list.extend_from_slice(b"LIST");
+        list.extend_from_slice(&3u32.to_le_bytes());
+        list.extend_from_slice(&[1, 2, 3, 0]);
+        let data = [1u8, 0, 2, 0];
+        let bytes = wav(1, 16, &list, &data, data.len() as u32);
+        let (rate, channels, pcm) = decode_wav_pcm(&bytes).expect("data chunk must be found");
+        assert_eq!((rate, channels), (16_000, 1));
+        assert_eq!(pcm, vec![1, 2]);
+    }
+
+    #[test]
+    fn wav_decoder_rejects_non_16_bit_or_non_pcm() {
+        let data = [0u8; 8];
+        assert!(
+            decode_wav_pcm(&wav(3, 32, &[], &data, 8)).is_none(),
+            "float32"
+        );
+        assert!(
+            decode_wav_pcm(&wav(1, 24, &[], &data, 8)).is_none(),
+            "24-bit"
+        );
+        assert!(decode_wav_pcm(&wav(1, 16, &[], &data, 8)).is_some());
+    }
+
+    #[test]
+    fn wav_decoder_clamps_streamed_data_size() {
+        let data = [5u8, 0, 6, 0];
+        let bytes = wav(1, 16, &[], &data, u32::MAX);
+        let (_, _, pcm) = decode_wav_pcm(&bytes).expect("streamed wav must decode");
+        assert_eq!(pcm, vec![5, 6]);
+    }
+
+    #[test]
+    fn cache_prune_removes_only_stale_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let old_cached = dir.path().join("1-old.txt");
+        let fresh_cached = dir.path().join("2-fresh.txt");
+        let old_part = dir.path().join(".abc.part");
+        for path in [&old_cached, &fresh_cached, &old_part] {
+            std::fs::write(path, b"x").unwrap();
+        }
+        // Pretend "now" is far in the future for the cached file but only just past the
+        // part TTL: both stale classes go, nothing fresh is touched by a near-term sweep.
+        prune_attachment_cache(dir.path(), std::time::SystemTime::now());
+        assert!(old_cached.exists() && fresh_cached.exists() && old_part.exists());
+        let later = std::time::SystemTime::now() + ATTACHMENT_PART_TTL + Duration::from_secs(60);
+        prune_attachment_cache(dir.path(), later);
+        assert!(!old_part.exists(), "stale .part must be removed");
+        assert!(old_cached.exists() && fresh_cached.exists());
+        let much_later =
+            std::time::SystemTime::now() + ATTACHMENT_CACHE_TTL + Duration::from_secs(60);
+        prune_attachment_cache(dir.path(), much_later);
+        assert!(!old_cached.exists() && !fresh_cached.exists());
+    }
 
     #[test]
     fn test_is_voice_attachment_detection() {

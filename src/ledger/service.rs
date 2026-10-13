@@ -124,31 +124,26 @@ impl DeliveryLedgerService {
         delivery_id: &str,
     ) -> Result<bool> {
         self.ensure_session(&event.session).await?;
-        let result = sqlx::query(
-            "INSERT INTO delivery_ledger (
-                delivery_id, session_key, event_id, message_id, status,
-                platform_message_id, created_at, updated_at, received_at
-             ) VALUES (?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
-             ON CONFLICT(message_id) DO UPDATE SET
-                status = 'in_progress',
-                updated_at = excluded.updated_at,
-                error = NULL
-             WHERE delivery_ledger.status = 'failed'",
-        )
-        .bind(Uuid::new_v4().to_string())
-        .bind(event.session.storage_key())
-        .bind(delivery_id)
-        .bind(delivery_id)
-        .bind(&event.platform_message_id)
-        .bind(event.received_at)
-        .bind(event.received_at)
-        .bind(event.received_at)
-        .execute(&self.pool)
-        .await?;
+        claim_delivery_row(&self.pool, event, delivery_id).await
+    }
 
-        // A fresh insert or the reclaim of a previously failed delivery both yield one
-        // affected row; an already pending/delivered claim yields zero and stays deduped.
-        Ok(result.rows_affected() == 1)
+    /// True when a live claim exists: any row for this id that is not `failed`.
+    /// Failed rows stay reclaimable by `record_incoming_as`.
+    async fn is_claimed(&self, message_id: &str) -> Result<bool> {
+        let alt = message_id.strip_prefix("discord:").unwrap_or_default();
+        let prefixed = format!("discord:{message_id}");
+        let claimed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM delivery_ledger
+             WHERE (message_id = ? OR message_id = ? OR message_id = ? OR platform_message_id = ?)
+             AND status != 'failed')",
+        )
+        .bind(message_id)
+        .bind(alt)
+        .bind(&prefixed)
+        .bind(message_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(claimed)
     }
 
     pub async fn is_duplicate(&self, message_id: &str) -> Result<bool> {
@@ -190,63 +185,68 @@ impl DeliveryLedgerService {
         self.ensure_session(&event.session).await?;
         self.ensure_constituents_table().await?;
 
-        if self.is_duplicate(delivery_id).await? {
+        // Only a live claim on the batch's own delivery id makes it a duplicate: a failed
+        // batch is reclaimable, and one already-seen constituent must not drop the others.
+        if self.is_claimed(delivery_id).await? {
             return Ok(false);
         }
+        let mut fresh: Vec<&String> = Vec::new();
         for c_id in constituent_ids {
-            if self.is_duplicate(c_id).await? {
-                return Ok(false);
+            if c_id != delivery_id && !self.is_claimed(c_id).await? {
+                fresh.push(c_id);
             }
         }
 
-        let recorded = self.record_incoming_as(event, delivery_id).await?;
-        if !recorded {
+        let mut tx = self.pool.begin().await?;
+        if !claim_delivery_row(&mut *tx, event, delivery_id).await? {
             return Ok(false);
         }
-
-        let _ = sqlx::query(
+        sqlx::query(
             "INSERT INTO delivery_ledger_constituents (parent_delivery_id, constituent_id)
              VALUES (?, ?)
              ON CONFLICT(constituent_id) DO UPDATE SET parent_delivery_id = excluded.parent_delivery_id",
         )
         .bind(delivery_id)
         .bind(delivery_id)
-        .execute(&self.pool)
-        .await;
+        .execute(&mut *tx)
+        .await?;
 
-        for c_id in constituent_ids {
-            if c_id != delivery_id {
-                let platform_msg_id = c_id.strip_prefix("discord:").unwrap_or(c_id);
-                let _ = sqlx::query(
-                    "INSERT INTO delivery_ledger (
-                        delivery_id, session_key, event_id, message_id, status,
-                        platform_message_id, created_at, updated_at, received_at
-                     ) VALUES (?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
-                     ON CONFLICT(message_id) DO NOTHING",
-                )
-                .bind(Uuid::new_v4().to_string())
-                .bind(event.session.storage_key())
-                .bind(c_id)
-                .bind(c_id)
-                .bind(platform_msg_id)
-                .bind(event.received_at)
-                .bind(event.received_at)
-                .bind(event.received_at)
-                .execute(&self.pool)
-                .await;
+        for c_id in fresh {
+            let platform_msg_id = c_id.strip_prefix("discord:").unwrap_or(c_id);
+            sqlx::query(
+                "INSERT INTO delivery_ledger (
+                    delivery_id, session_key, event_id, message_id, status,
+                    platform_message_id, created_at, updated_at, received_at
+                 ) VALUES (?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
+                 ON CONFLICT(message_id) DO UPDATE SET
+                    status = 'in_progress',
+                    updated_at = excluded.updated_at,
+                    error = NULL
+                 WHERE delivery_ledger.status = 'failed'",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(event.session.storage_key())
+            .bind(c_id)
+            .bind(c_id)
+            .bind(platform_msg_id)
+            .bind(event.received_at)
+            .bind(event.received_at)
+            .bind(event.received_at)
+            .execute(&mut *tx)
+            .await?;
 
-                let _ = sqlx::query(
-                    "INSERT INTO delivery_ledger_constituents (parent_delivery_id, constituent_id)
-                     VALUES (?, ?)
-                     ON CONFLICT(constituent_id) DO UPDATE SET parent_delivery_id = excluded.parent_delivery_id",
-                )
-                .bind(delivery_id)
-                .bind(c_id)
-                .execute(&self.pool)
-                .await;
-            }
+            sqlx::query(
+                "INSERT INTO delivery_ledger_constituents (parent_delivery_id, constituent_id)
+                 VALUES (?, ?)
+                 ON CONFLICT(constituent_id) DO UPDATE SET parent_delivery_id = excluded.parent_delivery_id",
+            )
+            .bind(delivery_id)
+            .bind(c_id)
+            .execute(&mut *tx)
+            .await?;
         }
 
+        tx.commit().await?;
         Ok(true)
     }
 
@@ -288,6 +288,8 @@ impl DeliveryLedgerService {
         let completed_at = Utc::now();
         let status = status_name(&status);
         let err_str = error.as_deref();
+        self.ensure_constituents_table().await?;
+        let mut tx = self.pool.begin().await?;
         let result = sqlx::query(
             "UPDATE delivery_ledger
              SET status = ?, error = ?, completed_at = ?, updated_at = ?,
@@ -300,7 +302,7 @@ impl DeliveryLedgerService {
         .bind(completed_at)
         .bind(completed_at)
         .bind(message_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if result.rows_affected() == 0 {
             return Err(OmonError::Database(format!(
@@ -308,8 +310,7 @@ impl DeliveryLedgerService {
             )));
         }
 
-        let _ = self.ensure_constituents_table().await;
-        let _ = sqlx::query(
+        sqlx::query(
             "UPDATE delivery_ledger
              SET status = ?, error = ?, completed_at = ?, updated_at = ?,
                  processing_latency_ms = MAX(0, CAST((julianday(?) - julianday(received_at)) * 86400000 AS INTEGER))
@@ -323,8 +324,9 @@ impl DeliveryLedgerService {
         .bind(completed_at)
         .bind(completed_at)
         .bind(message_id)
-        .execute(&self.pool)
-        .await;
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
 
         Ok(())
     }
@@ -388,6 +390,8 @@ impl DeliveryLedgerService {
              ) VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?, NULL, ?)
              ON CONFLICT(id) DO UPDATE SET
                 content = excluded.content,
+                -- New content has not been sent yet, whatever the old row's state was.
+                state = 'pending',
                 updated_at = excluded.updated_at,
                 owner_pid = excluded.owner_pid,
                 owner_started_at = excluded.owner_started_at",
@@ -489,11 +493,10 @@ impl DeliveryLedgerService {
         for row in rows {
             if let Some(pid) = row.owner_pid {
                 if pid > 0 && is_process_alive(pid as u32) {
-                    if let Some(ref started) = row.owner_started_at {
-                        if started == current_started_at {
-                            continue; // A live gateway instance still owns this row
-                        }
-                    } else if pid == current_pid {
+                    // Only a row stamped by THIS process start is owned by a live instance. A
+                    // legacy row with no stamp cannot prove ownership (PID reuse, e.g. PID 1
+                    // in containers), so it falls through to the stale/abandon checks.
+                    if row.owner_started_at.as_deref() == Some(current_started_at) {
                         continue;
                     }
                 }
@@ -677,6 +680,9 @@ pub async fn recover_pending_delivery_obligations(
     let ledger = DeliveryLedgerService::new(pool.clone());
     let recoverable = ledger.sweep_recoverable(3, 86400).await?;
     let mut count = 0;
+    // One obligation's bookkeeping failure must not strand the remaining recoverable
+    // obligations; the first error is still returned so the caller sees it.
+    let mut first_error: Option<OmonError> = None;
     for obligation in recoverable {
         let session_key: SessionKey = if let Ok(key) =
             SessionKey::from_storage_key(&obligation.session_key)
@@ -718,7 +724,11 @@ pub async fn recover_pending_delivery_obligations(
             reply_to: None,
         };
 
-        ledger.mark_obligation_attempting(&obligation.id).await?;
+        if let Err(error) = ledger.mark_obligation_attempting(&obligation.id).await {
+            tracing::error!(%error, obligation = %obligation.id, "failed to mark obligation attempting; skipping dispatch");
+            first_error.get_or_insert(error);
+            continue;
+        }
         let result = dispatcher
             .dispatch(crate::OutboundAction::Stream {
                 session: session_key,
@@ -727,19 +737,62 @@ pub async fn recover_pending_delivery_obligations(
             .await;
 
         match result {
-            Ok(_) => {
-                ledger.mark_obligation_delivered(&obligation.id).await?;
-                count += 1;
-            }
+            Ok(_) => match ledger.mark_obligation_delivered(&obligation.id).await {
+                Ok(()) => count += 1,
+                Err(error) => {
+                    tracing::error!(%error, obligation = %obligation.id, "reply dispatched but delivered checkpoint failed");
+                    first_error.get_or_insert(error);
+                }
+            },
             Err(ref err) => {
-                ledger
+                if let Err(error) = ledger
                     .mark_obligation_failed(&obligation.id, &err.to_string())
-                    .await?;
+                    .await
+                {
+                    tracing::error!(%error, obligation = %obligation.id, "failed to record obligation dispatch failure");
+                    first_error.get_or_insert(error);
+                }
             }
         }
     }
 
-    Ok(count)
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(count),
+    }
+}
+
+/// Inserts the delivery row as `in_progress`, or reclaims a previously `failed` one.
+/// Returns true when a row was inserted or reclaimed; an already live claim yields false.
+async fn claim_delivery_row<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    event: &InboundEvent,
+    delivery_id: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "INSERT INTO delivery_ledger (
+            delivery_id, session_key, event_id, message_id, status,
+            platform_message_id, created_at, updated_at, received_at
+         ) VALUES (?, ?, ?, ?, 'in_progress', ?, ?, ?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET
+            status = 'in_progress',
+            updated_at = excluded.updated_at,
+            error = NULL
+         WHERE delivery_ledger.status = 'failed'",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(event.session.storage_key())
+    .bind(delivery_id)
+    .bind(delivery_id)
+    .bind(&event.platform_message_id)
+    .bind(event.received_at)
+    .bind(event.received_at)
+    .bind(event.received_at)
+    .execute(executor)
+    .await?;
+    // A fresh insert or the reclaim of a previously failed delivery both yield one
+    // affected row; an already pending/delivered claim yields zero and stays deduped.
+    Ok(result.rows_affected() == 1)
 }
 
 fn status_name(status: &DeliveryStatus) -> &'static str {
@@ -939,5 +992,112 @@ mod tests {
             .unwrap();
         assert_eq!(obl_p.owner_pid, Some(current_pid));
         assert_eq!(obl_p.attempts, 1);
+    }
+
+    fn batch_event(session: &SessionKey, id: &str) -> InboundEvent {
+        InboundEvent::message(session.clone(), id, "chunk")
+    }
+
+    #[tokio::test]
+    async fn failed_batch_is_reclaimed_and_seen_constituent_does_not_drop_the_rest() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let service = DeliveryLedgerService::new(db.pool().clone());
+        let session = test_session();
+        let event = batch_event(&session, "30");
+        let ids = vec![
+            "discord:10".to_string(),
+            "discord:20".to_string(),
+            "discord:30".to_string(),
+        ];
+
+        assert!(service
+            .record_incoming_with_constituents(&event, "discord:30", &ids)
+            .await
+            .unwrap());
+        // Live claim -> duplicate.
+        assert!(!service
+            .record_incoming_with_constituents(&event, "discord:30", &ids)
+            .await
+            .unwrap());
+        // A failed batch (parent and constituents) must be retryable.
+        service.mark_failed("discord:30", "boom").await.unwrap();
+        assert!(service
+            .record_incoming_with_constituents(&event, "discord:30", &ids)
+            .await
+            .unwrap());
+        service.mark_delivered("discord:30").await.unwrap();
+
+        // A later batch containing one already-delivered constituent still processes.
+        let next = batch_event(&session, "50");
+        let next_ids = vec![
+            "discord:20".to_string(),
+            "discord:40".to_string(),
+            "discord:50".to_string(),
+        ];
+        assert!(service
+            .record_incoming_with_constituents(&next, "discord:50", &next_ids)
+            .await
+            .unwrap());
+        assert!(service.get("discord:40").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn legacy_unstamped_obligation_with_current_pid_is_not_skipped_forever() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let service = DeliveryLedgerService::new(db.pool().clone());
+        let session = test_session();
+        service
+            .record_obligation("obl-legacy", &session, "legacy")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE delivery_obligations SET owner_started_at = NULL, owner_pid = ?")
+            .bind(std::process::id() as i64)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let claimed = service.sweep_recoverable(3, 86400).await.unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, "obl-legacy");
+    }
+
+    struct FlakyDispatcher;
+
+    #[async_trait::async_trait]
+    impl crate::OutboundDispatcher for FlakyDispatcher {
+        async fn dispatch(&self, _action: crate::OutboundAction) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn recovery_continues_past_one_failing_obligation_and_reports_the_error() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let service = DeliveryLedgerService::new(db.pool().clone());
+        let session = test_session();
+        for id in ["obl-a", "obl-b"] {
+            service.record_obligation(id, &session, id).await.unwrap();
+        }
+        let previous =
+            DateTime::parse_from_rfc3339(process_started_at()).unwrap() - Duration::days(1);
+        sqlx::query("UPDATE delivery_obligations SET owner_started_at = ?")
+            .bind(previous.to_rfc3339())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        // The first obligation's attempting update is rejected; the second must still recover.
+        sqlx::query(
+            "CREATE TRIGGER fail_a BEFORE UPDATE ON delivery_obligations
+             WHEN NEW.id = 'obl-a' AND NEW.state = 'attempting'
+             BEGIN SELECT RAISE(ABORT, 'FAULT_A'); END;",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let result =
+            recover_pending_delivery_obligations(db.pool(), std::sync::Arc::new(FlakyDispatcher))
+                .await;
+        assert!(result.unwrap_err().to_string().contains("FAULT_A"));
+        let b = service.get_obligation("obl-b").await.unwrap().unwrap();
+        assert_eq!(b.state, "delivered");
     }
 }

@@ -75,6 +75,8 @@ pub struct ActivityDecision {
     pub report_count: usize,
     /// Raw curated report text; todo18/19 must scrub before transport.
     pub thread_posts: Vec<String>,
+    /// The item id was already captured: nothing was applied a second time.
+    pub replayed: bool,
 }
 
 #[derive(Clone)]
@@ -150,6 +152,7 @@ impl LaneActivity {
                 tx.rollback().await?;
                 return Ok(ActivityDecision {
                     pause: lane.status != "working",
+                    replayed: true,
                     ..ActivityDecision::default()
                 });
             }
@@ -335,7 +338,7 @@ impl LaneActivity {
             .execute(&mut **tx)
             .await?;
         sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, 'working', 'blocked', ?)")
-            .bind(&lane.key).bind(self.clock.now()).bind(text).execute(&mut **tx).await?;
+            .bind(&lane.key).bind(self.clock.now()).bind(super::state::safe_reason(text)).execute(&mut **tx).await?;
         self.event(tx, lane, kind, text).await
     }
 

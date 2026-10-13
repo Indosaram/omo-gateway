@@ -83,8 +83,9 @@ pub(crate) async fn collect(multiplexer: &SessionMultiplexer) -> Result<usize> {
             }
             Ok(Ok(false)) => handle.resume(),
             Ok(Err(error)) => {
+                // One session failing to flush must not stop the rest from being evicted.
                 handle.resume();
-                return Err(error);
+                tracing::error!(session = %key, %error, "failed to flush session during garbage collection");
             }
             Err(_) => {
                 multiplexer.remove_handle(&key, &handle);

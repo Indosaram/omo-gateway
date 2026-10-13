@@ -322,9 +322,19 @@ impl<C: Clock + 'static, L: DelegateLivenessChecker + 'static, S: WorkHeartbeatS
                 }
             };
 
-            self.sink.post_message(channel_id, &content).await?;
+            // One bad channel/thread must not starve every later stale item.
+            let content: String = content.chars().take(1900).collect();
+            if let Err(error) = self.sink.post_message(channel_id, &content).await {
+                tracing::warn!(work_item_id = %item.id, %error, "work heartbeat post failed; continuing");
+                continue;
+            }
             let next_progress_at = now.to_rfc3339();
-            update_work_item_progress(&self.pool, &item.id, &next_progress_at).await?;
+            if let Err(error) =
+                update_work_item_progress(&self.pool, &item.id, &next_progress_at).await
+            {
+                tracing::warn!(work_item_id = %item.id, %error, "work heartbeat progress update failed; continuing");
+                continue;
+            }
             processed += 1;
         }
 

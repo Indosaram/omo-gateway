@@ -18,6 +18,19 @@ const SCALAR_ENV_KEYS: [&str; 11] = [
     "APPROVALS_DESTRUCTIVE_SLASH_CONFIRM",
 ];
 
+const ACCESS_CONTROL_KEYS: [&str; 9] = [
+    "DISCORD_ALLOWED_USERS",
+    "DISCORD_ALLOWED_CHANNELS",
+    "DISCORD_ALLOWED_ROLES",
+    "DISCORD_ALLOW_ALL_USERS",
+    "DISCORD_IGNORED_CHANNELS",
+    "DISCORD_FREE_RESPONSE_CHANNELS",
+    "DISCORD_HOME_CHANNEL",
+    // The approval policy is gateway-wide; one profile's yolo mode must not disable it.
+    "APPROVAL_MODE",
+    "APPROVALS_DESTRUCTIVE_SLASH_CONFIRM",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfigImportResult {
     pub values: BTreeMap<String, String>,
@@ -459,6 +472,14 @@ fn map_values(
             .iter()
             .filter(|(_, cfg)| cfg.as_ref().is_none_or(|c| c.discord.enabled))
             .find_map(|(profile_env, _)| profile_env.get(key).map(String::as_str));
+        if ACCESS_CONTROL_KEYS.contains(&key) {
+            // Access control is never inherited from a profile, and root
+            // config.yaml values already set above are never overwritten.
+            if !output.contains_key(key) {
+                insert_nonempty(&mut output, key, root_value);
+            }
+            continue;
+        }
         insert_nonempty(&mut output, key, root_value.or(profile_value));
     }
     if !output.contains_key("APPROVAL_MODE") {
@@ -495,6 +516,10 @@ fn validate_output_values(values: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+fn overlay_owns_tokens(overlay: &BTreeMap<String, String>) -> bool {
+    overlay.contains_key("DISCORD_BOT_TOKEN") || overlay.contains_key("DISCORD_BOT_TOKENS")
+}
+
 fn merged_values(
     existing: Option<&EnvDocument>,
     overlay: &BTreeMap<String, String>,
@@ -502,11 +527,15 @@ fn merged_values(
     let mut merged = existing
         .map(|document| document.values.clone())
         .unwrap_or_default();
-    if !overlay.contains_key("DISCORD_BOT_TOKEN") {
-        merged.remove("DISCORD_BOT_TOKEN");
-    }
-    if !overlay.contains_key("DISCORD_BOT_TOKENS") {
-        merged.remove("DISCORD_BOT_TOKENS");
+    // Hermes owns the bot token set only when it supplies one; otherwise the
+    // target's existing credentials are left alone.
+    if overlay_owns_tokens(overlay) {
+        if !overlay.contains_key("DISCORD_BOT_TOKEN") {
+            merged.remove("DISCORD_BOT_TOKEN");
+        }
+        if !overlay.contains_key("DISCORD_BOT_TOKENS") {
+            merged.remove("DISCORD_BOT_TOKENS");
+        }
     }
     merged.extend(overlay.clone());
     merged
@@ -528,7 +557,9 @@ fn render_merged_env(existing: Option<&EnvDocument>, overlay: &BTreeMap<String, 
                     render_env_value(&mut rendered, value);
                     rendered.push('\n');
                     overlaid.insert(key.as_str());
-                } else if key == "DISCORD_BOT_TOKEN" || key == "DISCORD_BOT_TOKENS" {
+                } else if overlay_owns_tokens(overlay)
+                    && (key == "DISCORD_BOT_TOKEN" || key == "DISCORD_BOT_TOKENS")
+                {
                     continue;
                 } else {
                     rendered.push_str(raw);
@@ -1108,6 +1139,31 @@ mod tests {
     }
 
     #[test]
+    fn existing_discord_tokens_survive_when_hermes_supplies_none() {
+        let env = fixture();
+        write(
+            &env,
+            "/hermes/config.yaml",
+            "model:\n  default: gpt-4o\ndiscord:\n  enabled: false\n",
+        );
+        write(&env, "/hermes/.env", "");
+        let original = "DISCORD_BOT_TOKEN=keep-me\nDISCORD_BOT_TOKENS=a,b\n";
+        write(&env, "/gateway/.env", original);
+
+        import_config(
+            &env,
+            Path::new("/hermes"),
+            Path::new("/gateway/.env"),
+            false,
+        )
+        .unwrap();
+
+        let rendered = env.read_to_string(Path::new("/gateway/.env")).unwrap();
+        assert!(rendered.contains("DISCORD_BOT_TOKEN=keep-me\n"));
+        assert!(rendered.contains("DISCORD_BOT_TOKENS=a,b\n"));
+    }
+
+    #[test]
     fn dry_run_returns_masked_diff_and_performs_zero_writes() {
         let env = fixture();
         write(
@@ -1212,7 +1268,88 @@ mod tests {
                 .values
                 .get("DISCORD_ALLOWED_USERS")
                 .map(String::as_str),
-            Some("99")
+            None
+        );
+    }
+
+    #[test]
+    fn profile_access_control_never_imported_globally() {
+        let env = fixture();
+        write(
+            &env,
+            "/hermes/config.yaml",
+            "model:\n  default: gpt-4o\ndiscord:\n  allowed_users: [\"42\"]\n",
+        );
+        write(&env, "/hermes/.env", "DISCORD_BOT_TOKEN=primary\n");
+        write(
+            &env,
+            "/hermes/profiles/alpha/.env",
+            "DISCORD_ALLOWED_USERS=99\nDISCORD_ALLOWED_CHANNELS=7\nDISCORD_ALLOWED_ROLES=8\nDISCORD_ALLOW_ALL_USERS=true\nDISCORD_IGNORED_CHANNELS=9\nDISCORD_FREE_RESPONSE_CHANNELS=10\nDISCORD_HOME_CHANNEL=11\n",
+        );
+
+        let result = import_config(
+            &env,
+            Path::new("/hermes"),
+            Path::new("/gateway/.env"),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result
+                .values
+                .get("DISCORD_ALLOWED_USERS")
+                .map(String::as_str),
+            Some("42")
+        );
+        for key in [
+            "DISCORD_ALLOWED_CHANNELS",
+            "DISCORD_ALLOWED_ROLES",
+            "DISCORD_ALLOW_ALL_USERS",
+            "DISCORD_IGNORED_CHANNELS",
+            "DISCORD_FREE_RESPONSE_CHANNELS",
+            "DISCORD_HOME_CHANNEL",
+        ] {
+            assert!(
+                !result.values.contains_key(key),
+                "{key} leaked from profile"
+            );
+        }
+    }
+
+    #[test]
+    fn profile_approval_mode_never_overrides_root_config() {
+        let env = fixture();
+        write(
+            &env,
+            "/hermes/config.yaml",
+            "model:\n  default: gpt-4o\napprovals:\n  mode: always\n",
+        );
+        write(&env, "/hermes/.env", "DISCORD_BOT_TOKEN=primary\n");
+        write(
+            &env,
+            "/hermes/profiles/yolo/.env",
+            "APPROVAL_MODE=never\nAPPROVALS_DESTRUCTIVE_SLASH_CONFIRM=false\n",
+        );
+
+        let result = import_config(
+            &env,
+            Path::new("/hermes"),
+            Path::new("/gateway/.env"),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.values.get("APPROVAL_MODE").map(String::as_str),
+            Some("always"),
+            "a profile's approval mode must not override the root config"
+        );
+        assert!(
+            !result
+                .values
+                .contains_key("APPROVALS_DESTRUCTIVE_SLASH_CONFIRM"),
+            "slash-confirm must not leak from a profile"
         );
     }
 

@@ -175,48 +175,71 @@ pub fn probe_disk(workspace_root: &Path) -> CheckResult {
     check
 }
 
+/// Provider whose credentials a model id needs; `None` for unknown/custom ids.
+fn credential_provider(model: &str) -> Option<(&'static str, &'static str)> {
+    let name = model.rsplit('/').next().unwrap_or(model);
+    let is_openai_reasoning = |prefix: &str| {
+        name.strip_prefix(prefix)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['-', '.']))
+    };
+    if model.starts_with("anthropic/") || name.starts_with("claude") {
+        Some(("anthropic", "ANTHROPIC_API_KEY"))
+    } else if model.starts_with("openai/")
+        || name.starts_with("gpt")
+        || is_openai_reasoning("o1")
+        || is_openai_reasoning("o3")
+        || is_openai_reasoning("o4")
+    {
+        Some(("openai", "OPENAI_API_KEY"))
+    } else if name.starts_with("deepseek") {
+        Some(("deepseek", "DEEPSEEK_API_KEY"))
+    } else {
+        None
+    }
+}
+
 /// Probes whether required credentials for the configured default LLM provider are present in the environment.
+///
+/// A known provider requires its own key (or the generic `LLM_API_KEY`); a key for a
+/// different provider never satisfies it. Blank values count as absent.
 pub fn probe_credentials(default_model: &str) -> CheckResult {
+    probe_credentials_with(default_model, |name| std::env::var(name).ok())
+}
+
+fn probe_credentials_with(
+    default_model: &str,
+    lookup: impl Fn(&str) -> Option<String>,
+) -> CheckResult {
+    let env_present = |name: &str| lookup(name).is_some_and(|value| !value.trim().is_empty());
     let model = default_model.trim().to_ascii_lowercase();
     if model.is_empty() {
         return CheckResult::degraded("no default model configured");
     }
 
-    let has_any_api_key = std::env::var("ANTHROPIC_API_KEY").is_ok()
-        || std::env::var("OPENAI_API_KEY").is_ok()
-        || std::env::var("DEEPSEEK_API_KEY").is_ok()
-        || std::env::var("OPENROUTER_API_KEY").is_ok()
-        || std::env::var("GEMINI_API_KEY").is_ok()
-        || std::env::var("LLM_API_KEY").is_ok();
-
-    if model.contains("claude") || model.starts_with("anthropic/") {
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() || has_any_api_key {
-            CheckResult::ok_with_detail(format!("credentials present for model '{default_model}'"))
-        } else {
-            CheckResult::degraded("ANTHROPIC_API_KEY is not set in environment")
+    let present =
+        || CheckResult::ok_with_detail(format!("credentials present for model '{default_model}'"));
+    match credential_provider(&model) {
+        Some((_, key)) if env_present(key) || env_present("LLM_API_KEY") => present(),
+        Some((_, key)) => CheckResult::degraded(format!("{key} is not set in environment")),
+        None => {
+            let any_key = [
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "DEEPSEEK_API_KEY",
+                "OPENROUTER_API_KEY",
+                "GEMINI_API_KEY",
+                "LLM_API_KEY",
+            ]
+            .iter()
+            .any(|name| env_present(name));
+            if any_key {
+                present()
+            } else {
+                CheckResult::degraded(format!(
+                    "no API key found in environment for model '{default_model}'"
+                ))
+            }
         }
-    } else if model.contains("gpt")
-        || model.contains("o1")
-        || model.contains("o3")
-        || model.starts_with("openai/")
-    {
-        if std::env::var("OPENAI_API_KEY").is_ok() || has_any_api_key {
-            CheckResult::ok_with_detail(format!("credentials present for model '{default_model}'"))
-        } else {
-            CheckResult::degraded("OPENAI_API_KEY is not set in environment")
-        }
-    } else if model.contains("deepseek") {
-        if std::env::var("DEEPSEEK_API_KEY").is_ok() || has_any_api_key {
-            CheckResult::ok_with_detail(format!("credentials present for model '{default_model}'"))
-        } else {
-            CheckResult::degraded("DEEPSEEK_API_KEY is not set in environment")
-        }
-    } else if has_any_api_key {
-        CheckResult::ok_with_detail(format!("credentials present for model '{default_model}'"))
-    } else {
-        CheckResult::degraded(format!(
-            "no API key found in environment for model '{default_model}'"
-        ))
     }
 }
 
@@ -235,18 +258,24 @@ pub fn probe_gateway(bot_count: usize) -> CheckResult {
     }
 }
 
-/// Probes the local agent backend daemon health.
-pub async fn probe_backend(appserver_url: Option<&str>) -> CheckResult {
-    let url = appserver_url.unwrap_or("http://127.0.0.1:18800");
-    let http_url = if let Some(stripped) = url.strip_prefix("ws://") {
+fn backend_http_url(appserver_url: Option<&str>) -> String {
+    let url = appserver_url.unwrap_or("ws://127.0.0.1:19742");
+    if let Some(stripped) = url.strip_prefix("ws://") {
         format!("http://{stripped}")
     } else if let Some(stripped) = url.strip_prefix("wss://") {
         format!("https://{stripped}")
     } else {
         url.to_string()
-    };
+    }
+}
 
+/// Probes the local agent backend daemon health.
+pub async fn probe_backend(appserver_url: Option<&str>) -> CheckResult {
+    let http_url = backend_http_url(appserver_url);
+
+    // Loopback probe: never route it through HTTP(S)_PROXY.
     let client = match reqwest::Client::builder()
+        .no_proxy()
         .timeout(std::time::Duration::from_millis(800))
         .build()
     {
@@ -289,7 +318,10 @@ pub async fn collect_runtime_readiness(
     checks.insert("disk".to_string(), probe_disk(workspace_root));
     checks.insert("credentials".to_string(), probe_credentials(default_model));
     checks.insert("gateway".to_string(), probe_gateway(bot_count));
-    let appserver_url = std::env::var("OMON_APPSERVER_URL").ok();
+    let appserver_url = std::env::var("OMON_OMO_APPSERVER_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     checks.insert(
         "backend".to_string(),
         probe_backend(appserver_url.as_deref()).await,
@@ -310,6 +342,15 @@ pub async fn collect_runtime_readiness(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_probe_defaults_to_omo_appserver_url() {
+        assert_eq!(backend_http_url(None), "http://127.0.0.1:19742");
+        assert_eq!(
+            backend_http_url(Some("wss://example.test:9000")),
+            "https://example.test:9000"
+        );
+    }
 
     #[test]
     fn disk_pressure_uses_absolute_headroom() {
@@ -460,6 +501,56 @@ mod tests {
             Some(&serde_json::json!(2))
         );
         assert!(!active.metrics.contains_key("connected_bots"));
+    }
+
+    #[test]
+    fn credential_provider_matches_prefixes_not_substrings() {
+        let cases = [
+            ("claude-sonnet-4", Some("ANTHROPIC_API_KEY")),
+            ("anthropic/claude-3", Some("ANTHROPIC_API_KEY")),
+            ("gpt-4o", Some("OPENAI_API_KEY")),
+            ("openai/o3-mini", Some("OPENAI_API_KEY")),
+            ("o1", Some("OPENAI_API_KEY")),
+            ("deepseek-chat", Some("DEEPSEEK_API_KEY")),
+            // Substrings of unrelated names must not select a provider.
+            ("llama-3o1b", None),
+            ("custom-o3x", None),
+            ("custom-model", None),
+        ];
+        for (model, expected) in cases {
+            assert_eq!(
+                credential_provider(model).map(|(_, key)| key),
+                expected,
+                "{model}"
+            );
+        }
+    }
+
+    #[test]
+    fn credentials_require_the_models_own_provider_key() {
+        let only = |name: &'static str, value: &'static str| {
+            move |key: &str| (key == name).then(|| value.to_owned())
+        };
+        // A key for a different provider must not make a gpt model look ready.
+        let wrong = probe_credentials_with("gpt-4o", only("ANTHROPIC_API_KEY", "sk-ant"));
+        assert_eq!(wrong.status, "degraded");
+        // The model's own key, or the generic LLM_API_KEY, does.
+        assert_eq!(
+            probe_credentials_with("gpt-4o", only("OPENAI_API_KEY", "sk")).status,
+            "ok"
+        );
+        assert_eq!(
+            probe_credentials_with("gpt-4o", only("LLM_API_KEY", "sk")).status,
+            "ok"
+        );
+        // A blank value is not a credential.
+        let blank = probe_credentials_with("claude-sonnet-4", only("ANTHROPIC_API_KEY", "  "));
+        assert_eq!(blank.status, "degraded");
+        // Unknown models accept any non-blank key.
+        let custom = probe_credentials_with("custom-model", only("OPENROUTER_API_KEY", "k"));
+        assert_eq!(custom.status, "ok");
+        let none = probe_credentials_with("custom-model", |_| None);
+        assert_eq!(none.status, "degraded");
     }
 
     #[test]

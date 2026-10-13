@@ -8,6 +8,9 @@ use super::registry::{
     CommandOutput, CommandRunner, ProcessCommandRunner, RegistryError, Session, SessionRegistry,
 };
 
+/// Budget for list/send/read calls.
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     machine: String,
@@ -168,11 +171,26 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         let list = SessionRegistry::new(self.runner.clone(), vec![target.machine.clone()])
             .list_all()
             .await;
+        let machine_error = list
+            .errors
+            .into_iter()
+            .find(|error| error.machine == target.machine);
         let session = list
             .sessions
             .into_iter()
             .find(|s| s.machine == target.machine && s.session_id == target.session)
-            .ok_or(ControlError::NotRunning)?;
+            .ok_or_else(|| match machine_error {
+                // A failed listing says nothing about the session; only a successful
+                // listing that lacks it proves it is not running.
+                Some(error) => ControlError::Command {
+                    code: error.code,
+                    message: format!(
+                        "session listing failed on {}: {}",
+                        error.machine, error.message
+                    ),
+                },
+                None => ControlError::NotRunning,
+            })?;
         if !session.controls.iter().any(|c| c == capability) {
             return Err(ControlError::Unsupported(capability));
         }
@@ -196,8 +214,19 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         target: &Target,
         words: &[String],
     ) -> Result<CommandOutput, ControlError> {
+        self.output_with_timeout(target, words, CONTROL_TIMEOUT)
+            .await
+    }
+
+    /// Like `output`, with a caller-chosen budget for long-running remote commands.
+    pub async fn output_with_timeout(
+        &self,
+        target: &Target,
+        words: &[String],
+        timeout: Duration,
+    ) -> Result<CommandOutput, ControlError> {
         let argv = transport_argv(target, words);
-        let output = tokio::time::timeout(Duration::from_secs(20), self.runner.run("local", &argv))
+        let output = tokio::time::timeout(timeout, self.runner.run("local", &argv))
             .await
             .map_err(|_| ControlError::Timeout)?
             .map_err(|message| ControlError::Command { code: 5, message })?;
@@ -270,5 +299,86 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
             ],
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    /// Fails every listing, as an ssh timeout or VPN blip would.
+    struct ListingDown;
+
+    #[async_trait]
+    impl CommandRunner for ListingDown {
+        async fn run(&self, _machine: &str, _argv: &[String]) -> Result<CommandOutput, String> {
+            Err("ssh: connect timed out".into())
+        }
+    }
+
+    /// Answers every command with success after a fixed amount of (paused) time.
+    struct SlowRunner(Duration);
+
+    #[async_trait]
+    impl CommandRunner for SlowRunner {
+        async fn run(&self, _machine: &str, _argv: &[String]) -> Result<CommandOutput, String> {
+            tokio::time::sleep(self.0).await;
+            Ok(CommandOutput {
+                code: 0,
+                stdout: b"{}".to_vec(),
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_listing_is_not_reported_as_not_running() {
+        let control = SessionControl::new(Arc::new(ListingDown), vec!["omarchy".into()]);
+        let target: Target = "omarchy:session-1".parse().unwrap();
+        let error = control.session(&target, "send").await.unwrap_err();
+        assert!(
+            !matches!(error, ControlError::NotRunning),
+            "a failed listing must stay a transient error, got {error:?}"
+        );
+        assert!(matches!(error, ControlError::Command { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn successful_listing_without_the_session_is_not_running() {
+        struct EmptyListing;
+        #[async_trait]
+        impl CommandRunner for EmptyListing {
+            async fn run(&self, _: &str, _: &[String]) -> Result<CommandOutput, String> {
+                Ok(CommandOutput {
+                    code: 0,
+                    stdout: b"[]".to_vec(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let control = SessionControl::new(Arc::new(EmptyListing), vec!["omarchy".into()]);
+        let target: Target = "omarchy:session-1".parse().unwrap();
+        assert!(matches!(
+            control.session(&target, "send").await,
+            Err(ControlError::NotRunning)
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn output_budget_is_per_call() {
+        let control =
+            SessionControl::new(Arc::new(SlowRunner(Duration::from_secs(30))), Vec::new());
+        let target: Target = "local:session-1".parse().unwrap();
+        let words = vec!["true".to_owned()];
+        assert!(matches!(
+            control.output(&target, &words).await,
+            Err(ControlError::Timeout)
+        ));
+        let output = control
+            .output_with_timeout(&target, &words, Duration::from_secs(120))
+            .await
+            .expect("a longer budget lets a slow command finish");
+        assert_eq!(output.code, 0);
     }
 }

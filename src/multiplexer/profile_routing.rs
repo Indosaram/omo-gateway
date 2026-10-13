@@ -21,11 +21,11 @@ where
     match opt {
         Some(NumericOrString::U64(v)) => Ok(Some(v)),
         Some(NumericOrString::I64(v)) => {
-            if v >= 0 {
-                Ok(Some(v as u64))
-            } else {
-                Ok(None)
-            }
+            // A negative id is a config typo; mapping it to `None` would widen the route to
+            // "match any" instead of rejecting it.
+            u64::try_from(v).map(Some).map_err(|_| {
+                serde::de::Error::custom(format!("negative id {v} is not a valid Discord id"))
+            })
         }
         Some(NumericOrString::String(s)) => {
             let trimmed = s.trim();
@@ -232,7 +232,34 @@ impl ProfileRouter {
         user_id: u64,
         global_allowed_users: &[u64],
     ) -> bool {
-        if let Some(route) = self.match_route(None, channel_id, None) {
+        self.is_user_allowed_in_context(
+            bot_id,
+            None,
+            channel_id,
+            None,
+            None,
+            user_id,
+            global_allowed_users,
+        )
+    }
+
+    /// Like [`Self::is_user_allowed_for_bot_or_route`] but resolves the route with the full
+    /// Discord context, so a per-route `allowed_users` list on a guild-, thread- or
+    /// parent-scoped route is enforced instead of silently skipped.
+    #[allow(clippy::too_many_arguments)]
+    pub fn is_user_allowed_in_context(
+        &self,
+        bot_id: Option<&str>,
+        guild_id: Option<u64>,
+        channel_id: u64,
+        thread_id: Option<u64>,
+        parent_chat_id: Option<u64>,
+        user_id: u64,
+        global_allowed_users: &[u64],
+    ) -> bool {
+        if let Some(route) =
+            self.match_route_with_parent(guild_id, channel_id, thread_id, parent_chat_id)
+        {
             if let Some(ref allowed) = route.allowed_users {
                 return allowed.contains(&user_id);
             }
@@ -395,13 +422,36 @@ pub fn parse_profile_routes(json_str: &str) -> Vec<ProfileRoute> {
     if trimmed.is_empty() {
         return Vec::new();
     }
-    match serde_json::from_str::<Vec<ProfileRoute>>(trimmed) {
-        Ok(routes) => routes,
+    match serde_json::from_str::<Vec<serde_json::Value>>(trimmed) {
+        Ok(entries) => entries
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                match serde_json::from_value::<ProfileRoute>(entry) {
+                    Ok(route) => Some(route),
+                    Err(err) => {
+                        // One bad entry must not drop every other route's restrictions.
+                        tracing::error!(%err, index, "invalid profile route entry skipped");
+                        None
+                    }
+                }
+            })
+            .collect(),
         Err(err) => {
             tracing::warn!(%err, raw = %trimmed, "failed to parse profile routes JSON; falling back to empty routes");
             Vec::new()
         }
     }
+}
+
+/// Strict variant of [`parse_profile_routes`] for startup validation: empty input is an empty
+/// list, but any malformed entry (including negative ids) is an error instead of a silent drop.
+pub fn try_parse_profile_routes(json_str: &str) -> Result<Vec<ProfileRoute>, serde_json::Error> {
+    let trimmed = json_str.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    serde_json::from_str(trimmed)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -816,5 +866,42 @@ mod tests {
         let key_other =
             SessionKey::new("discord", Some("1234"), "999999", None::<String>, "user-1");
         assert!(router.match_session(&key_other).is_none());
+    }
+
+    #[test]
+    fn negative_ids_are_rejected_instead_of_widening_the_route() {
+        assert!(serde_json::from_str::<ProfileRoute>(r#"{"channel": -5}"#).is_err());
+        assert!(serde_json::from_str::<ProfileRoute>(r#"{"guild": -1}"#).is_err());
+        assert!(try_parse_profile_routes(r#"[{"thread": -2}]"#).is_err());
+        assert_eq!(
+            try_parse_profile_routes(r#"[{"channel": 5}]"#).unwrap()[0].channel,
+            Some(5)
+        );
+        assert!(try_parse_profile_routes("  ").unwrap().is_empty());
+    }
+
+    #[test]
+    fn one_bad_route_entry_does_not_drop_the_other_routes() {
+        let routes = parse_profile_routes(
+            r#"[
+                {"channel": -5, "enabled_toolsets": ["web"]},
+                {"channel": 6, "allowed_users": [1]}
+            ]"#,
+        );
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].channel, Some(6));
+        assert_eq!(routes[0].allowed_users, Some(vec![1]));
+    }
+
+    #[test]
+    fn allowlist_of_guild_scoped_route_is_enforced_with_full_context() {
+        let router =
+            ProfileRouter::from_json(r#"[{"guild": 10, "channel": 20, "allowed_users": [2]}]"#);
+        let global = vec![1];
+        // The legacy guild-less lookup cannot see a guild-scoped route.
+        assert!(router.is_user_allowed_for_bot_or_route(None, 20, 1, &global));
+        // With the guild known, the per-route allowlist applies and denies user 1.
+        assert!(!router.is_user_allowed_in_context(None, Some(10), 20, None, None, 1, &global));
+        assert!(router.is_user_allowed_in_context(None, Some(10), 20, None, None, 2, &global));
     }
 }

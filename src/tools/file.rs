@@ -24,7 +24,9 @@ impl FileTool {
             extra_roots: Vec::new(),
             max_read_bytes: 200_000,
             max_search_results: 1000,
-            require_write_approval: false,
+            // Secure by default: writes go through the registry approval gate.
+            // Unattended callers must opt out explicitly via `with_write_approval(false)`.
+            require_write_approval: true,
         }
     }
 
@@ -238,6 +240,11 @@ impl FileTool {
 
     async fn search(&self, args: &Value) -> Result<Value, OmonError> {
         let query = required(args, "query")?.to_owned();
+        if query.is_empty() {
+            return Err(OmonError::ToolExecution(
+                "search query must not be empty".into(),
+            ));
+        }
         let start =
             self.checked_existing(args.get("path").and_then(Value::as_str).unwrap_or("."))?;
         let root = self.canonical_root()?;
@@ -330,13 +337,25 @@ fn search_files(
     let mut pending = vec![start.to_owned()];
     let mut matches = Vec::new();
     while let Some(path) = pending.pop() {
-        let metadata = std::fs::symlink_metadata(&path).map_err(tool_error)?;
+        // Only the start path may fail the search; an unreadable or vanished entry
+        // deeper in the walk is skipped.
+        let is_start = path.as_path() == start;
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if is_start => return Err(tool_error(error)),
+            Err(_) => continue,
+        };
         if metadata.file_type().is_symlink() {
             continue;
         }
         if metadata.is_dir() {
-            for entry in std::fs::read_dir(&path).map_err(tool_error)? {
-                let entry_path = entry.map_err(tool_error)?.path();
+            let entries = match std::fs::read_dir(&path) {
+                Ok(entries) => entries,
+                Err(error) if is_start => return Err(tool_error(error)),
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let entry_path = entry.path();
                 if entry_path.starts_with(start) {
                     pending.push(entry_path);
                 }
@@ -392,6 +411,33 @@ fn tool_error(error: impl std::fmt::Display) -> OmonError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn writes_require_approval_by_default_and_can_opt_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = json!({"operation": "write", "path": "x.txt", "content": "c"});
+        let read = json!({"operation": "read", "path": "x.txt"});
+
+        let secure = FileTool::new(dir.path());
+        assert_eq!(
+            secure.requires_approval(&write).as_deref(),
+            Some("destructive file write to 'x.txt'")
+        );
+        assert!(secure.requires_approval(&read).is_none());
+
+        let relaxed = FileTool::new(dir.path()).with_write_approval(false);
+        assert!(relaxed.requires_approval(&write).is_none());
+    }
+
+    #[tokio::test]
+    async fn search_rejects_empty_query() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = FileTool::new(dir.path());
+        assert!(tool
+            .execute(json!({"operation": "search", "query": ""}))
+            .await
+            .is_err());
+    }
 
     #[test]
     fn test_is_authorized_temp_layout() {
@@ -478,6 +524,42 @@ mod tests {
             "content should stay bounded, got {} bytes",
             content.len()
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn search_skips_unreadable_entries_instead_of_aborting() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hit.txt"), "findme\n").unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("inner.txt"), "findme\n").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let tool = FileTool::new(dir.path());
+        let result = tool
+            .execute(json!({"operation": "search", "query": "findme"}))
+            .await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = result.expect("one unreadable directory must not abort the search");
+        let paths: Vec<&str> = result["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["path"].as_str())
+            .collect();
+        assert_eq!(paths, ["hit.txt"]);
+
+        // A start path that cannot be walked still reports an error.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let err = tool
+            .execute(json!({"operation": "search", "path": "locked", "query": "findme"}))
+            .await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(err.is_err(), "unreadable start path must error: {err:?}");
     }
 
     #[tokio::test]

@@ -54,11 +54,23 @@ pub async fn report(
     let judge_calls = attempts + fallback_calls;
     let inbox_passed: i64 = sqlx::query_scalar("SELECT count(*) FROM inbox_items WHERE julianday(collected_at)>=julianday(?) AND julianday(collected_at)<julianday(?)")
         .bind(since).bind(until).fetch_one(pool).await?;
+    // Drop counts are stored per KST day, so the window is day-granular and
+    // inclusive of the end day; an exclusive end would make intra-day windows empty.
     let dropped: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(sum(count),0) FROM inbox_filter_stats WHERE day>=? AND day<?",
+        "SELECT COALESCE(sum(count),0) FROM inbox_filter_stats WHERE day>=? AND day<=?",
     )
-    .bind(since.date_naive().to_string())
-    .bind(until.date_naive().to_string())
+    .bind(
+        since
+            .with_timezone(&chrono_tz::Asia::Seoul)
+            .date_naive()
+            .to_string(),
+    )
+    .bind(
+        until
+            .with_timezone(&chrono_tz::Asia::Seoul)
+            .date_naive()
+            .to_string(),
+    )
     .fetch_one(pool)
     .await?;
     Ok(Report {

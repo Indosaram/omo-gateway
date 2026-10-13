@@ -476,15 +476,18 @@ async fn cutover_survives_startup_sync() {
     // Restore empty store
     fs::write(fixture.root.join("cron/jobs.json"), &emptied).unwrap();
 
-    // Actual due-job claim via scheduler (no Discord)
-    let past = Utc::now() - chrono::Duration::seconds(120);
+    // Actual due-job claim via scheduler (no Discord). The clock is pinned so the
+    // 09:00 occurrence is inside the catch-up window regardless of wall time.
+    let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 30).unwrap();
+    let past = Utc.with_ymd_and_hms(2026, 1, 15, 8, 59, 0).unwrap();
     sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = 'hermes:default:daily'")
         .bind(past)
         .execute(database.pool())
         .await
         .unwrap();
 
-    let scheduler = CronScheduler::new(database.pool().clone(), Arc::new(PayloadTaskExecutor));
+    let scheduler = CronScheduler::new(database.pool().clone(), Arc::new(PayloadTaskExecutor))
+        .with_clock(move || fixed_now);
     let claimed = scheduler.run_due_jobs().await.unwrap();
     assert_eq!(
         claimed, 1,
@@ -789,14 +792,17 @@ async fn cutover_second_store_failure_preserves_bytes_and_receipt() {
     assert_eq!(daily_auth, "cutover_pending");
 
     // 7. Assert scheduler execution blocked while receipt is pending
-    let past = Utc::now() - chrono::Duration::seconds(60);
+    // Clock pinned so both the 09:00 (daily) and 10:00 (standup) occurrences are due.
+    let fixed_now = Utc.with_ymd_and_hms(2026, 1, 15, 10, 0, 30).unwrap();
+    let past = Utc.with_ymd_and_hms(2026, 1, 15, 8, 59, 0).unwrap();
     sqlx::query("UPDATE cron_jobs SET next_run_at = ?")
         .bind(past)
         .execute(database.pool())
         .await
         .unwrap();
 
-    let scheduler = CronScheduler::new(database.pool().clone(), Arc::new(PayloadTaskExecutor));
+    let scheduler = CronScheduler::new(database.pool().clone(), Arc::new(PayloadTaskExecutor))
+        .with_clock(move || fixed_now);
     let claimed_while_pending = scheduler.run_due_jobs().await.unwrap();
     assert_eq!(
         claimed_while_pending, 0,

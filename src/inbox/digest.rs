@@ -7,7 +7,10 @@ use serde_json::json;
 use sqlx::SqlitePool;
 
 use super::list::{list, render, ClassFilter};
-use crate::{CronJob, CronJobSpec, CronScheduler, CronTaskExecutor, OmonError, Result, SessionKey};
+use crate::{
+    CronJob, CronJobSpec, CronRunOutcome, CronScheduler, CronTaskExecutor, OmonError, Result,
+    SessionKey,
+};
 
 pub const JOB_ID: &str = "omon:inbox-digest";
 
@@ -31,6 +34,9 @@ pub fn spec(home: &SessionKey, owner: &str) -> Result<CronJobSpec> {
             "id": JOB_ID,
             "schedule": {"kind": "cron", "expr": "0 9 * * *", "timezone": "Asia/Seoul"},
             "deliver": "origin",
+            // The digest can carry a one-time owner approval token: it must reach the
+            // owner's Discord DM but never the session transcript the agent reads.
+            "attach_to_session": false,
             "origin": {"platform": "discord", "chat_id": home.channel_id,
                 "user_id": owner, "bot_id": home.bot_id}
         }),
@@ -140,5 +146,33 @@ impl CronTaskExecutor for DigestExecutor {
         } else {
             self.inner.execute(job).await
         }
+    }
+
+    async fn execute_with_outcome(&self, job: &CronJob) -> Result<CronRunOutcome> {
+        if job.id == JOB_ID {
+            Ok(CronRunOutcome {
+                output: self.execute(job).await?,
+                monitor_state: None,
+            })
+        } else {
+            self.inner.execute_with_outcome(job).await
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digest_job_is_never_attached_to_the_session_transcript() {
+        let home = SessionKey::new("discord", None::<String>, "dm", None::<String>, "owner");
+        let spec = spec(&home, "owner").unwrap();
+        assert_eq!(
+            spec.payload
+                .get("attach_to_session")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
     }
 }

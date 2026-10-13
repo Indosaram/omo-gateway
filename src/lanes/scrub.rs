@@ -4,11 +4,21 @@ use regex::{Regex, RegexBuilder};
 
 use crate::security::redact_approval_display;
 
-static HOME_DIR_SLASH_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/(?:Users|home)/[a-zA-Z0-9_\-]+/").expect("valid regex"));
+// The leading group anchors to a path start, so URL paths like host/home/x are kept.
+// A dotted account (first.last) is one name; a trailing sentence dot is not part of it.
+static HOME_DIR_SLASH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(^|[\s'"`(=\[{<,;:]|file://)/(?:Users|home)/[a-zA-Z0-9_\-]+(?:\.[a-zA-Z0-9_\-]+)*/"#,
+    )
+    .expect("valid regex")
+});
 
-static HOME_DIR_BARE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/(?:Users|home)/[a-zA-Z0-9_\-]+").expect("valid regex"));
+static HOME_DIR_BARE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(^|[\s'"`(=\[{<,;:]|file://)/(?:Users|home)/[a-zA-Z0-9_\-]+(?:\.[a-zA-Z0-9_\-]+)*"#,
+    )
+    .expect("valid regex")
+});
 
 static LITERAL_HOME_SLASH_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$(?:\{HOME\}|HOME)/").expect("valid regex"));
@@ -34,8 +44,15 @@ static JWT_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PRIVATE_KEY_BLOCK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)-----BEGIN [A-Z ]+ PRIVATE KEY-----.*?-----END [A-Z ]+ PRIVATE KEY-----")
-        .expect("valid regex")
+    Regex::new(
+        r"(?s)-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----.*?-----END (?:[A-Z ]+ )?PRIVATE KEY-----",
+    )
+    .expect("valid regex")
+});
+
+// Truncated output can lose the END marker; whatever follows a BEGIN is key material.
+static UNTERMINATED_PRIVATE_KEY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----.*").expect("valid regex")
 });
 
 pub fn scrub(text: &str) -> String {
@@ -69,6 +86,9 @@ pub fn scrub_with_hosts(text: &str, hosts: &[&str]) -> String {
         .replace_all(&scrubbed, "<redacted>")
         .into_owned();
     scrubbed = PRIVATE_KEY_BLOCK_RE
+        .replace_all(&scrubbed, "<redacted>")
+        .into_owned();
+    scrubbed = UNTERMINATED_PRIVATE_KEY_RE
         .replace_all(&scrubbed, "<redacted>")
         .into_owned();
 
@@ -109,8 +129,12 @@ pub fn scrub_with_hosts(text: &str, hosts: &[&str]) -> String {
         .replace_all(&scrubbed, "~")
         .into_owned();
 
-    scrubbed = HOME_DIR_SLASH_RE.replace_all(&scrubbed, "~/").into_owned();
-    scrubbed = HOME_DIR_BARE_RE.replace_all(&scrubbed, "~").into_owned();
+    scrubbed = HOME_DIR_SLASH_RE
+        .replace_all(&scrubbed, "${1}~/")
+        .into_owned();
+    scrubbed = HOME_DIR_BARE_RE
+        .replace_all(&scrubbed, "${1}~")
+        .into_owned();
 
     scrubbed
 }
@@ -272,6 +296,39 @@ mod tests {
         ] {
             assert_eq!(scrub(benign), benign);
         }
+    }
+
+    #[test]
+    fn test_redacts_pkcs8_and_rsa_private_key_blocks() {
+        let pkcs8 = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAAfake\n-----END PRIVATE KEY-----";
+        assert_eq!(scrub(&format!("k:\n{pkcs8}\nok")), "k:\n<redacted>\nok");
+        let rsa =
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAfake\n-----END RSA PRIVATE KEY-----";
+        assert_eq!(scrub(&format!("k:\n{rsa}\nok")), "k:\n<redacted>\nok");
+    }
+
+    #[test]
+    fn test_home_dir_regex_does_not_rewrite_url_paths() {
+        for url in [
+            "https://example.com/home/alice/profile",
+            "https://example.com/Users/alice",
+            "http://localhost:8080/home/runner/x",
+        ] {
+            assert_eq!(scrub(url), url);
+        }
+        assert_eq!(scrub("path=/home/alice/x"), "path=~/x");
+    }
+
+    #[test]
+    fn test_redacts_an_unterminated_private_key_and_scrubs_file_urls_and_dotted_users() {
+        assert_eq!(
+            scrub("out:\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAAfake"),
+            "out:\n<redacted>"
+        );
+        assert_eq!(scrub("file:///Users/bob/x.txt"), "file://~/x.txt");
+        assert_eq!(scrub("/Users/first.last/x"), "~/x");
+        assert_eq!(scrub("/home/first.last"), "~");
+        assert_eq!(scrub("Path is /Users/indo."), "Path is ~.");
     }
 
     #[test]

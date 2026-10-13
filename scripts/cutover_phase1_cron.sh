@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 DRY_RUN="${DRY_RUN:-0}"
-DB_PATH="${GATEWAY_DB_PATH:-${REPO_ROOT}/data/gateway.db}"
+DB_PATH="${GATEWAY_DB_PATH:-${REPO_ROOT}/omon_gateway.db}"
 LEGACY_PLIST="${LEGACY_PLIST:-${HOME}/Library/LaunchAgents/com.omomeow.cron.plist}"
 LEGACY_SERVICE="${LEGACY_SERVICE:-gui/$(id -u)/com.omomeow.cron}"
 
@@ -30,7 +30,39 @@ echo " Target DB: ${DB_PATH}"
 echo " Legacy Plist: ${LEGACY_PLIST}"
 echo "=========================================================="
 
-echo ">>> Step 1: Disabling legacy OmOMeow cron jobs..."
+echo ">>> Step 1: Activating 14 OmOMeow cron jobs in omon-gateway..."
+if [ "${DRY_RUN}" = "1" ]; then
+  echo "[DRY-RUN] Would execute SQL: UPDATE cron_jobs SET enabled = 1 WHERE id LIKE 'omomeow:%';"
+  if [ -f "${DB_PATH}" ]; then
+    MATCHED=$(sqlite3 "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%';")
+    echo "[DRY-RUN] Verified ${MATCHED} matching omomeow cron records in ${DB_PATH}"
+  fi
+else
+  if [ ! -f "${DB_PATH}" ]; then
+    echo "ERROR: Target database file not found at ${DB_PATH}; legacy cron left untouched" >&2
+    exit 1
+  fi
+
+  if ! MATCHED=$(sqlite3 "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%';" 2>&1); then
+    echo "ERROR: cannot query ${DB_PATH} (locked or not a gateway DB): ${MATCHED}; legacy cron left untouched" >&2
+    exit 1
+  fi
+  if [ "${MATCHED}" -ne 14 ]; then
+    echo "ERROR: expected 14 omomeow cron records in ${DB_PATH}, found ${MATCHED}; legacy cron left untouched" >&2
+    exit 1
+  fi
+
+  sqlite3 -cmd ".timeout 10000" "${DB_PATH}" "UPDATE cron_jobs SET enabled = 1 WHERE id LIKE 'omomeow:%';"
+
+  ACTIVE_COUNT=$(sqlite3 "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%' AND enabled = 1;")
+  if [ "${ACTIVE_COUNT}" -ne 14 ]; then
+    echo "ERROR: Expected 14 enabled omomeow jobs, found ${ACTIVE_COUNT}; legacy cron left untouched" >&2
+    exit 1
+  fi
+  echo "Verified: Successfully enabled exactly 14 OmOMeow cron jobs."
+fi
+
+echo ">>> Step 2: Disabling legacy OmOMeow cron jobs..."
 if [ "${DRY_RUN}" = "1" ]; then
   echo "[DRY-RUN] Would check and unload launchd service: ${LEGACY_SERVICE}"
   echo "[DRY-RUN] Would disable/rename legacy plist if present: ${LEGACY_PLIST} -> ${LEGACY_PLIST}.disabled"
@@ -48,35 +80,14 @@ else
     mv "${LEGACY_PLIST}" "${LEGACY_PLIST}.disabled"
   fi
 
-  if crontab -l 2>/dev/null | grep -q "omomeow" 2>/dev/null; then
-    echo "Backing up and commenting out omomeow crontab entries..."
-    crontab -l | sed 's/^\(.*omomeow.*\)$/# DISABLED_BY_CUTOVER \1/' | crontab -
+  if crontab -l 2>/dev/null | grep -v "DISABLED_BY_CUTOVER" | grep -q "omomeow" 2>/dev/null; then
+    CRON_BACKUP="${HOME}/.omon-crontab.backup.$(date +%Y%m%dT%H%M%S)"
+    crontab -l > "${CRON_BACKUP}"
+    echo "Backed up crontab to ${CRON_BACKUP}; commenting out omomeow entries..."
+    sed '/DISABLED_BY_CUTOVER/! s/^\(.*omomeow.*\)$/# DISABLED_BY_CUTOVER \1/' "${CRON_BACKUP}" | crontab -
   fi
 fi
 echo "Legacy OmOMeow cron jobs deactivated."
-
-echo ">>> Step 2: Activating 14 OmOMeow cron jobs in omon-gateway..."
-if [ "${DRY_RUN}" = "1" ]; then
-  echo "[DRY-RUN] Would execute SQL: UPDATE cron_jobs SET enabled = 1 WHERE id LIKE 'omomeow:%';"
-  if [ -f "${DB_PATH}" ]; then
-    MATCHED=$(sqlite3 "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%';")
-    echo "[DRY-RUN] Verified ${MATCHED} matching omomeow cron records in ${DB_PATH}"
-  fi
-else
-  if [ ! -f "${DB_PATH}" ]; then
-    echo "ERROR: Target database file not found at ${DB_PATH}" >&2
-    exit 1
-  fi
-
-  sqlite3 "${DB_PATH}" "UPDATE cron_jobs SET enabled = 1 WHERE id LIKE 'omomeow:%';"
-  
-  ACTIVE_COUNT=$(sqlite3 "${DB_PATH}" "SELECT count(*) FROM cron_jobs WHERE id LIKE 'omomeow:%' AND enabled = 1;")
-  if [ "${ACTIVE_COUNT}" -ne 14 ]; then
-    echo "WARNING: Expected 14 enabled omomeow jobs, found ${ACTIVE_COUNT}" >&2
-  else
-    echo "Verified: Successfully enabled exactly 14 OmOMeow cron jobs."
-  fi
-fi
 
 echo "=========================================================="
 echo " [Phase 1] OmOMeow Cron Cutover Completed Successfully."

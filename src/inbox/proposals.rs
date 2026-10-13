@@ -72,11 +72,19 @@ pub struct Proposal {
 
 impl Proposal {
     pub fn display(&self) -> String {
+        // Show the execution route so the owner approves what will actually run.
+        let route = match serde_json::from_str::<Action>(&self.action_json) {
+            Ok(Action::Repo { cwd, done }) => format!("\n[repo cwd={cwd} done={done}]"),
+            Ok(Action::Lookup) => "\n[lookup]".to_owned(),
+            Ok(Action::Draft) => "\n[draft]".to_owned(),
+            Err(_) => "\n[unknown action]".to_owned(),
+        };
         format!(
-            "#{} {} -> {}\n{}",
+            "#{} {} -> {}{}\n{}",
             self.number,
             self.title,
             self.proposed_action,
+            route,
             self.link.as_deref().unwrap_or("")
         )
     }
@@ -301,9 +309,15 @@ impl Proposals {
                 .fetch_all(&pool)
                 .await?;
         if !columns.iter().any(|c| c.1 == "outcome") {
-            sqlx::query("ALTER TABLE inbox_decisions ADD COLUMN outcome TEXT")
+            // Another caller may add the column between the check and the ALTER.
+            if let Err(error) = sqlx::query("ALTER TABLE inbox_decisions ADD COLUMN outcome TEXT")
                 .execute(&pool)
-                .await?;
+                .await
+            {
+                if !error.to_string().contains("duplicate column name") {
+                    return Err(error.into());
+                }
+            }
         }
         Ok(Self {
             pool,
@@ -473,6 +487,9 @@ impl Proposals {
                 "approved proposal failed; no automatic retry: {error}"
             )));
         }
+        // The full text stays in the persisted outcome; the owner DM is bounded
+        // because Discord rejects messages over 2000 characters.
+        let owner_text = owner_text.map(|text| bound_owner_text(&text));
         Ok(ApprovalResult::Executed {
             number,
             lane_key,
@@ -519,6 +536,54 @@ pub fn approval_number(content: &str) -> Option<i64> {
     raw.parse::<i64>().ok().filter(|n| *n > 0)
 }
 
+const OWNER_TEXT_MAX_CHARS: usize = 1800;
+
+pub(crate) fn bound_owner_text(text: &str) -> String {
+    if text.chars().count() <= OWNER_TEXT_MAX_CHARS {
+        return text.to_owned();
+    }
+    let mut bounded: String = text.chars().take(OWNER_TEXT_MAX_CHARS).collect();
+    bounded.push_str("\n…(truncated)");
+    bounded
+}
+
 fn invalid(message: impl Into<String>) -> OmonError {
     OmonError::Config(message.into())
+}
+
+#[cfg(test)]
+mod fix_r5_tests {
+    use super::*;
+
+    #[test]
+    fn owner_text_is_bounded_below_discord_limit() {
+        let long = "가".repeat(5000);
+        let bounded = bound_owner_text(&long);
+        assert!(bounded.chars().count() < 2000);
+        assert!(bounded.ends_with("(truncated)"));
+        assert_eq!(bound_owner_text("short"), "short");
+    }
+
+    #[test]
+    fn display_shows_repo_route() {
+        let proposal = Proposal {
+            number: 3,
+            item_id: "item".into(),
+            owner_id: OWNER_ID.into(),
+            channel_id: "c".into(),
+            message_id: None,
+            action_json: serde_json::to_string(&Action::Repo {
+                cwd: "/work/x".into(),
+                done: "file /work/x/out".into(),
+            })
+            .unwrap(),
+            proposed_action: "do it".into(),
+            link: None,
+            title: "mail: t".into(),
+            state: "pending".into(),
+        };
+        let shown = proposal.display();
+        assert!(shown.contains("/work/x"));
+        assert!(shown.contains("file /work/x/out"));
+    }
 }

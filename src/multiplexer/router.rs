@@ -134,7 +134,9 @@ impl SessionHandle {
         }
     }
 
-    pub(crate) async fn set_model(&self, model: String) -> Result<()> {
+    /// Reports `Sent` only once the live actor applied the change. `Retiring` and `Closed`
+    /// mean it was NOT delivered, so the caller must wait and retry or drop the dead handle.
+    pub(crate) async fn set_model(&self, model: String) -> Result<SendOutcome> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let outcome = self
             .send_command(ActorCommand::SetModel {
@@ -143,24 +145,43 @@ impl SessionHandle {
             })
             .await?;
         if outcome != SendOutcome::Sent {
-            return Ok(());
+            return Ok(outcome);
         }
-        reply_rx
-            .await
-            .map_err(|_| OmonError::Multiplexer("actor closed before set_model reply".into()))?
+        match reply_rx.await {
+            Ok(result) => result.map(|()| SendOutcome::Sent),
+            Err(_) => Ok(SendOutcome::Closed),
+        }
     }
 
-    pub(crate) async fn reset(&self) -> Result<()> {
+    pub(crate) async fn set_yolo(&self, yolo: bool) -> Result<SendOutcome> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let outcome = self
+            .send_command(ActorCommand::SetYolo {
+                yolo,
+                reply: reply_tx,
+            })
+            .await?;
+        if outcome != SendOutcome::Sent {
+            return Ok(outcome);
+        }
+        match reply_rx.await {
+            Ok(result) => result.map(|()| SendOutcome::Sent),
+            Err(_) => Ok(SendOutcome::Closed),
+        }
+    }
+
+    pub(crate) async fn reset(&self) -> Result<SendOutcome> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let outcome = self
             .send_command(ActorCommand::Reset { reply: reply_tx })
             .await?;
         if outcome != SendOutcome::Sent {
-            return Ok(());
+            return Ok(outcome);
         }
-        reply_rx
-            .await
-            .map_err(|_| OmonError::Multiplexer("actor closed before reset reply".into()))?
+        match reply_rx.await {
+            Ok(result) => result.map(|()| SendOutcome::Sent),
+            Err(_) => Ok(SendOutcome::Closed),
+        }
     }
 
     pub(crate) async fn get_context(&self) -> Result<SessionContext> {
@@ -572,38 +593,55 @@ impl SessionMultiplexer {
     }
 
     pub async fn set_model(&self, key: &SessionKey, model: String) -> Result<()> {
-        let storage_key = key.storage_key();
-        let state_json: Option<String> =
-            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
-                .bind(&storage_key)
-                .fetch_optional(&self.pool)
-                .await?;
-        let mut state: crate::SessionState = state_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-        state.active_model = Some(model.clone());
-        let state_str =
-            serde_json::to_string(&state).map_err(|e| OmonError::Database(e.to_string()))?;
+        // Patch only `active_model` in place: a corrupt `state_json` makes `json_set` fail
+        // instead of being silently replaced by a default state, and the write stays atomic.
         sqlx::query(
-            "UPDATE sessions SET state_json = ?, updated_at = CURRENT_TIMESTAMP WHERE session_key = ?",
+            "UPDATE sessions SET state_json = json_set(state_json, '$.active_model', ?), updated_at = CURRENT_TIMESTAMP WHERE session_key = ?",
         )
-        .bind(state_str)
-        .bind(&storage_key)
+        .bind(&model)
+        .bind(key.storage_key())
         .execute(&self.pool)
         .await?;
 
-        if let Some(handle) = self.sessions.get(key) {
-            let _ = handle.set_model(model).await;
-        }
-        Ok(())
+        self.apply_to_live_actor(key, |handle| {
+            let model = model.clone();
+            async move { handle.set_model(model).await }
+        })
+        .await
+    }
+
+    /// Pushes a persisted yolo change into the live actor (no-op without one).
+    pub async fn set_yolo(&self, key: &SessionKey, yolo: bool) -> Result<()> {
+        self.apply_to_live_actor(key, |handle| async move { handle.set_yolo(yolo).await })
+            .await
     }
 
     pub async fn reset(&self, key: &SessionKey) -> Result<()> {
-        if let Some(handle) = self.sessions.get(key) {
-            let _ = handle.reset().await;
+        self.apply_to_live_actor(key, |handle| async move { handle.reset().await })
+            .await
+    }
+
+    /// Delivers a state-mutating command to the session's live actor. A retiring actor (GC is
+    /// probing it) is waited for and retried, and a closed one is dropped, so the command is
+    /// never reported as applied while the live actor keeps stale state. No actor is a no-op.
+    async fn apply_to_live_actor<F, Fut>(&self, key: &SessionKey, command: F) -> Result<()>
+    where
+        F: Fn(Arc<SessionHandle>) -> Fut,
+        Fut: std::future::Future<Output = Result<SendOutcome>>,
+    {
+        loop {
+            let Some(handle) = self.sessions.get(key).map(|entry| entry.clone()) else {
+                return Ok(());
+            };
+            match command(handle.clone()).await? {
+                SendOutcome::Sent => return Ok(()),
+                SendOutcome::Retiring => handle.wait_until_reusable().await,
+                SendOutcome::Closed => {
+                    self.remove_handle(key, &handle);
+                    handle.mark_finished();
+                }
+            }
         }
-        Ok(())
     }
 
     pub async fn session_context(&self, key: &SessionKey) -> Result<Option<SessionContext>> {
@@ -628,15 +666,46 @@ impl SessionMultiplexer {
         }
     }
 
-    /// Marks all currently tracked in-flight sessions as `resume_pending` in SQLite.
+    /// Marks sessions that have an active turn or queued events as `resume_pending` in SQLite.
+    /// Resident but idle sessions are skipped: their last turn already finished (or failed
+    /// visibly), and re-running it on restart would repeat side effects.
     pub async fn mark_in_flight_resume_pending(&self) -> Result<usize> {
+        let sessions: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
         let mut count = 0;
-        for entry in self.sessions.iter() {
-            let key = entry.key();
+        for (key, handle) in sessions {
+            if !Self::has_unfinished_work(&handle).await {
+                continue;
+            }
             crate::storage::mark_session_resume_pending(&self.pool, &key.storage_key()).await?;
             count += 1;
         }
         Ok(count)
+    }
+
+    /// True when the actor is running a turn or holds queued events. A full mailbox or an actor
+    /// that does not answer within the probe window is assumed busy so shutdown never loses
+    /// in-flight work. The probe uses `try_send` (no in-flight accounting) so a timeout can never
+    /// leak the send counter that `shutdown` waits on.
+    async fn has_unfinished_work(handle: &Arc<SessionHandle>) -> bool {
+        const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+        if handle.finished.load(Ordering::Acquire) {
+            return false;
+        }
+        let (reply, result) = tokio::sync::oneshot::channel();
+        match handle.sender.try_send(ActorCommand::IsIdle { reply }) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => return true,
+            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+        }
+        match tokio::time::timeout(PROBE_TIMEOUT, result).await {
+            Ok(Ok(idle)) => !idle,
+            Ok(Err(_)) => false,
+            Err(_) => true,
+        }
     }
 
     /// Returns an activity heartbeat callback suitable for injecting into approval requesters.
@@ -765,5 +834,247 @@ impl SessionMultiplexer {
 impl From<mpsc::error::SendError<ActorCommand>> for OmonError {
     fn from(_: mpsc::error::SendError<ActorCommand>) -> Self {
         OmonError::Multiplexer("session actor stopped before accepting an event".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Database;
+    use async_trait::async_trait;
+
+    struct GateRunner {
+        started: mpsc::UnboundedSender<String>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl AgentRunner for GateRunner {
+        async fn run(&self, _session: &mut SessionContext, event: InboundEvent) -> Result<()> {
+            let _ = self.started.send(event.content.clone());
+            if event.content == "blocking" {
+                self.release.notified().await;
+            }
+            Ok(())
+        }
+    }
+
+    fn gate_multiplexer(
+        db: &Database,
+        config: MultiplexerConfig,
+    ) -> (
+        SessionMultiplexer,
+        mpsc::UnboundedReceiver<String>,
+        Arc<Notify>,
+    ) {
+        let (started_tx, started_rx) = mpsc::unbounded_channel();
+        let release = Arc::new(Notify::new());
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            Arc::new(GateRunner {
+                started: started_tx,
+                release: release.clone(),
+            }),
+            config,
+        );
+        (multiplexer, started_rx, release)
+    }
+
+    fn key(channel: &str) -> SessionKey {
+        SessionKey::new("discord", Some("guild"), channel, None::<String>, "u")
+    }
+
+    async fn resume_pending(db: &Database, key: &SessionKey) -> i64 {
+        sqlx::query_scalar("SELECT resume_pending FROM sessions WHERE session_key = ?")
+            .bind(key.storage_key())
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn mark_in_flight_resume_pending_skips_idle_sessions() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (multiplexer, mut started_rx, release) =
+            gate_multiplexer(&db, MultiplexerConfig::default());
+        let busy = key("channel-busy");
+        let idle = key("channel-idle");
+
+        multiplexer
+            .route_awaiting_turn(InboundEvent::message(idle.clone(), "m-idle", "quick"))
+            .await
+            .unwrap();
+        multiplexer
+            .route(InboundEvent::message(busy.clone(), "m-busy", "blocking"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while let Some(content) = started_rx.recv().await {
+                if content == "blocking" {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("busy turn should start");
+
+        assert_eq!(
+            multiplexer.mark_in_flight_resume_pending().await.unwrap(),
+            1
+        );
+        assert_eq!(resume_pending(&db, &busy).await, 1);
+        assert_eq!(
+            resume_pending(&db, &idle).await,
+            0,
+            "a resident idle session must not be re-run on restart"
+        );
+
+        release.notify_one();
+        multiplexer.wait_for_session_idle(&busy).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_yolo_waits_out_a_retiring_actor_instead_of_dropping_the_change() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (multiplexer, _started_rx, _release) =
+            gate_multiplexer(&db, MultiplexerConfig::default());
+        let key = key("channel-retire");
+        multiplexer
+            .route_awaiting_turn(InboundEvent::message(key.clone(), "m-1", "quick"))
+            .await
+            .unwrap();
+
+        // GC probing an actor: it stops accepting commands until the probe is answered.
+        let handle = multiplexer
+            .sessions
+            .get(&key)
+            .map(|entry| entry.clone())
+            .unwrap();
+        assert!(handle.try_retire());
+
+        let task = tokio::spawn({
+            let multiplexer = multiplexer.clone();
+            let key = key.clone();
+            async move { multiplexer.set_yolo(&key, true).await }
+        });
+        // The test runtime is single-threaded: one yield runs the task to its first pending
+        // point, which is the wait for the actor to accept commands again.
+        tokio::task::yield_now().await;
+        assert!(
+            !task.is_finished(),
+            "set_yolo must wait while the actor is retiring"
+        );
+        handle.resume();
+        task.await.unwrap().unwrap();
+
+        let context = multiplexer.session_context(&key).await.unwrap().unwrap();
+        assert!(context.state.yolo, "the live actor must observe the change");
+    }
+
+    async fn insert_session_state(db: &Database, key: &SessionKey, state_json: &str) {
+        sqlx::query(
+            "INSERT INTO sessions (
+                session_key, platform, guild_id, channel_id, thread_id, user_id,
+                state_json, created_at, updated_at
+             ) VALUES (?, 'discord', 'guild', 'channel-sm', NULL, 'u', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        )
+        .bind(key.storage_key())
+        .bind(state_json)
+        .execute(db.pool())
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn set_model_patches_only_the_model_and_refuses_corrupt_state() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (multiplexer, _started_rx, _release) =
+            gate_multiplexer(&db, MultiplexerConfig::default());
+
+        let intact = key("channel-sm-intact");
+        insert_session_state(
+            &db,
+            &intact,
+            r#"{"yolo":true,"system_prompt":"keep","metadata":{"omo_thread_id":"t1"}}"#,
+        )
+        .await;
+        multiplexer
+            .set_model(&intact, "model-b".into())
+            .await
+            .unwrap();
+        let stored: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(intact.storage_key())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let state: crate::SessionState = serde_json::from_str(&stored).unwrap();
+        assert_eq!(state.active_model.as_deref(), Some("model-b"));
+        assert!(state.yolo);
+        assert_eq!(state.system_prompt.as_deref(), Some("keep"));
+        assert_eq!(
+            state.metadata.get("omo_thread_id"),
+            Some(&serde_json::json!("t1"))
+        );
+
+        let corrupt = key("channel-sm-corrupt");
+        insert_session_state(&db, &corrupt, "{not-json").await;
+        assert!(multiplexer
+            .set_model(&corrupt, "model-b".into())
+            .await
+            .is_err());
+        let raw: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(corrupt.storage_key())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(raw, "{not-json", "corrupt state must not be overwritten");
+    }
+
+    #[tokio::test]
+    async fn gc_keeps_evicting_after_one_session_fails_to_flush() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (multiplexer, _started_rx, _release) = gate_multiplexer(
+            &db,
+            MultiplexerConfig {
+                idle_timeout: Duration::ZERO,
+                gc_interval: Duration::from_secs(60),
+            },
+        );
+        let failing = key("channel-gc-failing");
+        let healthy = key("channel-gc-healthy");
+        for (session, id) in [(&failing, "m-f"), (&healthy, "m-h")] {
+            multiplexer
+                .route_awaiting_turn(InboundEvent::message(session.clone(), id, "quick"))
+                .await
+                .unwrap();
+        }
+
+        // Leave the failing actor dirty with a flush that cannot succeed.
+        sqlx::query(&format!(
+            "CREATE TRIGGER fail_gc_flush BEFORE UPDATE OF state_json ON sessions
+             WHEN old.session_key = '{}'
+             BEGIN SELECT RAISE(ABORT, 'forced flush failure'); END;",
+            failing.storage_key()
+        ))
+        .execute(db.pool())
+        .await
+        .unwrap();
+        assert!(multiplexer.set_yolo(&failing, true).await.is_err());
+
+        // A zero idle timeout needs the actor clock to tick past its last activity, so retry
+        // (bounded, no sleeping) until the healthy session is evicted.
+        let mut evicted = 0;
+        for _ in 0..1000 {
+            evicted += multiplexer.collect_garbage().await.unwrap();
+            if !multiplexer.contains_session(&healthy) {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(evicted, 1, "the healthy idle session must still be evicted");
+        assert!(!multiplexer.contains_session(&healthy));
+        assert!(multiplexer.contains_session(&failing));
     }
 }

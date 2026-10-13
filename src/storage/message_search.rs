@@ -41,6 +41,11 @@ impl MessageSearchIndex {
         &self.pool
     }
 
+    /// Validates that `query` has at least one searchable term without touching the database.
+    pub fn validate_query(query: &str) -> Result<()> {
+        build_fts_query(query).map(|_| ())
+    }
+
     pub async fn upsert(&self, document: &MessageSearchDocument) -> Result<()> {
         let attachment_names = serde_json::to_string(&document.attachment_names)
             .map_err(|error| OmonError::Database(error.to_string()))?;
@@ -149,6 +154,14 @@ impl MessageSearchIndex {
         limit: usize,
     ) -> Result<Vec<MessageSearchHit>> {
         let fts_query = build_fts_query(query)?;
+        if let Some(before) = before_message_id {
+            // A non-numeric cursor would CAST to 0 and silently exclude everything.
+            if before.is_empty() || !before.chars().all(|c| c.is_ascii_digit()) {
+                return Err(OmonError::ToolExecution(
+                    "before_message_id must be a numeric message id".into(),
+                ));
+            }
+        }
         let rows = sqlx::query_as::<_, MessageSearchHitRow>(
             "SELECT d.platform, d.guild_id, d.channel_id, d.thread_id, d.message_id,
                     d.author_id, d.author_name, d.content, d.attachment_names,
@@ -158,6 +171,7 @@ impl MessageSearchIndex {
              WHERE message_search_fts MATCH ?
                AND d.platform = ?
                AND d.channel_id = ?
+               AND (d.thread_id IS NULL OR d.thread_id = d.channel_id)
                AND (? IS NULL OR CAST(d.message_id AS INTEGER) < CAST(? AS INTEGER))
              ORDER BY rank ASC, d.timestamp DESC
              LIMIT ?",
@@ -215,10 +229,16 @@ impl MessageSearchIndex {
             .filter(|a| !a.is_empty())
             .cloned()
             .unwrap_or_else(|| session.user_id.clone());
+        // A thread's messages are keyed by the thread id (as the REST backfill does),
+        // never by the parent channel, so a parent-channel search cannot return
+        // private-thread content.
         let document = MessageSearchDocument {
             platform: session.platform.clone(),
             guild_id: session.guild_id.clone(),
-            channel_id: session.channel_id.clone(),
+            channel_id: session
+                .thread_id
+                .clone()
+                .unwrap_or_else(|| session.channel_id.clone()),
             thread_id: session.thread_id.clone(),
             message_id: event.platform_message_id.clone(),
             author_id,
@@ -401,5 +421,74 @@ mod tests {
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].document.message_id, "100");
+    }
+
+    #[tokio::test]
+    async fn non_numeric_before_cursor_is_rejected() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let index = MessageSearchIndex::new(db.pool().clone());
+        index.upsert(&document("100", "needle")).await.unwrap();
+
+        assert!(index
+            .search("discord", "2", "needle", Some("abc"), 10)
+            .await
+            .is_err());
+    }
+
+    #[test]
+    fn validate_query_requires_a_term() {
+        assert!(MessageSearchIndex::validate_query("  \"\" ").is_err());
+        assert!(MessageSearchIndex::validate_query("needle").is_ok());
+    }
+
+    #[tokio::test]
+    async fn thread_messages_are_not_returned_to_parent_channel_search() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let index = MessageSearchIndex::new(db.pool().clone());
+        let parent = SessionKey::new("discord", Some("1"), "2", None::<String>, "u");
+        let thread = SessionKey::new("discord", Some("1"), "2", Some("77"), "u");
+        let mut parent_event = InboundEvent::message(parent.clone(), "100", "needle public");
+        parent_event.received_at = Utc::now();
+        let mut thread_event = InboundEvent::message(thread.clone(), "101", "needle private");
+        thread_event.received_at = Utc::now();
+        assert!(index.index_inbound(&parent, &parent_event).await.unwrap());
+        assert!(index.index_inbound(&thread, &thread_event).await.unwrap());
+
+        let parent_hits = index
+            .search("discord", "2", "needle", None, 10)
+            .await
+            .unwrap();
+        assert_eq!(parent_hits.len(), 1);
+        assert_eq!(parent_hits[0].document.message_id, "100");
+
+        let thread_hits = index
+            .search("discord", "77", "needle", None, 10)
+            .await
+            .unwrap();
+        assert_eq!(thread_hits.len(), 1);
+        assert_eq!(thread_hits[0].document.message_id, "101");
+        assert_eq!(thread_hits[0].document.thread_id.as_deref(), Some("77"));
+    }
+
+    #[tokio::test]
+    async fn transcript_trigger_thread_rows_are_hidden_from_parent_search() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let index = MessageSearchIndex::new(db.pool().clone());
+        // The legacy transcript trigger stores thread rows under the parent channel id.
+        let mut legacy = document("300", "needle legacy thread");
+        legacy.thread_id = Some("77".into());
+        index.upsert(&legacy).await.unwrap();
+        index
+            .upsert(&document("301", "needle plain"))
+            .await
+            .unwrap();
+
+        let hits = index
+            .search("discord", "2", "needle", None, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].document.message_id, "301");
     }
 }

@@ -191,6 +191,8 @@ cargo run --release
 docker compose up -d
 ```
 
+SQLite data and the agent workspace persist in the named volumes `omon-data` and `omon-workspace`, which are writable by the image's non-root user (uid 10001). Bind mounts of `./data` and `./workspace` would be root-owned on Linux and break the database.
+
 ### 3. Run as macOS Background Service (LaunchAgent)
 
 ```bash

@@ -278,7 +278,9 @@ pub fn rebuild_buttons(
                             }
                         }
                         ButtonKind::Link { .. } => CreateButton::from(button.clone()),
-                        _ => CreateButton::from(button.clone()).disabled(disabled),
+                        _ => {
+                            CreateButton::from(button.clone()).disabled(disabled || button.disabled)
+                        }
                     }),
                     _ => None,
                 })
@@ -312,11 +314,25 @@ async fn set_buttons(
     rows: Option<Vec<CreateActionRow>>,
 ) {
     let Some(rows) = rows else { return };
-    if let Err(error) = channel_id
-        .edit_message(http, message_id, EditMessage::new().components(rows))
-        .await
-    {
-        tracing::warn!(%error, %message_id, "failed to update button state");
+    // A transient edit failure after a terminal action would leave the button clickable
+    // (re-running an irreversible action), so retry a couple of times.
+    for attempt in 1..=3u32 {
+        match channel_id
+            .edit_message(
+                http,
+                message_id,
+                EditMessage::new().components(rows.clone()),
+            )
+            .await
+        {
+            Ok(_) => return,
+            Err(error) => {
+                tracing::warn!(%error, %message_id, attempt, "failed to update button state");
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            }
+        }
     }
 }
 
@@ -638,6 +654,23 @@ mod tests {
         let json = serde_json::to_value(&restored).unwrap();
         assert_eq!(json[0]["components"][0]["label"], "발행");
         assert_eq!(json[0]["components"][0]["disabled"], false);
+    }
+
+    #[test]
+    fn restore_keeps_originally_disabled_buttons_disabled() {
+        let rows: Vec<ActionRow> = serde_json::from_value(serde_json::json!([{
+            "type": 1,
+            "components": [
+                {"type": 2, "style": 3, "label": "발행", "custom_id": "omon:btn:content-intel:publish:86"},
+                {"type": 2, "style": 2, "label": "이미 완료", "custom_id": "omon:btn:content-intel:skip:86", "disabled": true}
+            ]
+        }]))
+        .unwrap();
+        let restored =
+            rebuild_buttons(&rows, "omon:btn:content-intel:publish:86", None, false).unwrap();
+        let json = serde_json::to_value(&restored).unwrap();
+        assert_eq!(json[0]["components"][0]["disabled"], false);
+        assert_eq!(json[0]["components"][1]["disabled"], true);
     }
 
     #[test]

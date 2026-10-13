@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -57,6 +57,30 @@ where
     match owner_pid {
         None => true,
         Some(pid) => pid == 0 || !is_alive(pid),
+    }
+}
+
+/// Run ids currently executing inside this process (any scheduler instance).
+///
+/// An expired lease whose `owner_pid` is this process's PID is only trusted as
+/// live when its run id is registered here. A recycled PID (container restart)
+/// or an executor task that panicked leaves a row owned by our PID that nothing
+/// in this process is running, so it must be reclaimable immediately instead of
+/// waiting for the stale-lease safety net.
+static ACTIVE_RUN_IDS: LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    LazyLock::new(|| std::sync::Mutex::new(Default::default()));
+
+fn active_run_ids() -> std::sync::MutexGuard<'static, std::collections::HashSet<String>> {
+    ACTIVE_RUN_IDS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+struct ActiveRunGuard(String);
+
+impl Drop for ActiveRunGuard {
+    fn drop(&mut self) {
+        active_run_ids().remove(&self.0);
     }
 }
 
@@ -136,7 +160,9 @@ pub async fn resolve_predecessor_output(
         }
     }
 
-    // 2. Fallback: Check messages table for backward compatibility with exact session keys
+    // 2. Fallback: Check messages table for backward compatibility. Only cron-owned
+    //    sessions (`...:cron:<job_id>`) qualify; `context_from` is agent-settable and a
+    //    bare `%:<id>` suffix would match any user/bot session ending in that id.
     let exact_session = if profile.is_empty() {
         format!("cron:{job_id}")
     } else {
@@ -145,12 +171,18 @@ pub async fn resolve_predecessor_output(
 
     let db_result: Option<(String,)> = sqlx::query_as(
         "SELECT content FROM messages \
-         WHERE (session_key = ? OR session_key LIKE ?) \
+         WHERE (session_key = ? OR session_key LIKE ? ESCAPE '\\') \
            AND role = 'assistant' AND TRIM(content) != '' \
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(&exact_session)
-    .bind(format!("%:{job_id}"))
+    .bind(format!(
+        "%:cron:{}",
+        job_id
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    ))
     .fetch_optional(pool)
     .await
     .ok()
@@ -414,11 +446,46 @@ pub struct CronNotification {
     pub triggered_at: DateTime<Utc>,
 }
 
+/// One executor run. `monitor_state` is a pending `(job_id, hash, snapshot)` monitor
+/// baseline that the scheduler commits only after the run's delivery succeeded.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CronRunOutcome {
+    pub output: Option<String>,
+    pub monitor_state: Option<(String, String, String)>,
+}
+
+impl CronRunOutcome {
+    pub fn from_output(output: Option<String>) -> Self {
+        Self {
+            output,
+            monitor_state: None,
+        }
+    }
+}
+
 #[async_trait]
 pub trait CronTaskExecutor: Send + Sync + 'static {
     /// Executes a job and optionally returns completion text. If no text is
     /// returned, the scheduler uses `notification` or `content` from payload.
     async fn execute(&self, job: &CronJob) -> Result<Option<String>>;
+
+    /// Like [Self::execute], but also hands back state the scheduler must commit
+    /// only after delivery succeeded. Executors without such state keep the default.
+    async fn execute_with_outcome(&self, job: &CronJob) -> Result<CronRunOutcome> {
+        Ok(CronRunOutcome::from_output(self.execute(job).await?))
+    }
+}
+
+static OWNER_TOKEN_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(--owner-token\s+)[0-9A-Za-z]+").expect("static owner token pattern")
+});
+
+/// Strips one-time owner approval tokens from text that is stored or mirrored into
+/// a session transcript. The delivered Discord message keeps the token.
+pub(crate) fn redact_owner_tokens(text: &str) -> String {
+    OWNER_TOKEN_RE
+        .replace_all(text, "${1}<redacted>")
+        .into_owned()
 }
 
 #[derive(Default)]
@@ -841,6 +908,51 @@ impl CronScheduler {
         Ok(())
     }
 
+    /// Inserts a new job only if `id` is free, with `enabled` applied in the same
+    /// statement so a job created disabled is never claimable. Returns `None` when the
+    /// id already exists.
+    pub async fn register_new(
+        &self,
+        id: impl Into<String>,
+        spec: CronJobSpec,
+        enabled: bool,
+    ) -> Result<Option<CronJob>> {
+        Self::validate_cron_payload_lifecycle(&spec.payload)?;
+        let id = id.into();
+        let now = (self.clock)();
+        let timezone = spec
+            .payload
+            .get("schedule")
+            .and_then(|s| s.get("timezone"))
+            .and_then(Value::as_str);
+        let next_run_at = next_run_tz(&spec.expression, now, timezone)?;
+        let payload_json = serde_json::to_string(&spec.payload)
+            .map_err(|error| OmonError::Config(error.to_string()))?;
+        let inserted = sqlx::query(
+            "INSERT INTO cron_jobs
+             (id, session_key, expression, payload_json, enabled, next_run_at, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(&id)
+        .bind(&spec.session_key)
+        .bind(&spec.expression)
+        .bind(payload_json)
+        .bind(enabled)
+        .bind(enabled.then_some(next_run_at))
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        if inserted.rows_affected() == 0 {
+            return Ok(None);
+        }
+        if enabled {
+            self.wake.notify_one();
+        }
+        self.get(&id).await
+    }
+
     pub async fn register_with_id(
         &self,
         id: impl Into<String>,
@@ -961,7 +1073,12 @@ impl CronScheduler {
             return Ok(false);
         };
         let now = (self.clock)();
-        let next = next_run(&job.expression, now)?;
+        let payload: Value = serde_json::from_str(&job.payload_json).unwrap_or_default();
+        let timezone = payload
+            .get("schedule")
+            .and_then(|schedule| schedule.get("timezone"))
+            .and_then(Value::as_str);
+        let next = next_run_tz(&job.expression, now, timezone)?;
         sqlx::query(
             "UPDATE cron_jobs SET enabled = 1, next_run_at = ?, updated_at = ? WHERE id = ?",
         )
@@ -1132,12 +1249,47 @@ impl CronScheduler {
         .await?;
         let mut claimed = 0;
         for id in job_ids {
-            if let Some(claim) = self.claim_job(&id, true, true).await? {
-                self.spawn_claim(claim).await;
-                claimed += 1;
+            // One job failing to claim must not block every later job.
+            match self.claim_job(&id, true, true).await {
+                Ok(Some(claim)) => {
+                    self.spawn_claim(claim).await;
+                    claimed += 1;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::error!(%error, job_id = %id, "cron claim failed; continuing with remaining due jobs");
+                }
             }
         }
         Ok(claimed)
+    }
+
+    /// Computes the next future occurrence. When none can be computed (a
+    /// year-bounded expression that has ended, or a bad timezone) the job is
+    /// disabled instead of failing the claim every poll.
+    async fn next_future_or_retire(
+        &self,
+        id: &str,
+        expression: &str,
+        now: DateTime<Utc>,
+        timezone: Option<&str>,
+    ) -> Result<Option<DateTime<Utc>>> {
+        match next_run_tz(expression, now, timezone) {
+            Ok(next) => Ok(Some(next)),
+            Err(error) => {
+                tracing::error!(%error, job_id = id, "cannot compute next cron occurrence; disabling job");
+                sqlx::query(
+                    "UPDATE cron_jobs SET enabled = 0, next_run_at = NULL, updated_at = ?
+                     WHERE id = ? AND expression = ?",
+                )
+                .bind(now)
+                .bind(id)
+                .bind(expression)
+                .execute(&self.pool)
+                .await?;
+                Ok(None)
+            }
+        }
     }
 
     async fn claim_job(
@@ -1167,7 +1319,14 @@ impl CronScheduler {
         for (candidate_run_id, owner_pid_i64, candidate_lease_expires_at) in candidate_runs {
             let lease_age = now.signed_duration_since(candidate_lease_expires_at);
             let owner_pid = owner_pid_i64.and_then(|p| if p > 0 { Some(p as u32) } else { None });
-            if should_reclaim(owner_pid, true, lease_age) {
+            let run_active_here = active_run_ids().contains(&candidate_run_id);
+            if should_reclaim_with(owner_pid, true, lease_age, |pid| {
+                if i64::from(pid) == current_pid {
+                    run_active_here
+                } else {
+                    crate::ledger::is_process_alive(pid)
+                }
+            }) {
                 let reclaimed = sqlx::query(
                     "UPDATE cron_runs
                      SET status = 'failed', completed_at = ?, error = COALESCE(error, 'lease expired before completion')
@@ -1197,7 +1356,14 @@ impl CronScheduler {
         let parsed_payload: Value = serde_json::from_str(&payload_json).unwrap_or_default();
         let (times, completed) = extract_repeat_info(&parsed_payload);
         if should_disable_after(completed, times) {
-            tracing::warn!(job_id = %id, completed, ?times, "cron job repeat limit reached; skipping claim");
+            tracing::warn!(job_id = %id, completed, ?times, "cron job repeat limit reached; disabling job");
+            sqlx::query(
+                "UPDATE cron_jobs SET enabled = 0, next_run_at = NULL, updated_at = ? WHERE id = ?",
+            )
+            .bind(now)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
             return Ok(None);
         }
 
@@ -1217,7 +1383,7 @@ impl CronScheduler {
                         return Ok(None);
                     }
                     target_occurrence = Some(next_run);
-                } else if next_run <= now {
+                } else if next_run <= now && !is_backoff_retry(&parsed_payload, next_run) {
                     let catch_up_hours = parsed_payload
                         .get("catch_up_hours")
                         .and_then(Value::as_u64)
@@ -1229,7 +1395,12 @@ impl CronScheduler {
                         .and_then(Value::as_str);
 
                     if catch_up_hours == 0 {
-                        let next_future = next_run_tz(&expression, now, timezone)?;
+                        let Some(next_future) = self
+                            .next_future_or_retire(id, &expression, now, timezone)
+                            .await?
+                        else {
+                            return Ok(None);
+                        };
                         sqlx::query(
                             "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
                         )
@@ -1242,7 +1413,13 @@ impl CronScheduler {
                         return Ok(None);
                     }
 
-                    let window_start = now - TimeDelta::hours(catch_up_hours as i64);
+                    // Payload-controlled and unbounded: an out-of-range window
+                    // means "catch up everything" instead of panicking the loop.
+                    let window_start = i64::try_from(catch_up_hours)
+                        .ok()
+                        .and_then(TimeDelta::try_hours)
+                        .and_then(|window| now.checked_sub_signed(window))
+                        .unwrap_or(DateTime::<Utc>::MIN_UTC);
                     let newest = newest_missed_occurrence(
                         &expression,
                         next_run,
@@ -1253,7 +1430,12 @@ impl CronScheduler {
 
                     match newest {
                         None => {
-                            let next_future = next_run_tz(&expression, now, timezone)?;
+                            let Some(next_future) = self
+                                .next_future_or_retire(id, &expression, now, timezone)
+                                .await?
+                            else {
+                                return Ok(None);
+                            };
                             if let Err(error) = health::record_missed_occurrence(
                                 &self.pool,
                                 id,
@@ -1281,7 +1463,12 @@ impl CronScheduler {
                                 .get("last_occurrence")
                                 .and_then(Value::as_str);
                             if last_occ == Some(&occ_key) {
-                                let next_future = next_run_tz(&expression, now, timezone)?;
+                                let Some(next_future) = self
+                                    .next_future_or_retire(id, &expression, now, timezone)
+                                    .await?
+                                else {
+                                    return Ok(None);
+                                };
                                 if let Err(error) = health::record_missed_occurrence(
                                     &self.pool,
                                     id,
@@ -1350,6 +1537,7 @@ impl CronScheduler {
             .get(id)
             .await?
             .ok_or_else(|| OmonError::Database(format!("claimed cron job {id} disappeared")))?;
+        active_run_ids().insert(run_id.clone());
         Ok(Some(CronClaim {
             run_id,
             claim_token,
@@ -1370,6 +1558,7 @@ impl CronScheduler {
     }
 
     async fn execute_claim(&self, claim: CronClaim) {
+        let _active_run = ActiveRunGuard(claim.run_id.clone());
         let heartbeat_scheduler = self.clone();
         let heartbeat_token = claim.claim_token.clone();
         let (heartbeat_stop, mut heartbeat_stopped) = watch::channel(false);
@@ -1398,10 +1587,22 @@ impl CronScheduler {
         let _ = heartbeat.await;
 
         match result {
-            Ok(output) => {
-                if let Err(error) = self.complete_success(&claim, output.as_deref()).await {
+            Ok(outcome) => {
+                if let Err(error) = self
+                    .complete_success(&claim, outcome.output.as_deref())
+                    .await
+                {
                     tracing::error!(%error, job_id = %claim.job.id, run_id = %claim.run_id, "failed to commit successful cron run");
                 } else {
+                    // Delivery already succeeded, so the detected monitor change may
+                    // now be consumed.
+                    if let Some(state) = &outcome.monitor_state {
+                        if let Err(error) =
+                            super::executor::commit_monitor_state(&self.pool, state).await
+                        {
+                            tracing::error!(%error, job_id = %claim.job.id, run_id = %claim.run_id, "failed to commit cron monitor state");
+                        }
+                    }
                     self.run_health_hook(&claim.job.id, &claim.run_id, false)
                         .await;
                 }
@@ -1514,14 +1715,39 @@ impl CronScheduler {
             }
             obj.insert("last_error".to_string(), Value::Null);
             obj.insert("last_delivery_error".to_string(), Value::Null);
+            if claim.advance_schedule {
+                // The retry (if any) ran; a manual run leaves the pending one alone.
+                obj.remove("retry_at");
+            }
         }
         let updated_payload_json =
             serde_json::to_string(&payload).unwrap_or_else(|_| claim.job.payload_json.clone());
         let limit_reached = should_disable_after(completed_count, times);
 
         if claim.advance_schedule {
-            if claim.job.expression.starts_with("once:") || limit_reached {
-                sqlx::query(
+            // An expression with no further occurrence (or a bad timezone) must not
+            // roll the completion back: the run already happened, so retire the job.
+            let next_run = if claim.job.expression.starts_with("once:") || limit_reached {
+                None
+            } else {
+                let timezone = payload
+                    .get("schedule")
+                    .and_then(|schedule| schedule.get("timezone"))
+                    .and_then(Value::as_str);
+                match next_run_tz(&claim.job.expression, now, timezone) {
+                    Ok(next) => Some(next),
+                    Err(calc_err) => {
+                        tracing::error!(
+                            %calc_err,
+                            job_id = %claim.job.id,
+                            "failed to compute next run after success, disabling cron job"
+                        );
+                        None
+                    }
+                }
+            };
+            if next_run.is_none() {
+                let updated = sqlx::query(
                     "UPDATE cron_jobs
                      SET enabled = 0, next_run_at = NULL, payload_json = ?, updated_at = ?
                      WHERE id = ? AND expression = ? AND payload_json = ?",
@@ -1533,13 +1759,18 @@ impl CronScheduler {
                 .bind(&claim.job.payload_json)
                 .execute(&mut *transaction)
                 .await?;
-            } else {
-                let timezone = payload
-                    .get("schedule")
-                    .and_then(|schedule| schedule.get("timezone"))
-                    .and_then(Value::as_str);
-                let next = next_run_tz(&claim.job.expression, now, timezone)?;
-                sqlx::query(
+                if updated.rows_affected() == 0 {
+                    Self::reconcile_job_after_run(
+                        &mut transaction,
+                        claim,
+                        &payload,
+                        Some(None),
+                        now,
+                    )
+                    .await?;
+                }
+            } else if let Some(next) = next_run {
+                let updated = sqlx::query(
                     "UPDATE cron_jobs
                      SET next_run_at = ?, payload_json = ?, updated_at = ?
                      WHERE id = ? AND enabled = 1 AND expression = ? AND payload_json = ?",
@@ -1552,9 +1783,19 @@ impl CronScheduler {
                 .bind(&claim.job.payload_json)
                 .execute(&mut *transaction)
                 .await?;
+                if updated.rows_affected() == 0 {
+                    Self::reconcile_job_after_run(
+                        &mut transaction,
+                        claim,
+                        &payload,
+                        Some(Some(next)),
+                        now,
+                    )
+                    .await?;
+                }
             }
         } else {
-            sqlx::query(
+            let updated = sqlx::query(
                 "UPDATE cron_jobs
                  SET payload_json = ?, updated_at = ?
                  WHERE id = ? AND expression = ? AND payload_json = ?",
@@ -1566,11 +1807,16 @@ impl CronScheduler {
             .bind(&claim.job.payload_json)
             .execute(&mut *transaction)
             .await?;
+            if updated.rows_affected() == 0 {
+                Self::reconcile_job_after_run(&mut transaction, claim, &payload, None, now).await?;
+            }
         }
 
         if let Some(out) = output {
             let profile = claim.job.profile();
-            let _ = sqlx::query(
+            // Not fatal (the run already happened; failing here would re-run it), but
+            // a lost output silently breaks `context_from` consumers, so surface it.
+            if let Err(error) = sqlx::query(
                 "INSERT INTO cron_outputs (profile, job_id, run_id, output, created_at)
                  VALUES (?, ?, ?, ?, ?)
                  ON CONFLICT(profile, job_id, run_id) DO UPDATE SET output = excluded.output, created_at = excluded.created_at",
@@ -1578,10 +1824,13 @@ impl CronScheduler {
             .bind(&profile)
             .bind(&claim.job.id)
             .bind(&claim.run_id)
-            .bind(out)
+            .bind(redact_owner_tokens(out))
             .bind(now.to_rfc3339())
             .execute(&mut *transaction)
-            .await;
+            .await
+            {
+                tracing::error!(%error, job_id = %claim.job.id, run_id = %claim.run_id, "failed to persist cron output");
+            }
         }
 
         transaction.commit().await?;
@@ -1672,7 +1921,7 @@ impl CronScheduler {
 
         if claim.advance_schedule {
             if claim.job.expression.starts_with("once:") || limit_reached {
-                sqlx::query(
+                let updated = sqlx::query(
                     "UPDATE cron_jobs
                      SET enabled = 0, next_run_at = NULL, payload_json = ?, updated_at = ?
                      WHERE id = ? AND expression = ? AND payload_json = ?",
@@ -1684,6 +1933,16 @@ impl CronScheduler {
                 .bind(&claim.job.payload_json)
                 .execute(&mut *transaction)
                 .await?;
+                if updated.rows_affected() == 0 {
+                    Self::reconcile_job_after_run(
+                        &mut transaction,
+                        claim,
+                        &payload,
+                        Some(None),
+                        now,
+                    )
+                    .await?;
+                }
             } else {
                 let recent_statuses: Vec<String> = sqlx::query_scalar(
                     "SELECT status FROM cron_runs
@@ -1700,26 +1959,53 @@ impl CronScheduler {
                     .take_while(|status| status.as_str() == "failed")
                     .count() as u32;
 
-                let next_result =
-                    next_run_after_failure(&claim.job.expression, now, consecutive_failures);
+                let timezone = payload
+                    .get("schedule")
+                    .and_then(|schedule| schedule.get("timezone"))
+                    .and_then(Value::as_str);
+                let next_result = next_run_after_failure(
+                    &claim.job.expression,
+                    now,
+                    consecutive_failures,
+                    timezone,
+                );
                 match next_result {
                     Ok(Some(next)) => {
-                        sqlx::query(
+                        // The failure path can move next_run_at off the schedule grid
+                        // (backoff). Record it so claim_job runs it as an explicit retry
+                        // instead of treating it as a missed occurrence.
+                        let mut retry_payload = payload.clone();
+                        if let Some(obj) = retry_payload.as_object_mut() {
+                            obj.insert("retry_at".to_string(), Value::String(next.to_rfc3339()));
+                        }
+                        let retry_payload_json = serde_json::to_string(&retry_payload)
+                            .unwrap_or_else(|_| updated_payload_json.clone());
+                        let updated = sqlx::query(
                             "UPDATE cron_jobs
                              SET next_run_at = ?, payload_json = ?, updated_at = ?
                              WHERE id = ? AND enabled = 1 AND expression = ? AND payload_json = ?",
                         )
                         .bind(next)
-                        .bind(&updated_payload_json)
+                        .bind(&retry_payload_json)
                         .bind(now)
                         .bind(&claim.job.id)
                         .bind(&claim.job.expression)
                         .bind(&claim.job.payload_json)
                         .execute(&mut *transaction)
                         .await?;
+                        if updated.rows_affected() == 0 {
+                            Self::reconcile_job_after_run(
+                                &mut transaction,
+                                claim,
+                                &retry_payload,
+                                Some(Some(next)),
+                                now,
+                            )
+                            .await?;
+                        }
                     }
                     Ok(None) => {
-                        sqlx::query(
+                        let updated = sqlx::query(
                             "UPDATE cron_jobs
                              SET enabled = 0, next_run_at = NULL, payload_json = ?, updated_at = ?
                              WHERE id = ? AND expression = ? AND payload_json = ?",
@@ -1731,6 +2017,16 @@ impl CronScheduler {
                         .bind(&claim.job.payload_json)
                         .execute(&mut *transaction)
                         .await?;
+                        if updated.rows_affected() == 0 {
+                            Self::reconcile_job_after_run(
+                                &mut transaction,
+                                claim,
+                                &payload,
+                                Some(None),
+                                now,
+                            )
+                            .await?;
+                        }
                     }
                     Err(calc_err) => {
                         tracing::error!(
@@ -1738,7 +2034,7 @@ impl CronScheduler {
                             job_id = %claim.job.id,
                             "failed to compute next run after failure, disabling cron job"
                         );
-                        sqlx::query(
+                        let updated = sqlx::query(
                             "UPDATE cron_jobs
                              SET enabled = 0, next_run_at = NULL, payload_json = ?, updated_at = ?
                              WHERE id = ? AND expression = ? AND payload_json = ?",
@@ -1750,11 +2046,21 @@ impl CronScheduler {
                         .bind(&claim.job.payload_json)
                         .execute(&mut *transaction)
                         .await?;
+                        if updated.rows_affected() == 0 {
+                            Self::reconcile_job_after_run(
+                                &mut transaction,
+                                claim,
+                                &payload,
+                                Some(None),
+                                now,
+                            )
+                            .await?;
+                        }
                     }
                 }
             }
         } else {
-            sqlx::query(
+            let updated = sqlx::query(
                 "UPDATE cron_jobs
                  SET payload_json = ?, updated_at = ?
                  WHERE id = ? AND expression = ? AND payload_json = ?",
@@ -1766,21 +2072,126 @@ impl CronScheduler {
             .bind(&claim.job.payload_json)
             .execute(&mut *transaction)
             .await?;
+            if updated.rows_affected() == 0 {
+                Self::reconcile_job_after_run(&mut transaction, claim, &payload, None, now).await?;
+            }
         }
         transaction.commit().await?;
         self.wake.notify_one();
         Ok(())
     }
 
+    /// Fallback for the payload compare-and-swap in `complete_success` /
+    /// `complete_failure`: when the job row was edited during the run, merge
+    /// the run outcome into the *current* row and still advance the schedule so
+    /// the executed occurrence is never re-run.
+    async fn reconcile_job_after_run(
+        transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        claim: &CronClaim,
+        outcome: &Value,
+        schedule: Option<Option<DateTime<Utc>>>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let current: Option<(String, String)> =
+            sqlx::query_as("SELECT expression, payload_json FROM cron_jobs WHERE id = ?")
+                .bind(&claim.job.id)
+                .fetch_optional(&mut **transaction)
+                .await?;
+        let Some((expression, payload_json)) = current else {
+            return Ok(());
+        };
+        tracing::warn!(
+            job_id = %claim.job.id,
+            run_id = %claim.run_id,
+            "cron job edited during run; applying outcome to current row"
+        );
+        let mut payload: Value =
+            serde_json::from_str(&payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        let (times, completed) = increment_repeat_completed(&mut payload);
+        if let (Some(obj), Some(source)) = (payload.as_object_mut(), outcome.as_object()) {
+            for key in [
+                "last_status",
+                "last_run_at",
+                "last_occurrence",
+                "last_error",
+                "last_delivery_error",
+            ] {
+                if let Some(value) = source.get(key) {
+                    obj.insert(key.to_string(), value.clone());
+                }
+            }
+            if schedule.is_some() {
+                match source.get("retry_at") {
+                    Some(value) => {
+                        obj.insert("retry_at".to_string(), value.clone());
+                    }
+                    None => {
+                        obj.remove("retry_at");
+                    }
+                }
+            }
+        }
+        let mut schedule = if expression == claim.job.expression {
+            schedule
+        } else {
+            None
+        };
+        if schedule.is_some() && should_disable_after(completed, times) {
+            schedule = Some(None);
+        }
+        let payload_json = serde_json::to_string(&payload).unwrap_or(payload_json);
+        match schedule {
+            None => {
+                sqlx::query("UPDATE cron_jobs SET payload_json = ?, updated_at = ? WHERE id = ?")
+                    .bind(&payload_json)
+                    .bind(now)
+                    .bind(&claim.job.id)
+                    .execute(&mut **transaction)
+                    .await?;
+            }
+            Some(None) => {
+                sqlx::query(
+                    "UPDATE cron_jobs
+                     SET enabled = 0, next_run_at = NULL, payload_json = ?, updated_at = ?
+                     WHERE id = ?",
+                )
+                .bind(&payload_json)
+                .bind(now)
+                .bind(&claim.job.id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+            Some(Some(next)) => {
+                sqlx::query(
+                    "UPDATE cron_jobs
+                     SET next_run_at = CASE WHEN enabled = 1 THEN ? ELSE next_run_at END,
+                         payload_json = ?, updated_at = ?
+                     WHERE id = ?",
+                )
+                .bind(next)
+                .bind(&payload_json)
+                .bind(now)
+                .bind(&claim.job.id)
+                .execute(&mut **transaction)
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn execute_job(&self, job: &CronJob) -> Result<Option<String>> {
-        self.execute_job_with_outcome(job, &mut false).await
+        let outcome = self.execute_job_with_outcome(job, &mut false).await?;
+        if let Some(state) = &outcome.monitor_state {
+            super::executor::commit_monitor_state(&self.pool, state).await?;
+        }
+        Ok(outcome.output)
     }
 
     async fn execute_job_with_outcome(
         &self,
         job: &CronJob,
         delivery_failed: &mut bool,
-    ) -> Result<Option<String>> {
+    ) -> Result<CronRunOutcome> {
         let payload = match job.payload() {
             Ok(payload) => payload,
             Err(error) => return Err(error),
@@ -1803,10 +2214,13 @@ impl CronScheduler {
             }
         }
 
-        let execution = self.executor.execute(job).await;
+        let execution = self.executor.execute_with_outcome(job).await;
 
         match execution {
-            Ok(result_content) => {
+            Ok(CronRunOutcome {
+                output: result_content,
+                monitor_state,
+            }) => {
                 let content = result_content
                     .or_else(|| {
                         payload
@@ -1863,7 +2277,10 @@ impl CronScheduler {
                     .bind(&job.id)
                     .execute(&self.pool)
                     .await;
-                Ok(content)
+                Ok(CronRunOutcome {
+                    output: content,
+                    monitor_state,
+                })
             }
             Err(error) => {
                 let signature = format!("{error}");
@@ -1980,7 +2397,14 @@ impl CronScheduler {
             session = session.with_bot_id(profile);
         }
 
-        let obl_id = format!("obl:cron:{}:{}", job.id, (self.clock)().timestamp_millis());
+        // Fan-out destinations delivered within one millisecond must not share an
+        // obligation row, so the id carries a per-delivery nonce.
+        let obl_id = format!(
+            "obl:cron:{}:{}:{}",
+            job.id,
+            (self.clock)().timestamp_millis(),
+            Uuid::new_v4().simple()
+        );
         let ledger = crate::DeliveryLedgerService::new(self.pool.clone());
         ledger.record_obligation(&obl_id, &session, content).await?;
         ledger.mark_obligation_attempting(&obl_id).await?;
@@ -2019,7 +2443,7 @@ impl CronScheduler {
                 &job.id,
                 job.session_key.as_deref(),
                 destination,
-                content,
+                &redact_owner_tokens(content),
             )
             .await
             {
@@ -2231,7 +2655,9 @@ pub fn next_run(expression: &str, after: DateTime<Utc>) -> Result<DateTime<Utc>>
     if let Some(interval) = parse_interval(expression)? {
         let delta = TimeDelta::from_std(interval)
             .map_err(|_| OmonError::Config("cron interval is too large".into()))?;
-        return Ok(after + delta);
+        return after
+            .checked_add_signed(delta)
+            .ok_or_else(|| OmonError::Config("cron interval is too large".into()));
     }
     let normalized = normalize_cron_expression(expression);
     let schedule = Schedule::from_str(&normalized).map_err(|error| {
@@ -2308,7 +2734,13 @@ pub fn newest_missed_occurrence(
             return Ok(None);
         }
         let count = diff.num_milliseconds() / step_ms;
-        let latest = scheduled_from + delta * (count as i32);
+        let Some(latest) = step_ms
+            .checked_mul(count)
+            .and_then(TimeDelta::try_milliseconds)
+            .and_then(|offset| scheduled_from.checked_add_signed(offset))
+        else {
+            return Ok(None);
+        };
         if latest >= window_start && latest <= now {
             return Ok(Some(latest));
         }
@@ -2416,15 +2848,26 @@ pub fn failure_backoff_duration(consecutive_failures: u32) -> Duration {
     Duration::from_secs(seconds)
 }
 
+/// True when `next_run` was set by the failure backoff path (see `complete_failure`):
+/// an explicit retry time, not a schedule occurrence that could have been missed.
+fn is_backoff_retry(payload: &Value, next_run: DateTime<Utc>) -> bool {
+    payload
+        .get("retry_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .is_some_and(|retry_at| retry_at.timestamp_millis() == next_run.timestamp_millis())
+}
+
 pub fn next_run_after_failure(
     expression: &str,
     now: DateTime<Utc>,
     consecutive_failures: u32,
+    timezone: Option<&str>,
 ) -> Result<Option<DateTime<Utc>>> {
     if expression.starts_with("once:") {
         return Ok(None);
     }
-    let scheduled_next = next_run(expression, now)?;
+    let scheduled_next = next_run_tz(expression, now, timezone)?;
     let backoff = failure_backoff_duration(consecutive_failures);
     let backoff_delta = TimeDelta::from_std(backoff)
         .map_err(|_| OmonError::Config("backoff duration out of range".into()))?;
@@ -2509,25 +2952,25 @@ mod tests {
             .with_timezone(&Utc);
 
         // interval:1s with 1 failure -> backoff of 10s wins over 1s schedule
-        let next1 = next_run_after_failure("interval:1s", now, 1)
+        let next1 = next_run_after_failure("interval:1s", now, 1, None)
             .unwrap()
             .unwrap();
         assert_eq!(next1, now + TimeDelta::seconds(10));
 
         // interval:1s with 2 failures -> backoff of 20s wins over 1s schedule
-        let next2 = next_run_after_failure("interval:1s", now, 2)
+        let next2 = next_run_after_failure("interval:1s", now, 2, None)
             .unwrap()
             .unwrap();
         assert_eq!(next2, now + TimeDelta::seconds(20));
 
         // interval:1h with 1 failure -> schedule (1h) wins over backoff (10s)
-        let next_1h = next_run_after_failure("interval:1h", now, 1)
+        let next_1h = next_run_after_failure("interval:1h", now, 1, None)
             .unwrap()
             .unwrap();
         assert_eq!(next_1h, now + TimeDelta::hours(1));
 
         // once: expression returns None on failure (job should finish)
-        let next_once = next_run_after_failure("once:2026-08-16T12:00:00Z", now, 1).unwrap();
+        let next_once = next_run_after_failure("once:2026-08-16T12:00:00Z", now, 1, None).unwrap();
         assert!(next_once.is_none());
     }
 
@@ -2539,13 +2982,13 @@ mod tests {
 
         // Cron running every minute (next schedule = 12:01:00 = 60s)
         // Failure 1 backoff is 10s, so schedule (60s) wins
-        let next1 = next_run_after_failure("* * * * *", now, 1)
+        let next1 = next_run_after_failure("* * * * *", now, 1, None)
             .unwrap()
             .unwrap();
         assert_eq!(next1, now + TimeDelta::seconds(60));
 
         // Failure 5 backoff is 160s, so backoff (160s) wins over schedule (60s)
-        let next5 = next_run_after_failure("* * * * *", now, 5)
+        let next5 = next_run_after_failure("* * * * *", now, 5, None)
             .unwrap()
             .unwrap();
         assert_eq!(next5, now + TimeDelta::seconds(160));
@@ -3333,6 +3776,211 @@ mod tests {
         );
     }
 
+    #[test]
+    fn redact_owner_tokens_strips_only_the_token() {
+        assert_eq!(
+            redact_owner_tokens("run: omo-gateway cron approve-rerun 7 --owner-approved --owner-token 0123abcDEF tail"),
+            "run: omo-gateway cron approve-rerun 7 --owner-approved --owner-token <redacted> tail"
+        );
+        assert_eq!(
+            redact_owner_tokens("--owner-token <redacted>"),
+            "--owner-token <redacted>"
+        );
+        assert_eq!(redact_owner_tokens("no token here"), "no token here");
+    }
+
+    #[tokio::test]
+    async fn owner_token_is_redacted_from_cron_outputs_and_mirrored_transcript() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let home = SessionKey::new("discord", None::<String>, "42", None::<String>, "owner");
+        insert_session(pool, &home).await;
+        let sessions = Arc::new(Mutex::new(Vec::new()));
+        let message = "approve: --owner-token deadbeef0123";
+        let scheduler = CronScheduler::with_dispatcher(
+            pool.clone(),
+            Arc::new(SilentExecutor(Some(message.into()))),
+            Arc::new(RecordingDispatcher { sessions }),
+        );
+        let mut spec = CronJobSpec::new(
+            "interval:1h",
+            serde_json::json!({"channel_id": "42", "user_id": "owner"}),
+        );
+        spec.session_key = Some(home.storage_key());
+        let job = scheduler.register_with_id("token-job", spec).await.unwrap();
+        let mut notifications = scheduler.subscribe();
+
+        let receipt = scheduler.trigger_wait(&job.id).await.unwrap();
+
+        assert_eq!(receipt.status, "succeeded");
+        assert_eq!(
+            notifications.try_recv().unwrap().content,
+            message,
+            "the delivered Discord message keeps the token"
+        );
+        let stored: String =
+            sqlx::query_scalar("SELECT output FROM cron_outputs WHERE job_id = 'token-job'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert!(!stored.contains("deadbeef0123"), "{stored}");
+        let mirrored: Vec<String> =
+            sqlx::query_scalar("SELECT content FROM messages WHERE session_key = ?")
+                .bind(home.storage_key())
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert_eq!(mirrored.len(), 1);
+        assert!(!mirrored[0].contains("deadbeef0123"), "{}", mirrored[0]);
+    }
+
+    struct FailingDispatcher;
+
+    #[async_trait]
+    impl OutboundDispatcher for FailingDispatcher {
+        async fn dispatch(&self, _action: OutboundAction) -> Result<()> {
+            Err(OmonError::Config("discord outage".into()))
+        }
+    }
+
+    struct ChangedOutputBackend;
+
+    #[async_trait]
+    impl crate::agent::AgentBackend for ChangedOutputBackend {
+        async fn run(
+            &self,
+            session: &mut crate::SessionContext,
+            _event: crate::InboundEvent,
+        ) -> Result<()> {
+            session.state.metadata.insert(
+                "cron_agent_output".into(),
+                serde_json::json!("monitor changed"),
+            );
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn monitor_change_is_committed_only_after_successful_delivery() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool().clone();
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
+        std::fs::write(temp.path().join("scripts/mon.sh"), "echo state-1\n").unwrap();
+        let executor = || {
+            Arc::new(crate::AgentCronExecutor {
+                backend: Arc::new(ChangedOutputBackend),
+                workspace_root: temp.path().to_path_buf(),
+                pool: pool.clone(),
+                cron_script_timeout_secs: 30,
+            })
+        };
+        let failing =
+            CronScheduler::with_dispatcher(pool.clone(), executor(), Arc::new(FailingDispatcher));
+        failing
+            .register_with_id(
+                "mon_job",
+                CronJobSpec::new(
+                    "interval:1h",
+                    serde_json::json!({
+                        "id": "mon_job",
+                        "prompt": "summarize change",
+                        "monitor_script": "mon.sh",
+                        "deliver": "discord:42",
+                        "schedule": {"kind": "every", "every": "1h"},
+                        "_omon_hermes_home": temp.path().to_str().unwrap()
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let receipt = failing.trigger_wait("mon_job").await.unwrap();
+        assert_eq!(receipt.status, "failed", "{receipt:?}");
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cron_monitor_states")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 0, "a failed delivery must not consume the change");
+
+        let healthy =
+            CronScheduler::with_dispatcher(pool.clone(), executor(), Arc::new(SilentDispatcher));
+        let receipt = healthy.trigger_wait("mon_job").await.unwrap();
+        assert_eq!(receipt.status, "succeeded", "{receipt:?}");
+        assert_eq!(receipt.output.as_deref(), Some("monitor changed"));
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cron_monitor_states")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows, 1, "a delivered change is committed");
+    }
+
+    #[tokio::test]
+    async fn backoff_retry_of_cron_expression_job_is_not_a_missed_occurrence() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let now = utc("2026-01-01T00:00:30Z");
+        let scheduler = CronScheduler::new(pool.clone(), Arc::new(SilentExecutor(None)))
+            .with_clock(move || now);
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "* * * * *",
+                serde_json::json!({"channel_id": "test"}),
+            ))
+            .await
+            .unwrap();
+
+        // A failed run records its backoff retry time.
+        let claim = scheduler
+            .claim_job(&job.id, false, true)
+            .await
+            .unwrap()
+            .expect("claimable");
+        scheduler
+            .complete_failure(&claim, &OmonError::ToolExecution("boom".into()))
+            .await
+            .unwrap();
+        let failed = scheduler.get(&job.id).await.unwrap().unwrap();
+        let retry_at = failed.next_run_at.expect("retry scheduled");
+        let marker = failed.payload().unwrap()["retry_at"]
+            .as_str()
+            .map(str::to_owned)
+            .expect("backoff retry is marked in the payload");
+        assert_eq!(utc(&marker), retry_at);
+
+        // An off-grid retry time (no cron mark inside [retry-1s, now]) must run.
+        let off_grid = utc("2026-01-01T00:00:20Z");
+        sqlx::query(
+            "UPDATE cron_jobs SET next_run_at = ?, payload_json = json_set(payload_json, '$.retry_at', ?) WHERE id = ?",
+        )
+        .bind(off_grid)
+        .bind(off_grid.to_rfc3339())
+        .bind(&job.id)
+        .execute(pool)
+        .await
+        .unwrap();
+        let retry_claim = scheduler
+            .claim_job(&job.id, true, true)
+            .await
+            .unwrap()
+            .expect("an explicit backoff retry must run instead of being skipped as missed");
+        assert_eq!(retry_claim.occurrence, None);
+        let missed: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cron_problems WHERE kind = 'missed'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(missed, 0);
+
+        // A success clears the marker.
+        scheduler
+            .complete_success(&retry_claim, None)
+            .await
+            .unwrap();
+        let done = scheduler.get(&job.id).await.unwrap().unwrap();
+        assert!(done.payload().unwrap().get("retry_at").is_none());
+    }
+
     #[tokio::test]
     async fn test_brief_file_read_and_fallback() {
         let temp = tempfile::tempdir().unwrap();
@@ -3713,6 +4361,217 @@ mod tests {
         assert!(
             msg_expr.contains("uncomputable schedule"),
             "Expected uncomputable error, got: {msg_expr}"
+        );
+    }
+
+    fn utc(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[tokio::test]
+    async fn complete_success_retires_job_with_no_further_occurrence() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let scheduler = CronScheduler::new(
+            database.pool().clone(),
+            Arc::new(SilentExecutor(Some("done".into()))),
+        );
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "0 0 0 1 1 * 2030",
+                serde_json::json!({"channel_id": "test"}),
+            ))
+            .await
+            .unwrap();
+
+        let late = utc("2031-06-01T00:00:00Z");
+        let late_scheduler = scheduler.clone().with_clock(move || late);
+        let claim = late_scheduler
+            .claim_job(&job.id, false, true)
+            .await
+            .unwrap()
+            .expect("job must be claimable");
+        late_scheduler
+            .complete_success(&claim, None)
+            .await
+            .expect("a schedule with no next occurrence must not fail completion");
+
+        let status: String = sqlx::query_scalar("SELECT status FROM cron_runs WHERE run_id = ?")
+            .bind(&claim.run_id)
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, "succeeded", "the run must not roll back to running");
+        let after = scheduler.get(&job.id).await.unwrap().unwrap();
+        assert!(!after.enabled, "exhausted schedule must disable the job");
+        assert!(after.next_run_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn run_due_jobs_isolates_a_job_whose_claim_errors() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let scheduler = CronScheduler::new(
+            database.pool().clone(),
+            Arc::new(SilentExecutor(Some("done".into()))),
+        );
+        let bad = scheduler
+            .register(CronJobSpec::new("*/5 * * * *", serde_json::json!({})))
+            .await
+            .unwrap();
+        let good = scheduler
+            .register(CronJobSpec::new("interval:1h", serde_json::json!({})))
+            .await
+            .unwrap();
+        let now = Utc::now();
+        // An invalid timezone makes the catch-up computation fail inside claim_job.
+        sqlx::query("UPDATE cron_jobs SET payload_json = ?, next_run_at = ? WHERE id = ?")
+            .bind(r#"{"schedule":{"timezone":"Mars/Nowhere"}}"#)
+            .bind(now - TimeDelta::minutes(10))
+            .bind(&bad.id)
+            .execute(database.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = ?")
+            .bind(now - TimeDelta::minutes(1))
+            .bind(&good.id)
+            .execute(database.pool())
+            .await
+            .unwrap();
+
+        let claimed = scheduler
+            .run_due_jobs()
+            .await
+            .expect("one job's claim error must not abort the poll");
+        assert_eq!(claimed, 1, "the healthy job after the broken one must run");
+        scheduler.wait_idle().await;
+        let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cron_runs WHERE job_id = ?")
+            .bind(&good.id)
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(runs, 1);
+    }
+
+    #[tokio::test]
+    async fn expired_lease_owned_by_this_pid_but_not_running_here_is_reclaimed() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let scheduler = CronScheduler::new(
+            database.pool().clone(),
+            Arc::new(SilentExecutor(Some("done".into()))),
+        );
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "interval:1h",
+                serde_json::json!({"channel_id": "test"}),
+            ))
+            .await
+            .unwrap();
+        // Simulates a recycled PID / panicked executor: our own PID owns the row,
+        // but no execution in this process holds the run id.
+        let expired = Utc::now() - TimeDelta::minutes(5);
+        sqlx::query(
+            "INSERT INTO cron_runs
+             (run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid)
+             VALUES ('orphan-run', ?, 'orphan-token', ?, ?, NULL, 'running', 1, NULL, ?)",
+        )
+        .bind(&job.id)
+        .bind(expired)
+        .bind(expired)
+        .bind(std::process::id() as i64)
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        let claim = scheduler
+            .claim_job(&job.id, false, false)
+            .await
+            .unwrap()
+            .expect("orphaned same-pid lease must be reclaimed");
+        assert_ne!(claim.run_id, "orphan-run");
+        let old: String =
+            sqlx::query_scalar("SELECT status FROM cron_runs WHERE run_id = 'orphan-run'")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(old, "failed");
+    }
+
+    #[tokio::test]
+    async fn predecessor_fallback_does_not_read_non_cron_sessions() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json, created_at, updated_at) \
+             VALUES ('discord:bot:chan:4242', 'discord', 'chan', '4242', '{}', ?, ?)",
+        )
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at) \
+             VALUES ('private1', 'discord:bot:chan:4242', 'assistant', 'private reply', '{}', ?)",
+        )
+        .bind(now)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        assert_eq!(resolve_predecessor_output(pool, "", "4242").await, None);
+    }
+
+    #[tokio::test]
+    async fn fan_out_deliveries_in_one_millisecond_keep_distinct_obligations() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let dispatched = Arc::new(Mutex::new(Vec::new()));
+        let fixed = utc("2026-10-13T00:00:00Z");
+        let scheduler = CronScheduler::with_dispatcher(
+            pool.clone(),
+            Arc::new(SilentExecutor(Some("Report content".into()))),
+            Arc::new(RecordingDispatcher {
+                sessions: dispatched,
+            }),
+        )
+        .with_clock(move || fixed);
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "interval:1m",
+                serde_json::json!({"deliver": "discord:111,discord:222"}),
+            ))
+            .await
+            .unwrap();
+
+        scheduler.execute_job(&job).await.unwrap();
+
+        let obligations: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM delivery_obligations WHERE id LIKE 'obl:cron:%'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            obligations, 2,
+            "each destination needs its own obligation row"
+        );
+    }
+
+    #[test]
+    fn interval_arithmetic_does_not_panic_on_overflow() {
+        assert!(next_run("interval:100000000d", Utc::now()).is_err());
+
+        let from = utc("2020-01-01T00:00:00Z");
+        let now = utc("2026-10-13T00:00:00Z");
+        let latest =
+            newest_missed_occurrence("interval:1ms", from, now - TimeDelta::hours(1), now, None)
+                .unwrap();
+        assert_eq!(
+            latest,
+            Some(now),
+            "millisecond count beyond i32 must not wrap"
         );
     }
 }

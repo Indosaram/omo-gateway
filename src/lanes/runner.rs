@@ -69,7 +69,9 @@ async fn apply_reopen(
     text: Option<&str>,
     receipt: Option<&str>,
 ) -> Result<()> {
-    let mut tx = pool.begin().await?;
+    // Read-then-write across processes: take the write lock up front so a concurrent
+    // commit cannot turn the first UPDATE into an immediate SQLITE_BUSY_SNAPSHOT.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let (from,): (String,) = sqlx::query_as("SELECT status FROM lanes WHERE key = ?")
         .bind(key)
         .fetch_optional(&mut *tx)
@@ -207,7 +209,13 @@ async fn thread_effect(
     // until the window resets. The title marker is cosmetic, so a held rename is
     // skipped instead of stalling close/reopen and the lane loop behind it.
     match tokio::time::timeout(timeout, transport.status(thread, status)).await {
-        Ok(result) => result.map_err(|error| OmonError::Config(error.to_string()))?,
+        Ok(Ok(())) => {}
+        // On reopen the thread may still be archived, where Discord can refuse the
+        // rename; the title marker is cosmetic and the status refresh repairs it.
+        Ok(Err(error)) if !close => {
+            tracing::warn!(lane = %lane.key, %error, "lane thread rename failed on reopen; skipped")
+        }
+        Ok(Err(error)) => return Err(OmonError::Config(error.to_string())),
         Err(_) => tracing::warn!(lane = %lane.key, "lane thread rename held by Discord; skipped"),
     }
     tokio::time::timeout(timeout, transport.archived(thread, close))
@@ -464,8 +472,16 @@ async fn restore_cwd(pool: &SqlitePool, lane: &Lane) -> Result<()> {
     if tree.path != lane.cwd {
         return Err(OmonError::Config("previous cwd capability mismatch".into()));
     }
+    let mut tree = tree;
     if tree.state == "registered" {
         return validate_owned(&tree).await;
+    }
+    if tree.state == "restoring" {
+        // A crash between 'restoring' and 'registered' must not strand the lane.
+        if finish_interrupted_restore(pool, &tree).await? {
+            return Ok(());
+        }
+        tree.state = "removed".into();
     }
     let completed: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_close_intents WHERE id=? AND state='completed' AND previous_cwd=?)").bind(tree.removal_intent).bind(&tree.path).fetch_one(pool).await?;
     let receipt = tree
@@ -536,6 +552,39 @@ async fn restore_cwd(pool: &SqlitePool, lane: &Lane) -> Result<()> {
     sqlx::query("UPDATE lane_owned_worktrees SET state='registered',git_dir=?,identity=?,restoration_receipt=? WHERE id=? AND state='restoring'")
         .bind(dir).bind(&identity).bind(json!({"identity":identity,"removal":tree.removal_receipt,"path":tree.path,"branch":branch}).to_string()).bind(tree.id).execute(pool).await?;
     Ok(())
+}
+
+/// True when the interrupted restoration had in fact produced the owned worktree
+/// and is now registered; false when nothing was restored and the state was rolled
+/// back to 'removed' so the restoration can run again.
+async fn finish_interrupted_restore(
+    pool: &SqlitePool,
+    tree: &crate::storage::lanes::OwnedWorktree,
+) -> Result<bool> {
+    match worktree_proof(&tree.repo, &tree.path).await {
+        Ok((common, dir, identity, branch))
+            if common == tree.common_dir && branch == tree.branch =>
+        {
+            sqlx::query("UPDATE lane_owned_worktrees SET state='registered',git_dir=?,identity=?,restoration_receipt=? WHERE id=? AND state='restoring'")
+                .bind(dir).bind(&identity).bind(json!({"identity":identity,"removal":tree.removal_receipt,"path":tree.path,"branch":branch,"recovered":true}).to_string()).bind(tree.id).execute(pool).await?;
+            Ok(true)
+        }
+        _ => {
+            if tokio::fs::symlink_metadata(&tree.path).await.is_ok() {
+                return Err(OmonError::Config(
+                    "interrupted restoration left an unverifiable path; needs explicit reconciliation"
+                        .into(),
+                ));
+            }
+            sqlx::query(
+                "UPDATE lane_owned_worktrees SET state='removed' WHERE id=? AND state='restoring'",
+            )
+            .bind(tree.id)
+            .execute(pool)
+            .await?;
+            Ok(false)
+        }
+    }
 }
 
 pub(super) fn io_error(error: std::io::Error) -> OmonError {
@@ -630,11 +679,14 @@ impl OutboundDispatcher for CapturingDispatcher {
                 Err(_) => reopen_generation(&self.pool, &session.channel_id).await?,
             };
             let activity = LaneActivity::new(self.pool.clone(), Arc::new(SystemClock));
-            activity
+            let decision = activity
                 .captured_item(&session.channel_id, &content, generation, &identity)
                 .await?;
-            sqlx::query("INSERT INTO lane_transcript(lane_key, at, role, text) SELECT ?, ?, 'agent', ? WHERE (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
-                .bind(&session.channel_id).bind(Utc::now()).bind(&content).bind(&session.channel_id).bind(generation).execute(&self.pool).await?;
+            // A replayed item was already recorded; a second row would be re-read as new output.
+            if !decision.replayed {
+                sqlx::query("INSERT INTO lane_transcript(lane_key, at, role, text) SELECT ?, ?, 'agent', ? WHERE (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                    .bind(&session.channel_id).bind(Utc::now()).bind(&content).bind(&session.channel_id).bind(generation).execute(&self.pool).await?;
+            }
             self.posts_ready.notify_one();
         }
         Ok(())
@@ -816,7 +868,7 @@ impl LaneRunner {
                 };
                 if !status.can_transition_to(to,intent.note.as_deref()) { return Err(OmonError::Config("illegal close transition".into())); }
                 sqlx::query("INSERT INTO lane_history(lane_key,at,from_status,to_status,reason) VALUES (?,?,?,?,?)")
-                    .bind(&lane.key).bind(Utc::now()).bind(status.as_str()).bind(to.as_str()).bind(intent.note.as_deref()).execute(&mut *tx).await?;
+                    .bind(&lane.key).bind(Utc::now()).bind(status.as_str()).bind(to.as_str()).bind(intent.note.as_deref().map(super::state::safe_reason)).execute(&mut *tx).await?;
                 status=to;
             }
             sqlx::query("UPDATE lane_close_intents SET state='completed',phase=2,error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='running'").bind(id).execute(&mut *tx).await?;
@@ -866,7 +918,7 @@ impl LaneRunner {
                 Ok(())
             }.await;
             if let Err(error) = result {
-                sqlx::query(
+                let parked = sqlx::query(
                     "UPDATE lane_owner_replies SET error=? WHERE message_id=? AND state='pending'",
                 )
                 .bind(error.to_string())
@@ -874,6 +926,22 @@ impl LaneRunner {
                 .execute(&self.pool)
                 .await?;
                 tracing::warn!(%key,%error,"owner reply remains pending");
+                // A parked reply is retried only by a new owner reply: tell the lead once.
+                if parked.rows_affected() == 1 {
+                    crate::storage::lanes::enqueue_lane_event_with_executor(
+                        &self.pool,
+                        Some(&key),
+                        &lane.lead_session_key,
+                        "owner_reply_failed",
+                        &super::scrub::scrub(&format!(
+                            "owner reply to {key} could not be applied: {error}"
+                        ))
+                        .chars()
+                        .take(2000)
+                        .collect::<String>(),
+                    )
+                    .await?;
+                }
             }
         }
         Ok(())
@@ -1547,6 +1615,85 @@ pub fn brief_footer(lane: &Lane) -> String {
 #[cfg(test)]
 mod activity_generation_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn interrupted_restoration_without_a_worktree_rolls_back_to_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tokio::fs::canonicalize(dir.path())
+            .await
+            .unwrap()
+            .join("repo");
+        tokio::fs::create_dir(&repo).await.unwrap();
+        git(repo.to_str().unwrap(), &["init", "--quiet"])
+            .await
+            .unwrap();
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let missing = dir.path().join("gone-lane");
+        let mut lane = Lane::new(
+            "restoring",
+            "Restoring",
+            "lead",
+            missing.to_str().unwrap(),
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "closed".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        sqlx::query("INSERT INTO lane_owned_worktrees(lane_key,path,role,repo,common_dir,git_dir,identity,branch,registrar,state) VALUES ('restoring',?,'cwd',?,'c','g','i','b','test','restoring')")
+            .bind(missing.to_str().unwrap())
+            .bind(repo.to_str().unwrap())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        // The receipt checks that follow still refuse this lane, but the stranded
+        // 'restoring' state itself must be cleared first.
+        assert!(restore_cwd(db.pool(), &lane).await.is_err());
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM lane_owned_worktrees WHERE lane_key='restoring'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(state, "removed");
+    }
+
+    #[tokio::test]
+    async fn parked_owner_reply_notifies_the_lead_once() {
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut lane = Lane::new(
+            "parked",
+            "Parked",
+            "lead-key",
+            dir.path().join("missing-cwd").to_str().unwrap(),
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "closed".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        sqlx::query("INSERT INTO lane_owner_replies(message_id,lane_key,author_id,text,generation) VALUES ('m1','parked','owner','again',0)")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let runner = LaneRunner::new(db.pool().clone(), Arc::new(UnusedBackend));
+        runner.apply_owner_replies().await.unwrap();
+        runner.apply_owner_replies().await.unwrap();
+        let events: Vec<(String, String)> = sqlx::query_as(
+            "SELECT kind, lead_session_key FROM lane_events WHERE lane_key = 'parked'",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            events,
+            vec![("owner_reply_failed".into(), "lead-key".into())]
+        );
+    }
 
     struct UnusedBackend;
 

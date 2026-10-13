@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use chrono::Utc;
 use serde_json::Value;
@@ -15,11 +18,36 @@ use crate::storage::{get_lane, Lane};
 use crate::work_heartbeat::{Clock, SystemClock};
 use crate::{OmonError, Result};
 
-use super::control::{SendMode, SessionControl, Target};
+use super::control::{ControlError, SendMode, SessionControl, Target};
 use super::registry::{CommandRunner, ProcessCommandRunner};
 
-pub const MIGRATION: &str = include_str!("external.sql");
+pub const MIGRATION: &str = include_str!("../../migrations/0040_external_sessions.sql");
 pub const FALLBACK_INTERVAL: Duration = Duration::from_secs(300);
+const MAX_CONSECUTIVE_ERRORS: u32 = 3;
+/// Consecutive errors only fail a lane once they span this long, so a burst of wake-ups
+/// during one outage cannot exhaust the error budget.
+const ERROR_WINDOW: Duration = Duration::from_secs(120);
+/// Remote command Done signals get the same budget as the local runner.
+const REMOTE_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Default)]
+struct ErrorStreak {
+    count: u32,
+    since: Option<Instant>,
+}
+
+impl ErrorStreak {
+    /// Records one failed step; true once enough errors have accumulated over enough time.
+    fn record(&mut self, now: Instant) -> bool {
+        self.count += 1;
+        let since = *self.since.get_or_insert(now);
+        self.count >= MAX_CONSECUTIVE_ERRORS && now.saturating_duration_since(since) >= ERROR_WINDOW
+    }
+
+    fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
 
 fn invalid(error: impl std::fmt::Display) -> OmonError {
     OmonError::Config(error.to_string())
@@ -66,6 +94,10 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         if goal.trim().is_empty() || lead.trim().is_empty() {
             return Err(invalid("goal and lead must not be empty"));
         }
+        // Same rule as `lanes::cli`: an unparsable lead would be stored and never woken.
+        if crate::SessionKey::from_storage_key(lead.trim()).is_err() {
+            return Err(invalid("lead must be a session storage key"));
+        }
         parse_signals(done).map_err(invalid)?;
         let session = self
             .control
@@ -104,12 +136,22 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
 
     pub async fn release(&self, target: &Target) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let key: Option<String> =
-            sqlx::query_scalar("SELECT key FROM lanes WHERE external_target=?")
+        let lane: Option<(String, String)> =
+            sqlx::query_as("SELECT key,status FROM lanes WHERE external_target=?")
                 .bind(target.to_string())
                 .fetch_optional(&mut *tx)
                 .await?;
-        let key = key.ok_or_else(|| invalid("session is not adopted"))?;
+        let (key, status) = lane.ok_or_else(|| invalid("session is not adopted"))?;
+        if !matches!(status.as_str(), "verified_done" | "closed" | "failed") {
+            sqlx::query("UPDATE lanes SET status='closed',updated_at=? WHERE key=? AND status=?")
+                .bind(self.clock.now())
+                .bind(&key)
+                .bind(&status)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO lane_history(lane_key,at,from_status,to_status,reason) VALUES(?,?,?,'closed','external session released')")
+                .bind(&key).bind(self.clock.now()).bind(&status).execute(&mut *tx).await?;
+        }
         sqlx::query("UPDATE external_sessions SET released_at=? WHERE lane_key=?")
             .bind(self.clock.now())
             .bind(&key)
@@ -148,9 +190,8 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         let lane = get_lane(&self.pool, key)
             .await?
             .ok_or_else(|| invalid("lane not found"))?;
-        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as("SELECT l.external_target,l.done_signals,e.goal,e.send_key,e.sent_at FROM lanes l JOIN external_sessions e ON e.lane_key=l.key WHERE l.key=? AND e.released_at IS NULL AND l.external_target IS NOT NULL AND l.status='working'")
-            .bind(key).fetch_optional(&mut *tx).await?;
+            .bind(key).fetch_optional(&self.pool).await?;
         if let Some((target, done, goal, send_key, None)) = row {
             let target: Target = target.parse().map_err(invalid)?;
             let separator = if target.machine() == "local" {
@@ -159,12 +200,11 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
                 " | "
             };
             let footer = crate::lanes::runner::brief_footer(&lane);
-            let footer = if target.machine() == "local" {
-                footer
-            } else {
-                footer.replace(['\n', '\r'], " | ")
-            };
-            let text = format!("{goal}{separator}{footer}{separator}Done = {done}{separator}For this external session, claim completion with a standalone line: [CLAIM_DONE] {key} | <checkable evidence>. A [REPORT] done line is not a claim.");
+            let mut text = format!("{goal}{separator}{footer}{separator}Done = {done}{separator}For this external session, claim completion with a standalone line: [CLAIM_DONE] {key} | <checkable evidence>. A [REPORT] done line is not a claim.");
+            if target.machine() != "local" {
+                // Remote sends reject multi-line text; the goal and Done text may hold newlines too.
+                text = text.replace(['\n', '\r'], " | ");
+            }
             self.control
                 .send(
                     &target,
@@ -179,10 +219,9 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             )
             .bind(self.clock.now())
             .bind(key)
-            .execute(&mut *tx)
+            .execute(&self.pool)
             .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 
@@ -215,6 +254,8 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
                 tx.rollback().await?;
                 return Ok(count);
             }
+            let generation: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened'")
+                .bind(key).fetch_one(&mut *tx).await?;
             let seen: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM external_session_items WHERE lane_key=? AND item_id=?)")
                 .bind(key).bind(&id).fetch_one(&mut *tx).await?;
             if seen {
@@ -222,7 +263,7 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
                 continue;
             }
             tx.commit().await?;
-            activity.captured_item(key, &text, 0, &id).await?;
+            activity.captured_item(key, &text, generation, &id).await?;
             let prefix = format!("[CLAIM_DONE] {key} | ");
             if let Some(evidence) = text
                 .lines()
@@ -283,13 +324,24 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         notify: Arc<Notify>,
         shutdown: CancellationToken,
     ) -> Result<()> {
-        self.send_goal(key).await?;
+        let mut streak = ErrorStreak::default();
+        let mut step = self.send_goal(key).await;
         let mut fallback = tokio::time::interval_at(
             tokio::time::Instant::now() + FALLBACK_INTERVAL,
             FALLBACK_INTERVAL,
         );
         fallback.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
+            if let Err(error) = step {
+                let exhausted = streak.record(Instant::now());
+                tracing::warn!(lane = key, errors = streak.count, %error, "external session step failed");
+                let not_running = matches!(&error, OmonError::Config(message) if *message == ControlError::NotRunning.to_string());
+                if not_running || exhausted {
+                    return Err(error);
+                }
+            } else {
+                streak.clear();
+            }
             if self.target(key).await?.is_none() {
                 return Ok(());
             }
@@ -304,8 +356,12 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
                 _ = notify.notified() => {},
                 _ = fallback.tick() => {},
             }
-            self.read_new(key).await?;
-            self.send_pending(key).await?;
+            step = async {
+                self.send_goal(key).await?;
+                self.read_new(key).await?;
+                self.send_pending(key).await
+            }
+            .await;
         }
     }
 
@@ -334,6 +390,7 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         .bind(key)
         .fetch_all(&mut *tx)
         .await?;
+        tx.commit().await?;
         for (id, text) in messages {
             let text = if target.machine() == "local" {
                 text
@@ -354,10 +411,9 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             sqlx::query("UPDATE lane_inbox SET consumed_at=? WHERE id=? AND consumed_at IS NULL")
                 .bind(self.clock.now())
                 .bind(id)
-                .execute(&mut *tx)
+                .execute(&self.pool)
                 .await?;
         }
-        tx.commit().await?;
         Ok(())
     }
 }
@@ -391,7 +447,10 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
             DoneSignal::Command { argv, stdout_regex } => {
                 let mut command = vec!["python3".into(), "-c".into(), "import os,subprocess,sys; os.chdir(sys.argv[1]); r=subprocess.run(sys.argv[3:],capture_output=True,text=True); print(r.stdout,end=''); print(r.stderr,file=sys.stderr,end=''); sys.exit(r.returncode)".into(), lane.cwd.clone(), "--".into()];
                 command.extend(argv);
-                let output = control.output(target, &command).await.map_err(invalid)?;
+                let output = match control.output_with_timeout(target, &command, REMOTE_COMMAND_TIMEOUT).await {
+                    Ok(output) => output,
+                    Err(error) => { reasons.push(format!("remote command unavailable: {error}")); continue; }
+                };
                 if output.code != 0 { reasons.push(format!("remote command exited {}", output.code)); }
                 if let Some(pattern) = stdout_regex {
                     let pattern = regex::Regex::new(&pattern).map_err(invalid)?;
@@ -412,7 +471,13 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
                 continue;
             }
         };
-        let output = control.output(target, &argv).await.map_err(invalid)?;
+        let output = match control.output(target, &argv).await {
+            Ok(output) => output,
+            Err(error) => {
+                reasons.push(format!("remote file check unavailable: {error}"));
+                continue;
+            }
+        };
         if output.code != 0 {
             reasons.push(format!(
                 "remote file check failed: {}",
@@ -431,13 +496,14 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
                 lane.cwd.clone(),
             ],
         )
-        .await
-        .map_err(invalid)?;
-    if output.code != 0 {
-        reasons.push(format!(
+        .await;
+    match output {
+        Ok(output) if output.code != 0 => reasons.push(format!(
             "remote worktree check failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        )),
+        Ok(_) => {}
+        Err(error) => reasons.push(format!("remote worktree check unavailable: {error}")),
     }
     Ok(reasons)
 }
@@ -464,17 +530,73 @@ fn assistant_items(value: &Value) -> Result<Vec<(String, String)>> {
         if entry.get("role").and_then(Value::as_str) != Some("assistant") {
             continue;
         }
-        let text = entry
-            .get("text")
-            .or_else(|| entry.get("content"))
-            .and_then(Value::as_str)
-            .ok_or_else(|| invalid("assistant message has no text"))?;
+        let Some(text) = entry_text(entry) else {
+            // Tool-call-only or otherwise non-text entries carry nothing to capture; skipping
+            // them lets the cursor advance instead of re-reading the same page forever.
+            continue;
+        };
         let id = entry
             .get("id")
             .or_else(|| entry.get("itemId"))
             .and_then(Value::as_str)
             .ok_or_else(|| invalid("assistant message has no stable id"))?;
-        items.push((id.to_owned(), text.to_owned()));
+        items.push((id.to_owned(), text));
     }
     Ok(items)
+}
+
+fn entry_text(entry: &Value) -> Option<String> {
+    let content = entry
+        .get("text")
+        .filter(|value| !value.is_null())
+        .or_else(|| entry.get("content"))?;
+    match content {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => {
+            let parts: Vec<&str> = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect();
+            (!parts.is_empty()).then(|| parts.join("\n"))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn error_streak_needs_both_count_and_elapsed_time() {
+        let start = Instant::now();
+        let mut streak = ErrorStreak::default();
+        // A burst of wake-ups during one outage must not exhaust the budget.
+        for offset in 0..5 {
+            assert!(!streak.record(start + Duration::from_secs(offset)));
+        }
+        assert!(streak.record(start + ERROR_WINDOW));
+        streak.clear();
+        assert!(!streak.record(start + ERROR_WINDOW * 2));
+        assert_eq!(streak.count, 1);
+    }
+
+    #[test]
+    fn non_text_assistant_entries_are_skipped_not_fatal() {
+        let page = json!({"messages":[
+            {"id":"tool","role":"assistant","text":null},
+            {"id":"tool-2","role":"assistant","content":[{"type":"tool_use","name":"x"}]},
+            {"id":"blocks","role":"assistant","content":[{"type":"text","text":"a"},{"type":"text","text":"b"}]},
+            {"id":"user","role":"user","text":"ignored"},
+            {"id":"plain","role":"assistant","text":"done"}
+        ]});
+        assert_eq!(
+            assistant_items(&page).unwrap(),
+            vec![
+                ("blocks".to_owned(), "a\nb".to_owned()),
+                ("plain".to_owned(), "done".to_owned())
+            ]
+        );
+    }
 }

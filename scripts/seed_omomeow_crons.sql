@@ -1,4 +1,4 @@
-INSERT OR REPLACE INTO cron_jobs (id, session_key, expression, payload_json, enabled) VALUES
+INSERT INTO cron_jobs (id, session_key, expression, payload_json, enabled) VALUES
 ('omomeow:calendar_check_5m', NULL, '*/5 * * * *', '{"job_id":"calendar_check_5m","name":"Calendar 5m Check","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
 ('omomeow:mail_check_5m', NULL, '*/5 * * * *', '{"job_id":"mail_check_5m","name":"Mail 5m Check","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
 ('omomeow:govsupport_daily_0800', NULL, '0 8 * * *', '{"job_id":"govsupport_daily_0800","name":"Gov Support Daily 08:00","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
@@ -12,4 +12,5 @@ INSERT OR REPLACE INTO cron_jobs (id, session_key, expression, payload_json, ena
 ('omomeow:watch_memory_usage', NULL, '*/5 * * * *', '{"job_id":"watch_memory_usage","name":"Watch Memory Usage","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
 ('omomeow:watch_network_traffic', NULL, '*/15 * * * *', '{"job_id":"watch_network_traffic","name":"Watch Network Traffic","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
 ('omomeow:watch_backup_status', NULL, '0 2 * * *', '{"job_id":"watch_backup_status","name":"Watch Backup Status","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0),
-('omomeow:watch_ssl_expiry', NULL, '0 6 * * *', '{"job_id":"watch_ssl_expiry","name":"Watch SSL Expiry","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0);
+('omomeow:watch_ssl_expiry', NULL, '0 6 * * *', '{"job_id":"watch_ssl_expiry","name":"Watch SSL Expiry","brief_file":null,"workdir":null,"deliver":"origin","timezone":"Asia/Seoul","authority":"omon_owned"}', 0)
+ON CONFLICT(id) DO NOTHING;

@@ -3,7 +3,8 @@
 //! The gateway is zero-config: when the app-server URL points at a local
 //! address and nothing is listening there yet, the gateway spawns
 //! `omo app-server --listen <url>` itself, waits for readiness, keeps it
-//! alive (bounded restarts), and kills it on shutdown. Externally managed
+//! alive (capped exponential backoff, never giving up), and kills it on
+//! shutdown. Externally managed
 //! daemons (already listening, or non-local URLs) are detected and left
 //! alone.
 
@@ -22,19 +23,31 @@ static SPAWN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const READY_WAIT_AFTER_SPAWN: Duration = Duration::from_secs(30);
+/// First delay before a restart attempt; it doubles per consecutive failure.
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
+/// Upper bound of the restart delay: the supervisor keeps retrying at this pace.
+const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// A daemon that stayed ready this long before exiting counts as healthy, so its
+/// exit starts a fresh outage (backoff reset) instead of extending a crash loop.
 const RESTART_WINDOW: Duration = Duration::from_secs(60);
-const MAX_RESTARTS: usize = 3;
+
+/// Delay before the restart attempt that follows `failures` consecutive failures.
+fn restart_backoff(failures: u32, base: Duration, cap: Duration) -> Duration {
+    base.saturating_mul(1u32 << failures.min(16)).min(cap)
+}
 
 /// True when the daemon URL targets this machine (auto-spawn eligible).
 pub fn is_local_url(url: &str) -> bool {
-    let host = url
+    let rest = url
         .trim()
         .strip_prefix("ws://")
-        .unwrap_or_else(|| url.trim())
-        .split(['/', ':'])
-        .next()
-        .unwrap_or("");
+        .unwrap_or_else(|| url.trim());
+    let authority = rest.split('/').next().unwrap_or("");
+    // `ws://localhost:pw@evil.example` connects to evil.example; userinfo is never local.
+    if authority.contains('@') {
+        return false;
+    }
+    let host = authority.split(':').next().unwrap_or("");
     host.eq_ignore_ascii_case("127.0.0.1") || host.eq_ignore_ascii_case("localhost")
 }
 
@@ -146,8 +159,114 @@ fn resolve_daemon_bin(bin: &str, path_env: &str) -> String {
     bin.to_string()
 }
 
+fn listen_port(listen_url: &str) -> &str {
+    listen_url
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.split('/').next())
+        .unwrap_or("default")
+}
+
+/// Write the configured app-server token to an owner-only (0600) file that
+/// `omo app-server --ws-auth <token-file>` reads.
+fn write_token_file(
+    dir: &std::path::Path,
+    listen_url: &str,
+    token: &str,
+) -> std::io::Result<std::path::PathBuf> {
+    create_private_dir(dir);
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(format!("omo-appserver-{}.token", listen_port(listen_url)));
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let file = options.open(&path)?;
+        // A pre-existing file keeps its old mode; tighten it explicitly.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        drop(file);
+    }
+    #[cfg(not(unix))]
+    drop(options.open(&path)?);
+    std::fs::write(&path, token)?;
+    Ok(path)
+}
+
+/// Creates `dir` (and parents) owner-only on Unix; failures are left to the
+/// caller's own open, which reports them.
+fn create_private_dir(dir: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let _ = std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir);
+    }
+    #[cfg(not(unix))]
+    let _ = std::fs::create_dir_all(dir);
+}
+
+/// Daemon logs are rotated to `.1` once they pass this size.
+const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Opens the daemon log owner-only (it holds prompts and tool output), keeping a
+/// single rotated generation so it cannot grow without bound.
+fn open_private_log(path: &std::path::Path) -> Option<std::fs::File> {
+    if std::fs::metadata(path).is_ok_and(|meta| meta.len() > MAX_LOG_BYTES) {
+        let _ = std::fs::rename(path, path.with_extension("log.1"));
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let file = options.open(path).ok()?;
+        // A pre-existing log keeps its old mode; tighten it explicitly.
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))
+            .ok()?;
+        Some(file)
+    }
+    #[cfg(not(unix))]
+    {
+        options.open(path).ok()
+    }
+}
+
+/// Token file for a token-authenticated daemon, or `None` when no token is
+/// configured (the daemon then runs with `--ws-auth off`).
+fn prepare_token_file(cfg: &OmoBackendConfig) -> Result<Option<std::path::PathBuf>> {
+    let Some(token) = cfg.auth_token.as_deref() else {
+        return Ok(None);
+    };
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| {
+            OmonError::Config(
+                "cannot autospawn a token-authenticated omo app-server: HOME is not set \
+                 (set OMON_OMO_AUTOSPAWN=off and start the daemon yourself)"
+                    .to_string(),
+            )
+        })?;
+    let dir = std::path::PathBuf::from(home).join(".omon");
+    write_token_file(&dir, &cfg.appserver_url, token)
+        .map(Some)
+        .map_err(|e| {
+            OmonError::Config(format!(
+                "cannot write omo app-server token file in {}: {e}",
+                dir.display()
+            ))
+        })
+}
+
 /// Build the spawn command for a local daemon. Exposed for tests.
-fn daemon_command(bin: &str, listen_url: &str) -> Command {
+///
+/// With a token file the daemon enforces the same bearer token the backend
+/// sends; without one it runs unauthenticated (`--ws-auth off`).
+fn daemon_command(bin: &str, listen_url: &str, token_file: Option<&std::path::Path>) -> Command {
     #[cfg(windows)]
     let mut cmd = if bin.ends_with(".cmd") || bin.ends_with(".bat") {
         let mut c = Command::new("cmd.exe");
@@ -159,30 +278,23 @@ fn daemon_command(bin: &str, listen_url: &str) -> Command {
     #[cfg(not(windows))]
     let mut cmd = Command::new(bin);
 
-    cmd.args(["app-server", "--listen", listen_url, "--ws-auth", "off"])
-        .stdin(Stdio::null())
-        .kill_on_drop(true);
+    cmd.args(["app-server", "--listen", listen_url, "--ws-auth"]);
+    match token_file {
+        Some(path) => cmd.arg(path),
+        None => cmd.arg("off"),
+    };
+    cmd.stdin(Stdio::null()).kill_on_drop(true);
 
     let log_file = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
         .map(|home| {
-            let port = listen_url
-                .rsplit(':')
-                .next()
-                .and_then(|p| p.split('/').next())
-                .unwrap_or("default");
+            let port = listen_port(listen_url);
             let dir = std::path::PathBuf::from(home).join(".omon");
-            let _ = std::fs::create_dir_all(&dir);
+            create_private_dir(&dir);
             dir.join(format!("omo-appserver-{port}.log"))
         })
-        .and_then(|path| {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .ok()
-        });
+        .and_then(|path| open_private_log(&path));
 
     if let Some(file) = log_file {
         if let Ok(file_clone) = file.try_clone() {
@@ -208,16 +320,18 @@ fn autospawn_enabled() -> bool {
 }
 
 /// Owns the spawned daemon child for the lifetime of the gateway and
-/// restarts it (bounded backoff) if it dies. Killing the supervisor kills
-/// the daemon.
+/// restarts it, retrying with capped exponential backoff for as long as the
+/// gateway runs, if it dies. Killing the supervisor kills the daemon.
 pub struct OmoDaemonSupervisor {
     child: Arc<Mutex<Option<Child>>>,
     shutdown: Arc<AtomicBool>,
 }
 
 impl OmoDaemonSupervisor {
-    /// False after shutdown or a terminal restart/readiness failure.
-    /// Live backend readiness still requires probing the daemon's readyz endpoint.
+    /// False once the supervisor has been shut down. A daemon that keeps failing
+    /// is retried indefinitely rather than abandoned, so this never reports a
+    /// give-up. Live backend readiness still requires probing the daemon's
+    /// readyz endpoint.
     pub fn is_available(&self) -> bool {
         !self.shutdown.load(Ordering::Acquire)
     }
@@ -239,8 +353,9 @@ impl OmoDaemonSupervisor {
             return Ok(None);
         }
 
+        let token_file = prepare_token_file(cfg)?;
         tracing::info!(url = %cfg.appserver_url, bin = %bin, "spawning omo app-server daemon");
-        let child = daemon_command(&bin, &cfg.appserver_url)
+        let child = daemon_command(&bin, &cfg.appserver_url, token_file.as_deref())
             .spawn()
             .map_err(|e| {
                 OmonError::Config(format!(
@@ -259,7 +374,7 @@ impl OmoDaemonSupervisor {
         while Instant::now() < deadline {
             if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
                 tracing::info!(url = %cfg.appserver_url, "omo app-server daemon ready");
-                supervisor.spawn_watcher(cfg.appserver_url.clone(), bin);
+                supervisor.spawn_watcher(cfg.appserver_url.clone(), bin, token_file);
                 return Ok(Some(supervisor));
             }
             if supervisor.child_exited() {
@@ -289,11 +404,27 @@ impl OmoDaemonSupervisor {
             .unwrap_or(false)
     }
 
-    fn spawn_watcher(&self, url: String, bin: String) {
+    fn spawn_watcher(&self, url: String, bin: String, token_file: Option<std::path::PathBuf>) {
+        self.spawn_watcher_with_backoff(url, bin, token_file, RESTART_BACKOFF, RESTART_BACKOFF_MAX);
+    }
+
+    fn spawn_watcher_with_backoff(
+        &self,
+        url: String,
+        bin: String,
+        token_file: Option<std::path::PathBuf>,
+        backoff_base: Duration,
+        backoff_cap: Duration,
+    ) {
         let child_slot = Arc::clone(&self.child);
         let shutdown = Arc::clone(&self.shutdown);
         tokio::spawn(async move {
-            let mut restarts = std::collections::VecDeque::new();
+            // Consecutive restart cycles that did not end in a daemon that stayed
+            // healthy; drives the backoff. There is deliberately no give-up state:
+            // the gateway keeps running after a failed restart, so abandoning the
+            // daemon would leave every turn failing until a manual restart.
+            let mut failures: u32 = 0;
+            let mut healthy_since = Some(Instant::now());
             loop {
                 if shutdown.load(Ordering::Acquire) {
                     return;
@@ -317,8 +448,20 @@ impl OmoDaemonSupervisor {
                 if shutdown.load(Ordering::Acquire) {
                     return;
                 }
-                tracing::warn!(url = %url, "omo app-server daemon exited; checking before restart");
-                sleep(RESTART_BACKOFF).await;
+                if healthy_since
+                    .take()
+                    .is_some_and(|since| since.elapsed() >= RESTART_WINDOW)
+                {
+                    failures = 0;
+                }
+                let delay = restart_backoff(failures, backoff_base, backoff_cap);
+                failures = failures.saturating_add(1);
+                tracing::warn!(
+                    url = %url,
+                    retry_in_secs = delay.as_secs_f32(),
+                    "omo app-server daemon is down; restarting after backoff"
+                );
+                sleep(delay).await;
                 if shutdown.load(Ordering::Acquire) {
                     return;
                 }
@@ -332,20 +475,7 @@ impl OmoDaemonSupervisor {
                     );
                     return;
                 }
-                let now = Instant::now();
-                while restarts
-                    .front()
-                    .is_some_and(|at| now.duration_since(*at) >= RESTART_WINDOW)
-                {
-                    restarts.pop_front();
-                }
-                if restarts.len() == MAX_RESTARTS {
-                    shutdown.store(true, Ordering::Release);
-                    tracing::error!(url = %url, available = false, "omo app-server restart circuit open");
-                    return;
-                }
-                restarts.push_back(now);
-                match daemon_command(&bin, &url).spawn() {
+                match daemon_command(&bin, &url, token_file.as_deref()).spawn() {
                     Ok(child) => {
                         child_slot.lock().await.replace(child);
                         let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
@@ -371,19 +501,19 @@ impl OmoDaemonSupervisor {
                             }
                             sleep(Duration::from_millis(200)).await;
                         }
-                        if !ready && !exited {
+                        if ready {
+                            healthy_since = Some(Instant::now());
+                        } else if !exited {
                             if let Some(mut child) = child_slot.lock().await.take() {
                                 if let Err(error) = child.kill().await {
                                     tracing::error!(%error, "failed to kill/reap unready omo app-server");
                                 }
                             }
-                            shutdown.store(true, Ordering::Release);
-                            tracing::error!(url = %url, available = false, "omo app-server replacement readiness deadline expired");
-                            return;
+                            tracing::error!(url = %url, "omo app-server replacement readiness deadline expired; will retry");
                         }
                     }
                     Err(e) => {
-                        tracing::error!(error = %e, "failed to restart omo app-server daemon");
+                        tracing::error!(error = %e, "failed to restart omo app-server daemon; will retry");
                     }
                 }
             }
@@ -449,9 +579,8 @@ mod tests {
         assert!(output.status.success());
         if matches!(
             test,
-            "daemon_exiting_child_budget_local_surface"
-                | "daemon_restart_budget_stops_spawn_failures"
-                | "daemon_restart_budget_and_unready_child"
+            "daemon_exiting_child_is_restarted_past_the_old_budget"
+                | "daemon_unready_replacement_is_killed_and_retried"
                 | "daemon_ensure_owned_local_surface"
                 | "test_daemon_command_arguments"
         ) {
@@ -470,10 +599,13 @@ mod tests {
         true
     }
 
+    /// More consecutive crashes than the old three-strike circuit tolerated.
+    const RESTARTS_PAST_OLD_LIMIT: usize = 5;
+
     #[tokio::test]
     #[cfg(unix)]
-    async fn daemon_exiting_child_budget_local_surface() {
-        if isolated_home("daemon_exiting_child_budget_local_surface").await {
+    async fn daemon_exiting_child_is_restarted_past_the_old_budget() {
+        if isolated_home("daemon_exiting_child_is_restarted_past_the_old_budget").await {
             return;
         }
         use std::os::unix::fs::PermissionsExt;
@@ -499,14 +631,20 @@ s.recv(1)
             child: Arc::new(Mutex::new(None)),
             shutdown: Arc::new(AtomicBool::new(false)),
         };
-        supervisor.spawn_watcher("invalid-url".into(), bin.to_string_lossy().into_owned());
-        for _ in 0..MAX_RESTARTS {
+        supervisor.spawn_watcher_with_backoff(
+            "invalid-url".into(),
+            bin.to_string_lossy().into_owned(),
+            None,
+            Duration::from_millis(10),
+            Duration::from_millis(40),
+        );
+        for _ in 0..RESTARTS_PAST_OLD_LIMIT {
             let (mut event, _) = timeout(Duration::from_secs(10), events.accept())
                 .await
                 .unwrap()
                 .unwrap();
             assert_eq!(event.read_u8().await.unwrap(), b'S');
-            // Observe actual process exit before advancing the restart clock.
+            // Observe actual process exit before the watcher may restart it.
             let mut slot = supervisor.child.lock().await;
             event.write_all(b"X").await.unwrap();
             timeout(Duration::from_secs(5), slot.as_mut().unwrap().wait())
@@ -514,22 +652,49 @@ s.recv(1)
                 .unwrap()
                 .unwrap();
             drop(slot);
+            assert!(
+                supervisor.is_available(),
+                "a crash-looping daemon must keep being retried, never abandoned"
+            );
         }
-        tokio::time::pause();
-        sleep(Duration::from_secs(4)).await;
-        assert!(!supervisor.is_available());
-        assert!(timeout(Duration::from_secs(120), events.accept())
-            .await
-            .is_err());
-        assert!(supervisor
-            .child
-            .lock()
-            .await
-            .as_mut()
-            .unwrap()
-            .try_wait()
-            .unwrap()
-            .is_some());
+        supervisor.kill();
+    }
+
+    #[test]
+    fn restart_backoff_grows_exponentially_and_is_capped() {
+        let base = Duration::from_secs(2);
+        let cap = Duration::from_secs(60);
+        let delays: Vec<u64> = (0..8)
+            .map(|failures| restart_backoff(failures, base, cap).as_secs())
+            .collect();
+        assert_eq!(delays, vec![2, 4, 8, 16, 32, 60, 60, 60]);
+        assert_eq!(restart_backoff(u32::MAX, base, cap), cap);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fixr5_daemon_log_is_owner_only_and_rotated() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("omo-appserver-1.log");
+        std::fs::write(&log, b"old").unwrap();
+        std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o644)).unwrap();
+        drop(open_private_log(&log).expect("log opens"));
+        assert_eq!(
+            std::fs::metadata(&log).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let oversized = std::fs::OpenOptions::new().write(true).open(&log).unwrap();
+        oversized.set_len(MAX_LOG_BYTES + 1).unwrap();
+        drop(oversized);
+        drop(open_private_log(&log).expect("log reopens after rotation"));
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 0);
+        assert_eq!(
+            std::fs::metadata(log.with_extension("log.1"))
+                .unwrap()
+                .len(),
+            MAX_LOG_BYTES + 1
+        );
     }
 
     #[tokio::test]
@@ -554,7 +719,7 @@ s.recv(1)
                     .unwrap();
             }
         });
-        supervisor.spawn_watcher(url.clone(), "/nonexistent/U62-daemon".into());
+        supervisor.spawn_watcher(url.clone(), "/nonexistent/U62-daemon".into(), None);
         // The external server survives supervisor shutdown; no child is adopted.
         assert!(probe_readyz(&url, Duration::from_secs(5)).await);
         timeout(Duration::from_secs(5), server)
@@ -607,6 +772,7 @@ s.recv(1)
 ''''test -x /opt/homebrew/bin/python3 && exec /opt/homebrew/bin/python3 "$0" "$@"; exec /usr/bin/python3 "$0" "$@" # '''
 import socket, sys
 s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('127.0.0.1', int(sys.argv[3].rsplit(':', 1)[1])))
 s.listen()
 while True:
@@ -642,30 +808,9 @@ while True:
     }
 
     #[tokio::test]
-    async fn daemon_restart_budget_stops_spawn_failures() {
-        if isolated_home("daemon_restart_budget_stops_spawn_failures").await {
-            return;
-        }
-        tokio::time::pause();
-        let supervisor = OmoDaemonSupervisor {
-            child: Arc::new(Mutex::new(None)),
-            shutdown: Arc::new(AtomicBool::new(false)),
-        };
-        supervisor.spawn_watcher("invalid-url".into(), "/nonexistent/U62-daemon".into());
-        // Auto-advance drives the actual backoff timers, not wall time.
-        sleep(Duration::from_secs(15)).await;
-        let stopped = supervisor.shutdown.load(Ordering::Acquire);
-        supervisor.kill();
-        assert!(
-            stopped,
-            "restart circuit did not stop failed spawn attempts"
-        );
-    }
-
-    #[tokio::test]
     #[cfg(unix)]
-    async fn daemon_restart_budget_and_unready_child() {
-        if isolated_home("daemon_restart_budget_and_unready_child").await {
+    async fn daemon_unready_replacement_is_killed_and_retried() {
+        if isolated_home("daemon_unready_replacement_is_killed_and_retried").await {
             return;
         }
         use std::os::unix::fs::PermissionsExt;
@@ -684,6 +829,7 @@ while True:
 ''''test -x /opt/homebrew/bin/python3 && exec /opt/homebrew/bin/python3 "$0" "$@"; exec /usr/bin/python3 "$0" "$@" # '''
 import os, socket, sys
 s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('127.0.0.1', int(sys.argv[3].rsplit(':', 1)[1])))
 s.listen()
 event = socket.create_connection(('127.0.0.1', {}))
@@ -707,45 +853,59 @@ while True:
         };
         // Subscribe before starting the real production watcher.
         let started = events.accept();
-        supervisor.spawn_watcher(url.clone(), bin.to_string_lossy().into_owned());
+        supervisor.spawn_watcher_with_backoff(
+            url.clone(),
+            bin.to_string_lossy().into_owned(),
+            None,
+            Duration::from_millis(10),
+            Duration::from_millis(40),
+        );
         let (mut event, _) = timeout(Duration::from_secs(10), started)
             .await
             .unwrap()
             .unwrap();
-        let mut pid = Vec::new();
+        let mut first_pid = Vec::new();
         loop {
             let byte = event.read_u8().await.unwrap();
             if byte == b'\n' {
                 break;
             }
-            pid.push(byte);
+            first_pid.push(byte);
         }
         assert!(!probe_readyz(&url, READY_PROBE_TIMEOUT).await);
+        // Subscribe to the retry before the readiness bound is crossed.
+        let retried = events.accept();
         // Time is the behavior under test: advance beyond the readiness bound.
         tokio::time::pause();
         tokio::time::advance(READY_WAIT_AFTER_SPAWN + Duration::from_secs(3)).await;
         tokio::time::resume();
-        let eof = timeout(Duration::from_secs(2), event.read_u8()).await;
-        let mut slot = supervisor.child.lock().await;
-        let reaped = match slot.as_mut() {
-            Some(child) => child.try_wait().unwrap().is_some(),
-            None => true,
-        };
-        // Cleanup also on RED, before the assertion.
-        if let Some(child) = slot.as_mut() {
-            if !reaped {
-                child.kill().await.unwrap();
+        // The unready replacement is killed (its event socket closes)...
+        let eof = timeout(Duration::from_secs(5), event.read_u8()).await;
+        // ...and the supervisor retries instead of giving up.
+        let (mut second_event, _) = timeout(Duration::from_secs(10), retried)
+            .await
+            .expect("supervisor must start another daemon after the readiness deadline")
+            .unwrap();
+        let mut second_pid = Vec::new();
+        loop {
+            let byte = second_event.read_u8().await.unwrap();
+            if byte == b'\n' {
+                break;
             }
+            second_pid.push(byte);
         }
-        drop(slot);
-        let unavailable = !supervisor.is_available();
+        let available = supervisor.is_available();
         supervisor.kill();
-        assert!(unavailable);
         assert!(
-            reaped && matches!(eof, Ok(Err(_))),
+            matches!(eof, Ok(Err(_))),
             "owned HTTP-503 replacement PID {} survived readiness deadline",
-            String::from_utf8_lossy(&pid)
+            String::from_utf8_lossy(&first_pid)
         );
+        assert!(
+            available,
+            "an unready replacement must not permanently disable the supervisor"
+        );
+        assert_ne!(first_pid, second_pid, "retry must be a fresh process");
     }
 
     #[test]
@@ -755,6 +915,8 @@ while True:
         assert!(is_local_url("ws://LOCALHOST:9"));
         assert!(!is_local_url("ws://10.1.2.3:19742"));
         assert!(!is_local_url("wss://relay.example.com"));
+        assert!(!is_local_url("ws://localhost:pw@evil.example"));
+        assert!(!is_local_url("ws://localhost@evil.example:80"));
     }
 
     #[tokio::test]
@@ -815,7 +977,7 @@ while True:
         if isolated_home("test_daemon_command_arguments").await {
             return;
         }
-        let cmd = daemon_command("omo", "ws://127.0.0.1:19742");
+        let cmd = daemon_command("omo", "ws://127.0.0.1:19742", None);
         // Command internals are not inspectable portably; assert via as_std.
         let std_cmd = cmd.as_std();
         let args: Vec<String> = std_cmd
@@ -833,5 +995,41 @@ while True:
             ]
         );
         assert_eq!(std_cmd.get_program().to_string_lossy(), "omo");
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn fixr1_daemon_command_uses_token_file_when_token_configured() {
+        if isolated_home("fixr1_daemon_command_uses_token_file_when_token_configured").await {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let token_file =
+            write_token_file(dir.path(), "ws://127.0.0.1:19742", "secret-token").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&token_file).unwrap(),
+            "secret-token"
+        );
+        let mode = std::fs::metadata(&token_file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+
+        let cmd = daemon_command("omo", "ws://127.0.0.1:19742", Some(&token_file));
+        let args: Vec<String> = cmd
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "app-server".to_string(),
+                "--listen".to_string(),
+                "ws://127.0.0.1:19742".to_string(),
+                "--ws-auth".to_string(),
+                token_file.to_string_lossy().to_string(),
+            ]
+        );
+        assert!(!args.iter().any(|a| a == "off"));
     }
 }

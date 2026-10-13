@@ -120,7 +120,10 @@ impl PoiseData {
         }
         let pool = self.pool.clone();
         tokio::spawn(async move {
-            let _ = crate::Database::record_thread_owner(&pool, thread_id, bot_id).await;
+            if let Err(error) = crate::Database::record_thread_owner(&pool, thread_id, bot_id).await
+            {
+                tracing::error!(%error, thread_id, bot_id, "failed to persist thread owner");
+            }
         });
     }
 
@@ -343,9 +346,18 @@ pub fn check_slash_admission(
     CommandAdmissionResult::Allowed
 }
 
+/// The owner can always approve pairing: with no allowlist configured, nobody else can, and
+/// the DM prompt only appears in exactly that configuration.
+fn is_pairing_operator(user_id: u64) -> bool {
+    crate::sessions::status_reply::owner_id() == user_id.to_string()
+}
+
 pub async fn command_check(ctx: PoiseContext<'_>) -> Result<bool, CommandError> {
     let data = ctx.data();
     let user_id = ctx.author().id.get();
+    if ctx.command().name == "pair" && is_pairing_operator(user_id) {
+        return Ok(true);
+    }
     let is_paired = data.pairing_store.is_user_paired(user_id).await;
     let user_roles: Vec<u64> = match ctx.author_member().await {
         Some(member) => member.roles.iter().map(|r| r.get()).collect(),
@@ -403,6 +415,45 @@ pub async fn command_check(ctx: PoiseContext<'_>) -> Result<bool, CommandError> 
             Ok(false)
         }
     }
+}
+
+/// Upper bound on transcript characters sent to the model for `/compress`.
+const MAX_COMPRESSION_PROMPT_CHARS: usize = 120_000;
+
+/// Pending-write actions expose staged payloads (possibly from other sessions), so
+/// their replies must be ephemeral: the visibility is fixed when the command is deferred.
+pub fn is_pending_write_action(action: &str) -> bool {
+    matches!(
+        action,
+        "pending" | "review" | "approve" | "apply" | "reject" | "deny" | "drop"
+    )
+}
+
+/// Skill pending writes are global (not per-session), so only operators may list, review,
+/// approve or reject them; paired users and role members may not.
+pub fn can_manage_skill_writes(allowed_users: &[u64], allow_all_users: bool, user_id: u64) -> bool {
+    allow_all_users || allowed_users.contains(&user_id)
+}
+
+/// Events synthesized from slash commands have no Discord message to reply to or react on;
+/// the interaction id is not a message id, so the platform message id stays empty.
+fn synthetic_command_event(session: SessionKey, content: impl Into<String>) -> crate::InboundEvent {
+    crate::InboundEvent::message(session, String::new(), content)
+}
+
+/// Number of leading rows (at least one) whose rendered transcript fits `max_chars`.
+fn select_compression_window(rows: &[(i64, String, String)], max_chars: usize) -> usize {
+    let mut total = 0usize;
+    let mut count = 0usize;
+    for (_, role, content) in rows {
+        let len = role.len() + content.len() + 4;
+        if count > 0 && total + len > max_chars {
+            break;
+        }
+        total += len;
+        count += 1;
+    }
+    count
 }
 
 enum PendingAction<'a> {
@@ -485,10 +536,26 @@ async fn skill_dispatch(
     action: &str,
     name_or_query: Option<String>,
 ) -> Result<(), CommandError> {
-    ctx.defer().await?;
+    let pending_action = is_pending_write_action(action);
+    if pending_action {
+        ctx.defer_ephemeral().await?;
+    } else {
+        ctx.defer().await?;
+    }
     let data = ctx.data();
     let query_val = name_or_query.clone().unwrap_or_default();
     let pool = &data.pool;
+    if pending_action
+        && !can_manage_skill_writes(
+            &data.allowed_users,
+            data.allow_all_users,
+            ctx.author().id.get(),
+        )
+    {
+        ctx.say("❌ Only operators can manage pending skill writes.")
+            .await?;
+        return Ok(());
+    }
 
     match action {
         "pending" | "review" | "approve" | "apply" | "reject" | "deny" | "drop" => {
@@ -552,12 +619,9 @@ async fn skill_dispatch(
                         .and_then(|v| v.as_array())
                         .cloned()
                         .unwrap_or_default();
-                    let list_str = matches
-                        .iter()
-                        .filter_map(|s| s.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n- ");
-                    ctx.say(format!("🔍 **Skill Search Results for `{query_val}`** ({count} matches):\n- {list_str}")).await?;
+                    for chunk in format_skill_search_reply(&query_val, count, &matches) {
+                        ctx.say(chunk).await?;
+                    }
                 }
                 Err(e) => {
                     ctx.say(format!("❌ Search failed: {e}")).await?;
@@ -597,8 +661,11 @@ async fn skill_dispatch(
             .await?;
             let session_key = session_key(ctx).await?;
             let prompt = format!("Execute skill: {}", query_val);
-            let event = crate::InboundEvent::message(session_key, ctx.id().to_string(), prompt);
-            let _ = data.multiplexer.route(event).await;
+            let event = synthetic_command_event(session_key, prompt);
+            if let Err(e) = data.multiplexer.route(event).await {
+                ctx.say(format!("❌ Could not run skill `{query_val}`: {e}"))
+                    .await?;
+            }
         }
         _ => {
             ctx.say("Usage: `/skills action:<list|search|read|run|pending|review|approve|reject> name_or_query:<name_or_id>`")
@@ -615,8 +682,12 @@ pub async fn memory(
     #[description = "Memory action: pending, review, approve, reject, list"] action: Option<String>,
     #[description = "Pending write ID or query"] id_or_query: Option<String>,
 ) -> Result<(), CommandError> {
-    ctx.defer().await?;
     let action_str = action.unwrap_or_else(|| "list".to_string()).to_lowercase();
+    if is_pending_write_action(&action_str) {
+        ctx.defer_ephemeral().await?;
+    } else {
+        ctx.defer().await?;
+    }
     let pool = &ctx.data().pool;
     let key = session_key(ctx).await?;
 
@@ -640,8 +711,7 @@ pub async fn memory(
             )
             .bind(key.storage_key())
             .fetch_all(pool)
-            .await
-            .unwrap_or_default();
+            .await?;
 
             if memories.is_empty() {
                 ctx.say("No memories stored for this session.").await?;
@@ -729,6 +799,7 @@ pub async fn model(
     ctx: PoiseContext<'_>,
     #[description = "Model name"] name: String,
 ) -> Result<(), CommandError> {
+    ctx.defer().await?;
     let key = session_key(ctx).await?;
     execute_model_command(ctx.data(), &key, &name).await?;
     ctx.say(format!("Model switched to `{name}`.")).await?;
@@ -749,8 +820,14 @@ pub async fn execute_reset_command(
     if data.destructive_slash_confirm && confirm != Some(true) {
         return Ok(ResetCommandResult::NeedsConfirmation);
     }
+    // Reset (and interrupt) the live actor first and require success: wiping the DB under a
+    // running turn would break its rollback, and a swallowed actor error would let stale
+    // state be flushed back over the reset.
+    data.multiplexer.reset(key).await?;
     reset_session(&data.pool, &data.approvals, key).await?;
-    let _ = data.multiplexer.reset(key).await;
+    // The wipe above rewrites `sessions.state_json`; resetting the (now idle) actor again
+    // re-flushes its profile-derived defaults over it, as a single reset used to.
+    data.multiplexer.reset(key).await?;
     Ok(ResetCommandResult::Executed)
 }
 
@@ -788,6 +865,7 @@ pub async fn reset(
     ctx: PoiseContext<'_>,
     #[description = "Confirm destruction (true/false)"] confirm: Option<bool>,
 ) -> Result<(), CommandError> {
+    ctx.defer().await?;
     let key = session_key(ctx).await?;
     let data = ctx.data();
     match execute_reset_command(data, &key, confirm).await? {
@@ -830,6 +908,7 @@ pub async fn stop_session(
     // Commit/persist before guard/cache callbacks to prevent deadlock on max_connections(1)
     // and ensure failed persistence never acknowledges unsaved change.
     approvals.set_yolo(key, false).await;
+    multiplexer.set_yolo(key, false).await?;
     Ok(interrupted)
 }
 
@@ -954,6 +1033,7 @@ pub async fn steer(
     ctx: PoiseContext<'_>,
     #[description = "Steering guidance for the agent"] text: String,
 ) -> Result<(), CommandError> {
+    ctx.defer_ephemeral().await?;
     let key = session_key(ctx).await?;
     let prompt = format_steer_prompt(&text);
 
@@ -961,7 +1041,7 @@ pub async fn steer(
     // immediately; only fall back to queueing a fresh turn when nothing is running.
     let steered = ctx.data().multiplexer.steer(&key, &prompt).await?;
     if !steered {
-        let event = crate::InboundEvent::message(key, ctx.id().to_string(), prompt);
+        let event = synthetic_command_event(key, prompt);
         ctx.data().multiplexer.route(event).await?;
     }
 
@@ -1011,17 +1091,16 @@ pub async fn undo(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
 #[poise::command(slash_command)]
 /// Re-run the last user message in this session.
 pub async fn retry(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
+    ctx.defer_ephemeral().await?;
     let key = session_key(ctx).await?;
-    let storage_key = key.storage_key();
-
-    let user_row: Option<(i64, String)> = sqlx::query_as(
-        "SELECT sequence, content FROM messages WHERE session_key = ? AND role = 'user' ORDER BY sequence DESC LIMIT 1",
+    let Some(user_content) = retry_last_user_message(
+        &ctx.data().pool,
+        &ctx.data().multiplexer,
+        key,
+        String::new(),
     )
-    .bind(&storage_key)
-    .fetch_optional(&ctx.data().pool)
-    .await?;
-
-    let Some((user_seq, user_content)) = user_row else {
+    .await?
+    else {
         ctx.send(
             poise::CreateReply::default()
                 .content("No previous user message found to retry.")
@@ -1031,15 +1110,7 @@ pub async fn retry(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
         return Ok(());
     };
 
-    sqlx::query("DELETE FROM messages WHERE session_key = ? AND sequence >= ?")
-        .bind(&storage_key)
-        .bind(user_seq)
-        .execute(&ctx.data().pool)
-        .await?;
-
     let preview = preview_text(&user_content, 100);
-    let event = crate::InboundEvent::message(key, ctx.id().to_string(), user_content);
-    ctx.data().multiplexer.route(event).await?;
 
     ctx.send(
         poise::CreateReply::default()
@@ -1054,10 +1125,17 @@ pub async fn retry(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
 /// Compress conversation history into a concise summary.
 pub async fn compress(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
     ctx.defer().await?;
+    // Replacing history with a first-line-snippet digest is irreversible and lossy, so
+    // compression is refused unless the model can write a real summary.
+    let Some(llm) = &ctx.data().llm else {
+        ctx.say("❌ Compression requires a configured LLM client; history left untouched.")
+            .await?;
+        return Ok(());
+    };
     let key = session_key(ctx).await?;
     let storage_key = key.storage_key();
 
-    let rows: Vec<(i64, String, String)> = sqlx::query_as(
+    let mut rows: Vec<(i64, String, String)> = sqlx::query_as(
         "SELECT sequence, role, content FROM messages WHERE session_key = ? ORDER BY sequence ASC",
     )
     .bind(&storage_key)
@@ -1070,33 +1148,30 @@ pub async fn compress(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
         return Ok(());
     }
 
+    // Summarize only the oldest window that fits the prompt budget; newer rows stay intact.
+    let window = select_compression_window(&rows, MAX_COMPRESSION_PROMPT_CHARS);
+    rows.truncate(window);
+    if rows.len() < 2 {
+        ctx.say("The oldest message is too large to compress.")
+            .await?;
+        return Ok(());
+    }
+
     let cutoff_sequence = rows.last().map(|(seq, _, _)| *seq).unwrap_or(0);
     let history: Vec<(String, String)> = rows.into_iter().map(|(_, r, c)| (r, c)).collect();
     let chars_before: usize = history.iter().map(|(_, c)| c.len()).sum();
     let prompt = build_compression_prompt(&history);
 
-    let summary = if let Some(llm) = &ctx.data().llm {
-        match llm.stream(&[ChatMessage::new("user", prompt)], &[]).await {
-            Ok(mut stream) => {
-                let mut acc = String::new();
-                while let Some(chunk) = stream.next().await {
-                    if let Ok(chunk) = chunk {
-                        acc.push_str(&chunk.content);
-                    }
-                }
-                if acc.trim().is_empty() {
-                    fallback_summary(&history)
-                } else {
-                    acc.trim().to_string()
-                }
-            }
+    let summary = {
+        let stream = llm.stream(&[ChatMessage::new("user", prompt)], &[]).await;
+        match collect_compression_summary(stream).await {
+            Ok(summary) => summary,
             Err(e) => {
-                tracing::warn!(error = %e, "LLM compression stream failed, using fallback summary");
-                fallback_summary(&history)
+                tracing::warn!(error = %e, "LLM compression failed; history left untouched");
+                ctx.say(format!("❌ Compression failed: {e}")).await?;
+                return Ok(());
             }
         }
-    } else {
-        fallback_summary(&history)
     };
 
     let summary_content = format!("[Conversation Summary]\n{summary}");
@@ -1192,9 +1267,15 @@ pub async fn thread(
                 )
                 .with_bot_id(bot_id.to_string());
 
-                let event =
-                    crate::InboundEvent::message(thread_key, ctx.id().to_string(), starter_msg);
-                let _ = ctx.data().multiplexer.route(event).await;
+                let event = synthetic_command_event(thread_key, starter_msg);
+                if let Err(e) = ctx.data().multiplexer.route(event).await {
+                    ctx.say(format!(
+                        "❌ Created thread <#{}> but could not start a session: {e}",
+                        created_thread.id
+                    ))
+                    .await?;
+                    return Ok(());
+                }
             }
 
             ctx.say(format!("🧵 Created thread <#{}>.", created_thread.id))
@@ -1252,6 +1333,7 @@ pub struct YoloOutcome {
 pub async fn yolo_toggle(
     pool: &SqlitePool,
     approvals: &SmartApprovalGuard,
+    multiplexer: &SessionMultiplexer,
     key: &SessionKey,
     mode: Option<&str>,
 ) -> Result<YoloOutcome, CommandError> {
@@ -1281,6 +1363,8 @@ pub async fn yolo_toggle(
     // Commit/persist before guard/cache callbacks to prevent deadlock on max_connections(1)
     // and ensure failed persistence never acknowledges unsaved change.
     approvals.set_yolo(key, new_yolo).await;
+    // A live actor keeps its own copy of the state and would flush it back over the DB value.
+    multiplexer.set_yolo(key, new_yolo).await?;
 
     let status_str = if new_yolo { "enabled" } else { "disabled" };
     let note = if new_yolo {
@@ -1300,10 +1384,12 @@ pub async fn yolo(
     ctx: PoiseContext<'_>,
     #[description = "Enable or disable YOLO mode (on/off)"] mode: Option<String>,
 ) -> Result<(), CommandError> {
+    ctx.defer_ephemeral().await?;
     let key = session_key(ctx).await?;
     let outcome = yolo_toggle(
         &ctx.data().pool,
         &ctx.data().approvals,
+        &ctx.data().multiplexer,
         &key,
         mode.as_deref(),
     )
@@ -1328,13 +1414,15 @@ pub async fn pair(
         Some(member) => member.roles.iter().map(|r| r.get()).collect(),
         None => Vec::new(),
     };
-    if !is_user_authorized(
-        ctx.author().id.get(),
-        &user_roles,
-        &data.allowed_users,
-        &data.allowed_roles,
-        data.allow_all_users,
-    ) {
+    if !is_pairing_operator(ctx.author().id.get())
+        && !is_user_authorized(
+            ctx.author().id.get(),
+            &user_roles,
+            &data.allowed_users,
+            &data.allowed_roles,
+            data.allow_all_users,
+        )
+    {
         ctx.send(
             poise::CreateReply::default()
                 .content("❌ You are not authorized to approve pairing codes.")
@@ -1438,6 +1526,126 @@ pub fn fallback_summary(history: &[(String, String)]) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Collects the full LLM compression summary.
+pub async fn collect_compression_summary(
+    stream: Result<crate::LlmStream, OmonError>,
+) -> Result<String, OmonError> {
+    match stream {
+        Ok(mut stream) => {
+            let mut acc = String::new();
+            while let Some(chunk) = stream.next().await {
+                acc.push_str(&chunk?.content);
+            }
+            if acc.trim().is_empty() {
+                Err(OmonError::Llm("LLM returned an empty summary".into()))
+            } else {
+                Ok(acc.trim().to_string())
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+pub fn format_skill_search_reply(
+    query: &str,
+    count: u64,
+    matches: &[serde_json::Value],
+) -> Vec<String> {
+    let list_str = matches
+        .iter()
+        .take(30)
+        .filter_map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n- ");
+    let reply =
+        format!("🔍 **Skill Search Results for `{query}`** ({count} matches):\n- {list_str}");
+    chunk_slash_reply(&reply, 2000)
+}
+
+/// Deletes the last user exchange and re-routes the user message as a new turn.
+/// Returns the retried content, or `None` when there is no user message.
+pub async fn retry_last_user_message(
+    pool: &SqlitePool,
+    multiplexer: &SessionMultiplexer,
+    key: SessionKey,
+    event_id: String,
+) -> Result<Option<String>, CommandError> {
+    let storage_key = key.storage_key();
+    let user_row: Option<(i64, String)> = sqlx::query_as(
+        "SELECT sequence, content FROM messages WHERE session_key = ? AND role = 'user' ORDER BY sequence DESC LIMIT 1",
+    )
+    .bind(&storage_key)
+    .fetch_optional(pool)
+    .await?;
+    let Some((user_seq, user_content)) = user_row else {
+        return Ok(None);
+    };
+
+    if multiplexer.is_draining() {
+        return Err(OmonError::Config("gateway is draining; retry refused".into()).into());
+    }
+
+    let removed = take_messages_from_sequence(pool, &storage_key, user_seq).await?;
+
+    let event = crate::InboundEvent::message(key, event_id, user_content.clone());
+    if let Err(route_error) = multiplexer.route(event).await {
+        restore_messages(pool, &storage_key, removed).await?;
+        return Err(route_error.into());
+    }
+    Ok(Some(user_content))
+}
+
+/// A deleted `messages` row: sequence, id, role, content, metadata_json, created_at,
+/// platform_message_id.
+type RemovedMessage = (i64, String, String, String, String, String, Option<String>);
+
+/// Deletes every row at or after `from_sequence` and returns exactly the rows removed,
+/// in one statement, so a row written concurrently can never be deleted without being
+/// captured for rollback.
+async fn take_messages_from_sequence(
+    pool: &SqlitePool,
+    storage_key: &str,
+    from_sequence: i64,
+) -> Result<Vec<RemovedMessage>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let mut removed: Vec<RemovedMessage> = sqlx::query_as(
+        "DELETE FROM messages WHERE session_key = ? AND sequence >= ? RETURNING sequence, id, role, content, metadata_json, created_at, platform_message_id",
+    )
+    .bind(storage_key)
+    .bind(from_sequence)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    removed.sort_by_key(|row| row.0);
+    Ok(removed)
+}
+
+/// Re-inserts rows taken by [`take_messages_from_sequence`], preserving `platform_message_id`
+/// so transcript dedup keeps recognizing the restored user message.
+async fn restore_messages(
+    pool: &SqlitePool,
+    storage_key: &str,
+    removed: Vec<RemovedMessage>,
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    for (sequence, id, role, content, metadata_json, created_at, platform_message_id) in removed {
+        sqlx::query(
+            "INSERT INTO messages (sequence, id, session_key, role, content, metadata_json, created_at, platform_message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(sequence)
+        .bind(id)
+        .bind(storage_key)
+        .bind(role)
+        .bind(content)
+        .bind(metadata_json)
+        .bind(created_at)
+        .bind(platform_message_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await
 }
 
 pub fn calculate_compression_stats(before_chars: usize, after_chars: usize) -> (usize, usize, f64) {
@@ -2079,6 +2287,231 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn fix_commands_yolo_reaches_live_actor() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let key = SessionKey::new("discord", Some("g"), "c-yolo", None::<String>, "");
+        let guard = SmartApprovalGuard::new().with_pool(pool.clone());
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(DummyRunner),
+            crate::MultiplexerConfig::default(),
+        );
+        multiplexer
+            .route(crate::InboundEvent::message(key.clone(), "e1", "hi"))
+            .await
+            .unwrap();
+        multiplexer.wait_for_session_idle(&key).await.unwrap();
+        yolo_toggle(pool, &guard, &multiplexer, &key, Some("on"))
+            .await
+            .unwrap();
+        let ctx = multiplexer.session_context(&key).await.unwrap().unwrap();
+        assert!(ctx.state.yolo, "live actor copy did not observe yolo=true");
+    }
+
+    #[tokio::test]
+    async fn fix_commands_retry_refused_route_preserves_history() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let key = SessionKey::new("discord", Some("g"), "c-retry", None::<String>, "");
+        let storage_key = key.storage_key();
+        ensure_session(pool, &key).await.unwrap();
+        for (id, role, content) in [("m1", "user", "prompt"), ("m2", "assistant", "answer")] {
+            sqlx::query(
+                "INSERT INTO messages (id, session_key, role, content) VALUES (?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(&storage_key)
+            .bind(role)
+            .bind(content)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        let (_drain_tx, drain_rx) = tokio::sync::watch::channel(true);
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(DummyRunner),
+            crate::MultiplexerConfig::default(),
+        )
+        .with_drain_receiver(drain_rx);
+
+        let result =
+            retry_last_user_message(pool, &multiplexer, key.clone(), "evt-1".to_string()).await;
+        assert!(result.is_err(), "draining gateway must refuse retry");
+        let remaining: Vec<(String, String)> = sqlx::query_as(
+            "SELECT role, content FROM messages WHERE session_key = ? ORDER BY sequence ASC",
+        )
+        .bind(&storage_key)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            remaining,
+            vec![
+                ("user".to_string(), "prompt".to_string()),
+                ("assistant".to_string(), "answer".to_string())
+            ],
+            "refused retry must not delete the exchange"
+        );
+    }
+
+    fn compression_chunk(content: &str) -> crate::StreamChunk {
+        crate::StreamChunk {
+            stream_id: uuid::Uuid::new_v4(),
+            sequence: 0,
+            content: content.to_string(),
+            is_final: false,
+            reply_to: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn fix_commands_compress_aborts_on_stream_errors() {
+        let mid_error: crate::LlmStream = Box::pin(futures_util::stream::iter(vec![
+            Ok(compression_chunk("partial ")),
+            Err(OmonError::Llm("connection reset".into())),
+            Ok(compression_chunk("tail")),
+        ]));
+        assert!(
+            collect_compression_summary(Ok(mid_error)).await.is_err(),
+            "mid-stream error must abort compression"
+        );
+        assert!(
+            collect_compression_summary(Err(OmonError::Llm("open failed".into())))
+                .await
+                .is_err(),
+            "stream-open error must abort compression"
+        );
+        let ok: crate::LlmStream = Box::pin(futures_util::stream::iter(vec![
+            Ok(compression_chunk("full ")),
+            Ok(compression_chunk("summary")),
+        ]));
+        assert_eq!(
+            collect_compression_summary(Ok(ok)).await.unwrap(),
+            "full summary"
+        );
+    }
+
+    #[test]
+    fn fix_commands_skill_search_reply_is_chunked() {
+        let matches: Vec<serde_json::Value> = (0..400)
+            .map(|i| serde_json::Value::String(format!("some-long-skill-name-number-{i}")))
+            .collect();
+        let chunks = format_skill_search_reply("q", 400, &matches);
+        assert!(!chunks.is_empty());
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= 2000, "chunk exceeds Discord limit");
+        }
+    }
+
+    #[test]
+    fn pending_write_actions_are_classified_for_ephemeral_defer() {
+        for action in [
+            "pending", "review", "approve", "apply", "reject", "deny", "drop",
+        ] {
+            assert!(is_pending_write_action(action), "{action}");
+        }
+        for action in ["list", "search", "read", "run", ""] {
+            assert!(!is_pending_write_action(action), "{action}");
+        }
+    }
+
+    #[test]
+    fn skill_pending_writes_are_operator_only() {
+        assert!(can_manage_skill_writes(&[7, 42], false, 42));
+        assert!(!can_manage_skill_writes(&[7], false, 42));
+        assert!(!can_manage_skill_writes(&[], false, 42));
+        assert!(can_manage_skill_writes(&[], true, 42));
+    }
+
+    #[test]
+    fn synthetic_command_events_carry_no_platform_message_id() {
+        let key = SessionKey::new("discord", Some("g"), "c", None::<String>, "");
+        let event = synthetic_command_event(key, "Execute skill: x");
+        assert!(event.platform_message_id.is_empty());
+        assert_eq!(event.content, "Execute skill: x");
+    }
+
+    #[test]
+    fn compression_window_is_bounded_but_keeps_at_least_one_row() {
+        let rows: Vec<(i64, String, String)> = (0..10)
+            .map(|i| (i, "user".to_string(), "x".repeat(100)))
+            .collect();
+        let window = select_compression_window(&rows, 250);
+        assert!(window >= 1 && window < rows.len(), "window={window}");
+        assert_eq!(select_compression_window(&rows, 0), 1);
+        assert_eq!(select_compression_window(&rows, usize::MAX), rows.len());
+        assert_eq!(select_compression_window(&[], 100), 0);
+    }
+
+    #[tokio::test]
+    async fn retry_rollback_restores_platform_message_id_and_concurrent_rows() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let key = SessionKey::new("discord", Some("g"), "c-retry-restore", None::<String>, "");
+        let storage_key = key.storage_key();
+        ensure_session(pool, &key).await.unwrap();
+        for (id, role, content, platform_id) in [
+            ("m0", "user", "old", Some("discord-1")),
+            ("m1", "user", "prompt", Some("discord-2")),
+            ("m2", "assistant", "answer", None),
+            ("m3", "user", "arrived mid-retry", Some("discord-3")),
+        ] {
+            sqlx::query(
+                "INSERT INTO messages (id, session_key, role, content, platform_message_id) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(&storage_key)
+            .bind(role)
+            .bind(content)
+            .bind(platform_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        let user_seq: i64 = sqlx::query_scalar("SELECT sequence FROM messages WHERE id = 'm1'")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        let removed = take_messages_from_sequence(pool, &storage_key, user_seq)
+            .await
+            .unwrap();
+        assert_eq!(removed.len(), 3, "every deleted row must be captured");
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE session_key = ?")
+            .bind(&storage_key)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 1);
+
+        restore_messages(pool, &storage_key, removed).await.unwrap();
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT id, platform_message_id FROM messages WHERE session_key = ? ORDER BY sequence ASC",
+        )
+        .bind(&storage_key)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("m0".to_string(), Some("discord-1".to_string())),
+                ("m1".to_string(), Some("discord-2".to_string())),
+                ("m2".to_string(), None),
+                ("m3".to_string(), Some("discord-3".to_string())),
+            ]
+        );
+        assert!(
+            crate::storage::has_platform_message_id(pool, &storage_key, "discord-2")
+                .await
+                .unwrap(),
+            "restored user row must keep its dedup id"
+        );
+    }
+
     #[test]
     fn test_is_thread_detection() {
         assert!(is_thread(serenity::ChannelType::PublicThread));
@@ -2128,7 +2561,7 @@ mod tests {
         let mut failures = Vec::new();
 
         // 1. Initial toggle on session_a: enable YOLO
-        let outcome = yolo_toggle(pool, &guard_1, &session_a, Some("on"))
+        let outcome = yolo_toggle(pool, &guard_1, &multiplexer, &session_a, Some("on"))
             .await
             .unwrap();
         if !outcome.enabled || !outcome.message.contains("enabled") {
@@ -2164,7 +2597,9 @@ mod tests {
         }
 
         // Toggle on session_a with guard_2 (mode None toggles against effective state)
-        let outcome_toggle = yolo_toggle(pool, &guard_2, &session_a, None).await.unwrap();
+        let outcome_toggle = yolo_toggle(pool, &guard_2, &multiplexer, &session_a, None)
+            .await
+            .unwrap();
         if outcome_toggle.enabled || !outcome_toggle.message.contains("disabled") {
             failures.push("toggle from enabled state did not return disabled outcome".to_string());
         }
@@ -2210,7 +2645,7 @@ mod tests {
             "dm-user-1",
         );
 
-        let outcome_twin = yolo_toggle(pool, &guard_1, &dm_bot84, Some("on"))
+        let outcome_twin = yolo_toggle(pool, &guard_1, &multiplexer, &dm_bot84, Some("on"))
             .await
             .unwrap();
         if !outcome_twin.enabled {
@@ -2265,7 +2700,8 @@ mod tests {
             failures.push("guard unexpectedly granted yolo to malformed session".to_string());
         }
 
-        let malformed_toggle = yolo_toggle(pool, &guard_1, &malformed_session, Some("on")).await;
+        let malformed_toggle =
+            yolo_toggle(pool, &guard_1, &multiplexer, &malformed_session, Some("on")).await;
         if malformed_toggle.is_ok() {
             failures
                 .push("yolo_toggle unexpectedly succeeded on malformed session state".to_string());
@@ -2304,12 +2740,12 @@ mod tests {
             .unwrap();
 
         // 3. Reset lifecycle: re-enable yolo and add cached approval on session_a; session_b unaffected
-        yolo_toggle(pool, &guard_1, &session_a, Some("on"))
+        yolo_toggle(pool, &guard_1, &multiplexer, &session_a, Some("on"))
             .await
             .unwrap();
         guard_1.approve_session(&session_a, "pattern:cmd1").await;
 
-        yolo_toggle(pool, &guard_1, &session_b, Some("on"))
+        yolo_toggle(pool, &guard_1, &multiplexer, &session_b, Some("on"))
             .await
             .unwrap();
         guard_1.approve_session(&session_b, "pattern:cmd2").await;
@@ -2379,8 +2815,14 @@ mod tests {
         let guard_closed = SmartApprovalGuard::new().with_pool(closed_db.pool().clone());
         closed_db.pool().close().await;
 
-        let failed_result =
-            yolo_toggle(closed_db.pool(), &guard_closed, &session_a, Some("on")).await;
+        let failed_result = yolo_toggle(
+            closed_db.pool(),
+            &guard_closed,
+            &multiplexer,
+            &session_a,
+            Some("on"),
+        )
+        .await;
         if failed_result.is_ok() {
             failures
                 .push("failed persistence unexpectedly acknowledged unsaved change".to_string());
@@ -2396,5 +2838,15 @@ mod tests {
             failures.is_empty(),
             "U11 constituent failures: {failures:#?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod pairing_operator_tests {
+    #[test]
+    fn configured_owner_is_a_pairing_operator() {
+        let owner: u64 = crate::sessions::status_reply::owner_id().parse().unwrap();
+        assert!(super::is_pairing_operator(owner));
+        assert!(!super::is_pairing_operator(owner.wrapping_add(1)));
     }
 }

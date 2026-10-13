@@ -16,13 +16,33 @@ use tokio_tungstenite::tungstenite::Message;
 
 struct CapturingDispatcher {
     actions: ParkingMutex<Vec<OutboundAction>>,
+    dispatched: tokio::sync::Notify,
 }
 
 impl CapturingDispatcher {
     fn new() -> Self {
         Self {
             actions: ParkingMutex::new(Vec::new()),
+            dispatched: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Wait until a final stream chunk has been dispatched. The notification is
+    /// armed before each state check, so a dispatch between check and await is
+    /// never missed.
+    async fn wait_for_final_chunk(&self, timeout: std::time::Duration) -> bool {
+        let wait = async {
+            loop {
+                let notified = self.dispatched.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.stream_chunks().iter().any(|chunk| chunk.is_final) {
+                    return;
+                }
+                notified.await;
+            }
+        };
+        tokio::time::timeout(timeout, wait).await.is_ok()
     }
 
     fn stream_chunks(&self) -> Vec<StreamChunk> {
@@ -41,6 +61,7 @@ impl CapturingDispatcher {
 impl OutboundDispatcher for CapturingDispatcher {
     async fn dispatch(&self, action: OutboundAction) -> omon_gateway::Result<()> {
         self.actions.lock().push(action);
+        self.dispatched.notify_waiters();
         Ok(())
     }
 }
@@ -148,6 +169,14 @@ impl FakeAppServer {
                                             },
                                             "model": "claude-3-5-sonnet"
                                         }
+                                    });
+                                    let _ = outgoing_tx.send(Message::text(resp.to_string())).await;
+                                }
+                                "thread/settings/update" => {
+                                    let resp = json!({
+                                        "jsonrpc": "2.0",
+                                        "id": id,
+                                        "result": {}
                                     });
                                     let _ = outgoing_tx.send(Message::text(resp.to_string())).await;
                                 }
@@ -297,7 +326,15 @@ async fn test_e2e_actor_omo_backend_persists_assistant_message() {
         Some("persona-model-override")
     );
 
-    // 2. Stream chunks were emitted to dispatcher
+    // 2. Stream chunks were emitted to dispatcher. The turn runs after the
+    // thread/start the wait above observed, so wait for the final chunk (sent
+    // after the assistant message is persisted) before asserting on it.
+    assert!(
+        dispatcher
+            .wait_for_final_chunk(std::time::Duration::from_secs(10))
+            .await,
+        "actor never dispatched a final stream chunk"
+    );
     let chunks = dispatcher.stream_chunks();
     assert!(!chunks.is_empty(), "Must emit stream chunks to dispatcher");
     let final_chunk = chunks.last().unwrap();

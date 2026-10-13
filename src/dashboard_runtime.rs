@@ -6,32 +6,60 @@ use std::time::Duration;
 
 use omon_gateway::storage::init_pool;
 use omon_gateway::{
-    cron_script_timeout_secs_from, ApprovalPolicy, CronScheduler, CronTool,
-    DiscordApprovalRequester, FileTool, McpTool, MessageContextPolicyMatrix,
+    cron_script_timeout_secs_from, validate_agent_backend_env, ApprovalPolicy, CronScheduler,
+    CronTool, DiscordApprovalRequester, FileTool, McpTool, MessageContextPolicyMatrix,
     MessengerPolicyStore, MultiplexerConfig, OmoBackend, OmoBackendConfig, OmoDaemonSupervisor,
     OutboundDispatcher, Result, ScaleToZero, SessionMultiplexer, SmartApprovalGuard, TerminalTool,
-    ToolRegistry, validate_agent_backend_env,
+    ToolRegistry,
 };
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use super::dashboard::{
-    spawn_server, DashboardSettings, DashboardState, WebDashboardDispatcher,
-};
+use super::dashboard::{spawn_server, DashboardSettings, DashboardState, WebDashboardDispatcher};
 
 pub async fn run_standalone_cli(settings: DashboardSettings) -> Result<()> {
     settings.validate()?;
     let shutdown = CancellationToken::new();
     let signal_shutdown = shutdown.clone();
     let signal_task = tokio::spawn(async move {
-        match tokio::signal::ctrl_c().await {
+        match wait_for_shutdown_signal().await {
             Ok(()) => signal_shutdown.cancel(),
-            Err(error) => tracing::error!(%error, "failed to listen for dashboard Ctrl+C"),
+            Err(error) => tracing::error!(%error, "failed to listen for shutdown signals"),
         }
     });
-    let result = run_standalone(settings, shutdown, true).await;
+    // A gateway normally owns the cron scheduler on this database. A second scheduler here
+    // would claim Discord-delivery jobs it cannot deliver, so it is opt-in.
+    let start_scheduler = standalone_scheduler_enabled(
+        super::optional_env("OMON_DASHBOARD_RUN_SCHEDULER").as_deref(),
+    );
+    let result = run_standalone(settings, shutdown, start_scheduler).await;
     signal_task.abort();
     result
+}
+
+/// Resolves on Ctrl+C or, on unix, SIGTERM (`systemctl stop` / `docker stop`), so the
+/// graceful shutdown path below runs for both.
+async fn wait_for_shutdown_signal() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
+}
+
+fn standalone_scheduler_enabled(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
 }
 
 pub async fn run_standalone(
@@ -56,9 +84,8 @@ pub async fn run_standalone(
     let approval_guard = SmartApprovalGuard::new().with_pool(pool.clone());
     let loaded_allowlist = approval_guard.load_persisted_allowlist().await?;
     tracing::info!(loaded_allowlist, "loaded dashboard approval allowlist");
-    let approval_timeout_secs = super::approval_timeout_secs_from(
-        super::optional_env("APPROVAL_TIMEOUT_SECS").as_deref(),
-    );
+    let approval_timeout_secs =
+        super::approval_timeout_secs_from(super::optional_env("APPROVAL_TIMEOUT_SECS").as_deref());
     let events = WebDashboardDispatcher::new();
     let dispatcher: Arc<dyn OutboundDispatcher> = Arc::new(events.clone());
     let approval_requester = Arc::new(DiscordApprovalRequester::new(
@@ -67,8 +94,7 @@ pub async fn run_standalone(
     ));
     approval_requester.set_dispatcher(dispatcher.clone()).await;
 
-    let approval_policy =
-        ApprovalPolicy::parse(super::optional_env("APPROVAL_MODE").as_deref());
+    let approval_policy = ApprovalPolicy::parse(super::optional_env("APPROVAL_MODE").as_deref());
     let deny_patterns = env::var("APPROVALS_DENY")
         .or_else(|_| env::var("OMON_APPROVALS_DENY"))
         .ok()
@@ -96,9 +122,7 @@ pub async fn run_standalone(
             )
             .with_deny_globs(deny_patterns),
     );
-    tools.register(
-        FileTool::new(&workspace_root).with_authorized_roots(extra_tool_roots.clone()),
-    );
+    tools.register(FileTool::new(&workspace_root).with_authorized_roots(extra_tool_roots.clone()));
     tools.register(McpTool::default());
     let cron_tool = CronTool::new(pool.clone());
     tools.register(cron_tool.clone());
@@ -125,18 +149,20 @@ pub async fn run_standalone(
         appserver_url = %omo_config.appserver_url,
         "Configured dashboard agent backend: OMO app-server"
     );
-    let omo_backend = Arc::new(
-        OmoBackend::new(omo_config.clone(), dispatcher.clone()).with_pool(pool.clone()),
-    );
+    let omo_backend =
+        Arc::new(OmoBackend::new(omo_config.clone(), dispatcher.clone()).with_pool(pool.clone()));
     let mux = SessionMultiplexer::with_dispatcher(
         pool.clone(),
         omo_backend.clone(),
         Some(dispatcher.clone()),
         MultiplexerConfig::default(),
     );
-    approval_requester.set_heartbeat(mux.activity_heartbeat()).await;
+    approval_requester
+        .set_heartbeat(mux.activity_heartbeat())
+        .await;
     let scale_to_zero = Some(ScaleToZero::start(mux.clone()));
     let multiplexer = Some(mux);
+    let shutdown_multiplexer = multiplexer.clone();
 
     // Cron and interactive share one multiplexed daemon instance with distinct agent threads
     let mut cron_omo_config =
@@ -154,9 +180,8 @@ pub async fn run_standalone(
         total_timeout_secs = cron_omo_config.total_timeout.as_secs(),
         "Configured dashboard cron backend: OMO app-server"
     );
-    let cron_backend = Arc::new(
-        OmoBackend::new(cron_omo_config, dispatcher.clone()).with_pool(pool.clone()),
-    );
+    let cron_backend =
+        Arc::new(OmoBackend::new(cron_omo_config, dispatcher.clone()).with_pool(pool.clone()));
 
     let scheduler = CronScheduler::with_dispatcher(
         pool.clone(),
@@ -201,13 +226,20 @@ pub async fn run_standalone(
         skill_roots,
         bot_connections,
         settings.web_root.clone(),
-    );
+    )
+    .detached_from_gateway();
     let server = spawn_server(settings, state, shutdown.clone()).await?;
     shutdown.cancelled().await;
     let _ = server.await;
     scheduler.shutdown().await;
     if let Some(scale_to_zero) = scale_to_zero {
         scale_to_zero.shutdown().await;
+    }
+    // Drain in-flight turns before the pool closes underneath them.
+    if let Some(mux) = shutdown_multiplexer {
+        if let Err(error) = mux.shutdown().await {
+            tracing::warn!(%error, "dashboard multiplexer shutdown reported an error");
+        }
     }
     pool.close().await;
     Ok(())
@@ -349,6 +381,15 @@ fn split_csv(value: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standalone_scheduler_is_opt_in() {
+        assert!(!standalone_scheduler_enabled(None));
+        assert!(!standalone_scheduler_enabled(Some("")));
+        assert!(!standalone_scheduler_enabled(Some("0")));
+        assert!(standalone_scheduler_enabled(Some("1")));
+        assert!(standalone_scheduler_enabled(Some(" TRUE ")));
+    }
 
     #[test]
     fn split_csv_trims_and_drops_empty_values() {

@@ -38,6 +38,7 @@ const DEFAULT_DASHBOARD_HOST: &str = "127.0.0.1";
 const DEFAULT_DASHBOARD_PORT: u16 = 9119;
 const MAX_PAGE_SIZE: u32 = 200;
 const LOG_CAPACITY: usize = 2_000;
+const DEFAULT_BACKEND_APPSERVER_URL: &str = "ws://127.0.0.1:19742";
 
 #[derive(Clone, Debug, clap::Args)]
 pub struct DashboardArgs {
@@ -75,10 +76,17 @@ impl DashboardSettings {
     pub fn from_env() -> Self {
         let port_raw = env::var("DASHBOARD_PORT").ok();
         let enabled = env_bool("DASHBOARD_ENABLED", false) || port_raw.is_some();
-        let port = port_raw
-            .as_deref()
-            .and_then(|raw| raw.trim().parse::<u16>().ok())
-            .unwrap_or(DEFAULT_DASHBOARD_PORT);
+        let port = match port_raw.as_deref().map(str::trim) {
+            Some(raw) => raw.parse::<u16>().unwrap_or_else(|_| {
+                tracing::warn!(
+                    value = raw,
+                    default = DEFAULT_DASHBOARD_PORT,
+                    "invalid DASHBOARD_PORT; falling back to the default port"
+                );
+                DEFAULT_DASHBOARD_PORT
+            }),
+            None => DEFAULT_DASHBOARD_PORT,
+        };
         Self {
             enabled,
             host: env::var("DASHBOARD_HOST")
@@ -293,6 +301,9 @@ impl Default for DashboardLogStore {
 
 impl DashboardLogStore {
     fn push(&self, level: &str, target: &str, message: String, fields: Value) {
+        // The id, the stored entry and the broadcast are ordered under one lock so
+        // subscribers and snapshots always observe strictly increasing ids.
+        let mut entries = self.entries.lock();
         let entry = DashboardLogEntry {
             id: self.sequence.fetch_add(1, Ordering::Relaxed),
             timestamp: Utc::now(),
@@ -301,13 +312,10 @@ impl DashboardLogStore {
             message,
             fields,
         };
-        {
-            let mut entries = self.entries.lock();
-            if entries.len() >= LOG_CAPACITY {
-                entries.pop_front();
-            }
-            entries.push_back(entry.clone());
+        if entries.len() >= LOG_CAPACITY {
+            entries.pop_front();
         }
+        entries.push_back(entry.clone());
         let _ = self.sender.send(entry);
     }
 
@@ -489,8 +497,25 @@ impl OutboundDispatcher for WebDashboardDispatcher {
             }
             _ => {}
         }
+        // The dashboard can only deliver to web sessions; messenger delivery
+        // through it must fail closed so callers never record a false success.
+        let undeliverable = match &action {
+            OutboundAction::SendMessage { session, .. }
+            | OutboundAction::EditMessage { session, .. }
+            | OutboundAction::DeleteMessage { session, .. }
+            | OutboundAction::UploadFile { session, .. }
+            | OutboundAction::Stream { session, .. } => {
+                (session.platform != "web").then(|| session.platform.clone())
+            }
+            _ => None,
+        };
         let _ = self.sender.send(action);
-        Ok(())
+        match undeliverable {
+            Some(platform) => Err(OmonError::Config(format!(
+                "web dashboard dispatcher cannot deliver to {platform} sessions"
+            ))),
+            None => Ok(()),
+        }
     }
 }
 
@@ -518,11 +543,12 @@ impl OutboundDispatcher for CompositeDispatcher {
         session: SessionKey,
         content: String,
     ) -> omon_gateway::Result<()> {
-        self.dashboard
+        let observed = self
+            .dashboard
             .dispatch_direct_reply(session.clone(), content.clone())
-            .await?;
+            .await;
         if session.platform == "web" {
-            Ok(())
+            observed
         } else {
             self.primary.dispatch_direct_reply(session, content).await
         }
@@ -530,9 +556,9 @@ impl OutboundDispatcher for CompositeDispatcher {
 
     async fn dispatch(&self, action: OutboundAction) -> omon_gateway::Result<()> {
         let web_only = action_session(&action).is_some_and(|session| session.platform == "web");
-        self.dashboard.dispatch(action.clone()).await?;
+        let observed = self.dashboard.dispatch(action.clone()).await;
         if web_only {
-            Ok(())
+            observed
         } else {
             self.primary.dispatch(action).await
         }
@@ -571,6 +597,11 @@ pub struct DashboardState {
     pub web_root: PathBuf,
     pub logs: DashboardLogStore,
     pub disk_sampler: Option<DiskSampler>,
+    /// True when this dashboard owns its own multiplexer and approval guard
+    /// instead of sharing the Discord gateway's runtime (combined `run` mode
+    /// and standalone `dashboard`). Messenger sessions and approvals then live
+    /// in a different runtime and must not be driven or reported from here.
+    pub detached_from_gateway: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -603,7 +634,13 @@ impl DashboardState {
             web_root,
             logs: global_logs(),
             disk_sampler: None,
+            detached_from_gateway: false,
         }
+    }
+
+    pub fn detached_from_gateway(mut self) -> Self {
+        self.detached_from_gateway = true;
+        self
     }
 
     pub fn with_disk_sampler<F>(mut self, sampler: F) -> Self
@@ -663,33 +700,6 @@ pub(crate) fn config_view_from_gateway(
             "processing_reactions": config.processing_reactions,
             "runtime_footer": config.runtime_footer,
             "cron_script_timeout_secs": config.cron_script_timeout_secs,
-        },
-        "dashboard": {
-            "host": settings.host,
-            "port": settings.port,
-            "insecure": settings.insecure,
-        }
-    })
-}
-
-pub fn config_view_from_environment(settings: &DashboardSettings) -> Value {
-    json!({
-        "model": env::var("DEFAULT_MODEL").ok(),
-        "providers": {
-            "openai_base_url": env::var("OPENAI_API_BASE").ok(),
-            "openai_api_key_configured": env::var("OPENAI_API_KEY").is_ok_and(|value| !value.trim().is_empty()),
-            "anthropic_base_url": env::var("ANTHROPIC_BASE_URL").ok(),
-            "anthropic_api_key_configured": env::var("ANTHROPIC_API_KEY").is_ok_and(|value| !value.trim().is_empty()),
-        },
-        "approval": {
-            "policy": env::var("APPROVAL_POLICY").unwrap_or_else(|_| "ask".into()),
-            "timeout_secs": env::var("APPROVAL_TIMEOUT_SECS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(900),
-        },
-        "workspace_root": env::var("WORKSPACE_ROOT").unwrap_or_else(|_| "workspace".into()),
-        "tool_roots": env::var("EXTRA_TOOL_ROOTS").ok(),
-        "discord": {
-            "bot_count": env::var("DISCORD_BOT_TOKENS").ok().map(|v| v.split(',').filter(|v| !v.trim().is_empty()).count()).unwrap_or(0),
-            "configured": env::var("DISCORD_BOT_TOKEN").is_ok() || env::var("DISCORD_BOT_TOKENS").is_ok(),
         },
         "dashboard": {
             "host": settings.host,
@@ -830,6 +840,19 @@ async fn api_health(State(state): State<DashboardState>) -> Json<Value> {
     }))
 }
 
+/// Resolves the agent backend URL the same way `OmoBackendConfig::from_env` does:
+/// an explicit config value, then `OMON_OMO_APPSERVER_URL`, then the local daemon default.
+fn readiness_backend_url(config: &Value, env_url: Option<&str>) -> String {
+    config
+        .get("appserver_url")
+        .and_then(Value::as_str)
+        .or(env_url)
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .unwrap_or(DEFAULT_BACKEND_APPSERVER_URL)
+        .to_owned()
+}
+
 async fn api_readiness(State(state): State<DashboardState>) -> Response {
     let db_ok = sqlx::query_scalar::<_, i64>("SELECT 1")
         .fetch_one(&state.pool)
@@ -840,15 +863,14 @@ async fn api_readiness(State(state): State<DashboardState>) -> Response {
     let disk_pressure = readiness::classify_disk_pressure_opt(disk_total, disk_available);
     let disk_ok = workspace_ok && disk_pressure == "ok";
     let chat_ok = state.multiplexer.is_some();
-    let appserver_url = state
-        .config
-        .get("appserver_url")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| std::env::var("OMON_APPSERVER_URL").ok());
-    let backend_check = readiness::probe_backend(appserver_url.as_deref()).await;
+    let env_url = std::env::var("OMON_OMO_APPSERVER_URL").ok();
+    let backend_configured = state.config.get("appserver_url").is_some() || env_url.is_some();
+    let appserver_url = readiness_backend_url(&state.config, env_url.as_deref());
+    let backend_check = readiness::probe_backend(Some(appserver_url.as_str())).await;
     let backend_ok = backend_check.status == "ok";
-    let ready = db_ok && workspace_ok && disk_ok && (backend_ok || appserver_url.is_none());
+    // The backend gates readiness when this dashboard serves chat, or when a backend was
+    // configured explicitly; a bare read-only dashboard does not depend on it.
+    let ready = db_ok && workspace_ok && disk_ok && (backend_ok || !(chat_ok || backend_configured));
     let status = if ready {
         StatusCode::OK
     } else {
@@ -907,6 +929,7 @@ async fn api_status(State(state): State<DashboardState>) -> Result<Json<Value>, 
     };
     Ok(Json(json!({
         "status": overall_status,
+        "model": state.config["model"].clone(),
         "uptime_seconds": state.started_at.elapsed().as_secs(),
         "bot_connections": state.bot_connections,
         "active_sessions": active_sessions,
@@ -998,6 +1021,21 @@ impl SessionRow {
     }
 }
 
+/// Builds a `LIKE '%value%'` pattern that matches `value` literally: `%`, `_` and the
+/// escape character itself are escaped (queries must use `ESCAPE '\\'`).
+fn like_contains_pattern(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len() + 2);
+    pattern.push('%');
+    for ch in value.chars() {
+        if matches!(ch, '%' | '_' | '\\') {
+            pattern.push('\\');
+        }
+        pattern.push(ch);
+    }
+    pattern.push('%');
+    pattern
+}
+
 #[derive(Debug, Deserialize)]
 struct PageQuery {
     page: Option<u32>,
@@ -1024,13 +1062,13 @@ async fn list_sessions(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| format!("%{value}%"));
+        .map(like_contains_pattern);
 
     let (rows, total) = if let Some(pattern) = search {
         let rows = sqlx::query_as::<_, SessionRow>(
             "SELECT session_key, platform, guild_id, channel_id, thread_id, user_id, state_json, created_at, updated_at
              FROM sessions
-             WHERE session_key LIKE ? OR platform LIKE ? OR channel_id LIKE ? OR user_id LIKE ?
+             WHERE session_key LIKE ? ESCAPE '\\' OR platform LIKE ? ESCAPE '\\' OR channel_id LIKE ? ESCAPE '\\' OR user_id LIKE ? ESCAPE '\\'
              ORDER BY updated_at DESC
              LIMIT ? OFFSET ?",
         )
@@ -1044,7 +1082,7 @@ async fn list_sessions(
         .await?;
         let total = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM sessions
-             WHERE session_key LIKE ? OR platform LIKE ? OR channel_id LIKE ? OR user_id LIKE ?",
+             WHERE session_key LIKE ? ESCAPE '\\' OR platform LIKE ? ESCAPE '\\' OR channel_id LIKE ? ESCAPE '\\' OR user_id LIKE ? ESCAPE '\\'",
         )
         .bind(&pattern)
         .bind(&pattern)
@@ -1210,6 +1248,7 @@ async fn post_chat(
         )
     })?;
     let key = resolve_session_key(&state.pool, &id).await?;
+    reject_detached_messenger_session(&state, &key)?;
     let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
     let owner = omon_gateway::sessions::status_reply::owner_id();
     let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
@@ -1244,6 +1283,7 @@ async fn stop_session(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<Value>, ApiError> {
     let key = resolve_session_key(&state.pool, &id).await?;
+    reject_detached_messenger_session(&state, &key)?;
     let Some(mux) = state.multiplexer.as_ref() else {
         return Err(ApiError::new(
             StatusCode::BAD_REQUEST,
@@ -1276,6 +1316,14 @@ async fn handle_session_socket(
     storage_id: String,
 ) {
     let mut events = state.events.subscribe();
+    let mut tracked_approvals: HashSet<Uuid> = state
+        .events
+        .pending_approvals()
+        .await
+        .into_iter()
+        .filter(|approval| approval.session.storage_key() == storage_id)
+        .map(|approval| approval.id)
+        .collect();
     let ready = json!({
         "type": "ready",
         "session_id": storage_id,
@@ -1303,6 +1351,10 @@ async fn handle_session_socket(
                                 let content = parsed.get("content").and_then(Value::as_str).unwrap_or_default().trim();
                                 if content.is_empty() {
                                     let _ = send_ws_error(&mut socket, "message must not be empty").await;
+                                    continue;
+                                }
+                                if let Err(error) = reject_detached_messenger_session(&state, &key) {
+                                    let _ = send_ws_error(&mut socket, &error.message).await;
                                     continue;
                                 }
                                 let Some(mux) = state.multiplexer.as_ref() else {
@@ -1334,7 +1386,9 @@ async fn handle_session_socket(
                                 }
                             }
                             "stop" => {
-                                if let Some(mux) = state.multiplexer.as_ref() {
+                                if let Err(error) = reject_detached_messenger_session(&state, &key) {
+                                    let _ = send_ws_error(&mut socket, &error.message).await;
+                                } else if let Some(mux) = state.multiplexer.as_ref() {
                                     match mux.stop(&key).await {
                                         Ok(stopped) => {
                                             let ack = json!({"type":"stopped","stopped":stopped});
@@ -1362,7 +1416,7 @@ async fn handle_session_socket(
             outbound = events.recv() => {
                 match outbound {
                     Ok(action) => {
-                        if action_session(&action).is_some_and(|session| session.storage_key() == storage_id) {
+                        if session_event_matches(&action, &storage_id, &mut tracked_approvals) {
                             let payload = json!({"type":"event","event":action});
                             if socket.send(WsMessage::Text(payload.to_string().into())).await.is_err() {
                                 break;
@@ -1380,12 +1434,52 @@ async fn handle_session_socket(
     }
 }
 
+/// Whether `action` belongs on the websocket of session `storage_id`. An
+/// `ExpireApproval` carries no session, so expiries are matched against the approval
+/// requests this socket has seen (or found pending when it connected).
+fn session_event_matches(
+    action: &OutboundAction,
+    storage_id: &str,
+    tracked_approvals: &mut HashSet<Uuid>,
+) -> bool {
+    match action {
+        OutboundAction::ApprovalRequest {
+            session,
+            request_id,
+            ..
+        } if session.storage_key() == storage_id => {
+            tracked_approvals.insert(*request_id);
+            true
+        }
+        OutboundAction::ExpireApproval { request_id } => tracked_approvals.remove(request_id),
+        other => action_session(other).is_some_and(|session| session.storage_key() == storage_id),
+    }
+}
+
 async fn send_ws_error(socket: &mut WebSocket, message: &str) -> Result<(), axum::Error> {
     socket
         .send(WsMessage::Text(
             json!({"type":"error","message":message}).to_string().into(),
         ))
         .await
+}
+
+/// A dashboard with its own runtime must not drive messenger sessions: their
+/// replies would only reach the web broadcast, never the messenger.
+fn reject_detached_messenger_session(
+    state: &DashboardState,
+    key: &SessionKey,
+) -> Result<(), ApiError> {
+    if state.detached_from_gateway && key.platform != "web" {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!(
+                "{} sessions are owned by the messenger gateway runtime and cannot be chatted with or stopped from this dashboard",
+                key.platform
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn web_session_key(id: &str) -> SessionKey {
@@ -1480,6 +1574,47 @@ struct CronJobInput {
     enabled: Option<bool>,
 }
 
+/// Partial update: every omitted field keeps the stored value.
+#[derive(Debug, Deserialize)]
+struct CronJobUpdateInput {
+    expression: Option<String>,
+    payload: Option<Value>,
+    session_key: Option<String>,
+    enabled: Option<bool>,
+}
+
+/// Payload keys the scheduler maintains while a job runs; an edit must not reset them.
+const SCHEDULER_OWNED_PAYLOAD_KEYS: [&str; 5] = [
+    "last_status",
+    "last_run_at",
+    "last_occurrence",
+    "last_error",
+    "last_delivery_error",
+];
+
+fn preserve_scheduler_state(existing: &Value, updated: &mut Value) {
+    let (Some(old), Some(new)) = (existing.as_object(), updated.as_object_mut()) else {
+        return;
+    };
+    for key in SCHEDULER_OWNED_PAYLOAD_KEYS {
+        if let Some(value) = old.get(key) {
+            if !new.contains_key(key) {
+                new.insert(key.to_owned(), value.clone());
+            }
+        }
+    }
+    if let Some(done) = old.get("repeat").and_then(|repeat| repeat.get("completed")) {
+        if let Some(repeat) = new.get_mut("repeat").and_then(Value::as_object_mut) {
+            repeat.entry("completed").or_insert_with(|| done.clone());
+        }
+    }
+    if let Some(done) = old.get("completed") {
+        if !new.contains_key("completed") && !new.contains_key("repeat") {
+            new.insert("completed".to_owned(), done.clone());
+        }
+    }
+}
+
 async fn list_cron_jobs(State(state): State<DashboardState>) -> Result<Json<Value>, ApiError> {
     let jobs = sqlx::query_as::<_, CronJob>(
         "SELECT * FROM cron_jobs ORDER BY enabled DESC, next_run_at IS NULL, next_run_at, id",
@@ -1487,7 +1622,7 @@ async fn list_cron_jobs(State(state): State<DashboardState>) -> Result<Json<Valu
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(json!({
-        "items": jobs.into_iter().map(cron_job_view).collect::<Result<Vec<_>, _>>()?,
+        "items": jobs.into_iter().map(cron_job_view).collect::<Vec<_>>(),
     })))
 }
 
@@ -1501,25 +1636,41 @@ async fn create_cron_job(
             "expression must not be empty",
         ));
     }
+    if input.id.as_deref().is_some_and(|id| id.trim().is_empty()) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "id must not be empty",
+        ));
+    }
+    if input.payload.is_null() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "payload is required",
+        ));
+    }
     let spec = CronJobSpec {
         expression: input.expression,
         payload: input.payload,
         session_key: input.session_key,
     };
-    let job = if let Some(id) = input.id {
-        state.scheduler.register_with_id(id, spec).await?
-    } else {
-        state.scheduler.register(spec).await?
-    };
-    if input.enabled == Some(false) {
-        state.scheduler.pause(&job.id).await?;
-    }
+    let enabled = input.enabled != Some(false);
+    let id = input.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let job = state
+        .scheduler
+        .register_new(id.clone(), spec, enabled)
+        .await?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::CONFLICT,
+                format!("cron job {id} already exists"),
+            )
+        })?;
     let job = state
         .scheduler
         .get(&job.id)
         .await?
         .ok_or_else(|| ApiError::not_found("cron job"))?;
-    Ok((StatusCode::CREATED, Json(cron_job_view(job)?)).into_response())
+    Ok((StatusCode::CREATED, Json(cron_job_view(job))).into_response())
 }
 
 async fn get_cron_job(
@@ -1531,34 +1682,60 @@ async fn get_cron_job(
         .get(&id)
         .await?
         .ok_or_else(|| ApiError::not_found("cron job"))?;
-    Ok(Json(cron_job_view(job)?))
+    Ok(Json(cron_job_view(job)))
 }
 
 async fn update_cron_job(
     State(state): State<DashboardState>,
     AxumPath(id): AxumPath<String>,
-    Json(input): Json<CronJobInput>,
+    Json(input): Json<CronJobUpdateInput>,
 ) -> Result<Json<Value>, ApiError> {
-    if state.scheduler.get(&id).await?.is_none() {
-        return Err(ApiError::not_found("cron job"));
-    }
+    let existing = state
+        .scheduler
+        .get(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cron job"))?;
+    let expression = match input.expression {
+        Some(expression) if expression.trim().is_empty() => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "expression must not be empty",
+            ));
+        }
+        Some(expression) => expression,
+        None => existing.expression.clone(),
+    };
+    let existing_payload = existing.payload();
+    let payload = match input.payload {
+        Some(mut payload) => {
+            if let Ok(old) = &existing_payload {
+                preserve_scheduler_state(old, &mut payload);
+            }
+            payload
+        }
+        None => existing_payload?,
+    };
+    // An omitted session_key keeps the stored binding; an empty one clears it.
+    let session_key = match input.session_key {
+        Some(key) if key.trim().is_empty() => None,
+        Some(key) => Some(key),
+        None => existing.session_key.clone(),
+    };
     let spec = CronJobSpec {
-        expression: input.expression,
-        payload: input.payload,
-        session_key: input.session_key.clone(),
+        expression,
+        payload,
+        session_key,
     };
     state.scheduler.register_with_id(&id, spec).await?;
-    sqlx::query("UPDATE cron_jobs SET session_key = ?, updated_at = ? WHERE id = ?")
-        .bind(input.session_key)
-        .bind(Utc::now())
-        .bind(&id)
-        .execute(&state.pool)
-        .await?;
     match input.enabled {
         Some(true) => {
             state.scheduler.resume(&id).await?;
         }
+        // register_with_id schedules a next run; a paused job must not keep one.
         Some(false) => {
+            state.scheduler.pause(&id).await?;
+        }
+        None if !existing.enabled => {
             state.scheduler.pause(&id).await?;
         }
         None => {}
@@ -1568,7 +1745,7 @@ async fn update_cron_job(
         .get(&id)
         .await?
         .ok_or_else(|| ApiError::not_found("cron job"))?;
-    Ok(Json(cron_job_view(job)?))
+    Ok(Json(cron_job_view(job)))
 }
 
 async fn delete_cron_job(
@@ -1585,10 +1762,30 @@ async fn trigger_cron_job(
     State(state): State<DashboardState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let job = state
+        .scheduler
+        .get(&id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("cron job"))?;
+    // A detached dashboard only has the web dispatcher: the agent would run, then
+    // delivery to Discord would fail. Leave those jobs to the gateway's scheduler.
+    if state.detached_from_gateway {
+        let has_messenger_destination = job
+            .payload()
+            .ok()
+            .and_then(|payload| omon_gateway::delivery_destinations(&payload).ok())
+            .is_some_and(|destinations| !destinations.is_empty());
+        if has_messenger_destination {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "this cron job delivers to a messenger; it must be triggered from the gateway runtime, not a detached dashboard",
+            ));
+        }
+    }
     if !state.scheduler.trigger(&id).await? {
         return Err(ApiError::new(
             StatusCode::CONFLICT,
-            "cron job does not exist or is already running",
+            "cron job is already running or unavailable",
         ));
     }
     Ok(Json(json!({"triggered": true, "id": id})))
@@ -1614,11 +1811,14 @@ async fn resume_cron_job(
     Ok(Json(json!({"resumed": true, "id": id})))
 }
 
-fn cron_job_view(job: CronJob) -> Result<Value, ApiError> {
-    let payload = job
-        .payload()
-        .map_err(|error| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
-    Ok(json!({
+/// A job whose stored payload is not valid JSON is still listed (payload null plus an
+/// `error` field) so the operator can find, repair or delete it.
+fn cron_job_view(job: CronJob) -> Value {
+    let (payload, error) = match job.payload() {
+        Ok(payload) => (payload, Value::Null),
+        Err(error) => (Value::Null, Value::String(error.to_string())),
+    };
+    json!({
         "id": job.id,
         "session_key": job.session_key,
         "expression": job.expression,
@@ -1627,14 +1827,14 @@ fn cron_job_view(job: CronJob) -> Result<Value, ApiError> {
         "next_run_at": job.next_run_at,
         "created_at": job.created_at,
         "updated_at": job.updated_at,
-    }))
+        "error": error,
+    })
 }
 
 #[derive(Debug, Serialize, FromRow)]
 struct CronRunRow {
     run_id: String,
     job_id: String,
-    claim_token: String,
     lease_expires_at: String,
     started_at: String,
     completed_at: Option<String>,
@@ -1659,7 +1859,7 @@ async fn list_cron_runs(
     let rows = match (query.job_id.as_deref(), query.status.as_deref()) {
         (Some(job_id), Some(status)) => {
             sqlx::query_as::<_, CronRunRow>(
-                "SELECT run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
+                "SELECT run_id, job_id, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
                  FROM cron_runs WHERE job_id = ? AND status = ? ORDER BY started_at DESC LIMIT ?",
             )
             .bind(job_id)
@@ -1670,7 +1870,7 @@ async fn list_cron_runs(
         }
         (Some(job_id), None) => {
             sqlx::query_as::<_, CronRunRow>(
-                "SELECT run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
+                "SELECT run_id, job_id, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
                  FROM cron_runs WHERE job_id = ? ORDER BY started_at DESC LIMIT ?",
             )
             .bind(job_id)
@@ -1680,7 +1880,7 @@ async fn list_cron_runs(
         }
         (None, Some(status)) => {
             sqlx::query_as::<_, CronRunRow>(
-                "SELECT run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
+                "SELECT run_id, job_id, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
                  FROM cron_runs WHERE status = ? ORDER BY started_at DESC LIMIT ?",
             )
             .bind(status)
@@ -1690,7 +1890,7 @@ async fn list_cron_runs(
         }
         (None, None) => {
             sqlx::query_as::<_, CronRunRow>(
-                "SELECT run_id, job_id, claim_token, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
+                "SELECT run_id, job_id, lease_expires_at, started_at, completed_at, status, attempt, error, owner_pid
                  FROM cron_runs ORDER BY started_at DESC LIMIT ?",
             )
             .bind(i64::from(limit))
@@ -1731,12 +1931,36 @@ struct SkillView {
     description: Option<String>,
 }
 
-async fn list_skills(State(state): State<DashboardState>) -> Json<Value> {
+async fn list_skills(State(state): State<DashboardState>) -> Result<Json<Value>, ApiError> {
     let roots = state.skill_roots.clone();
     let items = tokio::task::spawn_blocking(move || discover_skills(&roots))
         .await
-        .unwrap_or_default();
-    Json(json!({"items": items}))
+        .map_err(|error| {
+            ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("skill discovery failed: {error}"),
+            )
+        })?;
+    Ok(Json(json!({"items": items})))
+}
+
+/// Only the head of a SKILL.md is needed for its description.
+const SKILL_HEAD_BYTES: u64 = 8 * 1024;
+
+fn read_skill_head(path: &Path) -> String {
+    use std::io::Read;
+    let Ok(file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let mut buffer = Vec::new();
+    if file
+        .take(SKILL_HEAD_BYTES)
+        .read_to_end(&mut buffer)
+        .is_err()
+    {
+        return String::new();
+    }
+    String::from_utf8_lossy(&buffer).into_owned()
 }
 
 fn discover_skills(roots: &[PathBuf]) -> Vec<SkillView> {
@@ -1779,7 +2003,7 @@ fn collect_skills(
         if !seen.insert(canonical) {
             continue;
         }
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let content = read_skill_head(&path);
         let description = content
             .lines()
             .map(str::trim)
@@ -1905,34 +2129,41 @@ async fn create_bot(
             "name cannot be empty",
         ));
     }
-    let toolsets_str = payload.enabled_toolsets.map(|ts| ts.join(","));
+    // Blank values mean "use the default", exactly like update_bot: store NULL, never "".
+    let model = payload.model.filter(|m| !m.trim().is_empty());
+    let system_prompt = payload.system_prompt.filter(|p| !p.trim().is_empty());
+    let toolsets_str = payload
+        .enabled_toolsets
+        .filter(|ts| !ts.is_empty())
+        .map(|ts| ts.join(","));
     let settings_json = payload
         .custom_settings
         .map(|cs| cs.to_string())
         .unwrap_or_else(|| "{}".to_string());
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    // Create never overwrites: an existing profile is changed through PUT /api/bots/{id}.
+    let inserted = sqlx::query(
         "INSERT INTO bot_profiles (bot_id, name, model, system_prompt, enabled_toolsets, custom_settings_json, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(bot_id) DO UPDATE SET
-            name = excluded.name,
-            model = excluded.model,
-            system_prompt = excluded.system_prompt,
-            enabled_toolsets = excluded.enabled_toolsets,
-            custom_settings_json = excluded.custom_settings_json,
-            updated_at = excluded.updated_at"
+         ON CONFLICT(bot_id) DO NOTHING"
     )
     .bind(bot_id)
     .bind(name)
-    .bind(&payload.model)
-    .bind(&payload.system_prompt)
+    .bind(&model)
+    .bind(&system_prompt)
     .bind(&toolsets_str)
     .bind(&settings_json)
     .bind(&now)
     .bind(&now)
     .execute(&state.pool)
     .await?;
+    if inserted.rows_affected() == 0 {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!("bot profile {bot_id} already exists"),
+        ));
+    }
 
     Ok(Json(json!({
         "status": "created",
@@ -1965,55 +2196,66 @@ async fn update_bot(
     AxumPath(bot_id): AxumPath<String>,
     Json(payload): Json<UpdateBotPayload>,
 ) -> Result<Json<Value>, ApiError> {
-    let existing = sqlx::query_as::<_, BotProfileRow>(
-        "SELECT bot_id, name, model, system_prompt, enabled_toolsets, custom_settings_json, created_at, updated_at FROM bot_profiles WHERE bot_id = ?"
-    )
-    .bind(&bot_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| ApiError::not_found("bot profile"))?;
-
-    let name = payload.name.unwrap_or(existing.name);
-    let name = name.trim();
-    if name.is_empty() {
-        return Err(ApiError::new(
-            StatusCode::BAD_REQUEST,
-            "name cannot be empty",
-        ));
-    }
-    // An omitted optional field must retain the stored value; binding None here would
-    // write SQL NULL and silently erase the bot's configuration on a name-only update.
-    let model = payload.model.or(existing.model);
-    let system_prompt = payload.system_prompt.or(existing.system_prompt);
-    let toolsets_str = payload
-        .enabled_toolsets
-        .map(|ts| ts.join(","))
-        .or(existing.enabled_toolsets);
-    let settings_json = payload
-        .custom_settings
-        .map(|cs| cs.to_string())
-        .unwrap_or(existing.custom_settings_json);
+    let name = match payload.name.as_deref().map(str::trim) {
+        Some("") => {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "name cannot be empty",
+            ));
+        }
+        other => other.map(str::to_owned),
+    };
+    // An omitted optional field must retain the stored value; an explicitly empty value
+    // clears the field to SQL NULL ("use the default"). Each field is applied by one
+    // UPDATE (flag + value, CASE keeps the column when the flag is false) so concurrent
+    // updates of different fields cannot overwrite each other.
+    let (set_model, model) = match payload.model {
+        Some(m) if m.trim().is_empty() => (true, None),
+        Some(m) => (true, Some(m)),
+        None => (false, None),
+    };
+    let (set_prompt, system_prompt) = match payload.system_prompt {
+        Some(p) if p.trim().is_empty() => (true, None),
+        Some(p) => (true, Some(p)),
+        None => (false, None),
+    };
+    let (set_toolsets, toolsets_str) = match payload.enabled_toolsets {
+        Some(ts) if ts.is_empty() => (true, None),
+        Some(ts) => (true, Some(ts.join(","))),
+        None => (false, None),
+    };
+    let (set_settings, settings_json) = match payload.custom_settings {
+        Some(cs) => (true, Some(cs.to_string())),
+        None => (false, None),
+    };
     let now = Utc::now().to_rfc3339();
 
-    sqlx::query(
+    let result = sqlx::query(
         "UPDATE bot_profiles SET
-            name = ?,
-            model = ?,
-            system_prompt = ?,
-            enabled_toolsets = ?,
-            custom_settings_json = ?,
+            name = COALESCE(?, name),
+            model = CASE WHEN ? THEN ? ELSE model END,
+            system_prompt = CASE WHEN ? THEN ? ELSE system_prompt END,
+            enabled_toolsets = CASE WHEN ? THEN ? ELSE enabled_toolsets END,
+            custom_settings_json = CASE WHEN ? THEN COALESCE(?, custom_settings_json) ELSE custom_settings_json END,
             updated_at = ?
          WHERE bot_id = ?",
     )
-    .bind(name)
+    .bind(&name)
+    .bind(set_model)
     .bind(&model)
+    .bind(set_prompt)
     .bind(&system_prompt)
+    .bind(set_toolsets)
     .bind(&toolsets_str)
+    .bind(set_settings)
     .bind(&settings_json)
     .bind(&now)
     .bind(&bot_id)
     .execute(&state.pool)
     .await?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found("bot profile"));
+    }
 
     get_bot(State(state), AxumPath(bot_id)).await
 }
@@ -2038,11 +2280,11 @@ async fn list_memory(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| format!("%{value}%"));
+        .map(like_contains_pattern);
     let (rows, total) = if let Some(pattern) = search {
         let rows = sqlx::query_as::<_, MemoryRow>(
             "SELECT id, session_key, content, metadata_json, created_at, updated_at FROM memories
-             WHERE content LIKE ? OR session_key LIKE ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+             WHERE content LIKE ? ESCAPE '\\' OR session_key LIKE ? ESCAPE '\\' ORDER BY updated_at DESC LIMIT ? OFFSET ?",
         )
         .bind(&pattern)
         .bind(&pattern)
@@ -2051,7 +2293,7 @@ async fn list_memory(
         .fetch_all(&state.pool)
         .await?;
         let total = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM memories WHERE content LIKE ? OR session_key LIKE ?",
+            "SELECT COUNT(*) FROM memories WHERE content LIKE ? ESCAPE '\\' OR session_key LIKE ? ESCAPE '\\'",
         )
         .bind(&pattern)
         .bind(&pattern)
@@ -2091,11 +2333,19 @@ async fn list_memory(
     })))
 }
 
+const DETACHED_APPROVALS_WARNING: &str = "this dashboard runs its own approval guard; approvals pending in the messenger gateway are not listed here and must be resolved in the messenger";
+
 async fn list_pending_approvals(State(state): State<DashboardState>) -> Json<Value> {
-    Json(json!({
+    let mut body = json!({
         "items": state.events.pending_approvals().await,
         "pending_count": state.approvals.pending_count().await,
-    }))
+    });
+    if state.detached_from_gateway {
+        body["complete"] = json!(false);
+        body["gateway_approvals_visible"] = json!(false);
+        body["warning"] = json!(DETACHED_APPROVALS_WARNING);
+    }
+    Json(body)
 }
 
 #[derive(Debug, Deserialize)]
@@ -2122,6 +2372,14 @@ async fn resolve_approval(
     };
     let custom_id = format!("omon:approval:{id}:{suffix}");
     if !state.approvals.resolve_custom_id(&custom_id).await {
+        if state.detached_from_gateway {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                format!(
+                    "approval request not found in this dashboard; {DETACHED_APPROVALS_WARNING}"
+                ),
+            ));
+        }
         return Err(ApiError::not_found("approval request"));
     }
     // The requester's terminal event updates both dashboard and Discord UI.
@@ -2192,7 +2450,11 @@ async fn logs_ws(ws: WebSocketUpgrade, State(state): State<DashboardState>) -> R
 }
 
 async fn handle_logs_socket(mut socket: WebSocket, logs: DashboardLogStore) {
+    // Subscribe before taking the snapshot so entries logged while the snapshot is
+    // being sent are not lost; ids already sent in the snapshot are skipped below.
+    let mut receiver = logs.subscribe();
     let tail = logs.snapshot();
+    let mut last_sent_id = tail.last().map_or(0, |entry| entry.id);
     for entry in tail
         .into_iter()
         .rev()
@@ -2211,12 +2473,15 @@ async fn handle_logs_socket(mut socket: WebSocket, logs: DashboardLogStore) {
             return;
         }
     }
-    let mut receiver = logs.subscribe();
     loop {
         tokio::select! {
             entry = receiver.recv() => {
                 match entry {
                     Ok(entry) => {
+                        if entry.id <= last_sent_id {
+                            continue;
+                        }
+                        last_sent_id = entry.id;
                         if socket.send(WsMessage::Text(json!({"type":"log","entry":entry}).to_string().into())).await.is_err() {
                             break;
                         }
@@ -3171,6 +3436,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bot_create_with_existing_id_returns_conflict_and_keeps_profile() {
+        let state = test_state().await;
+        let pool = state.pool.clone();
+        let app = router(state);
+        let post = |body: Value| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/bots")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap()
+        };
+        let first = app
+            .clone()
+            .oneshot(post(json!({
+                "bot_id": "bot-dup",
+                "name": "original",
+                "system_prompt": "keep me",
+            })))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let second = app
+            .clone()
+            .oneshot(post(json!({"bot_id": "bot-dup", "name": "clobber"})))
+            .await
+            .unwrap();
+        assert_eq!(second.status(), StatusCode::CONFLICT);
+        let (name, prompt): (String, Option<String>) =
+            sqlx::query_as("SELECT name, system_prompt FROM bot_profiles WHERE bot_id = 'bot-dup'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(name, "original");
+        assert_eq!(prompt.as_deref(), Some("keep me"));
+    }
+
+    #[tokio::test]
     async fn bot_update_with_only_name_preserves_other_fields() {
         let state = test_state().await;
         let app = router(state);
@@ -3234,6 +3538,37 @@ mod tests {
             updated["custom_settings"],
             json!({"temperature": 1}),
             "omitted custom_settings must retain stored value: {updated}"
+        );
+
+        let cleared = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/bots/bot-partial-update")
+                    .header(header::HOST, "127.0.0.1")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        json!({"name": "renamed", "model": "", "system_prompt": "  ", "enabled_toolsets": []})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cleared.status(), StatusCode::OK);
+        let cleared = json_body(cleared).await;
+        assert!(
+            cleared["model"].is_null(),
+            "explicitly empty model must clear to default: {cleared}"
+        );
+        assert!(
+            cleared["system_prompt"].is_null(),
+            "explicitly empty system_prompt must clear: {cleared}"
+        );
+        assert!(
+            cleared["enabled_toolsets"].is_null(),
+            "explicitly empty toolsets must clear to all defaults: {cleared}"
         );
     }
 
@@ -3480,5 +3815,661 @@ mod tests {
             !invented_inventory,
             "DB unavailable must not return invented inventory: {db_down_body}"
         );
+    }
+
+    struct FixedCronOutput;
+
+    #[async_trait]
+    impl omon_gateway::CronTaskExecutor for FixedCronOutput {
+        async fn execute(&self, job: &CronJob) -> omon_gateway::Result<Option<String>> {
+            Ok(Some(format!("cron-ran:{}", job.id)))
+        }
+    }
+
+    #[tokio::test]
+    async fn fix_dash_web_dispatcher_fails_closed_for_messenger_delivery() {
+        let dispatcher = WebDashboardDispatcher::new();
+        let mut events = dispatcher.subscribe();
+        let discord = SessionKey::new("discord", None::<String>, "999", None::<String>, "7");
+        let web = web_session_key("probe");
+        let send = |session: SessionKey| OutboundAction::SendMessage {
+            session,
+            content: "hi".into(),
+            reply_to: None,
+        };
+        assert!(dispatcher.dispatch(send(web)).await.is_ok());
+        assert!(
+            dispatcher.dispatch(send(discord.clone())).await.is_err(),
+            "web dashboard dispatcher must not report Discord delivery as successful"
+        );
+        // Dashboard observers still see the attempted action.
+        assert!(events.try_recv().is_ok());
+        assert!(events.try_recv().is_ok());
+
+        // A dashboard-triggered Discord cron run must record a failed obligation.
+        let state = test_state().await;
+        let scheduler = CronScheduler::with_dispatcher(
+            state.pool.clone(),
+            Arc::new(FixedCronOutput),
+            Arc::new(dispatcher.clone()),
+        );
+        let payload = json!({
+            "id": "fix_dash_cron",
+            "name": "Fix Dash Cron",
+            "prompt": "run task",
+            "deliver": "discord:999",
+            "schedule": {"kind": "cron", "expr": "0 * * * *"}
+        });
+        sqlx::query("INSERT INTO cron_jobs (id, expression, payload_json, enabled, authority, created_at, updated_at) VALUES ('fix_dash_cron', '0 * * * *', ?, 1, 'omon_owned', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+            .bind(payload.to_string())
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let job = scheduler.get("fix_dash_cron").await.unwrap().unwrap();
+        let result = scheduler.execute_job(&job).await;
+        let states = sqlx::query_scalar::<_, String>(
+            "SELECT state FROM delivery_obligations WHERE channel_id = '999'",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .unwrap();
+        println!("FIX-DASH-1 execute_job={result:?} obligation_states={states:?}");
+        assert!(
+            result.is_err(),
+            "Discord cron delivery via web dispatcher must fail"
+        );
+        assert_eq!(states, vec!["failed".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn fix_dash_detached_dashboard_reports_gateway_approvals_unavailable() {
+        let state = test_state().await.detached_from_gateway();
+        let app = router(state);
+        let pending = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/approvals/pending")
+                    .header(header::HOST, "127.0.0.1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+        let body = json_body(pending).await;
+        println!("FIX-DASH-2 pending={body}");
+        assert_eq!(body["complete"], false);
+        assert_eq!(body["gateway_approvals_visible"], false);
+        assert!(body["warning"].as_str().is_some_and(|w| !w.is_empty()));
+
+        let resolve = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/approvals/{}/resolve", Uuid::new_v4()))
+                    .header(header::HOST, "127.0.0.1")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"decision":"once"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        println!("FIX-DASH-2 resolve unknown status={}", resolve.status());
+        assert_eq!(resolve.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn fix_dash_detached_dashboard_rejects_chat_and_stop_for_messenger_sessions() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+        let mut state = test_state().await.detached_from_gateway();
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        state.multiplexer = Some(SessionMultiplexer::new(
+            state.pool.clone(),
+            Arc::new(U65RecordingRunner { events: event_tx }),
+            omon_gateway::MultiplexerConfig::default(),
+        ));
+        let discord = SessionKey::new("discord", Some("g"), "123", None::<String>, "42");
+        let storage = discord.storage_key();
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, 'discord', '123', '42', '{}')")
+            .bind(&storage)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let app = router(state.clone());
+        let post = |uri: String, body: &'static str| {
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap()
+        };
+        let encoded = urlencoding::encode(&storage).into_owned();
+        let chat = app
+            .clone()
+            .oneshot(post(
+                format!("/api/sessions/{encoded}/chat"),
+                r#"{"message":"hello"}"#,
+            ))
+            .await
+            .unwrap();
+        let chat_status = chat.status();
+        let stop = app
+            .clone()
+            .oneshot(post(format!("/api/sessions/{encoded}/stop"), ""))
+            .await
+            .unwrap();
+        let stop_status = stop.status();
+        let web_chat = app
+            .clone()
+            .oneshot(post(
+                "/api/sessions/web-probe/chat".into(),
+                r#"{"message":"hello"}"#,
+            ))
+            .await
+            .unwrap();
+        let web_chat_status = web_chat.status();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let shutdown = CancellationToken::new();
+        let app_shutdown = shutdown.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(app_shutdown.cancelled_owned())
+                .await
+                .unwrap();
+        });
+        let mut request = format!("ws://{addr}/api/sessions/{encoded}/ws")
+            .into_client_request()
+            .unwrap();
+        request.headers_mut().insert(
+            header::ORIGIN,
+            HeaderValue::from_str(&format!("http://{addr}")).unwrap(),
+        );
+        let (mut ws, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        let _ready = ws.next().await.unwrap().unwrap();
+        ws.send(tokio_tungstenite::tungstenite::Message::Text(
+            json!({"type":"message","content":"hello"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let reply: Value =
+            serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+        let _ = ws.close(None).await;
+        shutdown.cancel();
+        let _ = server.await;
+
+        println!(
+            "FIX-DASH-3 chat={chat_status} stop={stop_status} web_chat={web_chat_status} ws_reply={reply}"
+        );
+        assert_eq!(chat_status, StatusCode::CONFLICT);
+        assert_eq!(stop_status, StatusCode::CONFLICT);
+        assert_eq!(web_chat_status, StatusCode::ACCEPTED);
+        assert_eq!(reply["type"], "error");
+    }
+
+    #[tokio::test]
+    async fn fix_dash_create_cron_job_rejects_duplicate_id() {
+        let state = test_state().await;
+        let app = router(state.clone());
+        let create = |content: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/api/cron/jobs")
+                .header(header::HOST, "127.0.0.1")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({"id":"dup","expression":"@every 5m","payload":{"content":content}})
+                        .to_string(),
+                ))
+                .unwrap()
+        };
+        let first = app.clone().oneshot(create("original")).await.unwrap();
+        assert_eq!(first.status(), StatusCode::CREATED);
+        let second = app.oneshot(create("overwrite")).await.unwrap();
+        let second_status = second.status();
+        let job = state.scheduler.get("dup").await.unwrap().unwrap();
+        println!(
+            "FIX-DASH-4 second_status={second_status} payload={}",
+            job.payload_json
+        );
+        assert_eq!(second_status, StatusCode::CONFLICT);
+        assert!(job.payload_json.contains("original"));
+    }
+
+    #[tokio::test]
+    async fn fix_r2_status_reports_configured_model() {
+        let response = router(test_state().await)
+            .oneshot(fix_r5_request("GET", "/api/status", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(json_body(response).await["model"], "test-model");
+    }
+
+    #[tokio::test]
+    async fn fix_r2_cron_create_without_id_honors_disabled_and_requires_payload() {
+        let state = test_state().await;
+        let app = router(state.clone());
+        let created = app
+            .clone()
+            .oneshot(fix_r5_request(
+                "POST",
+                "/api/cron/jobs",
+                Some(json!({"expression":"@every 5m","enabled":false,"payload":{"content":"x"}})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created = json_body(created).await;
+        assert_eq!(created["enabled"], false);
+        assert!(created["next_run_at"].is_null());
+        let id = created["id"].as_str().unwrap();
+        assert!(Uuid::parse_str(id).is_ok(), "generated id: {id}");
+
+        let missing = app
+            .oneshot(fix_r5_request(
+                "POST",
+                "/api/cron/jobs",
+                Some(json!({"expression":"@every 5m"})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::BAD_REQUEST);
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cron_jobs")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+    }
+
+    #[tokio::test]
+    async fn fix_r2_create_bot_normalizes_blank_overrides_to_null() {
+        let app = router(test_state().await);
+        let created = app
+            .clone()
+            .oneshot(fix_r5_request(
+                "POST",
+                "/api/bots",
+                Some(json!({
+                    "bot_id": "bot-blank",
+                    "name": "blank",
+                    "model": "",
+                    "system_prompt": "  ",
+                    "enabled_toolsets": []
+                })),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::OK);
+        let bot = app
+            .oneshot(fix_r5_request("GET", "/api/bots/bot-blank", None))
+            .await
+            .unwrap();
+        assert_eq!(bot.status(), StatusCode::OK);
+        let bot = json_body(bot).await;
+        assert!(bot["model"].is_null(), "{bot}");
+        assert!(bot["system_prompt"].is_null(), "{bot}");
+        assert!(bot["enabled_toolsets"].is_null(), "{bot}");
+    }
+
+    fn fix_r5_request(method: &str, uri: &str, body: Option<Value>) -> Request<Body> {
+        let builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::HOST, "127.0.0.1");
+        match body {
+            Some(body) => builder
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            None => builder.body(Body::empty()).unwrap(),
+        }
+    }
+
+    #[test]
+    fn fix_r5_readiness_backend_url_prefers_config_then_env_then_default() {
+        let with_config = json!({"appserver_url": " ws://cfg:1 "});
+        assert_eq!(
+            readiness_backend_url(&with_config, Some("ws://env:2")),
+            "ws://cfg:1"
+        );
+        let empty = json!({});
+        assert_eq!(
+            readiness_backend_url(&empty, Some("ws://env:2")),
+            "ws://env:2"
+        );
+        assert_eq!(
+            readiness_backend_url(&empty, Some("  ")),
+            DEFAULT_BACKEND_APPSERVER_URL
+        );
+        assert_eq!(
+            readiness_backend_url(&empty, None),
+            DEFAULT_BACKEND_APPSERVER_URL
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_r5_readiness_fails_when_chat_backend_is_down() {
+        let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_addr = probe.local_addr().unwrap();
+        drop(probe);
+
+        let mut state = test_state().await.with_disk_sampler(|_| {
+            (
+                Some(1_000_000 * readiness::DISK_BYTES_PER_MB),
+                Some(900_000 * readiness::DISK_BYTES_PER_MB),
+            )
+        });
+        state.config["appserver_url"] = json!(format!("ws://{dead_addr}"));
+
+        // An explicitly configured backend gates readiness even without a chat runtime.
+        let without_chat = router(state.clone())
+            .oneshot(fix_r5_request("GET", "/api/readiness", None))
+            .await
+            .unwrap();
+        assert_eq!(without_chat.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
+        state.multiplexer = Some(SessionMultiplexer::new(
+            state.pool.clone(),
+            Arc::new(U65RecordingRunner { events: event_tx }),
+            omon_gateway::MultiplexerConfig::default(),
+        ));
+        let with_chat = router(state)
+            .oneshot(fix_r5_request("GET", "/api/readiness", None))
+            .await
+            .unwrap();
+        assert_eq!(with_chat.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_body(with_chat).await;
+        assert_eq!(body["status"], "degraded");
+        assert_eq!(body["checks"]["backend"], false);
+        assert_eq!(body["checks"]["database"], true);
+    }
+
+    #[tokio::test]
+    async fn fix_r5_cron_put_without_payload_keeps_payload_and_session_key() {
+        let state = test_state().await;
+        let payload = json!({
+            "content": "ping",
+            "last_status": "succeeded",
+            "repeat": {"times": 5, "completed": 2}
+        });
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES ('web:keep', 'web', 'keep', 'dashboard', '{}')")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let mut spec = CronJobSpec::new("@every 5m", payload.clone());
+        spec.session_key = Some("web:keep".into());
+        state
+            .scheduler
+            .register_with_id("keep", spec)
+            .await
+            .unwrap();
+        let app = router(state.clone());
+
+        let schedule_only = app
+            .clone()
+            .oneshot(fix_r5_request(
+                "PUT",
+                "/api/cron/jobs/keep",
+                Some(json!({"expression":"@every 10m"})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(schedule_only.status(), StatusCode::OK);
+        let job = state.scheduler.get("keep").await.unwrap().unwrap();
+        assert_eq!(job.expression, "@every 10m");
+        assert_eq!(job.payload().unwrap(), payload);
+        assert_eq!(job.session_key.as_deref(), Some("web:keep"));
+
+        // A new payload keeps scheduler-owned state and the repeat counter.
+        let new_payload = app
+            .oneshot(fix_r5_request(
+                "PUT",
+                "/api/cron/jobs/keep",
+                Some(json!({"payload":{"content":"new","repeat":{"times":10}}})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(new_payload.status(), StatusCode::OK);
+        let job = state.scheduler.get("keep").await.unwrap().unwrap();
+        let stored = job.payload().unwrap();
+        assert_eq!(stored["content"], "new");
+        assert_eq!(stored["last_status"], "succeeded");
+        assert_eq!(stored["repeat"]["times"], 10);
+        assert_eq!(stored["repeat"]["completed"], 2);
+        assert_eq!(job.session_key.as_deref(), Some("web:keep"));
+    }
+
+    #[tokio::test]
+    async fn fix_r5_cron_put_on_paused_job_keeps_it_paused_without_next_run() {
+        let state = test_state().await;
+        state
+            .scheduler
+            .register_with_id(
+                "paused",
+                CronJobSpec::new("@every 5m", json!({"content": "x"})),
+            )
+            .await
+            .unwrap();
+        state.scheduler.pause("paused").await.unwrap();
+        let response = router(state.clone())
+            .oneshot(fix_r5_request(
+                "PUT",
+                "/api/cron/jobs/paused",
+                Some(json!({"expression":"@every 10m"})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let job = state.scheduler.get("paused").await.unwrap().unwrap();
+        assert!(!job.enabled);
+        assert!(job.next_run_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn fix_r5_cron_create_rejects_empty_id() {
+        let response = router(test_state().await)
+            .oneshot(fix_r5_request(
+                "POST",
+                "/api/cron/jobs",
+                Some(json!({"id":"  ","expression":"@every 5m","payload":{"content":"x"}})),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn fix_r5_cron_list_degrades_per_row_on_corrupt_payload() {
+        let state = test_state().await;
+        state
+            .scheduler
+            .register_with_id(
+                "good",
+                CronJobSpec::new("@every 5m", json!({"content": "x"})),
+            )
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO cron_jobs (id, expression, payload_json, enabled, authority, created_at, updated_at) VALUES ('bad', '@every 5m', '{not json', 1, 'omon_owned', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let response = router(state)
+            .oneshot(fix_r5_request("GET", "/api/cron/jobs", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        let items = body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let bad = items.iter().find(|item| item["id"] == "bad").unwrap();
+        assert!(bad["payload"].is_null());
+        assert!(bad["error"].as_str().is_some_and(|e| !e.is_empty()));
+        let good = items.iter().find(|item| item["id"] == "good").unwrap();
+        assert!(good["error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn fix_r5_cron_runs_do_not_expose_claim_token() {
+        let state = test_state().await;
+        state
+            .scheduler
+            .register_with_id(
+                "leased",
+                CronJobSpec::new("@every 5m", json!({"content": "x"})),
+            )
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO cron_runs (run_id, job_id, claim_token, lease_expires_at, started_at, status, attempt) VALUES ('run-1', 'leased', 'secret-fencing-token', '2099-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'running', 1)")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let response = router(state)
+            .oneshot(fix_r5_request("GET", "/api/cron/runs", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["items"][0]["run_id"], "run-1");
+        assert!(body["items"][0].get("claim_token").is_none());
+        assert!(!body.to_string().contains("secret-fencing-token"));
+    }
+
+    #[tokio::test]
+    async fn fix_r5_trigger_missing_job_is_404_and_detached_messenger_job_is_refused() {
+        let state = test_state().await.detached_from_gateway();
+        state
+            .scheduler
+            .register_with_id(
+                "discord-job",
+                CronJobSpec::new(
+                    "@every 5m",
+                    json!({"content": "x", "deliver": "discord:999"}),
+                ),
+            )
+            .await
+            .unwrap();
+        let app = router(state.clone());
+        let missing = app
+            .clone()
+            .oneshot(fix_r5_request("POST", "/api/cron/jobs/nope/trigger", None))
+            .await
+            .unwrap();
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let refused = app
+            .oneshot(fix_r5_request(
+                "POST",
+                "/api/cron/jobs/discord-job/trigger",
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::CONFLICT);
+        let runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cron_runs")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(runs, 0, "a refused trigger must not start a run");
+    }
+
+    #[test]
+    fn fix_r5_like_pattern_escapes_wildcards() {
+        assert_eq!(like_contains_pattern("abc"), "%abc%");
+        assert_eq!(like_contains_pattern("a%b_c\\d"), "%a\\%b\\_c\\\\d%");
+    }
+
+    #[tokio::test]
+    async fn fix_r5_session_search_matches_wildcards_literally() {
+        let state = test_state().await;
+        for (key, channel) in [("k1", "c_1"), ("k2", "cx1")] {
+            sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, 'discord', ?, '42', '{}')")
+                .bind(key)
+                .bind(channel)
+                .execute(&state.pool)
+                .await
+                .unwrap();
+        }
+        let response = router(state)
+            .oneshot(fix_r5_request("GET", "/api/sessions?search=c_1", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["total"], 1);
+        assert_eq!(body["items"][0]["id"], "k1");
+    }
+
+    #[test]
+    fn fix_r5_session_socket_forwards_expiry_of_its_own_approvals_only() {
+        let mine = SessionKey::new("web", None::<String>, "mine", None::<String>, "dashboard");
+        let other = SessionKey::new("web", None::<String>, "other", None::<String>, "dashboard");
+        let storage = mine.storage_key();
+        let (mine_id, other_id) = (Uuid::new_v4(), Uuid::new_v4());
+        let request = |session: &SessionKey, request_id: Uuid| OutboundAction::ApprovalRequest {
+            session: session.clone(),
+            request_id,
+            command: "ls".into(),
+            reason: "test".into(),
+        };
+        let mut tracked = HashSet::new();
+        assert!(session_event_matches(
+            &request(&mine, mine_id),
+            &storage,
+            &mut tracked
+        ));
+        assert!(!session_event_matches(
+            &request(&other, other_id),
+            &storage,
+            &mut tracked
+        ));
+        assert!(!session_event_matches(
+            &OutboundAction::ExpireApproval {
+                request_id: other_id
+            },
+            &storage,
+            &mut tracked
+        ));
+        assert!(session_event_matches(
+            &OutboundAction::ExpireApproval {
+                request_id: mine_id
+            },
+            &storage,
+            &mut tracked
+        ));
+        // Already forwarded: a duplicate expiry is not forwarded again.
+        assert!(!session_event_matches(
+            &OutboundAction::ExpireApproval {
+                request_id: mine_id
+            },
+            &storage,
+            &mut tracked
+        ));
+    }
+
+    #[test]
+    fn fix_r5_log_ids_are_strictly_increasing_in_snapshot_and_broadcast() {
+        let logs = DashboardLogStore::default();
+        let mut receiver = logs.subscribe();
+        for n in 0..5 {
+            logs.push("INFO", "test", format!("entry {n}"), json!({}));
+        }
+        let snapshot_ids: Vec<u64> = logs.snapshot().iter().map(|entry| entry.id).collect();
+        assert_eq!(snapshot_ids.len(), 5);
+        assert!(snapshot_ids.windows(2).all(|pair| pair[0] < pair[1]));
+        let mut last = 0;
+        for _ in 0..5 {
+            let entry = receiver.try_recv().unwrap();
+            assert!(entry.id > last);
+            last = entry.id;
+        }
     }
 }

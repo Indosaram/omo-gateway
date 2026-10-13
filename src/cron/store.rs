@@ -124,7 +124,13 @@ pub async fn prune_terminal_cron_runs(
             "cron run retention days must be non-negative".into(),
         ));
     }
-    let cutoff = now - chrono::TimeDelta::days(retention_days);
+    let cutoff = chrono::TimeDelta::try_days(retention_days)
+        .and_then(|span| now.checked_sub_signed(span))
+        .ok_or_else(|| {
+            OmonError::Config(format!(
+                "cron run retention of {retention_days} days is out of range"
+            ))
+        })?;
     let result = sqlx::query(
         "DELETE FROM cron_runs
          WHERE status IN ('succeeded', 'failed')
@@ -596,7 +602,10 @@ impl HermesJob {
             if let Some(targets) = list {
                 for t in targets {
                     let trimmed = t.trim();
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("discord:") {
+                    if trimmed
+                        .get(..8)
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("discord:"))
+                    {
                         let rest = trimmed[8..].trim();
                         if !rest.is_empty() {
                             return true;
@@ -636,8 +645,9 @@ impl HermesJob {
                 continue;
             }
 
-            let is_discord_prefixed =
-                trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("discord:");
+            let is_discord_prefixed = trimmed
+                .get(..8)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("discord:"));
 
             if is_discord_prefixed {
                 let rest = trimmed[8..].trim();
@@ -1021,6 +1031,15 @@ impl HermesStoreSynchronizer {
                     continue;
                 }
             };
+            // A missing store file loads as empty; treating that as "every job
+            // was removed" would delete all mirrors on a transient absence.
+            if !store.jobs_path().exists() {
+                tracing::warn!(
+                    profile = store.profile(),
+                    "Hermes store file missing; keeping mirrored jobs"
+                );
+                continue;
+            }
             let source = store.jobs_path().to_string_lossy().into_owned();
             let timezone = store.timezone().await;
             let mut live = HashSet::new();
@@ -1029,6 +1048,8 @@ impl HermesStoreSynchronizer {
                     Ok(val) => val,
                     Err(reason) => {
                         tracing::warn!(job_id = %job.id, %reason, "skipping invalid Hermes job");
+                        // Still present in the source: keep its existing mirror.
+                        live.insert(format!("hermes:{}:{}", store.profile(), job.id));
                         continue;
                     }
                 };
@@ -1060,7 +1081,7 @@ impl HermesStoreSynchronizer {
                     _ => now,
                 };
                 let insert_result = sqlx::query(
-                    "INSERT INTO cron_jobs (id, expression, payload_json, enabled, next_run_at, created_at, updated_at, authority)\n                     VALUES (?, ?, ?, ?, ?, ?, ?, 'hermes_mirror')\n                     ON CONFLICT(id) DO UPDATE SET\n                     expression=excluded.expression,\n                     payload_json=CASE\n                         WHEN json_extract(cron_jobs.payload_json, '$.last_status') IS NOT NULL\n                         THEN json_set(\n                             CASE\n                                 WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                                      AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                                 THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                                 ELSE excluded.payload_json\n                             END,\n                             '$.last_status', json_extract(cron_jobs.payload_json, '$.last_status'),\n                             '$.last_run_at', json_extract(cron_jobs.payload_json, '$.last_run_at'),\n                             '$.last_error', json_extract(cron_jobs.payload_json, '$.last_error'),\n                             '$.last_delivery_error', json_extract(cron_jobs.payload_json, '$.last_delivery_error')\n                         )\n                         WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                              AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                         THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                         ELSE excluded.payload_json\n                     END,\n                     enabled=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN cron_jobs.enabled\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN cron_jobs.enabled\n                         ELSE excluded.enabled\n                     END,\n                     next_run_at=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN NULL\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN NULL\n                         WHEN cron_jobs.expression <> excluded.expression\n                           OR json_remove(cron_jobs.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error', '$.last_occurrence') <> json_remove(excluded.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error', '$.last_occurrence')\n                           OR cron_jobs.enabled <> excluded.enabled\n                         THEN excluded.next_run_at\n                         ELSE cron_jobs.next_run_at\n                     END,\n                     updated_at=excluded.updated_at\n                     WHERE cron_jobs.authority = 'hermes_mirror'"
+                    "INSERT INTO cron_jobs (id, expression, payload_json, enabled, next_run_at, created_at, updated_at, authority)\n                     VALUES (?, ?, ?, ?, ?, ?, ?, 'hermes_mirror')\n                     ON CONFLICT(id) DO UPDATE SET\n                     expression=excluded.expression,\n                     payload_json=CASE\n                         WHEN json_extract(cron_jobs.payload_json, '$.last_status') IS NOT NULL\n                         THEN json_set(\n                             CASE\n                                 WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                                      AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                                 THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                                 ELSE excluded.payload_json\n                             END,\n                             '$.last_status', json_extract(cron_jobs.payload_json, '$.last_status'),\n                             '$.last_run_at', json_extract(cron_jobs.payload_json, '$.last_run_at'),\n                             '$.last_error', json_extract(cron_jobs.payload_json, '$.last_error'),\n                             '$.last_delivery_error', json_extract(cron_jobs.payload_json, '$.last_delivery_error'), '$.last_occurrence', json_extract(cron_jobs.payload_json, '$.last_occurrence'), '$.retry_at', json_extract(cron_jobs.payload_json, '$.retry_at')\n                         )\n                         WHEN json_extract(cron_jobs.payload_json, '$.repeat.completed') IS NOT NULL\n                              AND CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER) > CAST(COALESCE(json_extract(excluded.payload_json, '$.repeat.completed'), 0) AS INTEGER)\n                         THEN json_set(excluded.payload_json, '$.repeat.completed', CAST(json_extract(cron_jobs.payload_json, '$.repeat.completed') AS INTEGER))\n                         ELSE excluded.payload_json\n                     END,\n                     enabled=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN cron_jobs.enabled\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN cron_jobs.enabled\n                         ELSE excluded.enabled\n                     END,\n                     next_run_at=CASE\n                         WHEN cron_jobs.expression LIKE 'once:%'\n                              AND cron_jobs.next_run_at IS NULL\n                              AND cron_jobs.expression = excluded.expression\n                         THEN NULL\n                         WHEN json_extract(excluded.payload_json, '$.repeat.times') IS NOT NULL\n                              AND CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER) > 0\n                              AND CAST(COALESCE(json_extract(cron_jobs.payload_json, '$.repeat.completed'), 0) AS INTEGER) >= CAST(json_extract(excluded.payload_json, '$.repeat.times') AS INTEGER)\n                              AND cron_jobs.next_run_at IS NULL\n                         THEN NULL\n                         WHEN cron_jobs.expression <> excluded.expression\n                           OR json_remove(cron_jobs.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error', '$.last_occurrence', '$.retry_at') <> json_remove(excluded.payload_json, '$.repeat.completed', '$.last_status', '$.last_run_at', '$.last_error', '$.last_delivery_error', '$.last_occurrence', '$.retry_at')\n                           OR cron_jobs.enabled <> excluded.enabled\n                         THEN excluded.next_run_at\n                         ELSE cron_jobs.next_run_at\n                     END,\n                     updated_at=excluded.updated_at\n                     WHERE cron_jobs.authority = 'hermes_mirror'"
                 )
                 .bind(&id).bind(expression).bind(payload_json).bind(job.enabled)
                 .bind(next_run_at).bind(created).bind(now).execute(&self.pool).await?;
@@ -1107,24 +1128,15 @@ pub async fn set_cron_notepad(
             value.len()
         )));
     }
-    let current_entries = get_cron_notepads(pool, profile, job_id).await?;
-    let mut total_size: usize = current_entries
-        .iter()
-        .filter(|(k, _)| k != key)
-        .map(|(_, v)| v.len())
-        .sum();
-    total_size += value.len();
-    if total_size > MAX_NOTEPAD_TOTAL_BYTES {
-        return Err(OmonError::Config(format!(
-            "total notepad size {} bytes exceeds maximum allowed 64 KiB for job {job_id}",
-            total_size
-        )));
-    }
-
+    // Quota check and upsert are ONE statement, so concurrent writers cannot both pass
+    // the check against the same snapshot. Zero affected rows means the quota guard failed.
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query(
+    let max_total = MAX_NOTEPAD_TOTAL_BYTES as i64;
+    let result = sqlx::query(
         "INSERT INTO cron_notepads (profile, job_id, key, value, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
+         SELECT ?, ?, ?, ?, ?, ?
+         WHERE COALESCE((SELECT SUM(LENGTH(CAST(value AS BLOB))) FROM cron_notepads
+                         WHERE profile = ? AND job_id = ? AND key != ?), 0) + ? <= ?
          ON CONFLICT(profile, job_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
     )
     .bind(profile)
@@ -1133,9 +1145,19 @@ pub async fn set_cron_notepad(
     .bind(value)
     .bind(&now)
     .bind(&now)
+    .bind(profile)
+    .bind(job_id)
+    .bind(key)
+    .bind(value.len() as i64)
+    .bind(max_total)
     .execute(pool)
     .await
     .map_err(|e| OmonError::Database(e.to_string()))?;
+    if result.rows_affected() == 0 {
+        return Err(OmonError::Config(format!(
+            "total notepad size would exceed maximum allowed 64 KiB for job {job_id}"
+        )));
+    }
 
     Ok(())
 }
@@ -1190,6 +1212,49 @@ mod tests {
 
     use super::*;
     use crate::Database;
+
+    #[tokio::test]
+    async fn prune_rejects_retention_that_overflows_instead_of_panicking() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let result = prune_terminal_cron_runs(database.pool(), i64::MAX, Utc::now()).await;
+        assert!(matches!(result, Err(OmonError::Config(_))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn notepad_total_quota_holds_under_concurrent_writers() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations")
+            .run(database.pool())
+            .await
+            .unwrap();
+        let pool = database.pool().clone();
+        let chunk = "x".repeat(MAX_NOTEPAD_VALUE_BYTES);
+        // 6 writers x 16 KiB against a 64 KiB cap: at most 4 may land.
+        let mut tasks = tokio::task::JoinSet::new();
+        for index in 0..6 {
+            let pool = pool.clone();
+            let chunk = chunk.clone();
+            tasks.spawn(async move {
+                set_cron_notepad(&pool, "default", "job", &format!("k{index}"), &chunk).await
+            });
+        }
+        let mut accepted = 0;
+        while let Some(result) = tasks.join_next().await {
+            if result.unwrap().is_ok() {
+                accepted += 1;
+            }
+        }
+        let stored = get_cron_notepads(&pool, "default", "job").await.unwrap();
+        let total: usize = stored.iter().map(|(_, value)| value.len()).sum();
+        assert!(total <= MAX_NOTEPAD_TOTAL_BYTES, "total {total}");
+        assert_eq!(stored.len(), accepted);
+        assert_eq!(accepted, 4);
+        // Overwriting an existing key replaces its size instead of adding to it.
+        let key = stored[0].0.clone();
+        set_cron_notepad(&pool, "default", "job", &key, "small")
+            .await
+            .unwrap();
+    }
 
     fn job(value: Value) -> HermesJob {
         serde_json::from_value(value).expect("valid Hermes job")
@@ -1611,6 +1676,44 @@ mod tests {
             .unwrap();
         assert_eq!(jobs, vec!["hermes:default:benign".to_string()]);
 
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn synchronization_preserves_scheduler_last_occurrence() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let root = std::env::temp_dir().join(format!("omon-hermes-occ-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(root.join("cron")).await.unwrap();
+        tokio::fs::write(
+            root.join("cron/jobs.json"),
+            serde_json::to_vec(&json!({"jobs": [{
+                "id": "occ", "prompt": "run", "enabled": true,
+                "schedule": {"kind": "cron", "expr": "0 9 * * *"},
+                "deliver": "local"
+            }]}))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        let sync = HermesStoreSynchronizer::new(
+            database.pool().clone(),
+            vec![HermesStore::new("default", &root)],
+        );
+        sync.sync().await.unwrap();
+        sqlx::query(
+            "UPDATE cron_jobs SET payload_json = json_set(payload_json, '$.last_status', 'succeeded', '$.last_occurrence', '2026-08-15T00:00:00+00:00') WHERE id = 'hermes:default:occ'",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+        sync.sync().await.unwrap();
+        let occurrence: Option<String> = sqlx::query_scalar(
+            "SELECT json_extract(payload_json, '$.last_occurrence') FROM cron_jobs WHERE id = 'hermes:default:occ'",
+        )
+        .fetch_one(database.pool())
+        .await
+        .unwrap();
+        assert_eq!(occurrence.as_deref(), Some("2026-08-15T00:00:00+00:00"));
         tokio::fs::remove_dir_all(root).await.unwrap();
     }
 

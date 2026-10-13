@@ -355,6 +355,16 @@ impl TerminalTool {
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true);
 
+        // Gateway credentials must not leak into model-visible child output
+        // (`env`/`printenv`); a caller can still pass an explicit value below.
+        for (key, _) in std::env::vars_os() {
+            if let Some(key) = key.to_str() {
+                if is_secret_env_key(key) {
+                    command.env_remove(key);
+                }
+            }
+        }
+
         if let Some(session) = session {
             for (key, value) in build_session_environment(session) {
                 command.env(key, value);
@@ -380,9 +390,23 @@ impl TerminalTool {
         command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // Own process group, so backgrounded grandchildren holding the pipes open
+        // can be killed together with the child.
+        #[cfg(unix)]
+        command.process_group(0);
         let mut child = command
             .spawn()
             .map_err(|error| OmonError::ToolExecution(error.to_string()))?;
+        let group_id = child.id();
+        let kill_group = move || {
+            #[cfg(unix)]
+            if let Some(pgid) = group_id {
+                // SAFETY: killpg only sends a signal; the group was created above.
+                unsafe {
+                    libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+        };
         // Drain both pipes concurrently into bounded buffers from process start, so a
         // runaway child cannot exhaust memory before the timeout or truncation runs.
         let stdout_pipe = child.stdout.take();
@@ -390,37 +414,52 @@ impl TerminalTool {
         let cap = self.max_output_bytes;
         let mut out_task = tokio::spawn(read_capped(stdout_pipe, cap));
         let mut err_task = tokio::spawn(read_capped(stderr_pipe, cap));
-        // Kill the child as soon as EITHER pipe overflows its budget. Waiting for both
-        // would hang forever on a child that floods one pipe and never closes the other.
+        // Readers keep draining past the budget (retaining only head + tail), so a
+        // chatty command is never killed mid-run just for printing a lot. Only the
+        // timeout or the post-exit grace below kill anything.
+        // The child's exit is awaited concurrently with the readers: a grandchild that
+        // inherited the pipes must not hold the tool until the timeout. Once the child
+        // has exited, readers get a short grace period, then the group is killed so
+        // the pipes close and the readers return what they captured.
         let run = async {
-            let mut out_done: Option<Vec<u8>> = None;
-            let mut err_done: Option<Vec<u8>> = None;
+            let mut out_done: Option<CapturedOutput> = None;
+            let mut err_done: Option<CapturedOutput> = None;
+            let mut status = None;
+            let mut group_killed = false;
             while out_done.is_none() || err_done.is_none() {
                 tokio::select! {
                     res = &mut out_task, if out_done.is_none() => {
-                        let bytes = res.map_err(std::io::Error::other)??;
-                        if bytes.len() > cap {
-                            let _ = child.start_kill();
-                        }
-                        out_done = Some(bytes);
+                        out_done = Some(res.map_err(std::io::Error::other)??);
                     }
                     res = &mut err_task, if err_done.is_none() => {
-                        let bytes = res.map_err(std::io::Error::other)??;
-                        if bytes.len() > cap {
-                            let _ = child.start_kill();
-                        }
-                        err_done = Some(bytes);
+                        err_done = Some(res.map_err(std::io::Error::other)??);
+                    }
+                    res = child.wait(), if status.is_none() => {
+                        status = Some(res?);
+                    }
+                    _ = tokio::time::sleep(PIPE_DRAIN_GRACE), if status.is_some() && !group_killed => {
+                        kill_group();
+                        group_killed = true;
                     }
                 }
             }
-            let status = child.wait().await?;
+            let status = match status {
+                Some(status) => status,
+                None => child.wait().await?,
+            };
             Ok::<_, std::io::Error>((
                 out_done.unwrap_or_default(),
                 err_done.unwrap_or_default(),
                 status,
             ))
         };
-        let (out_bytes, err_bytes, status) = match tokio::time::timeout(self.timeout, run).await {
+        let outcome = tokio::time::timeout(self.timeout, run).await;
+        if outcome.is_err() {
+            kill_group();
+            out_task.abort();
+            err_task.abort();
+        }
+        let (out_capture, err_capture, status) = match outcome {
             Ok(result) => result.map_err(|error| OmonError::ToolExecution(error.to_string()))?,
             Err(_) => {
                 return Err(OmonError::ToolExecution(format!(
@@ -429,8 +468,8 @@ impl TerminalTool {
                 )));
             }
         };
-        let (stdout, stdout_truncated) = capture(&out_bytes, self.max_output_bytes);
-        let (stderr, stderr_truncated) = capture(&err_bytes, self.max_output_bytes);
+        let (stdout, stdout_truncated) = capture(&out_capture, self.max_output_bytes);
+        let (stderr, stderr_truncated) = capture(&err_capture, self.max_output_bytes);
         Ok(json!({
             "success": status.success(),
             "exit_code": status.code(),
@@ -441,6 +480,10 @@ impl TerminalTool {
         }))
     }
 }
+
+/// How long readers may keep draining after the direct child exits before the
+/// process group is killed to close pipes still held by background grandchildren.
+const PIPE_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 pub const DEFAULT_EXTRA_PATH: &str = if cfg!(windows) {
     "C:\\Program Files\\Git\\bin;C:\\Program Files\\Git\\usr\\bin"
@@ -613,52 +656,138 @@ fn canonical(path: &Path) -> Result<PathBuf, OmonError> {
 /// Environment variables a caller may never override: changing them would make the
 /// process execute or load something other than the approved executable.
 fn is_protected_env_key(key: &str) -> bool {
-    const PROTECTED: [&str; 7] = [
+    // Variables that make an already-approved command run different code: executable
+    // search, dynamic-loader injection, shell startup files, interpreter preload hooks,
+    // and git's external-command hooks.
+    const PROTECTED: &[&str] = &[
         "PATH",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "LD_AUDIT",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
-        "DYLD_FRAMEWORK_PATH",
+        "BASH_ENV",
+        "ENV",
+        "SHELL",
+        "SHELLOPTS",
+        "PROMPT_COMMAND",
+        "IFS",
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONHOME",
+        "PERL5OPT",
+        "PERL5LIB",
+        "RUBYOPT",
+        "RUBYLIB",
+        "JAVA_TOOL_OPTIONS",
+        "RUSTC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTFLAGS",
+        "PAGER",
+        "EDITOR",
+        "VISUAL",
+        "SSH_ASKPASS",
+        "LESSOPEN",
     ];
-    PROTECTED.iter().any(|p| key.eq_ignore_ascii_case(p))
+    // OMON_SESSION_/HERMES_SESSION_ carry session attribution injected by the gateway;
+    // a caller must not be able to spoof them.
+    const PROTECTED_PREFIXES: &[&str] = &[
+        "LD_",
+        "DYLD_",
+        "GIT_",
+        "BASH_FUNC_",
+        "CARGO_",
+        "NPM_CONFIG_",
+        "OMON_SESSION_",
+        "HERMES_SESSION_",
+    ];
+    let upper = key.to_ascii_uppercase();
+    PROTECTED.iter().any(|p| upper == *p) || PROTECTED_PREFIXES.iter().any(|p| upper.starts_with(p))
 }
 
-/// Reads at most `limit` bytes plus one marker byte, so `capture` can still report
-/// truncation while the process never buffers more than the budget allows.
-async fn read_capped<R>(pipe: Option<R>, limit: usize) -> std::io::Result<Vec<u8>>
+/// Gateway credentials that must not be inherited by terminal children.
+fn is_secret_env_key(key: &str) -> bool {
+    const SECRET_NAMES: &[&str] = &[
+        "DISCORD_BOT_TOKEN",
+        "DISCORD_BOT_TOKENS",
+        "DISCORD_TOKEN",
+        "OMON_OMO_APPSERVER_AUTH_TOKEN",
+    ];
+    const SECRET_SUFFIXES: &[&str] = &["_BOT_TOKEN", "_BOT_TOKENS", "_APPSERVER_AUTH_TOKEN"];
+    let upper = key.to_ascii_uppercase();
+    SECRET_NAMES.iter().any(|name| upper == *name)
+        || SECRET_SUFFIXES.iter().any(|suffix| upper.ends_with(suffix))
+}
+
+/// Bounded view of a pipe's output: the first `head` bytes, the last `tail` bytes,
+/// and the total number of bytes the child wrote.
+#[derive(Debug, Default)]
+struct CapturedOutput {
+    head: Vec<u8>,
+    tail: Vec<u8>,
+    total: u64,
+}
+
+/// Drains the pipe to EOF while retaining only a head buffer (2/5 of `limit`) and a
+/// ring-buffer tail (the rest), so memory stays bounded and the child is never
+/// blocked or killed by a full pipe.
+async fn read_capped<R>(pipe: Option<R>, limit: usize) -> std::io::Result<CapturedOutput>
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
     use tokio::io::AsyncReadExt;
-    let Some(reader) = pipe else {
-        return Ok(Vec::new());
+    let Some(mut reader) = pipe else {
+        return Ok(CapturedOutput::default());
     };
-    let mut buf = Vec::new();
-    // limit + 1 so `capture` can still detect and report truncation.
-    reader
-        .take(limit.saturating_add(1) as u64)
-        .read_to_end(&mut buf)
-        .await?;
-    Ok(buf)
+    let head_cap = (limit * 2) / 5;
+    let tail_cap = limit.saturating_sub(head_cap);
+    let mut head = Vec::new();
+    let mut tail: std::collections::VecDeque<u8> = std::collections::VecDeque::new();
+    let mut total = 0u64;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = reader.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+        total += read as u64;
+        let mut data = &chunk[..read];
+        if head.len() < head_cap {
+            let take = (head_cap - head.len()).min(data.len());
+            head.extend_from_slice(&data[..take]);
+            data = &data[take..];
+        }
+        if data.is_empty() || tail_cap == 0 {
+            continue;
+        }
+        if data.len() >= tail_cap {
+            tail.clear();
+            tail.extend(data[data.len() - tail_cap..].iter().copied());
+        } else {
+            let overflow = (tail.len() + data.len()).saturating_sub(tail_cap);
+            tail.drain(..overflow);
+            tail.extend(data.iter().copied());
+        }
+    }
+    Ok(CapturedOutput {
+        head,
+        tail: tail.into_iter().collect(),
+        total,
+    })
 }
 
-fn capture(bytes: &[u8], limit: usize) -> (String, bool) {
-    if bytes.len() <= limit {
-        return (String::from_utf8_lossy(bytes).into_owned(), false);
+fn capture(output: &CapturedOutput, limit: usize) -> (String, bool) {
+    if output.total <= limit as u64 {
+        let mut all = output.head.clone();
+        all.extend_from_slice(&output.tail);
+        return (String::from_utf8_lossy(&all).into_owned(), false);
     }
-    let head_len = (limit * 2) / 5;
-    let tail_len = limit.saturating_sub(head_len);
-    let head_bytes = &bytes[..head_len.min(bytes.len())];
-    let tail_start = bytes.len().saturating_sub(tail_len);
-    let tail_bytes = &bytes[tail_start..];
-    let omitted = bytes.len() - head_bytes.len() - tail_bytes.len();
+    let omitted = output.total - output.head.len() as u64 - output.tail.len() as u64;
     let text = format!(
         "{}\n\n... [output truncated: {} bytes omitted] ...\n\n{}",
-        String::from_utf8_lossy(head_bytes),
+        String::from_utf8_lossy(&output.head),
         omitted,
-        String::from_utf8_lossy(tail_bytes)
+        String::from_utf8_lossy(&output.tail)
     );
     (text, true)
 }
@@ -1050,6 +1179,13 @@ mod approval_tests {
             "LD_LIBRARY_PATH",
             "DYLD_INSERT_LIBRARIES",
             "DYLD_LIBRARY_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            "BASH_ENV",
+            "NODE_OPTIONS",
+            "PYTHONPATH",
+            "PERL5OPT",
+            "GIT_SSH_COMMAND",
+            "git_external_diff",
         ] {
             let err = tool
                 .execute(json!({
@@ -1079,31 +1215,107 @@ mod approval_tests {
 
     #[tokio::test]
     #[cfg(unix)]
-    async fn runaway_output_is_capped_without_buffering_everything() {
+    async fn output_over_cap_is_drained_not_killed() {
         let dir = tempfile::tempdir().unwrap();
         let tool = TerminalTool::new(dir.path())
             .with_approval_policy(ApprovalPolicy::Never)
-            .with_max_output_bytes(4096);
+            .with_max_output_bytes(4096)
+            .with_timeout(Duration::from_secs(20));
 
-        // `yes` prints forever; the aggregate capture budget must stop it.
-        let result = tokio::time::timeout(
-            Duration::from_secs(20),
-            tool.execute(json!({"program": "yes", "args": ["saturate"]})),
-        )
-        .await
-        .expect("capped capture must finish long before the process timeout")
-        .unwrap();
+        // 1..=200000 is 1_288_895 bytes of stdout from a finite producer. The command
+        // must run to completion (exit 0), not be killed at the cap.
+        let result = tool
+            .execute(json!({"program": "seq", "args": ["1", "200000"]}))
+            .await
+            .unwrap();
 
-        assert_eq!(
-            result["stdout_truncated"], true,
-            "runaway stdout must be reported as truncated: {result}"
-        );
+        assert_eq!(result["success"], true, "must not be killed: {result}");
+        assert_eq!(result["exit_code"], 0, "{result}");
+        assert_eq!(result["stdout_truncated"], true, "{result}");
         let stdout = result["stdout"].as_str().unwrap();
+        assert!(stdout.starts_with("1\n2\n"), "head preserved: {stdout:.40}");
         assert!(
-            stdout.len() < 64 * 1024,
-            "captured stdout must stay bounded, got {} bytes",
-            stdout.len()
+            stdout.ends_with("199999\n200000\n"),
+            "tail is the real end of output"
         );
+        assert!(stdout.len() < 8192, "bounded, got {} bytes", stdout.len());
+        let omitted: u64 = stdout
+            .split("[output truncated: ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|n| n.parse().ok())
+            .expect("marker with omitted count");
+        // head 1638 + tail 2458 bytes are retained out of 1_288_895.
+        assert_eq!(omitted, 1_288_895 - 4096);
+    }
+
+    #[tokio::test]
+    async fn read_capped_keeps_head_and_ring_tail_with_exact_total() {
+        let data: Vec<u8> = (0..10_000u32).map(|i| (i % 251) as u8).collect();
+        let captured = super::read_capped(Some(std::io::Cursor::new(data.clone())), 100)
+            .await
+            .unwrap();
+
+        assert_eq!(captured.total, 10_000);
+        assert_eq!(captured.head, data[..40]);
+        assert_eq!(captured.tail, data[10_000 - 60..]);
+        let (text, truncated) = super::capture(&captured, 100);
+        assert!(truncated);
+        assert!(text.contains("[output truncated: 9900 bytes omitted]"));
+
+        let small = super::read_capped(Some(std::io::Cursor::new(data[..100].to_vec())), 100)
+            .await
+            .unwrap();
+        let (_, small_truncated) = super::capture(&small, 100);
+        assert!(!small_truncated, "exactly-at-limit output is not truncated");
+    }
+
+    #[test]
+    fn caller_env_cannot_spoof_session_attribution_or_hijack_toolchain() {
+        for key in [
+            "OMON_SESSION_USER_ID",
+            "omon_session_channel",
+            "HERMES_SESSION_KEY",
+            "RUSTC_WRAPPER",
+            "CARGO_BUILD_RUSTC_WRAPPER",
+            "HOME",
+        ] {
+            assert!(super::is_protected_env_key(key), "{key} must be protected");
+        }
+        assert!(!super::is_protected_env_key("HARMLESS_VAR"));
+    }
+
+    #[test]
+    fn gateway_secrets_are_not_inherited_by_children() {
+        for key in [
+            "DISCORD_BOT_TOKEN",
+            "DISCORD_BOT_TOKENS",
+            "OMON_OMO_APPSERVER_AUTH_TOKEN",
+        ] {
+            assert!(super::is_secret_env_key(key), "{key} must be stripped");
+        }
+        assert!(!super::is_secret_env_key("PATH"));
+        assert!(!super::is_secret_env_key("OMON_SESSION_ID"));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn backgrounded_grandchild_does_not_hold_tool_until_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let tool = TerminalTool::new(dir.path())
+            .with_approval_policy(ApprovalPolicy::Never)
+            .with_timeout(Duration::from_secs(10));
+
+        // The grandchild inherits stdout/stderr and keeps both pipes open long
+        // after the shell exits. Before the fix this ran into the 10s timeout and
+        // returned `process timed out` with no output.
+        let result = tool
+            .execute(json!({"program": "sh", "args": ["-c", "echo hi; sleep 30 &"]}))
+            .await
+            .expect("must return once the direct child exits, not time out");
+
+        assert_eq!(result["success"], true, "{result}");
+        assert_eq!(result["stdout"], "hi\n", "{result}");
     }
 
     #[test]
@@ -1473,27 +1685,5 @@ mod approval_tests {
             "expected program path escapes tool root, got {:?}",
             err
         );
-    }
-}
-
-#[cfg(test)]
-mod scratch_probe_tests {
-    #[test]
-    fn probe_detection_with_absolute_paths() {
-        for cmd in [
-            "rm -rf /",
-            "/bin/rm -rf /",
-            "/bin/rm -rf /etc",
-            "/sbin/reboot",
-            "reboot",
-            "/bin/rm -rf target",
-            "/usr/bin/sudo -S launchctl bootout system/foo",
-        ] {
-            println!(
-                "{cmd:?} hardline={:?} dangerous={}",
-                crate::security::detect_hardline_command(cmd),
-                crate::security::is_dangerous(cmd)
-            );
-        }
     }
 }

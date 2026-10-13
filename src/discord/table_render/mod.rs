@@ -5,15 +5,58 @@ pub struct RenderedTable {
     pub filename: String,
 }
 
+const MAX_TABLE_ROWS: usize = 300;
+const MAX_TABLE_PIXELS: u64 = 32_000_000;
+
+fn system_font_db() -> std::sync::Arc<usvg::fontdb::Database> {
+    static FONT_DB: std::sync::OnceLock<std::sync::Arc<usvg::fontdb::Database>> =
+        std::sync::OnceLock::new();
+    FONT_DB
+        .get_or_init(|| {
+            let mut db = usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            std::sync::Arc::new(db)
+        })
+        .clone()
+}
+
+/// Splits a table row body on unescaped `|` that sit outside backtick code
+/// spans, and unescapes `\|` to `|`.
+fn split_table_cells(inner: &str) -> Vec<String> {
+    // With an odd number of backticks there is no well-formed code span, so
+    // fall back to splitting on every unescaped pipe.
+    let code_aware = inner.matches('`').count().is_multiple_of(2);
+    let mut cells = Vec::new();
+    let mut current = String::new();
+    let mut in_code = false;
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' if chars.peek() == Some(&'|') => {
+                current.push('|');
+                chars.next();
+            }
+            '`' if code_aware => {
+                in_code = !in_code;
+                current.push(ch);
+            }
+            '|' if !in_code => cells.push(std::mem::take(&mut current)),
+            _ => current.push(ch),
+        }
+    }
+    cells.push(current);
+    cells
+}
+
 fn parse_table_row(line: &str) -> Vec<String> {
     let trimmed = line.trim();
-    let inner = trimmed
-        .strip_prefix('|')
-        .unwrap_or(trimmed)
-        .strip_suffix('|')
-        .unwrap_or(trimmed);
-    inner
-        .split('|')
+    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = match inner.strip_suffix('|') {
+        Some(stripped) if !stripped.ends_with('\\') => stripped,
+        _ => inner,
+    };
+    split_table_cells(inner)
+        .into_iter()
         .map(|col| col.trim().replace("<br>", "\n").replace("<br/>", "\n"))
         .collect()
 }
@@ -297,11 +340,11 @@ fn html_escape(text: &str) -> String {
 }
 
 pub fn svg_to_png(svg_str: &str, scale: f32) -> Result<Vec<u8>, String> {
-    let mut opt = usvg::Options {
+    let opt = usvg::Options {
         font_family: "sans-serif".to_string(),
+        fontdb: system_font_db(),
         ..Default::default()
     };
-    opt.fontdb_mut().load_system_fonts();
 
     let tree = usvg::Tree::from_str(svg_str, &opt).map_err(|e| e.to_string())?;
 
@@ -310,6 +353,9 @@ pub fn svg_to_png(svg_str: &str, scale: f32) -> Result<Vec<u8>, String> {
         .to_int_size()
         .scale_by(scale)
         .ok_or_else(|| "invalid scale size".to_string())?;
+    if u64::from(pixmap_size.width()) * u64::from(pixmap_size.height()) > MAX_TABLE_PIXELS {
+        return Err("table image exceeds pixel budget".to_string());
+    }
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height())
         .ok_or_else(|| "failed to allocate pixmap".to_string())?;
 
@@ -330,6 +376,13 @@ pub fn transform_markdown_tables_to_images(content: &str) -> (String, Vec<Render
     let mut cursor = 0;
 
     for (idx, (span, table)) in tables.into_iter().enumerate() {
+        // Keep the raw text when the table cannot be drawn faithfully.
+        if table.rows.len() > MAX_TABLE_ROWS
+            || table.rows.iter().any(|row| row.len() > table.headers.len())
+        {
+            tracing::warn!("Table too large or malformed for image rendering; keeping raw text");
+            continue;
+        }
         let svg = render_table_to_svg(&table);
         match svg_to_png(&svg, 2.0) {
             Ok(png_bytes) => {
@@ -355,9 +408,59 @@ pub fn transform_markdown_tables_to_images(content: &str) -> (String, Vec<Render
     (modified, rendered)
 }
 
+/// Plain-text rendering of tables whose image upload failed, so the table
+/// content is never lost: each original table in a fenced code block.
+pub fn fallback_text(tables: &[RenderedTable]) -> String {
+    tables
+        .iter()
+        .map(|table| {
+            let longest_run = table
+                .original_text
+                .split(|c| c != '`')
+                .map(str::len)
+                .max()
+                .unwrap_or(0);
+            let fence = "`".repeat((longest_run + 1).max(3));
+            format!("{fence}\n{}\n{fence}", table.original_text)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escaped_pipes_and_code_span_pipes_stay_in_one_cell() {
+        let raw = "| Cmd | Note |\n|---|---|\n| `cat f | wc -l` | a \\| b |";
+        let tables = extract_markdown_tables(raw);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].headers, vec!["Cmd", "Note"]);
+        assert_eq!(tables[0].rows[0], vec!["`cat f | wc -l`", "a | b"]);
+        let (_, images) = transform_markdown_tables_to_images(raw);
+        assert_eq!(images.len(), 1);
+    }
+
+    #[test]
+    fn malformed_rows_keep_raw_text() {
+        let raw = "| A |\n|---|\n| x | y |";
+        let (output, images) = transform_markdown_tables_to_images(raw);
+        assert_eq!(output, raw);
+        assert!(images.is_empty());
+    }
+
+    #[test]
+    fn fallback_text_fences_original_tables() {
+        let table = RenderedTable {
+            original_text: "| A |\n|---|\n| ``` |".to_string(),
+            png_bytes: Vec::new(),
+            filename: "table_1.png".to_string(),
+        };
+        let text = fallback_text(&[table]);
+        assert!(text.starts_with("````\n| A |"));
+        assert!(text.ends_with("| ``` |\n````"));
+    }
 
     #[test]
     fn fences_and_unbroken_cells_preserve_content() {

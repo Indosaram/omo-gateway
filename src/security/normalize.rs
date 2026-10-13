@@ -7,9 +7,13 @@ static ANSI_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 static LINE_CONTINUATION_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\\r?\n").unwrap());
 
-static BACKSLASH_ESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\([^\n])").unwrap());
+// `\#` is kept escaped: unescaping it would turn a literal argument into a word-start `#`
+// that the tokenizer treats as a comment, hiding every option after it.
+static BACKSLASH_ESCAPE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\\([^\n#])").unwrap());
 
-static EMPTY_QUOTES_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"''|""""#).unwrap());
+// A plain (non-raw) literal on purpose: the raw form `r#"''|""""#` ends at its first `"#`, so its
+// content has only THREE double quotes and `""` was never stripped (`rm -rf /""` hid from hardline).
+static EMPTY_QUOTES_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new("''|\"\"").unwrap());
 
 static IFS_EXPANSION_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{IFS\b[^}]*\}|\$IFS\b").unwrap());
@@ -110,7 +114,17 @@ pub fn normalize_command_for_detection(command: &str) -> String {
     let collapsed_lines = LINE_CONTINUATION_RE.replace_all(&normalized_unicode, "");
     let rewritten_home = rewrite_home_prefixes(collapsed_lines.into_owned());
     let stripped_escapes = BACKSLASH_ESCAPE_RE.replace_all(&rewritten_home, "$1");
-    let stripped_quotes = EMPTY_QUOTES_RE.replace_all(&stripped_escapes, "");
+    // Removing an empty pair can expose another one (`"''"`), so repeat a bounded number of times.
+    let mut stripped_quotes = stripped_escapes.into_owned();
+    for _ in 0..4 {
+        let next = EMPTY_QUOTES_RE
+            .replace_all(&stripped_quotes, "")
+            .into_owned();
+        if next == stripped_quotes {
+            break;
+        }
+        stripped_quotes = next;
+    }
     let collapsed_ifs = IFS_EXPANSION_RE.replace_all(&stripped_quotes, " ");
     collapsed_ifs.into_owned()
 }
@@ -597,6 +611,10 @@ pub fn shell_tokens_with_spans(segment: &str, start: usize) -> Option<Vec<ShellT
         if i >= bytes.len() {
             break;
         }
+        // An unquoted `#` at the start of a word begins a shell comment.
+        if bytes[i] == b'#' {
+            break;
+        }
         let token_start = i;
         let mut value = Vec::new();
         let mut quote: Option<char> = None;
@@ -644,6 +662,30 @@ pub fn shell_tokens_with_spans(segment: &str, start: usize) -> Option<Vec<ShellT
     Some(tokens)
 }
 
+/// True when `segment` holds a command substitution (`$(` or a backtick) the shell would run,
+/// i.e. one that is not inside single quotes.
+fn segment_has_active_substitution(segment: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = segment.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_single {
+            if c == '\'' {
+                in_single = false;
+            }
+            continue;
+        }
+        match c {
+            '\'' if !in_double => in_single = true,
+            '"' => in_double = !in_double,
+            '`' => return true,
+            '$' if chars.peek() == Some(&'(') => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
 pub fn quoted_grep_pattern_spans(command: &str) -> (Vec<(usize, usize)>, bool) {
     let mut spans = Vec::new();
     let mut offset = 0;
@@ -680,6 +722,13 @@ pub fn quoted_grep_pattern_spans(command: &str) -> (Vec<(usize, usize)>, bool) {
                 continue;
             }
             let args = &tokens[1..];
+            // Blanking an operand is only sound while it is inert data. An executed `$(...)` or
+            // backtick substitution anywhere in the segment turns its words into code (an unquoted
+            // `$(rm -rf ~)` even spans several tokens), so leave the whole segment visible to the
+            // detectors instead of blanking part of it (`echo "$(rm -rf ~)"` runs the rm).
+            if segment_has_active_substitution(&segment) {
+                continue;
+            }
 
             if is_echo_or_printf {
                 for tok in args {
@@ -1005,8 +1054,23 @@ const MAX_DETECTION_VARIANTS: usize = 512;
 const MAX_DETECTION_VARIANT_BYTES: usize = 4 * 1024 * 1024;
 
 pub fn command_detection_variants(command: &str) -> Vec<String> {
+    command_detection_variants_with_budget(command).0
+}
+
+/// Like [`command_detection_variants`], but also reports whether the variant budget was
+/// exhausted, so detectors can treat an incompletely analysed command as a finding.
+pub fn command_detection_variants_with_budget(command: &str) -> (Vec<String>, bool) {
     let normalized = normalize_command_for_detection(command);
-    let (grep_safe, _) = grep_safe_detection_variant(&normalized);
+    // Normalization drops backslashes, so an escaped quote (`echo \'$(reboot)'`) would read as
+    // real quoting and the substitution inside would be blanked away. When the raw command has
+    // any backslash near a substitution, scan it unblanked instead.
+    let escaped_substitution =
+        command.contains('\\') && (command.contains("$(") || command.contains('`'));
+    let (grep_safe, _) = if escaped_substitution {
+        (normalized.clone(), false)
+    } else {
+        grep_safe_detection_variant(&normalized)
+    };
     let mut variants = Vec::new();
     let mut seen = std::collections::HashSet::new();
     // Each changed word retains a near-complete copy of the script, so an adversarial
@@ -1020,7 +1084,7 @@ pub fn command_detection_variants(command: &str) -> Vec<String> {
             if variants.len() >= MAX_DETECTION_VARIANTS
                 || retained_bytes.saturating_add(value.len()) > MAX_DETECTION_VARIANT_BYTES
             {
-                return variants;
+                return (variants, true);
             }
             retained_bytes += value.len();
             variants.push(value);
@@ -1063,7 +1127,7 @@ pub fn command_detection_variants(command: &str) -> Vec<String> {
         }
     }
 
-    variants
+    (variants, false)
 }
 
 #[cfg(test)]

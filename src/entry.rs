@@ -12,6 +12,12 @@ mod legacy {
         run_gateway().await
     }
 
+    pub async fn run_gateway_with_dashboard_public(
+        settings: dashboard::DashboardSettings,
+    ) -> Result<()> {
+        run_gateway_with_dashboard(Some(settings)).await
+    }
+
     #[allow(unused_imports)]
     pub mod dashboard {
         use tracing_subscriber::util::SubscriberInitExt;
@@ -116,6 +122,13 @@ async fn main() -> Result<()> {
     match command {
         Command::Run => run_gateway_with_optional_dashboard().await,
         Command::Dashboard(args) | Command::Serve(args) => {
+            // A standalone dashboard only owns the runtime when it also runs the
+            // cron scheduler; otherwise it never competes with a gateway.
+            let _runtime_lock = if standalone_dashboard_runs_scheduler() {
+                Some(acquire_runtime_lock()?)
+            } else {
+                None
+            };
             legacy::dashboard_runtime::run_standalone_cli(
                 legacy::dashboard::DashboardSettings::from_args(args),
             )
@@ -135,8 +148,11 @@ async fn main() -> Result<()> {
 }
 
 async fn connect_profile_database() -> std::result::Result<omon_gateway::Database, String> {
-    let url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://omon_gateway.db".to_owned());
+    // Same requirement as the gateway: never create a stray DB in the cwd.
+    let url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "missing required environment variable DATABASE_URL".to_owned())?;
     omon_gateway::Database::connect(&url)
         .await
         .map_err(|error| error.to_string())
@@ -190,11 +206,27 @@ async fn run_profile(args: ProfileArgs) -> i32 {
 }
 
 async fn run_gateway_with_optional_dashboard() -> Result<()> {
+    // Held until this function returns: a second gateway on the same database
+    // must fail here, before any Discord client, scheduler or recovery starts.
+    let _runtime_lock = acquire_runtime_lock()?;
     let settings = legacy::dashboard::DashboardSettings::from_env();
     if !settings.enabled {
         return legacy::run_gateway_public().await;
     }
     settings.validate()?;
+
+    let discord_enabled = legacy::parse_bool_from(
+        std::env::var("OMON_DISCORD_ENABLED")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .as_deref(),
+        true,
+    );
+    if discord_enabled {
+        // The dashboard runs inside the gateway runtime and shares its
+        // approval guard, multiplexer and outbound dispatcher.
+        return legacy::run_gateway_with_dashboard_public(settings).await;
+    }
 
     let shutdown = CancellationToken::new();
     let dashboard_shutdown = shutdown.clone();
@@ -206,8 +238,13 @@ async fn run_gateway_with_optional_dashboard() -> Result<()> {
     tokio::select! {
         result = &mut gateway => {
             shutdown.cancel();
-            dashboard.await?;
-            result
+            // The gateway outcome is the real result; a teardown error from the
+            // dashboard must not replace it.
+            let dashboard_result = dashboard.await;
+            if let (Err(_), Err(error)) = (&result, &dashboard_result) {
+                tracing::warn!(%error, "dashboard failed while the gateway was already stopping");
+            }
+            result.and(dashboard_result)
         }
         result = &mut dashboard => {
             match result {
@@ -225,28 +262,40 @@ pub struct RuntimeOwnershipLock {
 }
 
 impl RuntimeOwnershipLock {
+    /// Acquires the lock in `OMON_RUNTIME_LOCK_DIR`, or in the per-user state
+    /// directory (`~/.omon/run`) when unset; never in the shared temp dir.
     pub fn try_acquire(name: &str) -> Result<Self, OmonError> {
-        let lock_dir = std::env::var("OMON_RUNTIME_LOCK_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::env::temp_dir());
+        Self::try_acquire_in(&runtime_lock_dir()?, name)
+    }
+
+    pub fn try_acquire_in(lock_dir: &std::path::Path, name: &str) -> Result<Self, OmonError> {
+        let config_error = |message: String| OmonError::Config(message);
+        create_private_dir(lock_dir).map_err(|e| {
+            config_error(format!(
+                "failed to create runtime lock dir {}: {e}",
+                lock_dir.display()
+            ))
+        })?;
         let lock_path = lock_dir.join(format!("omon-gateway-{name}.lock"));
 
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|e| {
-                OmonError::Config(format!(
-                    "failed to open runtime lock {}: {e}",
-                    lock_path.display()
-                ))
-            })?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // Owner-only, and never follow a pre-planted symlink.
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        let file = options.open(&lock_path).map_err(|e| {
+            config_error(format!(
+                "failed to open runtime lock {}: {e}",
+                lock_path.display()
+            ))
+        })?;
 
         use fs2::FileExt;
         file.try_lock_exclusive().map_err(|e| {
-            OmonError::Config(format!(
+            config_error(format!(
                 "another gateway instance owns runtime lock {} (error: {e})",
                 lock_path.display()
             ))
@@ -259,11 +308,79 @@ impl RuntimeOwnershipLock {
     }
 }
 
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)
+}
+
+fn runtime_lock_dir() -> Result<std::path::PathBuf, OmonError> {
+    if let Some(dir) = std::env::var_os("OMON_RUNTIME_LOCK_DIR").filter(|v| !v.is_empty()) {
+        return Ok(std::path::PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            OmonError::Config(
+                "cannot place the runtime lock: set HOME or OMON_RUNTIME_LOCK_DIR".into(),
+            )
+        })?;
+    Ok(std::path::PathBuf::from(home).join(".omon").join("run"))
+}
+
+/// Lock name scoped to one database, so unrelated gateways on one host do not
+/// collide while two gateways on the same database always do.
+fn runtime_lock_name(database_url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let url = database_url.trim();
+    let path = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))
+        .unwrap_or(url);
+    let path = path.split('?').next().unwrap_or(path);
+    let identity = if path.starts_with(':') || std::path::Path::new(path).is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path).to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_owned())
+    };
+    let digest = Sha256::digest(identity.as_bytes());
+    digest
+        .iter()
+        .take(8)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn acquire_runtime_lock() -> Result<RuntimeOwnershipLock, OmonError> {
+    let database_url = std::env::var("DATABASE_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "sqlite://omon_gateway.db".to_owned());
+    RuntimeOwnershipLock::try_acquire(&runtime_lock_name(&database_url))
+}
+
+fn standalone_dashboard_runs_scheduler() -> bool {
+    matches!(
+        std::env::var("OMON_DASHBOARD_RUN_SCHEDULER")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use clap::Parser;
 
-    use super::{Cli, Command, RuntimeOwnershipLock};
+    use super::{runtime_lock_name, Cli, Command, RuntimeOwnershipLock};
 
     #[tokio::test]
     async fn session_cli_output_preserves_aggregate_exit_and_projection() {
@@ -295,11 +412,12 @@ mod tests {
 
     #[test]
     fn duplicate_gateway_start_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
         let lock_name = format!("test-lock-{}", uuid::Uuid::new_v4());
-        let lock1 = RuntimeOwnershipLock::try_acquire(&lock_name).unwrap();
+        let lock1 = RuntimeOwnershipLock::try_acquire_in(dir.path(), &lock_name).unwrap();
 
         // Second acquisition must fail explicitly
-        let err = RuntimeOwnershipLock::try_acquire(&lock_name).unwrap_err();
+        let err = RuntimeOwnershipLock::try_acquire_in(dir.path(), &lock_name).unwrap_err();
         assert!(
             err.to_string()
                 .contains("another gateway instance owns runtime lock"),
@@ -308,8 +426,48 @@ mod tests {
 
         // After releasing, a third can acquire
         drop(lock1);
-        let lock3 = RuntimeOwnershipLock::try_acquire(&lock_name).unwrap();
+        let lock3 = RuntimeOwnershipLock::try_acquire_in(dir.path(), &lock_name).unwrap();
         assert!(lock3.path.exists());
+    }
+
+    #[test]
+    fn runtime_lock_name_is_scoped_to_the_database() {
+        let a = runtime_lock_name("sqlite:///var/lib/omon/a.db");
+        let b = runtime_lock_name("sqlite:///var/lib/omon/b.db");
+        assert_ne!(a, b, "different databases must not share a lock");
+        assert_eq!(
+            a,
+            runtime_lock_name("sqlite:/var/lib/omon/a.db?mode=rwc"),
+            "URL spelling of the same file must map to one lock"
+        );
+        assert!(
+            a.chars().all(|c| c.is_ascii_hexdigit()),
+            "lock name is a file-safe hash: {a}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runtime_lock_is_private_and_refuses_symlinks() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("run");
+        let lock = RuntimeOwnershipLock::try_acquire_in(&nested, "perm").unwrap();
+        let file_mode = std::fs::metadata(&lock.path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o600);
+        let dir_mode = std::fs::metadata(&nested).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+
+        let target = dir.path().join("victim");
+        std::fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, nested.join("omon-gateway-linked.lock")).unwrap();
+        let err = RuntimeOwnershipLock::try_acquire_in(&nested, "linked").unwrap_err();
+        assert!(
+            err.to_string().contains("failed to open runtime lock"),
+            "symlinked lock path must be refused: {err}"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
     }
 
     #[test]

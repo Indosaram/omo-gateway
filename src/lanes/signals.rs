@@ -222,7 +222,9 @@ fn split_top_level_semicolons(input: &str) -> Result<Vec<String>, SignalParseErr
             continue;
         }
         match ch {
-            '"' | '\'' => {
+            // The grammar quotes with JSON strings only; an apostrophe in a path
+            // (it's.txt) must not swallow the semicolons after it.
+            '"' => {
                 in_quote = Some(ch);
                 current.push(ch);
             }
@@ -828,6 +830,62 @@ fn resolve_file_path(path: &Path, cwd: &Path) -> PathBuf {
     }
 }
 
+const OUTPUT_TAIL_BYTES: usize = 4096;
+
+/// Keeps only the last few KB of command output so failure details stay bounded.
+/// Command output kept in memory per stream (the tail; earlier output is dropped).
+const COMMAND_OUTPUT_CAP: usize = 256 * 1024;
+const FILE_SIGNAL_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+fn is_secret_env_name(name: &str) -> bool {
+    // Forge credentials stay: done signals such as `gh pr view` need them.
+    if matches!(name, "GH_TOKEN" | "GITHUB_TOKEN" | "NPM_TOKEN") {
+        return false;
+    }
+    let upper = name.to_ascii_uppercase();
+    [
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "API_KEY",
+        "APIKEY",
+        "CREDENTIAL",
+    ]
+    .iter()
+    .any(|marker| upper.contains(marker))
+}
+
+/// Drains a pipe to EOF, keeping only the last `cap` bytes.
+async fn read_tail<R: tokio::io::AsyncRead + Unpin>(mut pipe: R, cap: usize) -> Vec<u8> {
+    use tokio::io::AsyncReadExt;
+    let mut kept = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match pipe.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                kept.extend_from_slice(&chunk[..read]);
+                if kept.len() > cap {
+                    let excess = kept.len() - cap;
+                    kept.drain(..excess);
+                }
+            }
+        }
+    }
+    kept
+}
+
+fn output_tail(text: &str) -> &str {
+    if text.len() <= OUTPUT_TAIL_BYTES {
+        return text;
+    }
+    let mut start = text.len() - OUTPUT_TAIL_BYTES;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
 #[cfg(test)]
 type ChildReadyHook = std::sync::Arc<
     dyn Fn(u32) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
@@ -1125,13 +1183,21 @@ impl SignalRunner for SystemSignalRunner {
                 cmd.stdout(std::process::Stdio::piped());
                 cmd.stderr(std::process::Stdio::piped());
                 cmd.kill_on_drop(true);
+                // Lane-authored commands must not inherit the gateway's credentials.
+                for (name, _) in std::env::vars_os() {
+                    if is_secret_env_name(&name.to_string_lossy()) {
+                        cmd.env_remove(&name);
+                    }
+                }
+                #[cfg(unix)]
+                cmd.process_group(0);
 
                 #[cfg(test)]
                 if let Some(ref hook) = self.command_setup_hook {
                     hook(&mut cmd);
                 }
 
-                let child = match cmd.spawn() {
+                let mut child = match cmd.spawn() {
                     Ok(c) => c,
                     Err(e) => {
                         return SignalResult::fail(
@@ -1148,12 +1214,32 @@ impl SignalRunner for SystemSignalRunner {
                     }
                 }
 
-                let output = match tokio::time::timeout(
-                    self.command_timeout,
-                    child.wait_with_output(),
-                )
-                .await
-                {
+                let pgid = child.id();
+                let stdout_task = child
+                    .stdout
+                    .take()
+                    .map(|pipe| tokio::spawn(read_tail(pipe, COMMAND_OUTPUT_CAP)));
+                let stderr_task = child
+                    .stderr
+                    .take()
+                    .map(|pipe| tokio::spawn(read_tail(pipe, COMMAND_OUTPUT_CAP)));
+                let collected = async move {
+                    let status = child.wait().await?;
+                    let stdout = match stdout_task {
+                        Some(task) => task.await.unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    let stderr = match stderr_task {
+                        Some(task) => task.await.unwrap_or_default(),
+                        None => Vec::new(),
+                    };
+                    Ok::<_, std::io::Error>(std::process::Output {
+                        status,
+                        stdout,
+                        stderr,
+                    })
+                };
+                let output = match tokio::time::timeout(self.command_timeout, collected).await {
                     Ok(Ok(out)) => out,
                     Ok(Err(e)) => {
                         return SignalResult::fail(
@@ -1162,13 +1248,20 @@ impl SignalRunner for SystemSignalRunner {
                         )
                     }
                     Err(_) => {
+                        // The child leads its own group; kill grandchildren it spawned too.
+                        #[cfg(unix)]
+                        if let Some(pgid) = pgid {
+                            unsafe {
+                                libc::killpg(pgid as libc::pid_t, libc::SIGKILL);
+                            }
+                        }
                         return SignalResult::fail(
                             signal.to_string(),
                             format!(
                                 "command timed out after {}s",
                                 self.command_timeout.as_secs()
                             ),
-                        )
+                        );
                     }
                 };
 
@@ -1180,8 +1273,8 @@ impl SignalRunner for SystemSignalRunner {
                         format!(
                             "command exited with status {:?}. stdout: {}, stderr: {}",
                             output.status.code(),
-                            stdout.trim(),
-                            stderr.trim()
+                            output_tail(stdout.trim()),
+                            output_tail(stderr.trim())
                         ),
                     );
                 }
@@ -1203,7 +1296,7 @@ impl SignalRunner for SystemSignalRunner {
                             format!(
                                 "command stdout did not match regex '{}'. stdout: '{}'",
                                 regex_pat,
-                                stdout.trim()
+                                output_tail(stdout.trim())
                             ),
                         );
                     }
@@ -1222,6 +1315,18 @@ impl SignalRunner for SystemSignalRunner {
                 json_value,
             } => {
                 let resolved_path = resolve_file_path(path, cwd);
+                if let Ok(meta) = tokio::fs::metadata(&resolved_path).await {
+                    if meta.len() > FILE_SIGNAL_MAX_BYTES {
+                        return SignalResult::fail(
+                            signal.to_string(),
+                            format!(
+                                "file '{}' is larger than {} bytes",
+                                resolved_path.display(),
+                                FILE_SIGNAL_MAX_BYTES
+                            ),
+                        );
+                    }
+                }
                 let bytes = match tokio::fs::read(&resolved_path).await {
                     Ok(b) => b,
                     Err(e) => {
@@ -1376,6 +1481,34 @@ impl SignalRunner for SystemSignalRunner {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn apostrophe_in_a_path_does_not_swallow_the_next_signal() {
+        let signals = parse_signals("file it's.txt; file b.txt").unwrap();
+        assert_eq!(signals.len(), 2);
+    }
+
+    #[test]
+    fn secret_env_names_are_recognised() {
+        for name in [
+            "DISCORD_BOT_TOKEN",
+            "TYPESAFE_API_KEY",
+            "db_password",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            assert!(is_secret_env_name(name), "{name}");
+        }
+        for name in ["PATH", "HOME", "DATABASE_URL", "CARGO_HOME", "GH_TOKEN"] {
+            assert!(!is_secret_env_name(name), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn read_tail_keeps_only_the_last_bytes_of_unbounded_output() {
+        let data: Vec<u8> = (0..100_000u32).map(|n| (n % 251) as u8).collect();
+        let tail = read_tail(std::io::Cursor::new(data.clone()), 1000).await;
+        assert_eq!(tail, data[data.len() - 1000..]);
+    }
 
     #[test]
     fn test_parse_ok_all_kinds() {
@@ -2083,6 +2216,83 @@ exit 1
             eof, 0,
             "child process socket must reach EOF upon timeout kill"
         );
+    }
+
+    #[tokio::test]
+    async fn test_command_failure_detail_keeps_bounded_output_tail() {
+        let temp = tempfile::tempdir().unwrap();
+        let sig = parse_signals(
+            r#"command ["sh", "-c", "yes x | head -c 200000; printf TAIL_END; exit 3"]"#,
+        )
+        .unwrap()
+        .remove(0);
+        let res = SystemSignalRunner::new().check(&sig, temp.path()).await;
+        assert!(!res.ok);
+        assert!(res.detail.contains("TAIL_END"), "tail must be kept");
+        assert!(
+            res.detail.len() < 16 * 1024,
+            "detail must be bounded, got {} bytes",
+            res.detail.len()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_command_timeout_kills_whole_process_group() {
+        use tokio::io::AsyncBufReadExt;
+        use tokio::io::AsyncReadExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let sock_path = temp.path().join("grandchild_sync.sock");
+        let listener = tokio::net::UnixListener::bind(&sock_path).expect("bind sync socket");
+        let current_exe = std::env::current_exe().expect("current test exe");
+        let sig = parse_signals(&format!(
+            r#"command ["sh", "-c", "$0 lanes::signals::tests::helper_signals_hung_child --ignored --exact --nocapture & wait", "{}"]"#,
+            current_exe.display()
+        ))
+        .unwrap()
+        .remove(0);
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        let notify_clone = notify.clone();
+        let runner = SystemSignalRunner::new()
+            .with_command_timeout(Duration::from_millis(100))
+            .with_command_setup_hook({
+                let sock_path = sock_path.clone();
+                move |cmd| {
+                    cmd.env("OMON_SIGNALS_TEST_SOCK", &sock_path);
+                }
+            })
+            .with_child_ready_hook(move |_pid| {
+                let notify = notify_clone.clone();
+                async move { notify.notified().await }
+            });
+        let cwd = temp.path().to_path_buf();
+        let runner_task = tokio::spawn(async move { runner.check(&sig, &cwd).await });
+
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+            .await
+            .expect("grandchild must connect within 5s")
+            .expect("listener accept");
+        let mut reader = tokio::io::BufReader::new(&mut stream);
+        let mut line = String::new();
+        tokio::time::timeout(Duration::from_secs(5), reader.read_line(&mut line))
+            .await
+            .expect("read pid within 5s")
+            .expect("read line");
+        let grandchild: i32 = line.trim().parse().expect("valid grandchild pid");
+        notify.notify_one();
+        let res = tokio::time::timeout(Duration::from_secs(5), runner_task)
+            .await
+            .expect("runner task must complete within 5s")
+            .expect("task join");
+        assert!(res.detail.contains("timed out"), "{}", res.detail);
+
+        let mut buf = [0u8; 1];
+        let eof = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await;
+        if !matches!(eof, Ok(Ok(0))) {
+            unsafe { libc::kill(grandchild, libc::SIGKILL) };
+            panic!("grandchild survived the command timeout: {eof:?}");
+        }
     }
 
     #[tokio::test]

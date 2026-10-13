@@ -1,8 +1,51 @@
+use std::sync::LazyLock;
+
 use regex::Regex;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::{Result, SessionKey};
+
+/// Upper bound for each (first / last) line kept in a problem signature.
+const SIGNATURE_LINE_CHARS: usize = 160;
+
+static UUID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}\b").expect("valid regex")
+});
+static HEX_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[0-9a-fA-F]{8,}\b").expect("valid regex"));
+static DIGITS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[0-9]+").expect("valid regex"));
+
+fn normalize_signature_line(line: &str) -> String {
+    let line = UUID_RE.replace_all(line.trim(), "<uuid>");
+    let line = HEX_RE.replace_all(&line, "<hex>");
+    let line = DIGITS_RE.replace_all(&line, "#");
+    line.to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(SIGNATURE_LINE_CHARS)
+        .collect()
+}
+
+/// Dedup key for a problem: the kind plus a normalized, bounded form of the error text.
+/// Timestamps, pids, request ids and other digits or hex tokens are stripped so one
+/// underlying fault that prints varying noise maps to a single problem row.
+pub(super) fn problem_signature(kind: &str, detail: &str) -> String {
+    let mut lines = detail
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty());
+    let first = lines
+        .next()
+        .map(normalize_signature_line)
+        .unwrap_or_default();
+    match lines.next_back().map(normalize_signature_line) {
+        Some(last) if last != first => format!("{kind}:{first} | {last}"),
+        _ => format!("{kind}:{first}"),
+    }
+}
 
 pub async fn on_run_finished(
     pool: &SqlitePool,
@@ -71,9 +114,10 @@ pub async fn on_run_finished(
     };
 
     let signature = match &problem {
-        Some((kind, detail)) => format!("{kind}:{}", detail),
+        Some((kind, detail)) => problem_signature(kind, detail),
         None => String::new(),
     };
+    let stale_cutoff = now - chrono::TimeDelta::seconds(super::remediate::STALE_REMEDIATING_SECS);
     let mut tx = pool.begin().await?;
     if let Some((kind, detail)) = problem {
         let inserted = sqlx::query(
@@ -82,16 +126,23 @@ pub async fn on_run_finished(
              ON CONFLICT(job_id, kind, signature) DO UPDATE SET
              status = 'open', run_id = excluded.run_id, detail = excluded.detail,
              lane_key = NULL, created_at = excluded.created_at, updated_at = excluded.updated_at
-             WHERE cron_problems.status IN ('fixed', 'ignored')
+             WHERE (cron_problems.status IN ('fixed', 'ignored')
+                    OR (cron_problems.status = 'remediating'
+                        AND julianday(cron_problems.updated_at) < julianday(?)
+                        AND (cron_problems.lane_key IS NULL
+                             OR NOT EXISTS (SELECT 1 FROM lanes
+                                            WHERE lanes.key = cron_problems.lane_key
+                                            AND lanes.status NOT IN ('verified_done', 'closed')))))
              AND cron_problems.run_id IS NOT excluded.run_id",
         )
         .bind(job_id)
         .bind(kind)
         .bind(run_id)
-        .bind(signature)
+        .bind(&signature)
         .bind(&detail)
         .bind(now)
         .bind(now)
+        .bind(stale_cutoff)
         .execute(&mut *tx)
         .await?;
         if inserted.rows_affected() > 0 {
@@ -100,7 +151,7 @@ pub async fn on_run_finished(
             )
             .bind(job_id)
             .bind(kind)
-            .bind(format!("{kind}:{detail}"))
+            .bind(&signature)
             .fetch_one(&mut *tx)
             .await?;
             if let Some(lead) = default_lead() {
@@ -267,7 +318,33 @@ fn watch_enabled_from(value: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::watch_enabled_from;
+    use super::{problem_signature, watch_enabled_from};
+
+    #[test]
+    fn signature_ignores_timestamps_pids_and_ids_but_keeps_the_fault() {
+        let first = problem_signature(
+            "failed",
+            "cron script failed with Some(1): 2026-10-13T01:02:03Z pid 4242 req 9f8e7d6c5b4a connect refused",
+        );
+        let second = problem_signature(
+            "failed",
+            "cron script failed with Some(1): 2026-10-14T11:12:13Z pid 17 req 00112233aabb connect refused",
+        );
+        assert_eq!(first, second);
+        let other = problem_signature("failed", "cron script failed with Some(1): disk full");
+        assert_ne!(first, other);
+        assert_ne!(first, problem_signature("stuck", "cron script failed with Some(1): 2026-10-13T01:02:03Z pid 4242 req 9f8e7d6c5b4a connect refused"));
+    }
+
+    #[test]
+    fn signature_is_bounded_and_uses_first_and_last_line() {
+        let trace = format!("Traceback\n{}\nValueError: boom 77", "frame\n".repeat(5000));
+        let long_line = "x".repeat(100_000);
+        assert!(problem_signature("failed", &long_line).chars().count() < 200);
+        let sig = problem_signature("failed", &trace);
+        assert!(sig.chars().count() < 400);
+        assert_eq!(sig, "failed:traceback | valueerror: boom #");
+    }
 
     #[test]
     fn switch_defaults_on_and_disables_false_like_values() {

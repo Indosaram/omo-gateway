@@ -92,6 +92,91 @@ fn is_agent_progress(method: &str, frame: &Value) -> bool {
     agent_frame && frame.pointer("/params/item/type").and_then(Value::as_str) != Some("userMessage")
 }
 
+/// Whether a frame shows the followed thread/turn doing real work, so it may renew
+/// the inactivity watchdog and the interactive total deadline. Responses to
+/// gateway-issued requests (progress steers, interrupts), thread-status
+/// notifications and frames of other threads or turns are not progress: counting
+/// them would let the gateway's own steer acks keep a hung turn alive forever.
+fn frame_is_turn_progress(
+    method: &str,
+    frame: &Value,
+    thread_id: &str,
+    turn_id: Option<&str>,
+    awaiting_successor: bool,
+) -> bool {
+    if method.is_empty() {
+        return false;
+    }
+    match frame.pointer("/params/threadId").and_then(Value::as_str) {
+        Some(frame_thread) if frame_thread != thread_id => return false,
+        None if !is_approval_request(method) => return false,
+        _ => {}
+    }
+    if !(method.starts_with("turn/")
+        || is_agent_progress(method, frame)
+        || is_approval_request(method))
+    {
+        return false;
+    }
+    let frame_turn = frame
+        .pointer("/params/turnId")
+        .or_else(|| frame.pointer("/params/turn/id"))
+        .and_then(Value::as_str);
+    match (frame_turn, turn_id) {
+        (Some(frame_turn), Some(current)) if frame_turn != current => {
+            awaiting_successor && method == "turn/started"
+        }
+        _ => true,
+    }
+}
+
+/// Makes sure a cron session's `.omo/settings.json` disables the `ttsr` extension
+/// without clobbering anything else: an unreadable or non-JSON file is left alone,
+/// an already-correct file is not rewritten, and a rewrite goes through a temp file.
+async fn ensure_cron_ttsr_disabled(settings_path: &std::path::Path) {
+    let mut settings: serde_json::Map<String, Value> = match tokio::fs::read_to_string(
+        settings_path,
+    )
+    .await
+    {
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(map) => map,
+            Err(error) => {
+                tracing::warn!(path = %settings_path.display(), %error, "cron settings.json is not valid JSON; leaving it untouched");
+                return;
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(error) => {
+            tracing::warn!(path = %settings_path.display(), %error, "cannot read cron settings.json; leaving it untouched");
+            return;
+        }
+    };
+    let disabled = settings
+        .entry("disabledBuiltinExtensions".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    let Value::Array(entries) = disabled else {
+        tracing::warn!(path = %settings_path.display(), "disabledBuiltinExtensions is not an array; leaving cron settings.json untouched");
+        return;
+    };
+    if entries.iter().any(|entry| entry.as_str() == Some("ttsr")) {
+        return;
+    }
+    entries.push(Value::String("ttsr".to_string()));
+    let Ok(content) = serde_json::to_string_pretty(&Value::Object(settings)) else {
+        return;
+    };
+    let tmp_path = settings_path.with_extension("json.tmp");
+    if let Err(error) = tokio::fs::write(&tmp_path, content.as_bytes()).await {
+        tracing::warn!(path = %tmp_path.display(), %error, "failed to write cron settings.json");
+        return;
+    }
+    if let Err(error) = tokio::fs::rename(&tmp_path, settings_path).await {
+        tracing::warn!(path = %settings_path.display(), %error, "failed to replace cron settings.json");
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
+}
+
 /// Interactive (Discord) turns stop at 1800s (30m); cron turns keep their own budget.
 const INTERACTIVE_TURN_CAP: Duration = Duration::from_secs(1800);
 
@@ -235,8 +320,8 @@ impl OmoBackend {
     /// # Persona & Model Flow across Session Lifecycle:
     ///
     /// 1. **Initial Thread Creation (`thread/start`)**:
-    ///    When a session does not yet have an assigned `omo_thread_id` (in session metadata or
-    ///    the in-memory cache), `thread/start` is dispatched with:
+    ///    When a session does not yet have an assigned `omo_thread_id` in session metadata,
+    ///    `thread/start` is dispatched with:
     ///    - `developerInstructions`: Initial `session.state.system_prompt` resolved from the bot
     ///      profile route or database profile override.
     ///    - `model`: `session.state.active_model` or fallback `config.default_model`.
@@ -277,7 +362,6 @@ impl OmoBackend {
             .get("omo_thread_id")
             .and_then(Value::as_str)
             .map(String::from)
-            .or_else(|| self.thread_ids.lock().get(&storage_key).cloned())
         {
             if tokio::time::Instant::now() >= deadline {
                 return Err(OmonError::Llm("turn exceeded total deadline".into()));
@@ -447,28 +531,7 @@ impl OmoBackend {
                         })?;
                 }
                 if is_cron {
-                    let settings_path = omo_dir.join("settings.json");
-                    let mut settings: serde_json::Map<String, Value> =
-                        if tokio::fs::try_exists(&settings_path).await.unwrap_or(false) {
-                            tokio::fs::read_to_string(&settings_path)
-                                .await
-                                .ok()
-                                .and_then(|s| serde_json::from_str(&s).ok())
-                                .unwrap_or_default()
-                        } else {
-                            serde_json::Map::new()
-                        };
-                    let disabled = settings
-                        .entry("disabledBuiltinExtensions".to_string())
-                        .or_insert_with(|| Value::Array(Vec::new()));
-                    if let Value::Array(arr) = disabled {
-                        if !arr.iter().any(|v| v.as_str() == Some("ttsr")) {
-                            arr.push(Value::String("ttsr".to_string()));
-                        }
-                    }
-                    if let Ok(content) = serde_json::to_string_pretty(&Value::Object(settings)) {
-                        let _ = tokio::fs::write(&settings_path, content.as_bytes()).await;
-                    }
+                    ensure_cron_ttsr_disabled(&omo_dir.join("settings.json")).await;
                 }
                 Some(ws)
             } else {
@@ -570,6 +633,31 @@ impl OmoBackend {
 }
 
 impl OmoBackend {
+    /// Shows mid-turn status text to the user as a normal message. It is neither a
+    /// stream chunk nor persisted as the assistant reply; true only when dispatched.
+    async fn relay_status(
+        &self,
+        session: &SessionContext,
+        content: String,
+        reply_to: Option<String>,
+    ) -> bool {
+        match self
+            .dispatcher
+            .dispatch(OutboundAction::SendMessage {
+                session: session.key.clone(),
+                content,
+                reply_to,
+            })
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(session = %session.key, %error, "failed to relay mid-turn status");
+                false
+            }
+        }
+    }
+
     async fn capture_lane_item(
         &self,
         session: &SessionContext,
@@ -712,8 +800,15 @@ impl OmoBackend {
         effective_total_timeout: Duration,
         model_override: Option<&str>,
         fallback_eligible: &mut bool,
+        briefings: Option<&crate::mirror::CronBriefings>,
     ) -> Result<()> {
-        let user_prompt = render_user_prompt(&event);
+        let mut user_prompt = render_user_prompt(&event);
+        // Cron deliveries are posted by the scheduler, not by this thread; the agent
+        // gets the ones it has not seen yet so follow-up questions about them work.
+        // They are consumed only once turn/start is acknowledged (see below).
+        if let Some(briefings) = briefings {
+            user_prompt = format!("{}\n{user_prompt}", briefings.text);
+        }
         let model = model_override.or(session
             .state
             .active_model
@@ -868,6 +963,8 @@ impl OmoBackend {
         let mut started_ids: std::collections::HashSet<String> = Default::default();
         let mut approval_denials: u32 = 0;
         let mut messages_delivered: usize = 0;
+        // The agent already produced a message: it is composing, so no more progress steers.
+        let mut agent_message_seen = false;
         let steer_quiet_threshold = Duration::from_secs(12);
         let mut steer_request_id: u64 = 9_100;
         let mut last_steer_at = tokio::time::Instant::now();
@@ -931,7 +1028,13 @@ impl OmoBackend {
                     let rem = deadline.saturating_duration_since(tokio::time::Instant::now());
                     if !rem.is_zero() {
                         let drain_fut = async {
-                            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                            while let Some(frame) = ws.next().await {
+                                let text = match frame {
+                                    Ok(Message::Text(text)) => text,
+                                    // Ping/pong/binary frames must not abort the drain.
+                                    Ok(_) => continue,
+                                    Err(_) => break,
+                                };
                                 if let Ok(val) = serde_json::from_str::<Value>(&text) {
                                     if val.get("id").and_then(Value::as_u64) == Some(9_001) {
                                         return Some(val);
@@ -985,6 +1088,7 @@ impl OmoBackend {
                             if let Some(error) =
                                 val.get("lane_capture_error").and_then(Value::as_str)
                             {
+                                self.active_turns.lock().remove(&session.key.storage_key());
                                 return Err(OmonError::Llm(error.into()));
                             }
                             let status = val.pointer("/params/turn/status").and_then(Value::as_str);
@@ -1030,7 +1134,6 @@ impl OmoBackend {
                                     return Ok(());
                                 }
 
-                                let scrubbed_content = filter_reasoning(&full_content);
                                 let rendered = if scrubbed_content.trim().is_empty() {
                                     "✅ Done.".to_string()
                                 } else {
@@ -1119,6 +1222,7 @@ impl OmoBackend {
                     });
                     let _ = ws.send(Message::text(interrupt.to_string())).await;
                 }
+                self.active_turns.lock().remove(&session.key.storage_key());
                 return Err(OmonError::Llm(
                     "timeout during turn streaming: no activity from server".into(),
                 ));
@@ -1136,7 +1240,7 @@ impl OmoBackend {
             // Progress watchdog: if the agent has been quiet without delivering any
             // message to the user for longer than steer_quiet_threshold, inject a steering RPC
             // to prompt the agent to give an immediate progress brief to Discord.
-            if !is_cron_session && !is_lane && messages_delivered == 0 {
+            if !is_cron_session && !is_lane && messages_delivered == 0 && !agent_message_seen {
                 if let Some(current_turn_id) = &turn_id {
                     if now.duration_since(prompt_started_at) >= steer_quiet_threshold
                         && now.duration_since(last_steer_at) >= steer_quiet_threshold
@@ -1166,16 +1270,35 @@ impl OmoBackend {
             let msg = msg.map_err(|e| OmonError::Llm(format!("ws streaming error: {e}")))?;
             let val = match &msg {
                 Message::Text(text) => {
-                    last_activity_at = tokio::time::Instant::now();
-                    // Invariant: Non-cron interactive turns auto-renew their 30m deadline while actual work events arrive.
-                    if !is_cron_session && !is_lane {
-                        deadline = last_activity_at + effective_total_timeout;
-                        work_deadline = deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
+                    let parsed = serde_json::from_str::<Value>(text.as_str()).map_err(|e| {
+                        self.active_turns.lock().remove(&session.key.storage_key());
+                        OmonError::Llm(format!("invalid json: {e}"))
+                    })?;
+                    // Invariant: only frames showing real work for this thread/turn (or the
+                    // turn/start acknowledgement itself) renew the inactivity watchdog and the
+                    // interactive 30m deadline. Steer/interrupt acks and unrelated frames must
+                    // not, or the gateway's own progress steers would keep a hung turn alive.
+                    let frame_method = parsed.get("method").and_then(Value::as_str).unwrap_or("");
+                    let is_start_ack = !turn_started_ack
+                        && parsed.get("method").is_none()
+                        && parsed.get("id").and_then(Value::as_u64) == Some(3);
+                    if is_start_ack
+                        || frame_is_turn_progress(
+                            frame_method,
+                            &parsed,
+                            &thread_id,
+                            turn_id.as_deref(),
+                            awaiting_successor_turn,
+                        )
+                    {
+                        last_activity_at = tokio::time::Instant::now();
+                        if !is_cron_session && !is_lane {
+                            deadline = last_activity_at + effective_total_timeout;
+                            work_deadline =
+                                deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
+                        }
                     }
-                    Some(
-                        serde_json::from_str::<Value>(text.as_str())
-                            .map_err(|e| OmonError::Llm(format!("invalid json: {e}")))?,
-                    )
+                    Some(parsed)
                 }
                 _ => None,
             };
@@ -1228,6 +1351,7 @@ impl OmoBackend {
                     .and_then(Value::as_str)
                     .filter(|id| !id.is_empty())
                     .ok_or_else(|| {
+                        self.active_turns.lock().remove(&session.key.storage_key());
                         OmonError::Llm("turn/start acknowledgement missing turn id".into())
                     })?;
                 let acked_turn = id.to_string();
@@ -1255,23 +1379,34 @@ impl OmoBackend {
                 }
                 awaiting_successor_turn = taken_over_at.is_some() && successor.is_none();
                 let turn_id_str = successor.unwrap_or(acked_turn);
-                let mut active_turns = self.active_turns.lock();
-                let inserted_at = active_turns
-                    .get(&session.key.storage_key())
-                    .map(|existing| existing.inserted_at)
-                    .unwrap_or_else(tokio::time::Instant::now);
-                active_turns.insert(
-                    session.key.storage_key(),
-                    ActiveTurn {
-                        thread_id: thread_id.clone(),
-                        turn_id: Some(turn_id_str.clone()),
-                        inserted_at,
-                    },
-                );
+                {
+                    let mut active_turns = self.active_turns.lock();
+                    let inserted_at = active_turns
+                        .get(&session.key.storage_key())
+                        .map(|existing| existing.inserted_at)
+                        .unwrap_or_else(tokio::time::Instant::now);
+                    active_turns.insert(
+                        session.key.storage_key(),
+                        ActiveTurn {
+                            thread_id: thread_id.clone(),
+                            turn_id: Some(turn_id_str.clone()),
+                            inserted_at,
+                        },
+                    );
+                }
                 turn_id = Some(turn_id_str);
                 turn_started_ack = true;
                 prompt_started_at = tokio::time::Instant::now();
                 last_steer_at = prompt_started_at;
+                // The prompt carrying the cron briefings was accepted: only now are they consumed.
+                if let (Some(briefings), Some(pool)) = (briefings, &self.pool) {
+                    if let Err(error) =
+                        crate::mirror::mark_cron_briefings_injected(pool, &briefings.message_ids)
+                            .await
+                    {
+                        tracing::warn!(session = %session.key, %error, "failed to mark cron briefings injected");
+                    }
+                }
                 continue;
             }
 
@@ -1279,6 +1414,9 @@ impl OmoBackend {
                 (val.get("id"), val.get("method").and_then(Value::as_str))
             {
                 if is_approval_request(method) {
+                    // A toolset restriction denies even under YOLO, and counts toward the
+                    // denial-loop guard like any other policy denial.
+                    let mut toolset_blocked = false;
                     if let Some(ref toolsets) = session.state.enabled_toolsets {
                         let is_command = method.contains("commandExecution")
                             || val.pointer("/params/command").is_some()
@@ -1292,12 +1430,11 @@ impl OmoBackend {
                                 "tool declined: commandExecution is not in enabled_toolsets {:?}",
                                 toolsets
                             );
-                            let _ = ws.send(approval_denial_response(req_id)).await;
-                            continue;
+                            toolset_blocked = true;
                         }
                     }
 
-                    if session.state.yolo {
+                    if !toolset_blocked && session.state.yolo {
                         tracing::info!(
                             session = %session.key,
                             "approving daemon tool request under active YOLO mode"
@@ -1316,7 +1453,7 @@ impl OmoBackend {
                         Ok("always")
                     );
 
-                    if auto_approve {
+                    if !toolset_blocked && auto_approve {
                         tracing::info!(
                             session = %session.key,
                             "approving daemon tool request under gateway approval policy"
@@ -1339,6 +1476,7 @@ impl OmoBackend {
                             });
                             let _ = ws.send(Message::text(interrupt.to_string())).await;
                         }
+                        self.active_turns.lock().remove(&session.key.storage_key());
                         return Err(OmonError::Llm(format!(
                                 "tool approval denied {approval_denials} times by gateway policy; turn aborted"
                             )));
@@ -1390,10 +1528,15 @@ impl OmoBackend {
                         if let Some(text) = completed_agent_message_text(&method, &val) {
                             let scrubbed = filter_reasoning(text);
                             if !scrubbed.trim().is_empty() && !is_explicit_silence(&scrubbed) {
-                                self.deliver_rendered_result(
-                                    session, stream_id, sequence, &scrubbed, None,
-                                )
-                                .await?;
+                                if let Err(error) = self
+                                    .deliver_rendered_result(
+                                        session, stream_id, sequence, &scrubbed, None,
+                                    )
+                                    .await
+                                {
+                                    self.active_turns.lock().remove(&session.key.storage_key());
+                                    return Err(error);
+                                }
                                 sequence = sequence.saturating_add(1);
                             }
                         }
@@ -1424,7 +1567,7 @@ impl OmoBackend {
                     }
                 }
                 if first_progress_at.is_none() && is_agent_progress(&method, &val) {
-                    first_progress_at = Some(last_activity_at);
+                    first_progress_at = Some(tokio::time::Instant::now());
                 }
             }
 
@@ -1450,20 +1593,17 @@ impl OmoBackend {
                             if !is_cron_session && !is_lane && !full_content.trim().is_empty() {
                                 let scrubbed = filter_reasoning(&full_content);
                                 if !scrubbed.trim().is_empty() && !is_explicit_silence(&scrubbed) {
-                                    let _ = self
-                                        .emit_chunk(
-                                            session,
-                                            stream_id,
-                                            sequence,
-                                            scrubbed,
-                                            false,
-                                            reply_to.clone(),
-                                        )
-                                        .await;
-                                    sequence = sequence.saturating_add(1);
-                                    messages_delivered += 1;
+                                    // Visible as a normal message; counted and cleared only when it
+                                    // was actually dispatched, so a failed relay is not lost and
+                                    // does not disarm the progress steer.
+                                    if self.relay_status(session, scrubbed, reply_to.clone()).await
+                                    {
+                                        messages_delivered += 1;
+                                        full_content.clear();
+                                    }
+                                } else {
+                                    full_content.clear();
                                 }
-                                full_content.clear();
                             }
 
                             total_tool_calls += 1;
@@ -1485,45 +1625,28 @@ impl OmoBackend {
                             if let Some(text) = item.get("text").and_then(Value::as_str) {
                                 full_content.clear();
                                 full_content.push_str(text);
+                                agent_message_seen = true;
 
                                 if is_lane {
-                                    self.capture_lane_item(
-                                        session,
-                                        item,
-                                        turn_id.as_deref().unwrap_or(&thread_id),
-                                    )
-                                    .await?;
+                                    if let Err(error) = self
+                                        .capture_lane_item(
+                                            session,
+                                            item,
+                                            turn_id.as_deref().unwrap_or(&thread_id),
+                                        )
+                                        .await
+                                    {
+                                        self.active_turns.lock().remove(&session.key.storage_key());
+                                        return Err(error);
+                                    }
                                     session
                                         .state
                                         .metadata
                                         .insert("lane_completed_item".into(), json!(true));
                                 }
-
-                                // If this intermediate message was produced while the user is still waiting for an initial response,
-                                // immediately deliver it to Discord and mark messages_delivered > 0.
-                                if !is_cron_session
-                                    && !is_lane
-                                    && messages_delivered == 0
-                                    && !text.trim().is_empty()
-                                {
-                                    let scrubbed = filter_reasoning(text);
-                                    if !scrubbed.trim().is_empty()
-                                        && !is_explicit_silence(&scrubbed)
-                                    {
-                                        let _ = self
-                                            .emit_chunk(
-                                                session,
-                                                stream_id,
-                                                sequence,
-                                                scrubbed,
-                                                false,
-                                                reply_to.clone(),
-                                            )
-                                            .await;
-                                        sequence = sequence.saturating_add(1);
-                                        messages_delivered += 1;
-                                    }
-                                }
+                                // A completed message is relayed at the next tool start (a status
+                                // that more work follows); relayed here it would duplicate the final
+                                // reply whenever it turns out to be the last message of the turn.
                             }
                         }
                     }
@@ -1681,6 +1804,7 @@ impl OmoBackend {
                         .or_else(|| val.pointer("/params/error/message"))
                         .and_then(Value::as_str)
                         .unwrap_or("unknown error from omo app-server");
+                    self.active_turns.lock().remove(&session.key.storage_key());
                     return Err(OmonError::Llm(format!(
                         "omo app-server turn error: {err_msg}"
                     )));
@@ -1758,6 +1882,24 @@ impl AgentBackend for OmoBackend {
         };
         let deadline = tokio::time::Instant::now() + effective_total_timeout;
 
+        // Cron deliveries are posted by the scheduler, not by this thread. Take the
+        // pending ones once for every attempt of this run (a model fallback re-runs
+        // the turn); they are marked consumed only after turn/start is acknowledged.
+        let briefings = match (&self.pool, !is_cron_session && !is_lane) {
+            (Some(pool), true) => {
+                match crate::mirror::peek_pending_cron_briefings(pool, &session.key.storage_key())
+                    .await
+                {
+                    Ok(briefings) => briefings,
+                    Err(error) => {
+                        tracing::warn!(session = %session.key, %error, "failed to load cron briefings");
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         // Positive pre-submit setup: connect, initialize, resolve thread.
         // If a transport error occurs BEFORE turn/start submission, retry once
         // within the deadline budget.
@@ -1830,6 +1972,7 @@ impl AgentBackend for OmoBackend {
                 effective_total_timeout,
                 None,
                 &mut fallback_eligible,
+                briefings.as_ref(),
             )
             .await;
         if result.is_err()
@@ -1857,6 +2000,7 @@ impl AgentBackend for OmoBackend {
                     effective_total_timeout,
                     Some(fallback_model.as_str()),
                     &mut fallback_eligible,
+                    briefings.as_ref(),
                 )
                 .await;
         }
@@ -2133,5 +2277,99 @@ mod active_turn_staleness_tests {
             "item/reasoning/textDelta",
             &serde_json::json!({})
         ));
+    }
+}
+
+#[cfg(test)]
+mod fixr5_agent_tests {
+    use serde_json::json;
+
+    use super::{ensure_cron_ttsr_disabled, frame_is_turn_progress};
+
+    #[test]
+    fn steer_acks_and_unrelated_frames_do_not_count_as_turn_progress() {
+        let progress = |frame: serde_json::Value, awaiting_successor: bool| {
+            let method = frame.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            frame_is_turn_progress(method, &frame, "th1", Some("t1"), awaiting_successor)
+        };
+        // The gateway's own steer/interrupt acks carry no method.
+        assert!(!progress(json!({"id": 9100, "result": {}}), false));
+        assert!(!progress(json!({"id": 9001, "result": {}}), false));
+        // Status noise and frames of other threads or turns.
+        assert!(!progress(
+            json!({"method":"thread/status/changed","params":{"threadId":"th1","turnId":"t1"}}),
+            false
+        ));
+        assert!(!progress(
+            json!({"method":"item/started","params":{"threadId":"other","turnId":"t1","item":{"type":"commandExecution"}}}),
+            false
+        ));
+        assert!(!progress(
+            json!({"method":"item/started","params":{"threadId":"th1","turnId":"t0","item":{"type":"commandExecution"}}}),
+            false
+        ));
+        // The gateway's own steer echoed back as a user message is not agent work.
+        assert!(!progress(
+            json!({"method":"item/completed","params":{"threadId":"th1","turnId":"t1","item":{"type":"userMessage"}}}),
+            false
+        ));
+        // Real work for this thread and turn renews the watchdogs.
+        assert!(progress(
+            json!({"method":"item/started","params":{"threadId":"th1","turnId":"t1","item":{"type":"commandExecution"}}}),
+            false
+        ));
+        assert!(progress(
+            json!({"method":"item/agentMessage/delta","params":{"threadId":"th1","turnId":"t1","delta":"x"}}),
+            false
+        ));
+        assert!(progress(
+            json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"t1","status":"completed"}}}),
+            false
+        ));
+        assert!(progress(
+            json!({"id": 5, "method":"item/commandExecution/requestApproval","params":{"threadId":"th1"}}),
+            false
+        ));
+        // The successor of a queued prompt's turn is followed only while awaited.
+        let successor =
+            json!({"method":"turn/started","params":{"threadId":"th1","turn":{"id":"t9"}}});
+        assert!(!progress(successor.clone(), false));
+        assert!(progress(successor, true));
+    }
+
+    #[tokio::test]
+    async fn cron_settings_json_is_merged_atomically_and_never_clobbered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+
+        // Missing file: created with the extension disabled.
+        ensure_cron_ttsr_disabled(&path).await;
+        let created: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(created["disabledBuiltinExtensions"], json!(["ttsr"]));
+
+        // Existing settings are preserved and already-correct files are not rewritten.
+        std::fs::write(
+            &path,
+            r#"{"theme":"dark","disabledBuiltinExtensions":["a","ttsr"]}"#,
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        ensure_cron_ttsr_disabled(&path).await;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        std::fs::write(&path, r#"{"theme":"dark"}"#).unwrap();
+        ensure_cron_ttsr_disabled(&path).await;
+        let merged: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(merged["theme"], "dark");
+        assert_eq!(merged["disabledBuiltinExtensions"], json!(["ttsr"]));
+        assert!(!dir.path().join("settings.json.tmp").exists());
+
+        // A file that is not strict JSON is left exactly as the user wrote it.
+        let hand_edited = "{\n  // my settings\n  \"theme\": \"dark\",\n}\n";
+        std::fs::write(&path, hand_edited).unwrap();
+        ensure_cron_ttsr_disabled(&path).await;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), hand_edited);
     }
 }

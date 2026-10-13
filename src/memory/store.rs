@@ -19,6 +19,9 @@ pub struct Memory {
     pub score: f64,
 }
 
+/// Most recent rows scored per search; bounds the work for very large per-session tables.
+const MAX_SEARCH_SCAN_ROWS: i64 = 10_000;
+
 #[derive(Clone, Debug)]
 pub struct MemoryStore {
     pool: SqlitePool,
@@ -105,9 +108,10 @@ impl MemoryStore {
         }
         let rows = sqlx::query_as::<_, MemoryRow>(
             "SELECT id, session_key, content, metadata_json, created_at, updated_at
-             FROM memories WHERE session_key = ? ORDER BY updated_at DESC",
+             FROM memories WHERE session_key = ? ORDER BY updated_at DESC LIMIT ?",
         )
         .bind(session.storage_key())
+        .bind(MAX_SEARCH_SCAN_ROWS)
         .fetch_all(&self.pool)
         .await?;
         let query_terms = term_counts(query);
@@ -133,11 +137,21 @@ impl MemoryStore {
                 .unwrap_or(Ordering::Equal)
                 .then_with(|| right_row.updated_at.cmp(&left_row.updated_at))
         });
-        memories
+        // One corrupt `metadata_json` row must not take the whole search down: skip it.
+        Ok(memories
             .into_iter()
+            .filter_map(|(row, score)| {
+                let id = row.id.clone();
+                match row.into_memory(score) {
+                    Ok(memory) => Some(memory),
+                    Err(error) => {
+                        tracing::warn!(%error, memory = %id, "skipping memory with unreadable metadata");
+                        None
+                    }
+                }
+            })
             .take(limit)
-            .map(|(row, score)| row.into_memory(score))
-            .collect()
+            .collect())
     }
 
     pub async fn keyword_search(
@@ -231,5 +245,36 @@ fn cosine_similarity(left: &HashMap<String, usize>, right: &HashMap<String, usiz
         0.0
     } else {
         dot / (left_norm * right_norm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::Database;
+
+    #[tokio::test]
+    async fn search_skips_a_memory_with_corrupt_metadata() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let store = MemoryStore::new(database.pool().clone());
+        let session = SessionKey::new("discord", Some("g"), "c", None::<String>, "u");
+        let good = store
+            .remember(&session, "tokio runtime notes", json!({}))
+            .await
+            .unwrap();
+        let bad = store
+            .remember(&session, "tokio corrupted row tokio", json!({}))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE memories SET metadata_json = '{not json' WHERE id = ?")
+            .bind(&bad.id)
+            .execute(database.pool())
+            .await
+            .unwrap();
+        let found = store.search(&session, "tokio", 5).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, good.id);
     }
 }

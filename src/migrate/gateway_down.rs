@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const TERM_WAIT_POLLS: usize = 10;
+// 10s SIGTERM grace so an in-flight shutdown/cron run is not SIGKILLed mid-write.
+const TERM_WAIT_POLLS: usize = 100;
 const TERM_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 
 const PLIST_PREFIX: &str = "ai.hermes.gateway";

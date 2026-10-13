@@ -21,6 +21,14 @@ pub fn is_invisible_or_control(c: char) -> bool {
             | '\u{00AD}'
             | '\u{202A}'..='\u{202E}'
             | '\u{2060}'..='\u{206F}'
+            // Unicode tag block and variation selectors (ASCII-smuggling carriers), plus
+            // the combining grapheme joiner and Mongolian vowel separator. U+FE0F is kept so
+            // emoji presentation survives.
+            | '\u{E0000}'..='\u{E007F}'
+            | '\u{E0100}'..='\u{E01EF}'
+            | '\u{FE00}'..='\u{FE0E}'
+            | '\u{034F}'
+            | '\u{180E}'
     )
 }
 
@@ -31,11 +39,19 @@ pub fn neutralize_untrusted_inline_text(s: &str, max_len: usize) -> String {
     // 1. Strip ANSI escape sequences
     let without_ansi = ANSI_RE.replace_all(s, "");
 
-    // 2. Strip LLM injection delimiter sentinels (<|...|>, <|, |>) and backtick fences
-    let without_sentinels = SENTINEL_RE.replace_all(&without_ansi, " ");
+    // 2. Drop invisible characters first: they could otherwise split a sentinel
+    //    (`<\u{200B}|im_start|>`) past step 3 and be removed only afterwards,
+    //    reassembling it.
+    let visible: String = without_ansi
+        .chars()
+        .filter(|c| !is_invisible_or_control(*c))
+        .collect();
+
+    // 3. Strip LLM injection delimiter sentinels (<|...|>, <|, |>) and backtick fences
+    let without_sentinels = SENTINEL_RE.replace_all(&visible, " ");
     let sanitized_tokens = without_sentinels.replace('`', "'");
 
-    // 3. Filter invisible characters, convert control characters & newlines to spaces
+    // 4. Convert control characters & newlines to spaces
     let mut cleaned = String::with_capacity(sanitized_tokens.len());
     for c in sanitized_tokens.chars() {
         if is_invisible_or_control(c) {
@@ -118,6 +134,14 @@ mod tests {
             neutralize_untrusted_inline_text(invisible, 50),
             "hello world"
         );
+    }
+
+    #[test]
+    fn test_neutralize_strips_tag_and_variation_selector_smuggling() {
+        let smuggled = "a\u{E0049}\u{E0047}\u{E004E}b\u{E0100}c\u{FE01}d\u{034F}e\u{180E}f";
+        assert_eq!(neutralize_untrusted_inline_text(smuggled, 50), "abcdef");
+        assert!(is_invisible_or_control('\u{E0020}'));
+        assert!(!is_invisible_or_control('\u{FE0F}'));
     }
 
     #[test]

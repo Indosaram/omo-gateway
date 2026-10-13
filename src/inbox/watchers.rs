@@ -27,7 +27,14 @@ pub fn event_channel(capacity: usize) -> (InboxEventSender, InboxEventReceiver) 
 pub async fn on_gateway_message(
     sender: &InboxEventSender,
 ) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<InboxWatcherEvent>> {
-    sender.send(InboxWatcherEvent::GatewayMessage).await
+    // Called inline from the chat path, so never wait for capacity. A full
+    // channel already holds pending work and GatewayMessage is idempotent.
+    match sender.try_send(InboxWatcherEvent::GatewayMessage) {
+        Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => Ok(()),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(event)) => {
+            Err(tokio::sync::mpsc::error::SendError(event))
+        }
+    }
 }
 
 pub fn try_on_gateway_message(
@@ -140,7 +147,8 @@ pub async fn run_event_watch_with_shutdown(
                     Some(event) => {
                         let results = process_event(&pool, &borrowed, &rules, &event).await;
                         if let Some(ref tx) = progress_tx {
-                            let _ = tx.send(results).await;
+                            // Drop the result when the consumer lags rather than stall the drain.
+                            let _ = tx.try_send(results);
                         }
                     }
                     None => break,
@@ -246,5 +254,47 @@ pub async fn run_imessage_watch<F, Fut>(
     loop {
         next_event().await;
         collect_all(&pool, &sources, &rules).await;
+    }
+}
+
+#[cfg(test)]
+mod nonblocking_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn on_gateway_message_returns_promptly_when_channel_full() {
+        let (tx, _rx) = event_channel(1);
+        tx.try_send(InboxWatcherEvent::Startup).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(5), on_gateway_message(&tx)).await;
+        assert!(
+            matches!(result, Ok(Ok(()))),
+            "on_gateway_message must not block on a full channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn event_drain_does_not_block_on_full_progress_channel() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect_lazy("sqlite::memory:")
+            .unwrap();
+        let (event_tx, event_rx) = event_channel(4);
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::channel(1);
+        progress_tx.try_send(Vec::new()).unwrap();
+        event_tx.try_send(InboxWatcherEvent::Startup).unwrap();
+        event_tx.try_send(InboxWatcherEvent::Periodic).unwrap();
+        drop(event_tx);
+        let run = run_event_watch(
+            pool,
+            Vec::new(),
+            PrefilterRules::default(),
+            event_rx,
+            Some(progress_tx),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), run)
+                .await
+                .is_ok(),
+            "event drain must not block on a full progress channel"
+        );
     }
 }

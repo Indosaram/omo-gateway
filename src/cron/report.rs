@@ -5,13 +5,18 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
 
 use super::remediate::{Detail, RunReceipt};
 use crate::{CronScheduler, OmonError, Result};
 
 pub const PERSONA_COMMAND: &str = "omo-gateway cron health";
+
+/// Upper bound for one native-socket request line.
+const MAX_NATIVE_REQUEST_BYTES: u64 = 4096;
+/// How long shutdown waits for in-flight native requests before aborting them.
+const NATIVE_SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, Args)]
 pub struct CronArgs {
@@ -36,6 +41,9 @@ pub enum CronCommand {
         problem_id: i64,
         #[arg(long, required = true)]
         owner_approved: bool,
+        /// One-time token delivered to the owner with the escalation message.
+        #[arg(long, required = true)]
+        owner_token: String,
     },
 }
 
@@ -84,6 +92,13 @@ pub async fn health(pool: &SqlitePool) -> Result<HealthReport> {
         let last_success: Option<DateTime<Utc>> = sqlx::query_scalar("SELECT completed_at FROM cron_runs WHERE job_id=? AND status='succeeded' ORDER BY completed_at DESC LIMIT 1").bind(&job_id).fetch_optional(pool).await?.flatten();
         let problems = sqlx::query_as::<_, ProblemReport>("SELECT id,job_id,kind,status,lane_key,detail FROM cron_problems WHERE job_id=? AND status IN ('open','remediating','needs_owner') ORDER BY id")
             .bind(&job_id).fetch_all(pool).await?;
+        let problems = problems
+            .into_iter()
+            .map(|mut problem| {
+                problem.detail = without_approval_hash(&problem.detail);
+                problem
+            })
+            .collect::<Vec<_>>();
         if problems.is_empty()
             && last_status.as_deref() == Some("succeeded")
             && payload
@@ -109,6 +124,23 @@ pub async fn health(pool: &SqlitePool) -> Result<HealthReport> {
         });
     }
     Ok(report)
+}
+
+/// Health output is agent-reachable; never echo the stored approval-token digest.
+fn without_approval_hash(detail: &str) -> String {
+    match serde_json::from_str::<Value>(detail) {
+        Ok(mut value) => {
+            let removed = value
+                .as_object_mut()
+                .is_some_and(|object| object.remove("approval_hash").is_some());
+            if removed {
+                value.to_string()
+            } else {
+                detail.to_owned()
+            }
+        }
+        Err(_) => detail.to_owned(),
+    }
 }
 
 pub fn render(report: &HealthReport) -> String {
@@ -189,7 +221,7 @@ pub async fn digest_section(pool: &SqlitePool, now: DateTime<Utc>) -> Result<Opt
             problem.kind,
             problem.status,
             problem.lane_key.as_deref().unwrap_or("none"),
-            Detail::parse(&problem.detail).cause
+            crate::lanes::scrub::scrub(&Detail::parse(&problem.detail).cause)
         ));
     }
     lines.extend(outcomes.into_iter().map(|message| format!("- {message}")));
@@ -199,6 +231,10 @@ pub async fn digest_section(pool: &SqlitePool, now: DateTime<Utc>) -> Result<Opt
 pub async fn acknowledge_digest(pool: &SqlitePool, run_id: &str) -> Result<()> {
     sqlx::query("UPDATE cron_remediation_outcomes SET delivered_at=? WHERE delivered_at IS NULL AND julianday(created_at)<=(SELECT julianday(started_at) FROM cron_runs WHERE run_id=? AND job_id=? AND status='succeeded')")
         .bind(Utc::now()).bind(run_id).bind(crate::inbox::digest::JOB_ID).execute(pool).await?;
+    // A delivered digest no longer needs the one-time approval token in the clear.
+    sqlx::query("UPDATE OR IGNORE cron_remediation_outcomes SET message = substr(message, 1, instr(message, '--owner-token ') + 13) || '<redacted>' WHERE delivered_at IS NOT NULL AND instr(message, '--owner-token ') > 0 AND message NOT LIKE '%--owner-token <redacted>'")
+        .execute(pool)
+        .await?;
     Ok(())
 }
 
@@ -244,8 +280,14 @@ impl NativeServer {
                 .await
                 .map_err(|e| OmonError::Config(e.to_string()))?;
         }
-        let listener =
-            tokio::net::UnixListener::bind(&path).map_err(|e| OmonError::Config(e.to_string()))?;
+        let listener = {
+            // Create the socket 0600 from the start instead of chmod-ing after bind.
+            // SAFETY: umask only swaps the process file-creation mask; the bind below is synchronous.
+            let previous = unsafe { libc::umask(0o177) };
+            let bound = tokio::net::UnixListener::bind(&path);
+            unsafe { libc::umask(previous) };
+            bound.map_err(|e| OmonError::Config(e.to_string()))?
+        };
         use std::os::unix::fs::PermissionsExt;
         tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .await
@@ -266,19 +308,28 @@ impl NativeServer {
                 biased;
                 _ = shutdown.cancelled() => break,
                 accepted = listener.accept() => {
-                    let (stream, _) = accepted.map_err(|e| OmonError::Config(e.to_string()))?;
+                    let stream = match accepted {
+                        Ok((stream, _)) => stream,
+                        Err(error) => {
+                            // A transient accept error (e.g. fd exhaustion) must not stop the gateway.
+                            tracing::warn!(%error, "native cron accept failed");
+                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            continue;
+                        }
+                    };
                     let pool = pool.clone();
                     let scheduler = scheduler.clone();
                     connections.spawn(async move {
                         let mut stream = BufReader::new(stream);
                         let mut line = String::new();
                         let result: Result<RunReceipt> = async {
-                            tokio::time::timeout(std::time::Duration::from_secs(10), stream.read_line(&mut line)).await
+                            tokio::time::timeout(std::time::Duration::from_secs(10), (&mut stream).take(MAX_NATIVE_REQUEST_BYTES).read_line(&mut line)).await
                                 .map_err(|_| OmonError::Config("native cron request timed out".into()))?
                                 .map_err(|e| OmonError::Config(e.to_string()))?;
                             let request: Value = serde_json::from_str(line.trim()).map_err(|e| OmonError::Config(e.to_string()))?;
                             if let Some(id) = request.get("approve_problem").and_then(Value::as_i64) {
-                                return super::remediate::approve_rerun(id).await;
+                                let token = request.get("owner_token").and_then(Value::as_str).unwrap_or_default();
+                                return super::remediate::approve_rerun(id, token).await;
                             }
                             let job = request.as_str().ok_or_else(|| OmonError::Config("expected native job id".into()))?;
                             let payload: String = sqlx::query_scalar("SELECT payload_json FROM cron_jobs WHERE id=?").bind(job).fetch_one(&pool).await?;
@@ -306,10 +357,21 @@ impl NativeServer {
                 }
             }
         }
-        while let Some(result) = connections.join_next().await {
-            if let Err(error) = result {
-                tracing::error!(%error, "native cron request task failed on shutdown");
+        // In-flight `trigger_wait` runs can last as long as the job timeout; give them a
+        // short grace period, then abort so shutdown (and socket cleanup) cannot hang.
+        let drain = async {
+            while let Some(result) = connections.join_next().await {
+                if let Err(error) = result {
+                    tracing::error!(%error, "native cron request task failed on shutdown");
+                }
             }
+        };
+        if tokio::time::timeout(NATIVE_SHUTDOWN_GRACE, drain)
+            .await
+            .is_err()
+        {
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
         }
         tokio::fs::remove_file(path)
             .await
@@ -375,11 +437,14 @@ pub async fn run(args: CronArgs) -> i32 {
             CronCommand::ApproveRerun {
                 problem_id,
                 owner_approved: _,
+                owner_token,
             } => {
                 let mut stream = tokio::net::UnixStream::connect(socket_path()?)
                     .await
                     .map_err(|e| OmonError::Config(e.to_string()))?;
-                let request = serde_json::json!({"approve_problem":problem_id}).to_string();
+                let request =
+                    serde_json::json!({"approve_problem":problem_id,"owner_token":owner_token})
+                        .to_string();
                 stream
                     .write_all(format!("{request}\n").as_bytes())
                     .await

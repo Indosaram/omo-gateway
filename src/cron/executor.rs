@@ -9,7 +9,7 @@ use tracing::warn;
 use crate::agent::AgentBackend;
 use crate::cron::scheduler::{
     format_context_from_block, parse_context_from_ids, parse_wake_gate, resolve_predecessor_output,
-    truncate_context_output, CronJob, CronTaskExecutor, MAX_CONTEXT_CHARS,
+    truncate_context_output, CronJob, CronRunOutcome, CronTaskExecutor, MAX_CONTEXT_CHARS,
 };
 use crate::cron::store::{resolve_cron_script_timeout, HermesJob};
 use crate::error::{OmonError, Result};
@@ -25,7 +25,18 @@ pub struct AgentCronExecutor {
 
 #[async_trait]
 impl CronTaskExecutor for AgentCronExecutor {
+    /// Direct callers have no delivery step, so the detected monitor change is
+    /// committed as soon as the run succeeds. The scheduler uses
+    /// [Self::execute_with_outcome] and commits only after delivery.
     async fn execute(&self, job: &CronJob) -> Result<Option<String>> {
+        let outcome = self.execute_with_outcome(job).await?;
+        if let Some(state) = &outcome.monitor_state {
+            commit_monitor_state(&self.pool, state).await?;
+        }
+        Ok(outcome.output)
+    }
+
+    async fn execute_with_outcome(&self, job: &CronJob) -> Result<CronRunOutcome> {
         let payload = job.payload()?;
         if payload.get("schedule").is_none() {
             return execute_native_cron(
@@ -35,7 +46,8 @@ impl CronTaskExecutor for AgentCronExecutor {
                 &payload,
                 self.cron_script_timeout_secs,
             )
-            .await;
+            .await
+            .map(CronRunOutcome::from_output);
         }
         let hermes: HermesJob = serde_json::from_value(payload).map_err(|error| {
             OmonError::Config(format!("invalid Hermes job {}: {error}", job.id))
@@ -66,7 +78,7 @@ impl CronTaskExecutor for AgentCronExecutor {
                     job_id = %hermes.id,
                     "wakeAgent:false detected in script output, skipping agent execution"
                 );
-                return Ok(None);
+                return Ok(CronRunOutcome::from_output(None));
             }
             if output.trim().is_empty()
                 && (!hermes.prompt.trim().is_empty() || hermes.brief_file.is_some())
@@ -75,12 +87,14 @@ impl CronTaskExecutor for AgentCronExecutor {
                     job_id = %hermes.id,
                     "empty script output with prompt, skipping agent execution"
                 );
-                return Ok(None);
+                return Ok(CronRunOutcome::from_output(None));
             }
         }
 
         if hermes.no_agent {
-            return Ok(script_output.filter(|output| !output.trim().is_empty()));
+            return Ok(CronRunOutcome::from_output(
+                script_output.filter(|output| !output.trim().is_empty()),
+            ));
         }
 
         let monitor_script = hermes.monitor_script.as_deref().or_else(|| {
@@ -139,6 +153,7 @@ impl CronTaskExecutor for AgentCronExecutor {
             None
         };
 
+        let mut pending_monitor_state: Option<(String, String)> = None;
         if let Some(m_output) = monitor_output {
             use sha2::{Digest, Sha256};
             let current_hash = format!("{:x}", Sha256::digest(m_output.as_bytes()));
@@ -157,25 +172,13 @@ impl CronTaskExecutor for AgentCronExecutor {
                         "monitor state unchanged for job {}, skipping agent execution",
                         hermes.id
                     );
-                    return Ok(None);
+                    return Ok(CronRunOutcome::from_output(None));
                 }
             }
 
-            let now_str = chrono::Utc::now().to_rfc3339();
-            sqlx::query(
-                "INSERT INTO cron_monitor_states (job_id, last_hash, last_snapshot, updated_at)
-                 VALUES (?, ?, ?, ?)
-                 ON CONFLICT(job_id) DO UPDATE SET last_hash = excluded.last_hash,
-                                                   last_snapshot = excluded.last_snapshot,
-                                                   updated_at = excluded.updated_at",
-            )
-            .bind(&hermes.id)
-            .bind(&current_hash)
-            .bind(&m_output)
-            .bind(&now_str)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| OmonError::Database(e.to_string()))?;
+            // Committed by the scheduler only after the run's delivery succeeded, so
+            // neither a failed run nor a failed delivery consumes the detected change.
+            pending_monitor_state = Some((current_hash, m_output));
         }
 
         let effective_prompt = if let Some(ref brief_path) = hermes.brief_file {
@@ -228,14 +231,11 @@ impl CronTaskExecutor for AgentCronExecutor {
 
         let context_ids = parse_context_from_ids(hermes.context_from.as_ref());
         if !context_ids.is_empty() {
-            let profile = hermes
-                .origin
-                .as_ref()
-                .map(|o| o.platform.as_str())
-                .unwrap_or("");
+            // The scheduler stores outputs under CronJob::profile().
+            let source_profile = job.profile();
             for source_id in &context_ids {
                 if let Some(output) =
-                    resolve_predecessor_output(&self.pool, profile, source_id).await
+                    resolve_predecessor_output(&self.pool, &source_profile, source_id).await
                 {
                     if !output.trim().is_empty() {
                         let truncated = truncate_context_output(output.trim(), MAX_CONTEXT_CHARS);
@@ -247,8 +247,7 @@ impl CronTaskExecutor for AgentCronExecutor {
         }
 
         let profile = hermes.profile();
-        if let Ok(notepads) = crate::cron::get_cron_notepads(&self.pool, profile, &hermes.id).await
-        {
+        if let Ok(notepads) = collect_notepads(&self.pool, profile, &hermes.id).await {
             if !notepads.is_empty() {
                 prompt.push_str("[Notepad]\n");
                 for (k, v) in notepads {
@@ -351,10 +350,6 @@ impl CronTaskExecutor for AgentCronExecutor {
                     "gateway lifecycle violation in ack_command: {err}"
                 )));
             }
-            session
-                .state
-                .metadata
-                .insert("cron_ack_command".into(), json!(ack_command));
         }
         let event = InboundEvent::message(session_key, format!("cron:{}", job.id), prompt);
         self.backend.run(&mut session, event).await?;
@@ -364,8 +359,50 @@ impl CronTaskExecutor for AgentCronExecutor {
             .get("cron_agent_output")
             .and_then(serde_json::Value::as_str)
             .map(String::from);
-        Ok(result)
+        let has_destination = hermes
+            .discord_destinations()
+            .map(|destinations| !destinations.is_empty())
+            .unwrap_or(false);
+        let fallback = ["notification", "content"]
+            .iter()
+            .find_map(|key| hermes.extra.get(*key).and_then(serde_json::Value::as_str));
+        ack_unless_scheduler_delivers(
+            hermes.ack_command.as_deref(),
+            has_destination,
+            result.as_deref(),
+            fallback,
+        )
+        .await;
+        Ok(CronRunOutcome {
+            output: result,
+            monitor_state: pending_monitor_state
+                .map(|(hash, snapshot)| (hermes.id.clone(), hash, snapshot)),
+        })
     }
+}
+
+/// Upserts the monitor baseline for a job. Called by the scheduler once the run's
+/// delivery has succeeded.
+pub(crate) async fn commit_monitor_state(
+    pool: &SqlitePool,
+    state: &(String, String, String),
+) -> Result<()> {
+    let (job_id, hash, snapshot) = state;
+    sqlx::query(
+        "INSERT INTO cron_monitor_states (job_id, last_hash, last_snapshot, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(job_id) DO UPDATE SET last_hash = excluded.last_hash,
+                                           last_snapshot = excluded.last_snapshot,
+                                           updated_at = excluded.updated_at",
+    )
+    .bind(job_id)
+    .bind(hash)
+    .bind(snapshot)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .execute(pool)
+    .await
+    .map_err(|e| OmonError::Database(e.to_string()))?;
+    Ok(())
 }
 
 pub fn is_transient_process_init_error(code: Option<i32>) -> bool {
@@ -380,6 +417,25 @@ pub fn is_transient_process_init_error(code: Option<i32>) -> bool {
         let _ = code;
         false
     }
+}
+
+/// Notepads written through the cron tool default to profile "default" while a Hermes
+/// job may derive another profile (bot id / platform). Read both, job profile winning.
+pub(crate) async fn collect_notepads(
+    pool: &SqlitePool,
+    profile: &str,
+    job_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let mut merged = std::collections::BTreeMap::new();
+    if profile != "default" {
+        for (key, value) in crate::cron::get_cron_notepads(pool, "default", job_id).await? {
+            merged.insert(key, value);
+        }
+    }
+    for (key, value) in crate::cron::get_cron_notepads(pool, profile, job_id).await? {
+        merged.insert(key, value);
+    }
+    Ok(merged.into_iter().collect())
 }
 
 pub async fn execute_native_cron(
@@ -555,10 +611,6 @@ pub async fn execute_native_cron(
                 "gateway lifecycle violation in ack_command: {err}"
             )));
         }
-        session
-            .state
-            .metadata
-            .insert("cron_ack_command".into(), json!(ack_command));
     }
     let event = InboundEvent::message(session_key, format!("cron:{}", job.id), task);
     backend.run(&mut session, event).await?;
@@ -568,7 +620,44 @@ pub async fn execute_native_cron(
         .get("cron_agent_output")
         .and_then(serde_json::Value::as_str)
         .map(String::from);
+    let has_destination = crate::cron::scheduler::delivery_destination(payload)
+        .map(|destinations| !destinations.is_empty())
+        .unwrap_or(false);
+    let fallback = ["notification", "content"]
+        .iter()
+        .find_map(|key| payload.get(*key).and_then(serde_json::Value::as_str));
+    ack_unless_scheduler_delivers(
+        payload
+            .get("ack_command")
+            .and_then(serde_json::Value::as_str),
+        has_destination,
+        result.as_deref(),
+        fallback,
+    )
+    .await;
     Ok(result)
+}
+
+/// The scheduler runs a job's `ack_command` itself, after delivery succeeded.
+/// When it will not deliver (no destination, or the content is empty or a
+/// silence token), no delivery can fail, so the ack is run here once the agent
+/// run produced a result.
+async fn ack_unless_scheduler_delivers(
+    ack_command: Option<&str>,
+    has_destination: bool,
+    result: Option<&str>,
+    fallback: Option<&str>,
+) {
+    let Some(ack_command) = ack_command.filter(|command| !command.trim().is_empty()) else {
+        return;
+    };
+    let scheduler_delivers = has_destination
+        && result
+            .or(fallback)
+            .is_some_and(|content| !crate::cron::scheduler::is_cron_silence_response(content));
+    if !scheduler_delivers && result.is_some() {
+        crate::cron::ack::run_ack_logged(ack_command).await;
+    }
 }
 
 pub fn load_cron_skills(job: &HermesJob) -> Result<String> {
@@ -1041,4 +1130,38 @@ pub fn resolve_workspace_instructions(workdir: &Path) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::collect_notepads;
+    use crate::cron::set_cron_notepad;
+    use crate::Database;
+
+    #[tokio::test]
+    async fn notepads_written_under_default_profile_reach_jobs_with_derived_profile() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations")
+            .run(database.pool())
+            .await
+            .unwrap();
+        let pool = database.pool();
+        set_cron_notepad(pool, "default", "job", "a", "from-tool")
+            .await
+            .unwrap();
+        set_cron_notepad(pool, "default", "job", "b", "tool-b")
+            .await
+            .unwrap();
+        set_cron_notepad(pool, "bot-1", "job", "b", "profile-b")
+            .await
+            .unwrap();
+        let notes = collect_notepads(pool, "bot-1", "job").await.unwrap();
+        assert_eq!(
+            notes,
+            vec![
+                ("a".to_string(), "from-tool".to_string()),
+                ("b".to_string(), "profile-b".to_string())
+            ]
+        );
+    }
 }

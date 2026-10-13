@@ -52,7 +52,7 @@ else
   if [ ! -f "${ENV_FILE}" ]; then
     fail_check "Shadow config check" "Environment file ${ENV_FILE} not found. Create it from .env.omomeow.example."
   fi
-  if ! grep -q "DISCORD_BOT_TOKENS" "${ENV_FILE}"; then
+  if ! grep -Eq '^DISCORD_BOT_TOKENS=.+' "${ENV_FILE}"; then
     fail_check "DISCORD_BOT_TOKENS check" "DISCORD_BOT_TOKENS not configured in ${ENV_FILE}"
   fi
   pass_check "Shadow environment config loaded and validated"
@@ -64,7 +64,7 @@ if [ "${DRY_RUN}" = "1" ]; then
 else
   echo "Checking Discord Gateway reachability..."
   if command -v curl >/dev/null 2>&1; then
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" https://discord.com/api/v10/gateway || echo "000")
+    HTTP_CODE=$(curl -s --max-time "${TIMEOUT_SECS}" -o /dev/null -w "%{http_code}" https://discord.com/api/v10/gateway || echo "000")
     if [ "${HTTP_CODE}" = "200" ]; then
       pass_check "Discord Gateway API reachability (HTTP 200)"
     else
@@ -80,7 +80,7 @@ if [ "${DRY_RUN}" = "1" ]; then
   pass_check "Inbound message receive -> Turn Dispatch -> Channel reply flow (mocked)"
 else
   echo "Simulating message response via omon-gateway test runner..."
-  cargo test --test test_discord_adapter -- --nocapture >/dev/null 2>&1 || true
+  cargo test --test test_discord_adapter -- --nocapture >/dev/null 2>&1
   pass_check "Message response dispatch contract verified"
 fi
 

@@ -114,7 +114,7 @@ pub fn canonical_job_payload_matches(source: &Value, db_payload: &Value) -> bool
             normalize_job_payload(source)
         };
 
-    let db_norm = if let Ok(hermes_job) =
+    let mut db_norm = if let Ok(hermes_job) =
         serde_json::from_value::<crate::cron::HermesJob>(db_payload.clone())
     {
         if let Ok(serialized) = serde_json::to_value(&hermes_job) {
@@ -125,6 +125,31 @@ pub fn canonical_job_payload_matches(source: &Value, db_payload: &Value) -> bool
     } else {
         normalize_job_payload(db_payload)
     };
+
+    // Strip values injected at import time (config.yaml home channel/thread and
+    // timezone) when the source job does not carry them itself.
+    if let Value::Object(db_map) = &mut db_norm {
+        for key in ["_omon_discord_home_channel", "_omon_discord_home_thread"] {
+            if source_norm.get(key).is_none() {
+                db_map.remove(key);
+            }
+        }
+        let source_tz = source_norm
+            .get("schedule")
+            .and_then(|schedule| schedule.get("timezone"));
+        if source_tz.is_none_or(Value::is_null) {
+            if let Some(Value::Object(schedule)) = db_map.get_mut("schedule") {
+                match source_tz {
+                    Some(null) => {
+                        schedule.insert("timezone".into(), null.clone());
+                    }
+                    None => {
+                        schedule.remove("timezone");
+                    }
+                }
+            }
+        }
+    }
 
     source_norm == db_norm
 }
@@ -503,9 +528,40 @@ pub async fn cutover_cron_stores(
     tx.commit().await?;
 
     // Rewrite each source store and record progress
-    for store in &backed_up_stores {
+    for (index, store) in backed_up_stores.iter().enumerate() {
         let current = env.read(&store.path)?;
         if current != store.original_bytes {
+            // Do not leave the receipt pending: reconcile would fail forever on
+            // unknown content and the cutover_pending jobs would never run. Settle
+            // the receipt as failed; stores already emptied hand their jobs to
+            // omon, the untouched ones return to the Hermes mirror.
+            let mut tx = pool.begin().await?;
+            let failed_at = env.now();
+            sqlx::query(
+                "UPDATE cron_cutover_receipts SET status = 'failed', updated_at = ? WHERE operation_id = ?",
+            )
+            .bind(failed_at)
+            .bind(&operation_id)
+            .execute(&mut *tx)
+            .await?;
+            for (position, other) in backed_up_stores.iter().enumerate() {
+                let authority = if position < index {
+                    "omon_owned"
+                } else {
+                    "hermes_mirror"
+                };
+                for job_id in &other.job_ids {
+                    sqlx::query(
+                        "UPDATE cron_jobs SET authority = ?, updated_at = ? WHERE id = ? AND authority = 'cutover_pending'",
+                    )
+                    .bind(authority)
+                    .bind(failed_at)
+                    .bind(format!("hermes:{}:{}", other.profile, job_id))
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+            tx.commit().await?;
             return Err(OmonError::Config(format!(
                 "Hermes cron store changed during migration: {}; refusing to empty stale state",
                 store.path.display()
@@ -951,5 +1007,126 @@ mod tests {
             env.read(Path::new(STORE)).unwrap(),
             b"external-unrecognized-corruption"
         );
+    }
+}
+
+#[cfg(test)]
+mod fix_r5_tests {
+    use super::cutover_cron_stores;
+    use crate::migrate::sys::{FakeMigrationEnv, LaunchctlOutput, MigrationEnv, MigrationLock};
+    use crate::storage::Database;
+    use crate::Result;
+    use chrono::{DateTime, TimeZone, Utc};
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    const ROOT: &str = "/fixtures/.hermes";
+    const STORE: &str = "/fixtures/.hermes/cron/jobs.json";
+    const ORIGINAL: &[u8] = br#"{"jobs":[{"id":"daily"}],"updated_at":"old"}"#;
+
+    /// Rewrites the store right after its backup is taken, simulating Hermes
+    /// restarting between the snapshot and the emptying rewrite.
+    struct RewriteAfterBackupEnv {
+        inner: FakeMigrationEnv,
+    }
+
+    impl MigrationEnv for RewriteAfterBackupEnv {
+        fn read_to_string(&self, path: &Path) -> Result<String> {
+            self.inner.read_to_string(path)
+        }
+        fn read(&self, path: &Path) -> Result<Vec<u8>> {
+            self.inner.read(path)
+        }
+        fn write(&self, path: &Path, bytes: &[u8]) -> Result<()> {
+            self.inner.write(path, bytes)
+        }
+        fn write_unique(&self, path: &Path, bytes: &[u8]) -> Result<PathBuf> {
+            let written = self.inner.write_unique(path, bytes)?;
+            if path.to_string_lossy().contains("bak-omon-migration-") {
+                self.inner.write(
+                    Path::new(STORE),
+                    br#"{"jobs":[{"id":"daily"},{"id":"new"}]}"#,
+                )?;
+            }
+            Ok(written)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+            self.inner.rename(from, to)
+        }
+        fn remove_file(&self, path: &Path) -> Result<()> {
+            self.inner.remove_file(path)
+        }
+        fn acquire_jobs_lock(&self, path: &Path) -> Result<Box<dyn MigrationLock>> {
+            self.inner.acquire_jobs_lock(path)
+        }
+        fn exists(&self, path: &Path) -> bool {
+            self.inner.exists(path)
+        }
+        fn is_file(&self, path: &Path) -> bool {
+            self.inner.is_file(path)
+        }
+        fn is_dir(&self, path: &Path) -> bool {
+            self.inner.is_dir(path)
+        }
+        fn read_dir(&self, path: &Path) -> Result<Vec<PathBuf>> {
+            self.inner.read_dir(path)
+        }
+        fn create_dir_all(&self, path: &Path) -> Result<()> {
+            self.inner.create_dir_all(path)
+        }
+        fn current_uid(&self) -> u32 {
+            self.inner.current_uid()
+        }
+        fn now(&self) -> DateTime<Utc> {
+            self.inner.now()
+        }
+        fn pid_alive(&self, pid: i32) -> bool {
+            self.inner.pid_alive(pid)
+        }
+        fn terminate(&self, pid: i32) -> Result<()> {
+            self.inner.terminate(pid)
+        }
+        fn kill(&self, pid: i32) -> Result<()> {
+            self.inner.kill(pid)
+        }
+        fn sleep(&self, duration: Duration) {
+            self.inner.sleep(duration)
+        }
+        fn run_launchctl(&self, args: &[&str]) -> Result<LaunchctlOutput> {
+            self.inner.run_launchctl(args)
+        }
+    }
+
+    #[tokio::test]
+    async fn store_changed_after_snapshot_settles_receipt_and_restores_authority() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 15, 12, 34, 56).unwrap();
+        let env = RewriteAfterBackupEnv {
+            inner: FakeMigrationEnv::new(now),
+        };
+        env.inner.write(Path::new(STORE), ORIGINAL).unwrap();
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        sqlx::query(
+            "INSERT INTO cron_jobs (id, expression, payload_json, enabled) VALUES ('hermes:default:daily', '* * * * *', '{}', 1)",
+        )
+        .execute(database.pool())
+        .await
+        .unwrap();
+
+        let error = cutover_cron_stores(&env, Path::new(ROOT), database.pool(), false)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("changed during migration"));
+        let status: String = sqlx::query_scalar("SELECT status FROM cron_cutover_receipts")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+        assert_eq!(status, "failed");
+        let authority: String =
+            sqlx::query_scalar("SELECT authority FROM cron_jobs WHERE id = 'hermes:default:daily'")
+                .fetch_one(database.pool())
+                .await
+                .unwrap();
+        assert_eq!(authority, "hermes_mirror");
     }
 }

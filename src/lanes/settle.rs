@@ -90,15 +90,24 @@ impl Settler {
             if started != 0 {
                 reasons.push("settlement interrupted; claim again to recheck".into());
             } else if let Some(remote_reasons) =
-                crate::sessions::external::remote_checks(&self.pool, &lane).await?
+                match crate::sessions::external::remote_checks(&self.pool, &lane).await {
+                    Ok(remote_reasons) => remote_reasons,
+                    Err(error) => Some(vec![format!("remote checks: {error}")]),
+                }
             {
                 reasons.extend(remote_reasons);
             } else {
                 match parse_signals(&lane.done_signals) {
                     Ok(signals) => {
-                        let results = match crate::cron::remediate::settle_lane(&lane.key).await? {
-                            Some(results) => results,
-                            None => self.signals.check_all(&signals, Path::new(&lane.cwd)).await,
+                        let results = match crate::cron::remediate::settle_lane(&lane.key).await {
+                            Ok(Some(results)) => results,
+                            Ok(None) => {
+                                self.signals.check_all(&signals, Path::new(&lane.cwd)).await
+                            }
+                            Err(error) => {
+                                reasons.push(format!("cron settle: {error}"));
+                                Vec::new()
+                            }
                         };
                         for result in results {
                             if !result.ok {
@@ -126,7 +135,12 @@ impl Settler {
             } else {
                 "not_done"
             };
+            // The objection, history and inbox stay local and keep the full reason; the event
+            // leaves the lane, so only its body is scrubbed and capped.
             let detail = reasons.join("; ");
+            let event_body: String = super::scrub::scrub(&detail).chars().take(2000).collect();
+            // Signal runs can take minutes; stamp the commit with the current time.
+            let now = self.clock.now();
             let mut tx = self.pool.begin().await?;
             let changed = sqlx::query("UPDATE lanes SET status = ?, objection = ?, last_turn_outcome = NULL, updated_at = ? WHERE key = ? AND status = 'done_claimed' AND claim_at = ? AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND to_status = 'done_claimed' AND from_status != 'done_claimed') = ?")
                 .bind(target).bind(if reasons.is_empty() { None } else { Some(&detail) }).bind(now)
@@ -142,9 +156,8 @@ impl Settler {
             sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, 'done_claimed', ?, ?)")
                 .bind(&lane.key).bind(now).bind(target).bind(&detail).execute(&mut *tx).await?;
             if !reasons.is_empty() {
-                let body = super::scrub::scrub(&detail);
                 sqlx::query("INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) VALUES (?, ?, 'not_done', ?, ?)")
-                    .bind(&lane.key).bind(&lane.lead_session_key).bind(&body).bind(now).execute(&mut *tx).await?;
+                    .bind(&lane.key).bind(&lane.lead_session_key).bind(&event_body).bind(now).execute(&mut *tx).await?;
                 sqlx::query("INSERT INTO lane_inbox(lane_key, text, at) VALUES (?, ?, ?)")
                     .bind(&lane.key)
                     .bind(format!(
@@ -193,6 +206,11 @@ async fn done_diff(
             return Ok(("done_diff skipped: diff unavailable".into(), false));
         }
     };
+    if input.2 > 0 && input.3 == 0 {
+        // Nothing fit the budget: an empty diff would score as "nothing done".
+        tracing::info!(lane = %lane.key, omitted = input.2, "done_diff skipped: diff over budget");
+        return Ok(("done_diff skipped: diff exceeds size budget".into(), false));
+    }
     match judge
         .diff(
             crate::judge::Purpose::DoneDiff,
@@ -204,8 +222,15 @@ async fn done_diff(
     {
         Ok(verdict) => Ok((
             format!(
-                "done_diff fulfills={:.3} clean={:.3} risk={:.3}",
-                verdict.fulfills, verdict.clean, verdict.risk
+                "done_diff fulfills={:.3} clean={:.3} risk={:.3}{}",
+                verdict.fulfills,
+                verdict.clean,
+                verdict.risk,
+                if input.2 > 0 {
+                    format!(" ({} oversize files omitted)", input.2)
+                } else {
+                    String::new()
+                }
             ),
             verdict.fulfills < 0.65 || verdict.risk > 1.5,
         )),
@@ -216,7 +241,8 @@ async fn done_diff(
     }
 }
 
-struct DiffInput(PathBuf, String);
+/// Temp repo path, base revision, files omitted for size, files kept.
+struct DiffInput(PathBuf, String, usize, usize);
 impl Drop for DiffInput {
     fn drop(&mut self) {
         if let Err(error) = std::fs::remove_dir_all(&self.0) {
@@ -230,6 +256,8 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
     let mut input = DiffInput(
         std::env::temp_dir().join(format!("omon-done-diff-{}", uuid::Uuid::new_v4())),
         String::new(),
+        0,
+        0,
     );
     tokio::fs::create_dir(&input.0)
         .await
@@ -274,6 +302,7 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
         return Err(OmonError::Config("done_diff listing failed".into()));
     }
     let mut budget = MAX_DIFF;
+    let mut omitted = 0usize;
     let mut changes = Vec::new();
     for raw in listed
         .stdout
@@ -286,6 +315,35 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
                 .components()
                 .any(|c| matches!(c, std::path::Component::ParentDir))
         {
+            continue;
+        }
+        // Size both sides before reading them, so one huge artifact is skipped
+        // without loading it, and later files still reach the judge.
+        let new_len = match tokio::fs::metadata(cwd.join(&path)).await {
+            Ok(meta) => Some(meta.len() as usize),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(super::runner::io_error(error)),
+        };
+        let old_len = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            .arg("cat-file")
+            .arg("-s")
+            .arg(format!("{revision}:{}", path.display()))
+            .kill_on_drop(true)
+            .output()
+            .await
+            .map_err(super::runner::io_error)?;
+        let old_len = if old_len.status.success() {
+            String::from_utf8_lossy(&old_len.stdout)
+                .trim()
+                .parse::<usize>()
+                .ok()
+        } else {
+            None
+        };
+        if old_len.unwrap_or(0).saturating_add(new_len.unwrap_or(0)) > budget {
+            omitted += 1;
             continue;
         }
         let shown = tokio::process::Command::new("git")
@@ -305,7 +363,8 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
         };
         let size = old.as_ref().map_or(0, Vec::len) + new.as_ref().map_or(0, Vec::len);
         if size > budget {
-            break;
+            omitted += 1;
+            continue;
         }
         budget -= size;
         changes.push((path, old, new));
@@ -322,6 +381,8 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
             "user.name=omon",
             "-c",
             "user.email=omon@localhost",
+            "-c",
+            "commit.gpgsign=false",
             "commit",
             "--quiet",
             "--allow-empty",
@@ -338,6 +399,8 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
         write_side(&input.0, path, new.as_deref()).await?;
     }
     git(&input.0, &["add", "-A", "--"]).await?;
+    input.2 = omitted;
+    input.3 = changes.len();
     Ok(input)
 }
 
@@ -351,13 +414,7 @@ pub fn deliverable(brief: &str) -> String {
         "only inside",
         "no network",
         "delegat",
-        "service",
-        "production",
-        "model",
-        "commit",
         "emit ",
-        "report",
-        "claim",
         "do not ",
         "don't ",
         "never ",
@@ -368,6 +425,16 @@ pub fn deliverable(brief: &str) -> String {
         "owned local qa",
         "omo-gateway",
     ];
+    // Generic nouns match as whole words only: "Add a service module" or "Fix the
+    // reporting bug" describe the change, while "report done" is an operating rule.
+    const PROCESS_WORDS: &[&str] = &[
+        "service",
+        "production",
+        "model",
+        "commit",
+        "report",
+        "claim",
+    ];
     // Sentence ends are ". " or a line break; a bare "." inside "done.txt" is not.
     let kept: Vec<&str> = brief
         .lines()
@@ -377,6 +444,9 @@ pub fn deliverable(brief: &str) -> String {
         .filter(|sentence| {
             let lower = sentence.to_lowercase();
             !PROCESS.iter().any(|word| lower.contains(word))
+                && !lower
+                    .split(|c: char| !c.is_alphanumeric())
+                    .any(|word| PROCESS_WORDS.contains(&word))
         })
         .collect();
     if kept.is_empty() {
@@ -464,6 +534,10 @@ async fn worktree_reasons(lane: &Lane) -> Result<Vec<String>> {
             continue;
         };
         let path = PathBuf::from(path);
+        // A prunable registration (directory deleted) has nothing to verify.
+        if !tokio::fs::try_exists(&path).await.unwrap_or(true) {
+            continue;
+        }
         if include_worktree(&path, &cwd, lane.created_at, external_creation_time(&path)).await?
             && !paths.contains(&path)
         {
@@ -480,13 +554,10 @@ async fn worktree_reasons(lane: &Lane) -> Result<Vec<String>> {
             reasons.push(format!("uncommitted {}", path.display()));
         }
         if !git(&path, &["remote"]).await?.trim().is_empty()
-            && !git(
-                &path,
-                &["log", "--branches", "--not", "--remotes", "--oneline"],
-            )
-            .await?
-            .trim()
-            .is_empty()
+            && !git(&path, &["log", "HEAD", "--not", "--remotes", "--oneline"])
+                .await?
+                .trim()
+                .is_empty()
         {
             reasons.push(format!("unpushed {}", path.display()));
         }
@@ -571,6 +642,98 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn deliverable_keeps_sentences_that_only_contain_a_process_word_as_a_substring() {
+        assert_eq!(
+            super::deliverable("Update the models. Fix the reporting bug. Report done."),
+            "Update the models. Fix the reporting bug."
+        );
+    }
+
+    async fn commit_fixture() -> (tempfile::TempDir, PathBuf, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tokio::fs::canonicalize(dir.path())
+            .await
+            .unwrap()
+            .join("repo");
+        tokio::fs::create_dir(&repo).await.unwrap();
+        git(&repo, &["init", "--quiet"]).await.unwrap();
+        tokio::fs::write(repo.join("README"), "base\n")
+            .await
+            .unwrap();
+        git(&repo, &["add", "-A", "--"]).await.unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@localhost",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "base",
+            ],
+        )
+        .await
+        .unwrap();
+        let revision = git(&repo, &["rev-parse", "HEAD"])
+            .await
+            .unwrap()
+            .trim()
+            .to_owned();
+        (dir, repo, revision)
+    }
+
+    #[tokio::test]
+    async fn oversize_file_is_skipped_and_later_files_still_reach_the_diff() {
+        let (_dir, repo, revision) = commit_fixture().await;
+        // Cargo.lock sorts before src/ in the bytewise name listing.
+        tokio::fs::write(repo.join("Cargo.lock"), vec![b'x'; 300 * 1024])
+            .await
+            .unwrap();
+        tokio::fs::create_dir(repo.join("src")).await.unwrap();
+        tokio::fs::write(repo.join("src/a.rs"), "fn a() {}\n")
+            .await
+            .unwrap();
+        let input = lane_diff_input(&repo, &revision).await.unwrap();
+        assert_eq!((input.2, input.3), (1, 1));
+        let names = git(
+            &input.0,
+            &["diff", "--cached", "--name-only", input.1.as_str()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(names.trim(), "src/a.rs");
+    }
+
+    #[tokio::test]
+    async fn prunable_worktree_registration_does_not_block_verification() {
+        let (dir, repo, _) = commit_fixture().await;
+        let wt = dir.path().join("gone-wt");
+        git(
+            &repo,
+            &["worktree", "add", "-b", "gone", wt.to_str().unwrap()],
+        )
+        .await
+        .unwrap();
+        tokio::fs::remove_dir_all(&wt).await.unwrap();
+        let mut lane = Lane::new(
+            "prune",
+            "Prune",
+            "lead",
+            repo.to_str().unwrap(),
+            "/tmp/brief",
+            "lane",
+            "file x",
+        );
+        lane.created_at = Some(Utc::now() - chrono::Duration::hours(1));
+        let reasons = worktree_reasons(&lane).await.unwrap();
+        assert!(reasons.is_empty(), "{reasons:?}");
+    }
 
     #[tokio::test]
     async fn cwd_and_descendants_do_not_query_creation_metadata() {

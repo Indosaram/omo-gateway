@@ -32,16 +32,66 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 
+/// `MEDIA:` is an upper-case directive that must start a line or follow whitespace, so prose such
+/// as "Social media: Twitter" or "multimedia: foo" is never mistaken for a file directive.
 static MEDIA_DIRECTIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r#"(?i)(?:[`"'])?MEDIA:\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|`([^`\r\n]+)`|([^\s`"'\r\n]+))(?:[`"'])?"#,
+        r#"(^|\s)(?:[`"'])?MEDIA:\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)'|`([^`\r\n]+)`|([^\s`"'\r\n]+))(?:[`"'])?"#,
     )
     .expect("valid media directive regex")
 });
 
-/// Validates that a media path exists and is located within an authorized directory
-/// (e.g. system temp directory or current working directory / workspace).
+const MEDIA_DENIED_EXTENSIONS: &[&str] =
+    &["db", "sqlite", "sqlite3", "db-wal", "db-shm", "pem", "key"];
+
+/// Secret-bearing files that must never be uploaded even from an authorized root.
+fn media_path_is_denied(canonical: &Path) -> bool {
+    if canonical
+        .components()
+        .any(|component| matches!(component.as_os_str().to_str(), Some(".ssh" | ".gnupg")))
+    {
+        return true;
+    }
+    let Some(name) = canonical.file_name().and_then(|name| name.to_str()) else {
+        return true;
+    };
+    let lower = name.to_ascii_lowercase();
+    if lower == ".env" || lower.starts_with(".env.") || lower.ends_with(".env") {
+        return true;
+    }
+    canonical
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            MEDIA_DENIED_EXTENSIONS
+                .iter()
+                .any(|denied| ext.eq_ignore_ascii_case(denied))
+        })
+}
+
+fn media_allowed_roots(extra_roots: &[PathBuf]) -> Vec<PathBuf> {
+    [
+        std::env::temp_dir(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/tmp"),
+    ]
+    .into_iter()
+    .chain(extra_roots.iter().cloned())
+    .map(|root| root.canonicalize().unwrap_or(root))
+    .collect()
+}
+
+/// Validates a media path against the temp directories only.
+///
+/// The gateway's working directory is deliberately NOT an authorized root: it holds `.env` and the
+/// SQLite database. Use [`validate_media_path_in`] to additionally allow a workspace root.
 pub fn validate_media_path(raw_path: &str) -> Result<PathBuf> {
+    validate_media_path_in(raw_path, &[])
+}
+
+/// Validates that a media path is an existing regular file under the temp directories or one of
+/// `extra_roots` (e.g. the configured workspace root), and is not a secret-bearing file.
+pub fn validate_media_path_in(raw_path: &str, extra_roots: &[PathBuf]) -> Result<PathBuf> {
     let path = Path::new(raw_path);
     if !path.exists() {
         return Err(OmonError::Config(format!(
@@ -52,32 +102,30 @@ pub fn validate_media_path(raw_path: &str) -> Result<PathBuf> {
         OmonError::Config(format!("failed to canonicalize media path {raw_path}: {e}"))
     })?;
 
-    let temp_dir = std::env::temp_dir()
-        .canonicalize()
-        .unwrap_or_else(|_| std::env::temp_dir());
-    let cwd = std::env::current_dir()
-        .and_then(|p| p.canonicalize())
-        .unwrap_or_else(|_| PathBuf::from("."));
-
-    let canonical_str = canonical.to_string_lossy();
-    let is_in_temp = canonical.starts_with(&temp_dir)
-        || canonical_str.starts_with("/tmp")
-        || canonical_str.starts_with("/private/tmp")
-        || canonical_str.starts_with("/var/tmp");
-    let is_in_cwd = canonical.starts_with(&cwd);
-
-    if canonical_str.starts_with("/etc")
-        || canonical_str.starts_with("/proc")
-        || canonical_str.starts_with("/sys")
-        || canonical_str.contains(".ssh")
-        || canonical_str.contains(".gnupg")
-        || (!is_in_temp && !is_in_cwd)
+    if !canonical.is_file()
+        || media_path_is_denied(&canonical)
+        || !media_allowed_roots(extra_roots)
+            .iter()
+            .any(|root| canonical.starts_with(root))
     {
         return Err(OmonError::Config(format!(
             "media path outside authorized roots: {raw_path}"
         )));
     }
     Ok(canonical)
+}
+
+/// Appends a short visible note for media directives that could not be uploaded, so a failed
+/// attachment never silently disappears nor aborts delivery of the reply text.
+fn append_media_failure_note(text: &mut String, failed: &[String]) {
+    if failed.is_empty() {
+        return;
+    }
+    if !text.is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str("-# ⚠️ 파일 첨부 실패: ");
+    text.push_str(&failed.join(", "));
 }
 
 /// Extracts `MEDIA:<path>` directives from text, returning `(text_without_media, paths)`.
@@ -91,7 +139,7 @@ pub fn extract_media_directives(text: &str) -> (String, Vec<String>) {
         .replace("[[as_document]]", "");
 
     for line in preprocessed.lines() {
-        if !line.to_uppercase().contains("MEDIA:") {
+        if !line.contains("MEDIA:") {
             cleaned_lines.push(line.to_string());
             continue;
         }
@@ -99,10 +147,10 @@ pub fn extract_media_directives(text: &str) -> (String, Vec<String>) {
         let mut line_paths = Vec::new();
         for caps in MEDIA_DIRECTIVE_RE.captures_iter(line) {
             let path_opt = caps
-                .get(1)
-                .or_else(|| caps.get(2))
+                .get(2)
                 .or_else(|| caps.get(3))
                 .or_else(|| caps.get(4))
+                .or_else(|| caps.get(5))
                 .map(|m| m.as_str().trim().to_string());
             if let Some(clean_path) = path_opt {
                 if !clean_path.is_empty() {
@@ -567,6 +615,17 @@ pub fn coalesce_inbound_events(events: Vec<InboundEvent>) -> Option<InboundEvent
     coalesced.id = first.id;
     coalesced.received_at = first.received_at;
     coalesced.delivery_id = delivery_id;
+    // Author and reply link come from the most recent constituent that carried them; dropping
+    // them breaks owner-reply classification and leaves an empty author in the search index.
+    coalesced.author_id = unique_events
+        .iter()
+        .rev()
+        .find_map(|event| event.author_id.clone());
+    coalesced.referenced_message_id = unique_events
+        .iter()
+        .rev()
+        .find_map(|event| event.referenced_message_id.clone());
+    coalesced.origin = first.origin;
     Some(coalesced)
 }
 
@@ -736,7 +795,8 @@ impl DiscordAdapter {
         let framework = poise::Framework::builder()
             .options(poise::FrameworkOptions {
                 commands: commands::all(),
-                event_handler: |ctx, event, _framework, data| {
+                event_handler: |ctx, event, framework, data| {
+                    record_dispatch_event(framework.shard_manager);
                     Box::pin(handle_event(ctx, event, data))
                 },
                 command_check: Some(|ctx| Box::pin(commands::command_check(ctx))),
@@ -756,14 +816,17 @@ impl DiscordAdapter {
         let http = HttpBuilder::new(token.as_ref())
             .default_allowed_mentions(safe_allowed_mentions())
             .build();
-        Ok(serenity::ClientBuilder::new_with_http(http, intents)
+        let client = serenity::ClientBuilder::new_with_http(http, intents)
             .framework(framework)
-            .await?)
+            .await?;
+        // Production starts clients straight from `client()`, so the zombie-session watchdog has
+        // to be armed here rather than in `start()`.
+        spawn_receive_watchdog(client.shard_manager.clone());
+        Ok(client)
     }
 
     pub async fn start(&self, token: impl AsRef<str>) -> Result<()> {
         let mut client = self.client(token).await?;
-        spawn_receive_watchdog(client.shard_manager.clone());
         client.start().await?;
         Ok(())
     }
@@ -810,12 +873,27 @@ impl DiscordAdapter {
     }
 }
 
+/// Edits carry the reasoning-filtered text and must fit a single Discord message.
+fn edit_message_content(filtered: &str) -> String {
+    bound_split_messages(chunk_markdown(filtered, DISCORD_MESSAGE_LIMIT), 1)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+/// Splits an owner DM into Discord-sized messages (bounded, with a truncation notice).
+fn owner_dm_chunks(text: &str) -> Vec<String> {
+    bound_split_messages(
+        chunk_markdown(text, DISCORD_MESSAGE_LIMIT),
+        MAX_SPLIT_MESSAGES,
+    )
+}
+
 pub async fn handle_event(
     ctx: &serenity::Context,
     event: &FullEvent,
     data: &PoiseData,
 ) -> Result<(), CommandError> {
-    LAST_DISCORD_EVENT_MS.store(now_ms(), Ordering::Relaxed);
     match event {
         FullEvent::Message { new_message } => {
             if crate::inbox::triage::enabled()
@@ -890,17 +968,21 @@ pub async fn handle_event(
                         }
                         Err(error) => format!("제안 실행 실패: {error}"),
                     };
-                    new_message
-                        .channel_id
-                        .send_message(
-                            &ctx.http,
-                            serenity::CreateMessage::new()
-                                .content(text)
-                                .allowed_mentions(
-                                    crate::lanes::discord_threads::lane_allowed_mentions(),
-                                ),
-                        )
-                        .await?;
+                    // Lookup results can be tens of KiB; Discord rejects a single message over
+                    // 2000 chars, which would leave the owner with nothing after the proposal ran.
+                    for chunk in owner_dm_chunks(&text) {
+                        new_message
+                            .channel_id
+                            .send_message(
+                                &ctx.http,
+                                serenity::CreateMessage::new()
+                                    .content(chunk)
+                                    .allowed_mentions(
+                                        crate::lanes::discord_threads::lane_allowed_mentions(),
+                                    ),
+                            )
+                            .await?;
+                    }
                     return Ok(());
                 }
             }
@@ -915,7 +997,7 @@ pub async fn handle_event(
                 author_id = %new_message.author.id,
                 channel = %new_message.channel_id,
                 guild = ?new_message.guild_id,
-                content = %new_message.content,
+                content_len = new_message.content.chars().count(),
                 "Discord message event received"
             );
             let (channel_type, parent_channel_id) = if new_message.guild_id.is_some() {
@@ -936,12 +1018,7 @@ pub async fn handle_event(
             } else {
                 (Some(ChannelType::Private), None)
             };
-            let bot_user_id = ctx
-                .http
-                .get_current_user()
-                .await
-                .map(|u| u.id)
-                .unwrap_or(ctx.cache.current_user().id);
+            let bot_user_id = ctx.cache.current_user().id;
             let is_guild_text = channel_type == Some(ChannelType::Text);
             let mentioned_bot_ids = new_message
                 .mentions
@@ -1361,10 +1438,12 @@ pub async fn handle_event(
             handle_thread_create(thread).await;
         }
         FullEvent::ThreadUpdate { old: _, new } => {
-            handle_thread_update(data, new).await;
+            let bot_id = ctx.cache.current_user().id.get();
+            handle_thread_update(data, new, bot_id).await;
         }
         FullEvent::ThreadDelete { thread, .. } => {
-            handle_thread_delete(data, thread).await;
+            let bot_id = ctx.cache.current_user().id.get();
+            handle_thread_delete(data, thread, bot_id).await;
         }
         _ => {}
     }
@@ -1380,7 +1459,28 @@ pub async fn handle_thread_create(thread: &serenity::GuildChannel) {
     );
 }
 
-pub async fn handle_thread_update(data: &PoiseData, new: &serenity::GuildChannel) {
+/// Builds the session key for a Discord thread exactly like inbound thread messages
+/// (`message_to_inbound_with_config`): guild, parent channel, thread id, bot id.
+fn thread_session_key(
+    guild_id: Option<serenity::GuildId>,
+    parent_id: Option<serenity::ChannelId>,
+    thread_id: serenity::ChannelId,
+    bot_id: u64,
+) -> crate::SessionKey {
+    let thread_id = thread_id.to_string();
+    crate::SessionKey::new(
+        "discord",
+        guild_id.map(|id| id.to_string()),
+        parent_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| thread_id.clone()),
+        Some(thread_id),
+        "",
+    )
+    .with_bot_id(bot_id.to_string())
+}
+
+pub async fn handle_thread_update(data: &PoiseData, new: &serenity::GuildChannel, bot_id: u64) {
     let is_archived = new
         .thread_metadata
         .as_ref()
@@ -1392,48 +1492,69 @@ pub async fn handle_thread_update(data: &PoiseData, new: &serenity::GuildChannel
         is_archived,
         "Discord thread updated"
     );
-    let session_key = crate::SessionKey::new(
-        "discord",
-        None::<String>,
-        thread_id_str.clone(),
-        None::<String>,
-        "",
-    );
+    let session_key = thread_session_key(Some(new.guild_id), new.parent_id, new.id, bot_id);
     if is_archived {
-        let _ = data.multiplexer.stop(&session_key).await;
-        let _ = sqlx::query(
-            "UPDATE sessions SET metadata = json_set(COALESCE(metadata, '{}'), '$.thread_archived', true) WHERE session_key = ?"
-        )
-        .bind(session_key.storage_key())
-        .execute(&data.pool)
-        .await;
-    } else {
-        let _ = sqlx::query(
-            "UPDATE sessions SET metadata = json_set(COALESCE(metadata, '{}'), '$.thread_archived', false) WHERE session_key = ?"
-        )
-        .bind(session_key.storage_key())
-        .execute(&data.pool)
-        .await;
+        if let Err(error) = data.multiplexer.stop(&session_key).await {
+            tracing::warn!(session = %session_key, %error, "failed to stop archived thread turn");
+        }
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE sessions SET state_json = json_set(COALESCE(state_json, '{}'), '$.metadata.thread_archived', json(?)) WHERE session_key = ?",
+    )
+    .bind(if is_archived { "true" } else { "false" })
+    .bind(session_key.storage_key())
+    .execute(&data.pool)
+    .await
+    {
+        tracing::warn!(session = %session_key, %error, "failed to persist thread archived state");
     }
 }
 
-pub async fn handle_thread_delete(data: &PoiseData, thread: &serenity::PartialGuildChannel) {
+pub async fn handle_thread_delete(
+    data: &PoiseData,
+    thread: &serenity::PartialGuildChannel,
+    bot_id: u64,
+) {
     let thread_id_str = thread.id.to_string();
     tracing::info!(thread_id = %thread_id_str, "Discord thread deleted");
-    let session_key = crate::SessionKey::new(
-        "discord",
-        None::<String>,
-        thread_id_str.clone(),
-        None::<String>,
-        "",
+    let session_key = thread_session_key(
+        Some(thread.guild_id),
+        Some(thread.parent_id),
+        thread.id,
+        bot_id,
     );
-    let _ = data.multiplexer.stop(&session_key).await;
-    let _ = sqlx::query(
-        "UPDATE sessions SET metadata = json_remove(COALESCE(metadata, '{}'), '$.omo_thread_id') WHERE session_key = ?"
+    if let Err(error) = data.multiplexer.stop(&session_key).await {
+        tracing::warn!(session = %session_key, %error, "failed to stop deleted thread turn");
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE sessions SET state_json = json_remove(COALESCE(state_json, '{}'), '$.metadata.omo_thread_id') WHERE session_key = ?",
     )
     .bind(session_key.storage_key())
     .execute(&data.pool)
-    .await;
+    .await
+    {
+        tracing::warn!(session = %session_key, %error, "failed to clear deleted thread binding");
+    }
+}
+
+/// Records the durable per-bot cursor that missed-message backfill reads. The live path used to
+/// advance only the legacy per-channel cursor, so backfill never saw live progress. Called once a
+/// delivery is durably claimed in the ledger; best effort, a failed write only widens the next
+/// backfill window.
+async fn advance_live_bot_cursor(pool: &SqlitePool, event: &InboundEvent) {
+    let Some(bot_id) = event.session.bot_id.as_deref() else {
+        return;
+    };
+    let channel_id = event
+        .session
+        .thread_id
+        .as_deref()
+        .unwrap_or(&event.session.channel_id);
+    if let Err(error) =
+        update_bot_channel_cursor(pool, bot_id, channel_id, &event.platform_message_id).await
+    {
+        tracing::debug!(%error, channel_id, "failed to advance live bot cursor");
+    }
 }
 
 pub async fn route_claimed_event(data: &PoiseData, event: InboundEvent) -> Result<bool> {
@@ -1462,7 +1583,11 @@ pub async fn steer_claimed_event(data: &PoiseData, event: &InboundEvent) -> Resu
 
     match data.multiplexer.steer(&event.session, &event.content).await {
         Ok(true) => {
-            let _ = ledger.record_incoming_as(event, &delivery_id).await?;
+            // The steer already landed: a ledger failure must not surface as an error, or the
+            // caller re-enqueues the message and it is processed twice.
+            if let Err(error) = ledger.record_incoming_as(event, &delivery_id).await {
+                tracing::warn!(delivery_id, %error, "failed to record steered Discord delivery");
+            }
             if let Err(error) =
                 crate::multiplexer::record_inbound_transcript(&data.pool, event).await
             {
@@ -1518,6 +1643,8 @@ pub async fn route_claimed_event_with_constituents(
         tracing::info!(delivery_id, "Ignoring duplicate Discord delivery");
         return Ok(false);
     }
+    // Snapshot before `event` moves into route(); advance only once routing accepted it.
+    let cursor_event = event.clone();
 
     if let Some(downloader) = &data.attachment_downloader {
         for attachment in &mut event.attachments {
@@ -1560,6 +1687,7 @@ pub async fn route_claimed_event_with_constituents(
         ledger.mark_failed(&delivery_id, error.to_string()).await?;
         return Err(error);
     }
+    advance_live_bot_cursor(&data.pool, &cursor_event).await;
     Ok(true)
 }
 
@@ -1571,6 +1699,12 @@ pub async fn route_claimed_event_awaiting_turn(
     data: &PoiseData,
     mut event: InboundEvent,
 ) -> Result<bool> {
+    // A replayed text stop was already acted on live and leaves no ledger row; running it again
+    // would feed a stale control message to the agent as a prompt.
+    if event.content.trim().eq_ignore_ascii_case("/stop") {
+        tracing::info!(session = %event.session, "Skipping replay of Discord text stop command");
+        return Ok(false);
+    }
     let delivery_id = event
         .delivery_id
         .clone()
@@ -1580,6 +1714,8 @@ pub async fn route_claimed_event_awaiting_turn(
         tracing::info!(delivery_id, "Ignoring duplicate Discord delivery");
         return Ok(false);
     }
+    // The backfill caller advances the cursor only after the turn completed, so a failed
+    // turn stays behind the cursor and is retried on the next startup.
 
     if let Some(downloader) = &data.attachment_downloader {
         for attachment in &mut event.attachments {
@@ -1690,16 +1826,7 @@ pub async fn intercept_lane_owner_reply(
     channel_type: Option<ChannelType>,
     config: &InboundFilterConfig<'_>,
 ) -> Result<bool> {
-    let owner = std::env::var("DISCORD_ALLOWED_USERS")
-        .ok()
-        .and_then(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .find(|id| !id.is_empty())
-                .map(ToString::to_string)
-        })
-        .unwrap_or_else(|| "414011632306618368".to_string());
+    let owner = crate::sessions::status_reply::owner_id();
     if message.author.id.to_string() != owner
         || message.author.bot
         || message.webhook_id.is_some()
@@ -1740,7 +1867,16 @@ pub async fn intercept_lane_owner_reply(
     {
         if let Some(bot) = crate::Database::get_thread_owner(pool, message.channel_id.get()).await?
         {
-            crate::storage::lanes::bind_lane_thread(pool, &lane.key, &bot.to_string()).await?;
+            match crate::storage::lanes::bind_lane_thread(pool, &lane.key, &bot.to_string()).await {
+                Ok(()) => {}
+                Err(OmonError::Config(reason)) => {
+                    // The thread owner moved to another bot after the lane was bound: this bot
+                    // must not intercept, but the message still has to reach normal routing.
+                    tracing::warn!(lane = %lane.key, %reason, "lane owner reply not intercepted");
+                    return Ok(false);
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
     crate::storage::lanes::record_owner_reply(
@@ -2169,6 +2305,9 @@ pub trait DiscordUploadTransport: Send + Sync {
 
 pub const DISCORD_ATTACHMENT_LIMIT: usize = 10;
 
+/// Upper bound on a single uploaded file; larger files are rejected before being read into memory.
+const DISCORD_UPLOAD_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
 #[derive(Clone, Default)]
 pub struct DefaultDiscordUploadTransport;
 
@@ -2281,6 +2420,21 @@ impl DiscordFileUploader for SerenityFileUploader {
                 ))
             })?
             .to_owned();
+        let size = tokio::fs::metadata(path)
+            .await
+            .map_err(|error| {
+                OmonError::Config(format!(
+                    "failed to stat Discord upload {}: {error}",
+                    path.display()
+                ))
+            })?
+            .len();
+        if size > DISCORD_UPLOAD_MAX_BYTES {
+            return Err(OmonError::Config(format!(
+                "Discord upload {} is {size} bytes, over the {DISCORD_UPLOAD_MAX_BYTES} byte cap",
+                path.display()
+            )));
+        }
         let bytes = tokio::fs::read(path).await.map_err(|error| {
             OmonError::Config(format!(
                 "failed to read Discord upload {}: {error}",
@@ -2331,10 +2485,28 @@ struct ActiveDiscordStream {
 type StreamKey = (String, Uuid);
 type ApprovalMessageTarget = (SessionKey, ChannelId, MessageId);
 
-/// Millis (unix epoch) of the last gateway dispatch event, per process.
+/// Millis (unix epoch) of the last gateway dispatch event, tracked per bot client (keyed by its
+/// shard manager) so a healthy bot cannot mask a zombie session on another bot.
 /// Drives the receive watchdog: a long silence while connected means the
 /// Discord gateway session is a zombie and the shard must be restarted.
-static LAST_DISCORD_EVENT_MS: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(0));
+static LAST_DISCORD_EVENT_MS: LazyLock<parking_lot::Mutex<HashMap<usize, Arc<AtomicU64>>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+fn last_event_slot(key: usize) -> Arc<AtomicU64> {
+    LAST_DISCORD_EVENT_MS
+        .lock()
+        .entry(key)
+        .or_insert_with(|| Arc::new(AtomicU64::new(0)))
+        .clone()
+}
+
+fn shard_manager_key(shard_manager: &Arc<serenity::ShardManager>) -> usize {
+    Arc::as_ptr(shard_manager) as usize
+}
+
+fn record_dispatch_event(shard_manager: &Arc<serenity::ShardManager>) {
+    last_event_slot(shard_manager_key(shard_manager)).store(now_ms(), Ordering::Relaxed);
+}
 
 const RECEIVE_WATCHDOG_DEFAULT_THRESHOLD_SECS: u64 = 1200;
 
@@ -2367,13 +2539,14 @@ fn spawn_receive_watchdog(shard_manager: Arc<serenity::ShardManager>) {
     if threshold_secs == 0 {
         return;
     }
+    let last_event_ms = last_event_slot(shard_manager_key(&shard_manager));
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
         loop {
             ticker.tick().await;
-            let last_event = LAST_DISCORD_EVENT_MS.load(Ordering::Relaxed);
+            let last_event = last_event_ms.load(Ordering::Relaxed);
             if last_event == 0 {
                 // No dispatch received yet since boot (waiting for first event or Ready).
                 continue;
@@ -2401,7 +2574,7 @@ fn spawn_receive_watchdog(shard_manager: Arc<serenity::ShardManager>) {
                     "Discord receive watchdog: dispatch silent but shard runner reports healthy connected heartbeat; skipping restart"
                 );
                 // Advance the marker to give another full silence window before checking again
-                LAST_DISCORD_EVENT_MS.store(now_ms(), Ordering::Relaxed);
+                last_event_ms.store(now_ms(), Ordering::Relaxed);
                 continue;
             }
 
@@ -2410,17 +2583,20 @@ fn spawn_receive_watchdog(shard_manager: Arc<serenity::ShardManager>) {
                 threshold_secs,
                 "Discord receive watchdog: no gateway events and shard runner unhealthy; restarting shard"
             );
-            LAST_DISCORD_EVENT_MS.store(now_ms(), Ordering::Relaxed);
+            last_event_ms.store(now_ms(), Ordering::Relaxed);
             shard_manager.restart_shard(serenity::all::ShardId(0)).await;
         }
     });
 }
 
+/// One stream's placeholder is created once, outside the map lock.
+type StreamSlot = Arc<tokio::sync::OnceCell<Arc<ActiveDiscordStream>>>;
+
 #[derive(Clone)]
 pub struct DiscordEgress {
     clients: Arc<HashMap<String, Arc<serenity::Http>>>,
     default_bot_id: String,
-    streams: Arc<Mutex<HashMap<StreamKey, Arc<ActiveDiscordStream>>>>,
+    streams: Arc<Mutex<HashMap<StreamKey, StreamSlot>>>,
     typing: Arc<Mutex<HashMap<String, Typing>>>,
     file_uploader: Arc<dyn DiscordFileUploader>,
     approval_messages: Arc<Mutex<HashMap<Uuid, ApprovalMessageTarget>>>,
@@ -2519,6 +2695,25 @@ impl DeadTargetRegistry {
         self.is_dead_for_bot("default", channel_id)
     }
 
+    /// Read-only liveness check: unlike [`Self::is_dead_for_bot`] it never consumes the one-shot
+    /// probe slot, so non-send callers (typing indicators) cannot starve the real send probe.
+    pub fn is_dead_for_bot_peek(&self, bot_id: &str, channel_id: u64) -> bool {
+        let key = (bot_id.to_string(), channel_id);
+        let map = self.inner.lock();
+        let Some(entry) = map.get(&key) else {
+            return false;
+        };
+        if let Some(ttl) = self.ttl {
+            let elapsed = (chrono::Utc::now() - entry.marked_at)
+                .to_std()
+                .unwrap_or(std::time::Duration::ZERO);
+            if elapsed > ttl {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn is_dead_for_bot(&self, bot_id: &str, channel_id: u64) -> bool {
         let key = (bot_id.to_string(), channel_id);
         let mut map = self.inner.lock();
@@ -2609,13 +2804,17 @@ impl DeadTargetRegistry {
         let removed = map.remove(&key).is_some();
         drop(map);
 
-        if let Some(pool) = &self.pool {
-            let pool_clone = pool.clone();
-            let bot_clone = bot_id.to_string();
-            tokio::spawn(async move {
-                let _ =
-                    crate::storage::remove_dead_target(&pool_clone, &bot_clone, channel_id).await;
-            });
+        // Only a target that was actually dead needs its persisted row dropped; spawning a DB
+        // write for every successful send is pure overhead.
+        if removed {
+            if let Some(pool) = &self.pool {
+                let pool_clone = pool.clone();
+                let bot_clone = bot_id.to_string();
+                tokio::spawn(async move {
+                    let _ = crate::storage::remove_dead_target(&pool_clone, &bot_clone, channel_id)
+                        .await;
+                });
+            }
         }
         removed
     }
@@ -2738,35 +2937,56 @@ impl DeadTargetRegistry {
     }
 }
 
-/// Identifies whether a Serenity HTTP error is a confirmed whole-target 403 Forbidden
-/// or 404 Not Found error.
+/// Identifies whether a Serenity HTTP error proves the whole channel is unreachable for this bot:
+/// 404 Unknown Channel (10003) or 403 Missing Access (50001). Operation-scoped failures such as
+/// 50013 on an upload or 50005 on an edit do not mark the channel dead.
 pub fn is_discord_dead_target_error(error: &serenity::Error) -> Option<(u16, String)> {
+    dead_target_error(error, false)
+}
+
+/// Like [`is_discord_dead_target_error`], but for plain message sends, where 403 Missing
+/// Permissions (50013) also means the bot cannot speak in the channel.
+pub fn is_discord_send_dead_target_error(error: &serenity::Error) -> Option<(u16, String)> {
+    dead_target_error(error, true)
+}
+
+fn dead_target_error(error: &serenity::Error, from_send: bool) -> Option<(u16, String)> {
     if let serenity::Error::Http(serenity::all::HttpError::UnsuccessfulRequest(resp)) = error {
-        let code = resp.status_code.as_u16();
-        let discord_code = resp.error.code;
-        let msg = resp.error.message.as_str();
+        return classify_dead_target(
+            resp.status_code.as_u16(),
+            resp.error.code,
+            &resp.error.message,
+            from_send,
+        );
+    }
+    None
+}
 
-        // 10008 is Unknown Message (missing referenced message / edit target).
-        // It is a message-specific error, NOT channel death!
-        if discord_code == 10008 || msg.to_lowercase().contains("unknown message") {
-            return None;
-        }
+fn classify_dead_target(
+    code: u16,
+    discord_code: isize,
+    message: &str,
+    from_send: bool,
+) -> Option<(u16, String)> {
+    let lower = message.to_lowercase();
 
-        // 404 with Unknown Channel (10003) or generic channel 404 is a dead channel
-        if code == 404 {
-            if discord_code == 10003
-                || msg.to_lowercase().contains("unknown channel")
-                || discord_code == 0
-            {
-                return Some((code, resp.error.message.clone()));
-            }
-            return None;
-        }
+    // 10008 is Unknown Message (missing referenced message / edit target).
+    // It is a message-specific error, NOT channel death!
+    if discord_code == 10008 || lower.contains("unknown message") {
+        return None;
+    }
 
-        // 403 Forbidden (50001 Missing Access, 50013 Missing Permissions, etc.)
-        if code == 403 {
-            return Some((code, resp.error.message.clone()));
+    // 404 with Unknown Channel (10003) is a dead channel.
+    if code == 404 {
+        if discord_code == 10003 || lower.contains("unknown channel") {
+            return Some((code, message.to_owned()));
         }
+        return None;
+    }
+
+    // 403 Forbidden: 50001 Missing Access always; 50013 Missing Permissions only on sends.
+    if code == 403 && (discord_code == 50001 || (from_send && discord_code == 50013)) {
+        return Some((code, message.to_owned()));
     }
     None
 }
@@ -2855,18 +3075,103 @@ impl DiscordEgress {
         if rendered_tables.is_empty() {
             return Ok(());
         }
-        for chunk in rendered_tables.chunks(DISCORD_ATTACHMENT_LIMIT) {
+        for (index, chunk) in rendered_tables.chunks(DISCORD_ATTACHMENT_LIMIT).enumerate() {
             let attachments: Vec<CreateAttachment> = chunk
                 .iter()
                 .map(|table| {
                     CreateAttachment::bytes(table.png_bytes.clone(), table.filename.clone())
                 })
                 .collect();
-            self.upload_transport
+            if let Err(error) = self
+                .upload_transport
                 .send_attachments(http, channel, attachments)
-                .await?;
+                .await
+            {
+                // The message already says the table is attached; without the image the table
+                // would be lost, so post the original markdown (fenced) before surfacing the error.
+                let remaining = &rendered_tables[index * DISCORD_ATTACHMENT_LIMIT..];
+                let fallback = crate::discord::table_render::fallback_text(remaining);
+                if let Err(fallback_error) = self.send_plain_text(http, channel, &fallback).await {
+                    tracing::warn!(%fallback_error, "failed to post table text fallback");
+                }
+                return Err(error);
+            }
         }
         Ok(())
+    }
+
+    /// Sends plain text through the configured transport (or REST), chunked to Discord limits.
+    async fn send_plain_text(
+        &self,
+        http: &Arc<serenity::Http>,
+        channel: ChannelId,
+        text: &str,
+    ) -> Result<()> {
+        let chunks = bound_split_messages(
+            chunk_markdown(text, DISCORD_MESSAGE_LIMIT),
+            MAX_SPLIT_MESSAGES,
+        );
+        for chunk in chunks {
+            if let Some(transport) = &self.message_transport {
+                transport.send_message(channel, chunk).await?;
+            } else {
+                channel
+                    .send_message(
+                        http,
+                        CreateMessage::new()
+                            .content(chunk)
+                            .allowed_mentions(safe_allowed_mentions()),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Uploads every `MEDIA:` directive in `text` and returns the text with the directives
+    /// stripped. Media problems never abort delivery of the text itself:
+    /// - a path that does not exist is treated as a false positive and only noted in the text;
+    /// - an unauthorized path or a failed upload is noted in the text AND returned as a deferred
+    ///   error, so the caller still delivers the reply and then reports the failure.
+    async fn deliver_media_directives(
+        &self,
+        http: &Arc<serenity::Http>,
+        channel: ChannelId,
+        text: &str,
+    ) -> (String, Option<OmonError>) {
+        let (mut without_media, media_paths) = extract_media_directives(text);
+        let roots: Vec<PathBuf> = self.workspace_root.iter().cloned().collect();
+        let mut failed = Vec::new();
+        let mut deferred: Option<OmonError> = None;
+        for media_path in &media_paths {
+            let label = Path::new(media_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(media_path.as_str())
+                .to_owned();
+            match validate_media_path_in(media_path, &roots) {
+                Ok(valid_path) => {
+                    if let Err(error) = self
+                        .file_uploader
+                        .upload(http.clone(), channel, &valid_path)
+                        .await
+                    {
+                        tracing::warn!(%error, media_path, "media upload failed; delivering text");
+                        failed.push(label);
+                        deferred.get_or_insert(error);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, media_path, "media directive rejected; delivering text");
+                    failed.push(label);
+                    if Path::new(media_path).exists() {
+                        deferred.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        append_media_failure_note(&mut without_media, &failed);
+        (without_media, deferred)
     }
 
     pub fn with_message_transport(mut self, transport: Arc<dyn DiscordMessageTransport>) -> Self {
@@ -2976,8 +3281,10 @@ impl DiscordEgress {
         let value = session.thread_id.as_ref().unwrap_or(&session.channel_id);
         value
             .parse::<u64>()
+            .ok()
+            .filter(|id| *id != 0)
             .map(ChannelId::new)
-            .map_err(|_| OmonError::Config(format!("invalid Discord channel ID: {value}")))
+            .ok_or_else(|| OmonError::Config(format!("invalid Discord channel ID: {value}")))
     }
 
     fn identity<'a>(&'a self, session: &'a SessionKey) -> &'a str {
@@ -2999,7 +3306,7 @@ impl DiscordEgress {
         };
         let channel_id = channel.get();
         let bot_id = self.identity(session);
-        if self.dead_targets.is_dead_for_bot(bot_id, channel_id) {
+        if self.dead_targets.is_dead_for_bot_peek(bot_id, channel_id) {
             return;
         }
         let should = {
@@ -3049,11 +3356,17 @@ impl DiscordEgress {
             return Ok(());
         }
 
-        let active = {
+        // The map lock is only held to fetch the per-stream cell; the placeholder send (a network
+        // call) runs under the cell, so a slow send for one stream never blocks other sessions.
+        let cell = {
             let mut streams = self.streams.lock().await;
-            if let Some(active) = streams.get(&key) {
-                active.clone()
-            } else {
+            streams
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+                .clone()
+        };
+        let active = cell
+            .get_or_try_init(|| async {
                 let reference_id = chunk
                     .reply_to
                     .as_deref()
@@ -3066,12 +3379,25 @@ impl DiscordEgress {
                 let message_id = transport
                     .send_message_with_reference(channel, "\u{200b}".to_owned(), reference_id)
                     .await?;
-                let active = Arc::new(ActiveDiscordStream {
+                Ok::<_, OmonError>(Arc::new(ActiveDiscordStream {
                     throttler: Arc::new(LiveEditThrottler::new(transport, channel, message_id)),
                     last_sequence: Mutex::new(None),
-                });
-                streams.insert(key.clone(), active.clone());
-                active
+                }))
+            })
+            .await
+            .cloned();
+        let active = match active {
+            Ok(active) => active,
+            Err(error) => {
+                // A failed placeholder send must not leave an empty cell behind.
+                let mut streams = self.streams.lock().await;
+                if streams
+                    .get(&key)
+                    .is_some_and(|candidate| Arc::ptr_eq(candidate, &cell) && cell.get().is_none())
+                {
+                    streams.remove(&key);
+                }
+                return Err(error);
             }
         };
 
@@ -3079,17 +3405,15 @@ impl DiscordEgress {
         if last_sequence.is_some_and(|sequence| chunk.sequence <= sequence) {
             return Ok(());
         }
-        let (processed_content, rendered_tables) = if chunk.is_final {
-            let (without_media, media_paths) = extract_media_directives(&filtered_content);
-            for media_path in &media_paths {
-                let valid_path = validate_media_path(media_path)?;
-                self.file_uploader
-                    .upload(http.clone(), channel, &valid_path)
-                    .await?;
-            }
-            crate::discord::table_render::transform_markdown_tables_to_images(&without_media)
+        let (processed_content, rendered_tables, media_error) = if chunk.is_final {
+            let (without_media, deferred) = self
+                .deliver_media_directives(&http, channel, &filtered_content)
+                .await;
+            let (text, tables) =
+                crate::discord::table_render::transform_markdown_tables_to_images(&without_media);
+            (text, tables, deferred)
         } else {
-            (filtered_content, Vec::new())
+            (filtered_content, Vec::new(), None)
         };
 
         active.throttler.update(&processed_content, true).await?;
@@ -3097,18 +3421,28 @@ impl DiscordEgress {
         drop(last_sequence);
 
         if chunk.is_final {
-            self.dispatch_rendered_tables(&http, channel, rendered_tables)
-                .await?;
+            let tables_result = self
+                .dispatch_rendered_tables(&http, channel, rendered_tables)
+                .await;
 
-            let mut streams = self.streams.lock().await;
-            if streams
-                .get(&key)
-                .is_some_and(|candidate| Arc::ptr_eq(candidate, &active))
-            {
-                streams.remove(&key);
+            // The text is out. Keep the stream entry when a media/table problem is surfaced so a
+            // retry no-ops on `last_sequence` instead of posting the reply a second time.
+            if tables_result.is_ok() && media_error.is_none() {
+                let mut streams = self.streams.lock().await;
+                if streams.get(&key).is_some_and(|candidate| {
+                    candidate
+                        .get()
+                        .is_some_and(|stored| Arc::ptr_eq(stored, &active))
+                }) {
+                    streams.remove(&key);
+                }
+                drop(streams);
             }
-            drop(streams);
             self.typing_refresh.lock().await.remove(&channel.get());
+            tables_result?;
+            if let Some(error) = media_error {
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -3202,24 +3536,22 @@ impl OutboundDispatcher for DiscordEgress {
                     .and_then(|id| id.parse::<u64>().ok())
                     .map(MessageId::new);
 
-                let (processed_content, rendered_tables) = {
+                let (processed_content, rendered_tables, media_error) = {
                     let decorated = if self.runtime_footer {
                         let model = self.default_model.as_deref();
                         let cwd = self.workspace_root.as_deref();
-                        append_runtime_footer(&content, model, None, cwd)
+                        append_runtime_footer(&filtered_content, model, None, cwd)
                     } else {
-                        content.clone()
+                        filtered_content.clone()
                     };
-                    let (without_media, media_paths) = extract_media_directives(&decorated);
-                    for media_path in &media_paths {
-                        let valid_path = validate_media_path(media_path)?;
-                        self.file_uploader
-                            .upload(http.clone(), channel, &valid_path)
-                            .await?;
-                    }
-                    crate::discord::table_render::transform_markdown_tables_to_images(
-                        &without_media,
-                    )
+                    let (without_media, deferred) = self
+                        .deliver_media_directives(&http, channel, &decorated)
+                        .await;
+                    let (text, tables) =
+                        crate::discord::table_render::transform_markdown_tables_to_images(
+                            &without_media,
+                        );
+                    (text, tables, deferred)
                 };
 
                 let chunks = bound_split_messages(
@@ -3234,7 +3566,7 @@ impl OutboundDispatcher for DiscordEgress {
                     }
                     self.dispatch_rendered_tables(&http, channel, rendered_tables)
                         .await?;
-                    return Ok(());
+                    return media_error.map_or(Ok(()), Err);
                 }
 
                 let is_forum = match channel.to_channel(&http).await {
@@ -3245,7 +3577,7 @@ impl OutboundDispatcher for DiscordEgress {
                 };
 
                 if is_forum {
-                    let title = derive_forum_post_title(&content);
+                    let title = derive_forum_post_title(&filtered_content);
                     let first_chunk = chunks
                         .first()
                         .cloned()
@@ -3271,7 +3603,7 @@ impl OutboundDispatcher for DiscordEgress {
                                     .await
                                 {
                                     if let Some((code, reason)) =
-                                        is_discord_dead_target_error(&error)
+                                        is_discord_send_dead_target_error(&error)
                                     {
                                         self.dead_targets.mark_dead_for_bot(
                                             &bot_id,
@@ -3285,10 +3617,11 @@ impl OutboundDispatcher for DiscordEgress {
                             }
                             self.dispatch_rendered_tables(&http, post_channel.id, rendered_tables)
                                 .await?;
-                            return Ok(());
+                            return media_error.map_or(Ok(()), Err);
                         }
                         Err(error) => {
-                            if let Some((code, reason)) = is_discord_dead_target_error(&error) {
+                            if let Some((code, reason)) = is_discord_send_dead_target_error(&error)
+                            {
                                 self.dead_targets.mark_dead_for_bot(
                                     &bot_id,
                                     channel_id,
@@ -3311,7 +3644,9 @@ impl OutboundDispatcher for DiscordEgress {
                         match channel.send_message(&http, builder).await {
                             Ok(msg) => Ok(msg),
                             Err(error) => {
-                                if let Some((code, reason)) = is_discord_dead_target_error(&error) {
+                                if let Some((code, reason)) =
+                                    is_discord_send_dead_target_error(&error)
+                                {
                                     self.dead_targets.mark_dead_for_bot(
                                         &bot_id,
                                         channel_id,
@@ -3357,7 +3692,8 @@ impl OutboundDispatcher for DiscordEgress {
                             self.dead_targets.clear_for_bot(&bot_id, channel_id);
                         }
                         Err(error) => {
-                            if let Some((code, reason)) = is_discord_dead_target_error(&error) {
+                            if let Some((code, reason)) = is_discord_send_dead_target_error(&error)
+                            {
                                 self.dead_targets.mark_dead_for_bot(
                                     &bot_id,
                                     channel_id,
@@ -3378,6 +3714,9 @@ impl OutboundDispatcher for DiscordEgress {
 
                 self.dispatch_rendered_tables(&http, channel, rendered_tables)
                     .await?;
+                if let Some(error) = media_error {
+                    return Err(error);
+                }
             }
             OutboundAction::EditMessage {
                 session,
@@ -3414,12 +3753,13 @@ impl OutboundDispatcher for DiscordEgress {
                             "invalid Discord message ID: {platform_message_id}"
                         ))
                     })?;
+                let edit_content = edit_message_content(&filtered_content);
                 match channel
                     .edit_message(
                         &http,
                         message_id,
                         EditMessage::new()
-                            .content(content)
+                            .content(edit_content)
                             .allowed_mentions(safe_allowed_mentions()),
                     )
                     .await
@@ -3502,6 +3842,16 @@ impl OutboundDispatcher for DiscordEgress {
                     )));
                 }
 
+                if path
+                    .canonicalize()
+                    .is_ok_and(|canonical| media_path_is_denied(&canonical))
+                {
+                    return Err(OmonError::Config(format!(
+                        "refusing to upload secret-bearing file: {}",
+                        path.display()
+                    )));
+                }
+
                 match self.file_uploader.upload(http, channel, &path).await {
                     Ok(()) => {
                         self.dead_targets.clear_for_bot(&bot_id, channel_id);
@@ -3534,7 +3884,7 @@ impl OutboundDispatcher for DiscordEgress {
                 let bot_id = self.identity(&session).to_owned();
                 let channel = Self::target(&session)?;
                 let channel_id = channel.get();
-                if self.dead_targets.is_dead_for_bot(&bot_id, channel_id) {
+                if self.dead_targets.is_dead_for_bot_peek(&bot_id, channel_id) {
                     return Ok(());
                 }
 
@@ -3557,15 +3907,22 @@ impl OutboundDispatcher for DiscordEgress {
                 remove_others,
             } => {
                 let bot_id = self.identity(&session).to_owned();
-                // Reactions target the channel where the message was posted (session.channel_id),
-                // not the thread_id where the session was routed!
-                let channel = session
-                    .channel_id
-                    .parse::<u64>()
-                    .map(ChannelId::new)
-                    .unwrap_or_else(|_| Self::target(&session).unwrap_or(ChannelId::new(0)));
+                // A message in an existing thread lives in the thread; the message that
+                // started an auto-created thread lives in the parent. Try the thread first and
+                // fall back to the parent when the message is not there.
+                let parent = match session.channel_id.parse::<u64>() {
+                    Ok(id) if id != 0 => ChannelId::new(id),
+                    _ => Self::target(&session)?,
+                };
+                let thread = session
+                    .thread_id
+                    .as_deref()
+                    .and_then(|id| id.parse::<u64>().ok())
+                    .filter(|id| *id != 0)
+                    .map(ChannelId::new);
+                let channel = thread.unwrap_or(parent);
                 let channel_id = channel.get();
-                if self.dead_targets.is_dead_for_bot(&bot_id, channel_id) {
+                if self.dead_targets.is_dead_for_bot_peek(&bot_id, channel_id) {
                     return Err(OmonError::Multiplexer(format!(
                         "dead target short-circuited: bot={bot_id}, channel={channel_id}"
                     )));
@@ -3594,15 +3951,38 @@ impl OutboundDispatcher for DiscordEgress {
                         );
                     }
                 }
+                let reaction = serenity::all::ReactionType::Unicode(emoji);
                 if let Err(error) = channel
-                    .create_reaction(&http, msg_id, serenity::all::ReactionType::Unicode(emoji))
+                    .create_reaction(&http, msg_id, reaction.clone())
                     .await
                 {
-                    tracing::debug!(
-                        %error,
-                        %message_id,
-                        "Failed to add reaction to message"
-                    );
+                    let fell_back = if channel != parent {
+                        if remove_others {
+                            let _ = parent
+                                .delete_reaction(
+                                    &http,
+                                    msg_id,
+                                    None,
+                                    serenity::all::ReactionType::Unicode(
+                                        crate::models::PROCESSING_START_EMOJI.to_string(),
+                                    ),
+                                )
+                                .await;
+                        }
+                        parent
+                            .create_reaction(&http, msg_id, reaction)
+                            .await
+                            .is_ok()
+                    } else {
+                        false
+                    };
+                    if !fell_back {
+                        tracing::debug!(
+                            %error,
+                            %message_id,
+                            "Failed to add reaction to message"
+                        );
+                    }
                 }
             }
             OutboundAction::ApprovalRequest {
@@ -3651,7 +4031,7 @@ impl OutboundDispatcher for DiscordEgress {
                             .await;
                     }
                     Err(error) => {
-                        if let Some((code, reason)) = is_discord_dead_target_error(&error) {
+                        if let Some((code, reason)) = is_discord_send_dead_target_error(&error) {
                             self.dead_targets.mark_dead_for_bot(
                                 bot_id,
                                 channel_id,
@@ -3858,7 +4238,9 @@ pub async fn update_bot_channel_cursor(
         return Ok(false);
     }
 
-    let mut tx = pool.begin().await?;
+    // IMMEDIATE takes the write lock up front: a deferred read-then-write transaction can fail
+    // with SQLITE_BUSY when it upgrades while another writer holds the lock.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let existing: Option<(String,)> = sqlx::query_as(
         "SELECT last_message_id FROM discord_bot_cursors WHERE bot_id = ? AND channel_id = ?",
     )
@@ -4027,10 +4409,14 @@ pub async fn run_missed_message_backfill_with_fetcher(
     .bind(&bot_id_str)
     .fetch_all(pool)
     .await?;
-    for (cid, _) in stored_cursor_rows {
+    // Cursors are snapshotted before any replay: live messages arriving while earlier channels
+    // are being replayed advance the stored cursor and would otherwise hide the offline window.
+    let mut cursor_snapshot: HashMap<String, String> = HashMap::new();
+    for (cid, last) in stored_cursor_rows {
         if let Ok(c_num) = cid.parse::<u64>() {
             channel_ids_to_scan.insert(c_num);
         }
+        cursor_snapshot.insert(cid, last);
     }
 
     for &cid in &data.allowed_channels {
@@ -4063,9 +4449,11 @@ pub async fn run_missed_message_backfill_with_fetcher(
         let channel_id = ChannelId::new(channel_id_num);
         let channel_id_str = channel_id_num.to_string();
 
-        let mut current_cursor_str = get_bot_channel_cursor(pool, &bot_id_str, &channel_id_str)
-            .await?
-            .filter(|s| !s.trim().is_empty());
+        let mut current_cursor_str = match cursor_snapshot.get(&channel_id_str) {
+            Some(last) => Some(last.clone()),
+            None => get_bot_channel_cursor(pool, &bot_id_str, &channel_id_str).await?,
+        }
+        .filter(|s| !s.trim().is_empty());
 
         let mut channel_stopped = false;
 
@@ -4740,6 +5128,292 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn steer_claimed_event_ledger_failure_after_steer_still_reports_steered() {
+        use crate::{AgentRunner, MultiplexerConfig, SessionContext, SessionMultiplexer};
+
+        struct SteerableRunner {
+            active: Arc<Mutex<bool>>,
+            steered: Arc<Mutex<Vec<String>>>,
+            started: tokio::sync::mpsc::UnboundedSender<()>,
+            barrier: Arc<tokio::sync::Barrier>,
+        }
+
+        #[async_trait]
+        impl AgentRunner for SteerableRunner {
+            async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
+                *self.active.lock().await = true;
+                let _ = self.started.send(());
+                self.barrier.wait().await;
+                *self.active.lock().await = false;
+                Ok(())
+            }
+
+            async fn steer(&self, _session: &SessionContext, guidance: &str) -> Result<bool> {
+                let active = *self.active.lock().await;
+                if active {
+                    self.steered.lock().await.push(guidance.to_string());
+                }
+                Ok(active)
+            }
+        }
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let steered = Arc::new(Mutex::new(Vec::new()));
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runner = Arc::new(SteerableRunner {
+            active: Arc::new(Mutex::new(false)),
+            steered: steered.clone(),
+            started: started_tx,
+            barrier: barrier.clone(),
+        });
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            runner.clone(),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer.clone(), db.pool().clone());
+        let session = test_session("steer-ledger-failure-user");
+
+        let blocking = InboundEvent::message(session.clone(), "msg-blocking", "blocking");
+        let run_multiplexer = multiplexer.clone();
+        let turn = tokio::spawn(async move { run_multiplexer.route(blocking).await });
+        tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
+            .await
+            .expect("turn should start within timeout")
+            .expect("runner start channel closed unexpectedly");
+
+        // Make the post-steer ledger write fail; the read-only duplicate probe still works.
+        sqlx::query(
+            "CREATE TRIGGER fail_ledger_insert BEFORE INSERT ON delivery_ledger \
+             BEGIN SELECT RAISE(ABORT, 'ledger unavailable'); END",
+        )
+        .execute(&data.pool)
+        .await
+        .unwrap();
+
+        let event = InboundEvent::message(session.clone(), "msg-steer", "steer despite ledger");
+        let result = steer_claimed_event(&data, &event).await;
+        assert!(
+            matches!(result, Ok(true)),
+            "a landed steer must report Ok(true) so the caller does not re-enqueue it: {result:?}"
+        );
+        assert_eq!(steered.lock().await.as_slice(), ["steer despite ledger"]);
+
+        barrier.wait().await;
+        turn.await.unwrap().unwrap();
+    }
+
+    fn thread_test_channel(
+        thread_id: &str,
+        parent_id: &str,
+        archived: bool,
+    ) -> serenity::GuildChannel {
+        serde_json::from_value(serde_json::json!({
+            "id": thread_id,
+            "name": "test-thread",
+            "type": 11,
+            "guild_id": "111",
+            "parent_id": parent_id,
+            "position": 0,
+            "permission_overwrites": [],
+            "thread_metadata": {
+                "archived": archived,
+                "auto_archive_duration": 60,
+                "archive_timestamp": "2026-10-07T00:00:00Z",
+                "locked": false
+            }
+        }))
+        .unwrap()
+    }
+
+    fn inbound_thread_key(thread_id: &str, parent_id: &str, bot_id: u64) -> SessionKey {
+        SessionKey::new("discord", Some("111"), parent_id, Some(thread_id), "")
+            .with_bot_id(bot_id.to_string())
+    }
+
+    async fn insert_thread_session(pool: &SqlitePool, key: &SessionKey, state_json: &str) {
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json)
+             VALUES (?, 'discord', ?, '', ?)",
+        )
+        .bind(key.storage_key())
+        .bind(&key.channel_id)
+        .bind(state_json)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn session_state(pool: &SqlitePool, key: &SessionKey) -> serde_json::Value {
+        let raw: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(key.storage_key())
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    #[tokio::test]
+    async fn thread_archive_and_unarchive_write_state_json_metadata() {
+        use crate::{AgentRunner, MultiplexerConfig, SessionContext, SessionMultiplexer};
+
+        struct NoopRunner;
+        #[async_trait]
+        impl AgentRunner for NoopRunner {
+            async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            Arc::new(NoopRunner),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer, db.pool().clone());
+        let bot_id = 999_u64;
+        let key = inbound_thread_key("1234567890", "555", bot_id);
+        insert_thread_session(
+            &data.pool,
+            &key,
+            r#"{"metadata":{"omo_thread_id":"omo-1","keep":"v"}}"#,
+        )
+        .await;
+
+        handle_thread_update(
+            &data,
+            &thread_test_channel("1234567890", "555", true),
+            bot_id,
+        )
+        .await;
+        let state = session_state(&data.pool, &key).await;
+        assert_eq!(
+            state["metadata"]["thread_archived"],
+            serde_json::json!(true)
+        );
+        assert_eq!(state["metadata"]["omo_thread_id"], "omo-1");
+
+        handle_thread_update(
+            &data,
+            &thread_test_channel("1234567890", "555", false),
+            bot_id,
+        )
+        .await;
+        let state = session_state(&data.pool, &key).await;
+        assert_eq!(
+            state["metadata"]["thread_archived"],
+            serde_json::json!(false)
+        );
+        assert_eq!(state["metadata"]["keep"], "v");
+    }
+
+    #[tokio::test]
+    async fn thread_delete_removes_omo_thread_id_from_state_json() {
+        use crate::{AgentRunner, MultiplexerConfig, SessionContext, SessionMultiplexer};
+
+        struct NoopRunner;
+        #[async_trait]
+        impl AgentRunner for NoopRunner {
+            async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            Arc::new(NoopRunner),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer, db.pool().clone());
+        let bot_id = 999_u64;
+        let key = inbound_thread_key("3456789012", "555", bot_id);
+        insert_thread_session(
+            &data.pool,
+            &key,
+            r#"{"metadata":{"omo_thread_id":"omo-xyz","keep":"v"}}"#,
+        )
+        .await;
+
+        let partial: serenity::PartialGuildChannel = serde_json::from_value(serde_json::json!({
+            "id": "3456789012",
+            "type": 11,
+            "guild_id": "111",
+            "parent_id": "555"
+        }))
+        .unwrap();
+        handle_thread_delete(&data, &partial, bot_id).await;
+
+        let state = session_state(&data.pool, &key).await;
+        assert!(state["metadata"].get("omo_thread_id").is_none());
+        assert_eq!(state["metadata"]["keep"], "v");
+    }
+
+    #[tokio::test]
+    async fn thread_delete_stops_running_turn_keyed_like_inbound_thread_message() {
+        use crate::{AgentRunner, MultiplexerConfig, SessionContext, SessionMultiplexer};
+
+        struct BlockingRunner {
+            started: tokio::sync::mpsc::UnboundedSender<()>,
+            cancelled: tokio::sync::mpsc::UnboundedSender<()>,
+        }
+        #[async_trait]
+        impl AgentRunner for BlockingRunner {
+            async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
+                let _ = self.started.send(());
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+
+            async fn cancel(&self, _session: &SessionContext) -> Result<()> {
+                let _ = self.cancelled.send(());
+                Ok(())
+            }
+        }
+
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (cancelled_tx, mut cancelled_rx) = tokio::sync::mpsc::unbounded_channel();
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            Arc::new(BlockingRunner {
+                started: started_tx,
+                cancelled: cancelled_tx,
+            }),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer.clone(), db.pool().clone());
+        let bot_id = 999_u64;
+        let key = inbound_thread_key("4567890123", "555", bot_id);
+
+        let event = InboundEvent::message(key.clone(), "msg-thread", "long running");
+        let run_multiplexer = multiplexer.clone();
+        let turn = tokio::spawn(async move { run_multiplexer.route(event).await });
+        tokio::time::timeout(Duration::from_secs(5), started_rx.recv())
+            .await
+            .expect("turn should start within timeout")
+            .expect("runner start channel closed unexpectedly");
+
+        let partial: serenity::PartialGuildChannel = serde_json::from_value(serde_json::json!({
+            "id": "4567890123",
+            "type": 11,
+            "guild_id": "111",
+            "parent_id": "555"
+        }))
+        .unwrap();
+        handle_thread_delete(&data, &partial, bot_id).await;
+
+        tokio::time::timeout(Duration::from_secs(5), cancelled_rx.recv())
+            .await
+            .expect("thread delete must stop the running thread turn")
+            .expect("runner cancel channel closed unexpectedly");
+        let _ = turn.await;
+    }
+
+    #[tokio::test]
     async fn debouncer_cancel_discards_pending_chunks() {
         use crate::{AgentRunner, MultiplexerConfig, SessionContext, SessionMultiplexer};
 
@@ -5274,4 +5948,656 @@ mod receive_watchdog_tests {
         assert_eq!(receive_watchdog_threshold_from(Some("-5")), 1200);
     }
 }
-// receive_watchdog_tests appended above via separate block — see receive_watchdog_tests mod
+
+#[cfg(test)]
+mod fix_r5_discord_adapter_tests {
+    use super::*;
+    use crate::Database;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+
+    fn session(channel: &str) -> SessionKey {
+        SessionKey::new("discord", Some("g1"), channel, None::<String>, "u1")
+    }
+
+    #[derive(Default)]
+    struct RecordingTransport {
+        sent: std::sync::Mutex<Vec<String>>,
+        edits: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl DiscordMessageTransport for RecordingTransport {
+        async fn start_typing(&self, _channel_id: ChannelId) -> Result<()> {
+            Ok(())
+        }
+
+        async fn edit_message(
+            &self,
+            _channel_id: ChannelId,
+            _message_id: MessageId,
+            content: String,
+        ) -> Result<()> {
+            self.edits.lock().unwrap().push(content);
+            Ok(())
+        }
+
+        async fn send_message(&self, _channel_id: ChannelId, content: String) -> Result<MessageId> {
+            self.sent.lock().unwrap().push(content);
+            Ok(MessageId::new(42))
+        }
+
+        async fn delete_message(
+            &self,
+            _channel_id: ChannelId,
+            _message_id: MessageId,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingUploader {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl DiscordFileUploader for CountingUploader {
+        async fn upload(
+            &self,
+            _http: Arc<serenity::Http>,
+            _channel: ChannelId,
+            _path: &Path,
+        ) -> Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    struct FailingAttachmentTransport;
+
+    #[async_trait]
+    impl DiscordUploadTransport for FailingAttachmentTransport {
+        async fn send_voice_file(
+            &self,
+            _http: &serenity::all::Http,
+            _channel: ChannelId,
+            _filename: &str,
+            _bytes: Vec<u8>,
+            _meta: &VoiceMetadata,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn send_ordinary_file(
+            &self,
+            _http: &serenity::all::Http,
+            _channel: ChannelId,
+            _filename: &str,
+            _bytes: Vec<u8>,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn send_forum_file(
+            &self,
+            _http: &serenity::all::Http,
+            _channel: ChannelId,
+            _filename: &str,
+            _bytes: Vec<u8>,
+            _is_voice: bool,
+        ) -> Result<()> {
+            Ok(())
+        }
+
+        async fn send_attachments(
+            &self,
+            _http: &serenity::all::Http,
+            _channel: ChannelId,
+            _attachments: Vec<CreateAttachment>,
+        ) -> Result<()> {
+            Err(OmonError::Multiplexer("attachment upload refused".into()))
+        }
+    }
+
+    /// Blocks the placeholder send of any referenced (reply) stream until released, so a test can
+    /// prove one slow stream does not stall another session's stream.
+    struct GatedTransport {
+        inner: RecordingTransport,
+        entered: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+    }
+
+    #[async_trait]
+    impl DiscordMessageTransport for GatedTransport {
+        async fn start_typing(&self, channel_id: ChannelId) -> Result<()> {
+            self.inner.start_typing(channel_id).await
+        }
+
+        async fn edit_message(
+            &self,
+            channel_id: ChannelId,
+            message_id: MessageId,
+            content: String,
+        ) -> Result<()> {
+            self.inner
+                .edit_message(channel_id, message_id, content)
+                .await
+        }
+
+        async fn send_message(&self, channel_id: ChannelId, content: String) -> Result<MessageId> {
+            self.inner.send_message(channel_id, content).await
+        }
+
+        async fn send_message_with_reference(
+            &self,
+            channel_id: ChannelId,
+            content: String,
+            reference: Option<MessageId>,
+        ) -> Result<MessageId> {
+            if reference.is_some() {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            self.inner.send_message(channel_id, content).await
+        }
+
+        async fn delete_message(&self, channel_id: ChannelId, message_id: MessageId) -> Result<()> {
+            self.inner.delete_message(channel_id, message_id).await
+        }
+    }
+
+    fn egress_with(
+        transport: Arc<dyn DiscordMessageTransport>,
+        uploader: Arc<dyn DiscordFileUploader>,
+    ) -> DiscordEgress {
+        DiscordEgress::new(Arc::new(serenity::Http::new("test-token")))
+            .with_message_transport(transport)
+            .with_file_uploader(uploader)
+    }
+
+    #[test]
+    fn media_directive_requires_boundary_and_uppercase() {
+        for prose in [
+            "Social media: Twitter and Reddit",
+            "multimedia: foo",
+            "mass MEDIA-style: bar",
+            "Media: lower case is prose",
+        ] {
+            let (cleaned, paths) = extract_media_directives(prose);
+            assert!(paths.is_empty(), "{prose:?} must not yield media paths");
+            assert_eq!(cleaned, prose);
+        }
+        let (cleaned, paths) = extract_media_directives("see MEDIA:/tmp/a.png please");
+        assert_eq!(paths, vec!["/tmp/a.png"]);
+        assert_eq!(cleaned, "see please");
+        let (cleaned, paths) = extract_media_directives("report:\nMEDIA:/tmp/b.png");
+        assert_eq!(paths, vec!["/tmp/b.png"]);
+        assert_eq!(cleaned, "report:");
+    }
+
+    #[test]
+    fn media_path_rejects_cwd_and_secret_files() {
+        // The gateway cwd (holding .env and the SQLite DB) is no longer an authorized root.
+        assert!(validate_media_path("Cargo.toml").is_err());
+        let cwd = std::env::current_dir().unwrap();
+        assert!(validate_media_path_in("Cargo.toml", &[cwd]).is_ok());
+
+        let dir = tempfile::tempdir().unwrap();
+        for denied in [
+            ".env",
+            "prod.env",
+            ".env.local",
+            "gateway.db",
+            "state.sqlite3",
+        ] {
+            let path = dir.path().join(denied);
+            std::fs::write(&path, b"secret").unwrap();
+            assert!(
+                validate_media_path(path.to_str().unwrap()).is_err(),
+                "{denied} must be refused"
+            );
+        }
+        let ok = dir.path().join("chart.png");
+        std::fs::write(&ok, b"png").unwrap();
+        assert!(validate_media_path(ok.to_str().unwrap()).is_ok());
+        assert!(
+            validate_media_path(dir.path().to_str().unwrap()).is_err(),
+            "directories are not uploadable"
+        );
+    }
+
+    #[test]
+    fn coalesce_preserves_author_reference_and_origin() {
+        let s = session("coalesce");
+        let e1 = InboundEvent::message(s.clone(), "m1", "one").with_author_id("author-1");
+        let e2 = InboundEvent::message(s.clone(), "m2", "two")
+            .with_author_id("author-1")
+            .with_referenced_message_id("ref-9");
+        let e3 = InboundEvent::message(s, "m3", "three").with_author_id("author-1");
+        let coalesced = coalesce_inbound_events(vec![e1, e2, e3]).unwrap();
+        assert_eq!(coalesced.author_id.as_deref(), Some("author-1"));
+        assert_eq!(coalesced.referenced_message_id.as_deref(), Some("ref-9"));
+        assert_eq!(coalesced.origin, crate::EventOrigin::User);
+    }
+
+    #[test]
+    fn dead_target_classification_is_channel_scoped() {
+        // Operation-scoped failures must not blackhole the whole channel.
+        assert_eq!(
+            classify_dead_target(403, 50013, "Missing Permissions", false),
+            None
+        );
+        assert_eq!(
+            classify_dead_target(
+                403,
+                50005,
+                "Cannot edit a message authored by another user",
+                true
+            ),
+            None
+        );
+        assert_eq!(classify_dead_target(404, 0, "404: Not Found", true), None);
+        assert_eq!(
+            classify_dead_target(404, 10008, "Unknown Message", true),
+            None
+        );
+        // Channel-level failures do.
+        assert!(classify_dead_target(404, 10003, "Unknown Channel", false).is_some());
+        assert!(classify_dead_target(403, 50001, "Missing Access", false).is_some());
+        assert!(classify_dead_target(403, 50013, "Missing Permissions", true).is_some());
+    }
+
+    #[test]
+    fn dead_target_peek_does_not_consume_probe_slot() {
+        let registry = DeadTargetRegistry::new().with_probe_interval(std::time::Duration::ZERO);
+        registry.mark_dead_for_bot("bot", 7, 403, "HTTP 403: Missing Access");
+        assert!(registry.is_dead_for_bot_peek("bot", 7));
+        assert!(registry.is_dead_for_bot_peek("bot", 7));
+        // The send probe is still available after non-send callers peeked.
+        assert!(!registry.is_dead_for_bot("bot", 7));
+        assert!(registry.is_dead_for_bot("bot", 7));
+        assert!(!registry.is_dead_for_bot_peek("bot", 8));
+    }
+
+    #[test]
+    fn clear_for_bot_reports_only_real_removals() {
+        let registry = DeadTargetRegistry::new();
+        assert!(!registry.clear_for_bot("bot", 1));
+        registry.mark_dead_for_bot("bot", 1, 404, "HTTP 404: Unknown Channel");
+        assert!(registry.clear_for_bot("bot", 1));
+    }
+
+    #[test]
+    fn receive_watchdog_tracks_each_client_separately() {
+        let (a, b) = (0xA11C_E001_usize, 0xB0B0_0002_usize);
+        last_event_slot(a).store(123, Ordering::Relaxed);
+        assert_eq!(last_event_slot(a).load(Ordering::Relaxed), 123);
+        assert_eq!(last_event_slot(b).load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn owner_dm_and_edit_content_fit_discord_limits() {
+        let huge = "lookup row\n".repeat(6_000);
+        let chunks = owner_dm_chunks(&huge);
+        assert!(chunks.len() > 1 && chunks.len() <= MAX_SPLIT_MESSAGES);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= DISCORD_MESSAGE_LIMIT));
+        let edit = edit_message_content(&"x".repeat(5_000));
+        assert!(edit.chars().count() <= DISCORD_MESSAGE_LIMIT);
+        assert_eq!(edit_message_content("short"), "short");
+    }
+
+    #[tokio::test]
+    async fn send_message_with_media_lookalike_prose_is_delivered() {
+        let transport = Arc::new(RecordingTransport::default());
+        let uploader = Arc::new(CountingUploader::default());
+        let egress = egress_with(transport.clone(), uploader.clone());
+        egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session("7"),
+                content: "Social media: Twitter and Reddit".into(),
+                reply_to: None,
+            })
+            .await
+            .expect("prose must be delivered, not aborted by a fake media directive");
+        assert_eq!(
+            transport.sent.lock().unwrap().as_slice(),
+            ["Social media: Twitter and Reddit"]
+        );
+        assert_eq!(uploader.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn send_message_missing_media_still_delivers_text() {
+        let transport = Arc::new(RecordingTransport::default());
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()));
+        egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session("7"),
+                content: "hello\nMEDIA:/does/not/exist.png".into(),
+                reply_to: None,
+            })
+            .await
+            .expect("a nonexistent media path is a false positive, not a delivery failure");
+        let sent = transport.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].starts_with("hello"));
+        assert!(!sent[0].contains("MEDIA:"));
+    }
+
+    #[tokio::test]
+    async fn send_message_unauthorized_media_delivers_text_then_errors_without_upload() {
+        let transport = Arc::new(RecordingTransport::default());
+        let uploader = Arc::new(CountingUploader::default());
+        let egress = egress_with(transport.clone(), uploader.clone());
+        let result = egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session("7"),
+                content: "see attached\nMEDIA:Cargo.toml".into(),
+                reply_to: None,
+            })
+            .await;
+        assert!(result.is_err(), "an unauthorized path must still surface");
+        assert_eq!(uploader.calls.load(Ordering::SeqCst), 0);
+        let sent = transport.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "the reply text is delivered exactly once");
+        assert!(sent[0].starts_with("see attached"));
+    }
+
+    #[tokio::test]
+    async fn send_message_strips_reasoning_before_delivery() {
+        let transport = Arc::new(RecordingTransport::default());
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()));
+        egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session("7"),
+                content: "<think>private chain of thought</think>visible answer".into(),
+                reply_to: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            transport.sent.lock().unwrap().as_slice(),
+            ["visible answer"]
+        );
+    }
+
+    #[tokio::test]
+    async fn final_stream_with_bad_media_keeps_text_and_does_not_repost_on_retry() {
+        let transport = Arc::new(RecordingTransport::default());
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()));
+        let chunk = crate::StreamChunk {
+            stream_id: Uuid::new_v4(),
+            sequence: 0,
+            content: "final reply\nMEDIA:Cargo.toml".into(),
+            is_final: true,
+            reply_to: None,
+        };
+        let action = OutboundAction::Stream {
+            session: session("7"),
+            chunk,
+        };
+        assert!(egress.dispatch(action.clone()).await.is_err());
+        let delivered = transport.edits.lock().unwrap().clone();
+        assert_eq!(delivered.len(), 1);
+        assert!(delivered[0].starts_with("final reply"));
+        assert!(!delivered[0].contains("MEDIA:"));
+        // The stream stays registered, so a retry no-ops instead of double-posting.
+        assert_eq!(egress.streams.lock().await.len(), 1);
+        egress.dispatch(action).await.expect("retry is a no-op");
+        assert_eq!(transport.edits.lock().unwrap().len(), 1);
+        assert_eq!(
+            transport.sent.lock().unwrap().len(),
+            1,
+            "one placeholder only"
+        );
+    }
+
+    #[tokio::test]
+    async fn table_upload_failure_falls_back_to_original_markdown() {
+        let transport = Arc::new(RecordingTransport::default());
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()))
+            .with_upload_transport(Arc::new(FailingAttachmentTransport));
+        let result = egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session("7"),
+                content: "intro\n\n| Col 1 | Col 2 |\n| --- | --- |\n| X | Y |\n".into(),
+                reply_to: None,
+            })
+            .await;
+        assert!(result.is_err(), "the failed upload is still surfaced");
+        let sent = transport.sent.lock().unwrap().clone();
+        assert!(
+            sent.iter().any(|text| text.contains("| Col 1 | Col 2 |")),
+            "the table must not be lost when its image cannot be uploaded: {sent:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_placeholder_send_does_not_block_other_streams() {
+        let transport = Arc::new(GatedTransport {
+            inner: RecordingTransport::default(),
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()));
+        let slow = {
+            let egress = egress.clone();
+            tokio::spawn(async move {
+                egress
+                    .dispatch(OutboundAction::Stream {
+                        session: session("7"),
+                        chunk: crate::StreamChunk {
+                            stream_id: Uuid::new_v4(),
+                            sequence: 0,
+                            content: "slow".into(),
+                            is_final: true,
+                            reply_to: Some("5".into()),
+                        },
+                    })
+                    .await
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(5), transport.entered.notified())
+            .await
+            .expect("slow stream should reach its placeholder send");
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            egress.dispatch(OutboundAction::Stream {
+                session: session("8"),
+                chunk: crate::StreamChunk {
+                    stream_id: Uuid::new_v4(),
+                    sequence: 0,
+                    content: "fast".into(),
+                    is_final: true,
+                    reply_to: None,
+                },
+            }),
+        )
+        .await
+        .expect("another session's stream must not wait on the slow placeholder send")
+        .unwrap();
+        transport.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), slow)
+            .await
+            .expect("slow stream completes once released")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn upload_file_refuses_secret_bearing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join(".env");
+        std::fs::write(&secret, b"TOKEN=1").unwrap();
+        let uploader = Arc::new(CountingUploader::default());
+        let egress = egress_with(Arc::new(RecordingTransport::default()), uploader.clone());
+        let result = egress
+            .dispatch(OutboundAction::UploadFile {
+                session: session("7"),
+                path: secret,
+            })
+            .await;
+        assert!(result.is_err());
+        assert_eq!(uploader.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn react_with_non_numeric_channel_errors_instead_of_panicking() {
+        let egress = egress_with(
+            Arc::new(RecordingTransport::default()),
+            Arc::new(CountingUploader::default()),
+        );
+        for channel in ["not-a-number", "0"] {
+            let result = egress
+                .dispatch(OutboundAction::React {
+                    session: session(channel),
+                    message_id: "1".into(),
+                    emoji: "x".into(),
+                    remove_others: false,
+                })
+                .await;
+            assert!(result.is_err(), "channel {channel:?} must be rejected");
+        }
+    }
+
+    struct NoRunner;
+
+    #[async_trait]
+    impl crate::AgentRunner for NoRunner {
+        async fn run(
+            &self,
+            _session: &mut crate::SessionContext,
+            _event: InboundEvent,
+        ) -> Result<()> {
+            Err(OmonError::Multiplexer("runner must not be invoked".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn backfill_replay_of_text_stop_is_not_routed_as_a_prompt() {
+        use crate::{MultiplexerConfig, SessionMultiplexer};
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            Arc::new(NoRunner),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer, db.pool().clone());
+        let event = InboundEvent::message(session("stop"), "stop-1", " /STOP ");
+        assert!(!route_claimed_event_awaiting_turn(&data, event)
+            .await
+            .unwrap());
+        assert!(!DeliveryLedgerService::new(db.pool().clone())
+            .is_duplicate("discord:stop-1")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn lane_owner_reply_with_moved_thread_owner_falls_through() {
+        use crate::storage::{insert_lane, Lane};
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let mut lane = Lane::new(
+            "lane-1",
+            "t",
+            "lead",
+            "/tmp",
+            "/tmp/brief.md",
+            "lane-session",
+            "done",
+        );
+        lane.thread_channel_id = Some("88".into());
+        insert_lane(db.pool(), &lane).await.unwrap();
+        crate::storage::lanes::bind_lane_thread(db.pool(), "lane-1", "99")
+            .await
+            .unwrap();
+        // The thread has since been taken over by bot 100: binding to it now mismatches.
+        Database::record_thread_owner(db.pool(), 88, 100)
+            .await
+            .unwrap();
+
+        let message: Message = serde_json::from_value(serde_json::json!({
+            "id": "1001", "channel_id": "88", "guild_id": "77",
+            "author": {"id": crate::sessions::status_reply::owner_id(), "username": "owner",
+                       "discriminator": "0001", "avatar": null, "bot": false},
+            "content": "continue", "timestamp": "2026-10-11T00:00:00Z",
+            "edited_timestamp": null, "tts": false, "mention_everyone": false,
+            "mentions": [], "mention_roles": [], "attachments": [], "embeds": [],
+            "pinned": false, "type": 0
+        }))
+        .unwrap();
+        let config = InboundFilterConfig {
+            allow_all_users: true,
+            ..Default::default()
+        };
+        let intercepted = intercept_lane_owner_reply(
+            db.pool(),
+            &message,
+            UserId::new(100),
+            Some(ChannelType::PublicThread),
+            &config,
+        )
+        .await
+        .expect("a binding mismatch must not abort message handling");
+        assert!(!intercepted);
+    }
+
+    struct SignalRunner(tokio::sync::mpsc::UnboundedSender<()>);
+
+    #[async_trait]
+    impl crate::AgentRunner for SignalRunner {
+        async fn run(
+            &self,
+            _session: &mut crate::SessionContext,
+            _event: InboundEvent,
+        ) -> Result<()> {
+            let _ = self.0.send(());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn live_routing_advances_the_bot_cursor_backfill_reads() {
+        use crate::{MultiplexerConfig, SessionMultiplexer};
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let multiplexer = SessionMultiplexer::new(
+            db.pool().clone(),
+            Arc::new(SignalRunner(tx)),
+            MultiplexerConfig::default(),
+        );
+        let data = PoiseData::new(multiplexer, db.pool().clone());
+        let event = InboundEvent::message(
+            session("555").with_bot_id("9"),
+            "1234",
+            "hello from the live path",
+        );
+        assert!(route_claimed_event(&data, event).await.unwrap());
+        tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("turn should reach the runner")
+            .expect("runner channel open");
+        assert_eq!(
+            get_bot_channel_cursor(db.pool(), "9", "555").await.unwrap(),
+            Some("1234".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn bot_cursor_update_is_monotonic_under_immediate_transaction() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        assert!(update_bot_channel_cursor(&pool, "9", "555", "2000")
+            .await
+            .unwrap());
+        assert!(!update_bot_channel_cursor(&pool, "9", "555", "1500")
+            .await
+            .unwrap());
+        assert_eq!(
+            get_bot_channel_cursor(&pool, "9", "555").await.unwrap(),
+            Some("2000".to_string())
+        );
+    }
+}

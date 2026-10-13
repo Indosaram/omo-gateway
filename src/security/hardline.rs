@@ -2,8 +2,8 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 use super::normalize::{
-    command_detection_variants, command_parser_limit_exceeded, grep_safe_detection_variant,
-    normalize_command_for_detection,
+    command_detection_variants, command_detection_variants_with_budget,
+    command_parser_limit_exceeded, grep_safe_detection_variant, normalize_command_for_detection,
 };
 
 struct HardlineRule {
@@ -20,8 +20,8 @@ fn build_hardline_rm_path(path_alt: &str) -> String {
 }
 
 static HARDLINE_PATTERNS: LazyLock<Vec<HardlineRule>> = LazyLock::new(|| {
-    let cmdpos = r"(?:^|[\n`]|[$]\()\s*(?:sudo\s+(?:-[^\s]+\s+)*)?(?:env\s+(?:\w+=\S*\s+)*)?(?:(?:exec|nohup|setsid|time)\s+)*\s*";
-    let rm_prefix = format!(r"{cmdpos}rm\s+(-[^\s]*\s+)*");
+    let cmdpos = r"(?:^|[\n`]|[$]\()\s*(?:(?:\S*/)?sudo\s+(?:-[^\s]+\s+(?:[^-\s]\S*\s+)?)*)?(?:(?:\S*/)?env\s+(?:-[^\s]+\s+(?:[^-\s=]+\s+)?|\w+=\S*\s+)*)?(?:(?:exec|nohup|setsid|time)\s+)*\s*(?:\S*/)?";
+    let rm_prefix = format!(r"{cmdpos}rm\s+(?:[^\s;&|\n]+\s+)*");
     let hardline_system_dirs = r"/home|/home/\*|/root|/root/\*|/etc|/etc/\*|/usr|/usr/\*|/var|/var/\*|/bin|/bin/\*|/sbin|/sbin/\*|/boot|/boot/\*|/lib|/lib/\*|/System|/System/\*";
 
     let root_rm_path = build_hardline_rm_path(r"/(?:/|[.]/|[.][.]/)*(?:[.]|[.][.])?\**|/ \*");
@@ -62,14 +62,16 @@ static HARDLINE_PATTERNS: LazyLock<Vec<HardlineRule>> = LazyLock::new(|| {
             "fork bomb",
         ),
         // Kill all processes
+        // `kill -1` / `kill -9 -1` (pid -1 = every process). `-1` must be the final operand:
+        // `kill -1 1234` sends SIGHUP to one process and is not a kill-all.
         (
-            r"\bkill\s+(-[^\s]+\s+)*-1\b".to_string(),
+            r"\bkill\s+(?:[^\s;&|]+\s+)*-1(?:\s+(?:\d*[<>]\S*|#.*))*\s*(?:$|[;&|)`\n])".to_string(),
             "kill all processes",
         ),
         (r"\bkill\s+-9\s+-1\b".to_string(), "kill all processes"),
         // Shutdown / reboot / halt
         (
-            format!(r"{cmdpos}(shutdown|reboot|halt|poweroff)\b"),
+            format!(r"{cmdpos}(shutdown|reboot|halt|poweroff)(?:\s|$|[;&|)<>`])"),
             "system shutdown/reboot",
         ),
         (
@@ -122,13 +124,17 @@ pub fn detect_hardline_command(command: &str) -> Option<String> {
     if malformed_grep {
         return Some("command parser limit or malformed executable payload".to_string());
     }
-    for variant in command_detection_variants(command) {
+    let (variants, budget_exhausted) = command_detection_variants_with_budget(command);
+    for variant in variants {
         let variant_lower = variant.to_ascii_lowercase();
         for rule in HARDLINE_PATTERNS.iter() {
             if rule.regex.is_match(&variant_lower) {
                 return Some(rule.description.to_string());
             }
         }
+    }
+    if budget_exhausted {
+        return Some("command parser limit exceeded".to_string());
     }
     if let Some(reason) = check_sudo_stdin_guard(command) {
         return Some(reason);
@@ -138,30 +144,41 @@ pub fn detect_hardline_command(command: &str) -> Option<String> {
 
 /// Matches wildcard patterns (fnmatch style) where `*` matches any sequence of characters and `?` matches any single character.
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
-    let pattern = pattern.to_ascii_lowercase();
-    let text = text.to_ascii_lowercase();
-    let p_chars: Vec<char> = pattern.chars().collect();
-    let t_chars: Vec<char> = text.chars().collect();
-    let (p_len, t_len) = (p_chars.len(), t_chars.len());
-    let mut dp = vec![vec![false; t_len + 1]; p_len + 1];
-    dp[0][0] = true;
-    for i in 1..=p_len {
-        if p_chars[i - 1] == '*' {
-            dp[i][0] = dp[i - 1][0];
+    let pc: Vec<char> = pattern.to_ascii_lowercase().chars().collect();
+    let tc: Vec<char> = text.to_ascii_lowercase().chars().collect();
+    // Iterative matcher with single-star backtracking: no O(pattern * text) table, so a huge
+    // command cannot force a huge allocation per variant and glob.
+    let (mut p, mut t) = (0usize, 0usize);
+    let mut star: Option<usize> = None;
+    let mut mark = 0usize;
+    while t < tc.len() {
+        if p < pc.len() && pc[p] == '*' {
+            star = Some(p);
+            mark = t;
+            p += 1;
+        } else if p < pc.len() && (pc[p] == '?' || pc[p] == tc[t]) {
+            p += 1;
+            t += 1;
+        } else if let Some(s) = star {
+            p = s + 1;
+            mark += 1;
+            t = mark;
         } else {
-            break;
+            return false;
         }
     }
-    for i in 1..=p_len {
-        for j in 1..=t_len {
-            if p_chars[i - 1] == '*' {
-                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
-            } else if p_chars[i - 1] == '?' || p_chars[i - 1] == t_chars[j - 1] {
-                dp[i][j] = dp[i - 1][j - 1];
-            }
-        }
+    while p < pc.len() && pc[p] == '*' {
+        p += 1;
     }
-    dp[p_len][t_len]
+    p == pc.len()
+}
+
+/// A trailing ` *` only adds arguments, so `npm publish *` must also deny the bare `npm publish`.
+fn glob_matches(pattern: &str, candidate: &str) -> bool {
+    wildcard_match(pattern, candidate)
+        || pattern.strip_suffix(" *").is_some_and(|stem| {
+            !stem.trim().is_empty() && wildcard_match(stem.trim_end(), candidate)
+        })
 }
 
 /// Returns the matching `APPROVALS_DENY` pattern if the command or any normalized variant matches.
@@ -180,7 +197,7 @@ pub fn match_user_deny_rule<'a>(command: &str, deny_patterns: &'a [String]) -> O
     for variant in command_detection_variants(command) {
         let candidate = variant.trim();
         for pattern in &globs {
-            if wildcard_match(pattern, candidate) {
+            if glob_matches(pattern, candidate) {
                 return Some(pattern);
             }
         }
@@ -190,7 +207,7 @@ pub fn match_user_deny_rule<'a>(command: &str, deny_patterns: &'a [String]) -> O
         // wrapper-stripped executable form as well.
         for stripped in wrapper_stripped_forms(candidate) {
             for pattern in &globs {
-                if wildcard_match(pattern, stripped.trim()) {
+                if glob_matches(pattern, stripped.trim()) {
                     return Some(pattern);
                 }
             }
@@ -199,12 +216,19 @@ pub fn match_user_deny_rule<'a>(command: &str, deny_patterns: &'a [String]) -> O
     None
 }
 
+/// Upper bound on command-start spans re-rooted per variant, so a crafted script cannot
+/// multiply glob-matching work.
+const MAX_WRAPPER_STRIPPED_FORMS: usize = 256;
+
 /// Yields each command-start span of `command` re-rooted at its real executable, i.e.
 /// with wrapper prefixes such as `env`, `sudo`, `exec` and leading `VAR=value`
 /// assignments removed. Returns nothing when there was no prefix to strip.
 fn wrapper_stripped_forms(command: &str) -> Vec<String> {
     let mut forms = Vec::new();
-    for (start, _, _) in crate::security::normalize::iter_shell_command_word_spans(command) {
+    for (start, _, _) in crate::security::normalize::iter_shell_command_word_spans(command)
+        .into_iter()
+        .take(MAX_WRAPPER_STRIPPED_FORMS)
+    {
         if start == 0 {
             continue;
         }

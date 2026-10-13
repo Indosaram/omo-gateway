@@ -588,6 +588,81 @@ impl GuardWatcher {
 }
 
 pub const GUARD_INTERVAL: Duration = Duration::from_secs(60);
+const LAUNCH_DISCORD_TIMEOUT: Duration = Duration::from_secs(30);
+
+async fn active_lane_count<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+) -> crate::Result<u64> {
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM lanes WHERE status IN ('working','blocked','not_done','done_claimed')",
+    )
+    .fetch_one(executor)
+    .await?;
+    u64::try_from(count).map_err(|error| crate::OmonError::Config(error.to_string()))
+}
+
+/// Creates the lane thread with no DB connection held; returns (bot id, thread id).
+async fn create_launch_thread(
+    lane: &crate::storage::Lane,
+    parent: &str,
+) -> Result<(String, String), String> {
+    let parent = parent.parse::<u64>().map_err(|error| error.to_string())?;
+    let threads =
+        super::discord_threads::DiscordThreads::from_env().map_err(|error| error.to_string())?;
+    let bot = tokio::time::timeout(LAUNCH_DISCORD_TIMEOUT, threads.http().get_current_user())
+        .await
+        .map_err(|_| "discord bot lookup timed out".to_string())?
+        .map_err(|error| error.to_string())?
+        .id
+        .to_string();
+    let created = tokio::time::timeout(
+        LAUNCH_DISCORD_TIMEOUT,
+        threads.create_thread(
+            serenity::all::ChannelId::new(parent),
+            &lane.key,
+            &lane.title,
+        ),
+    )
+    .await
+    .map_err(|_| "discord thread creation timed out".to_string())?
+    .map_err(|error| error.to_string())?;
+    Ok((bot, created.thread_channel_id.to_string()))
+}
+
+/// Best effort: the lane service must not stall on a Discord failure here.
+async fn archive_orphan_thread(thread: u64) {
+    let Ok(threads) = super::discord_threads::DiscordThreads::from_env() else {
+        return;
+    };
+    match tokio::time::timeout(
+        LAUNCH_DISCORD_TIMEOUT,
+        threads.archive(serenity::all::ChannelId::new(thread)),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!(thread, %error, "orphan lane thread archive failed"),
+        Err(_) => tracing::warn!(thread, "orphan lane thread archive timed out"),
+    }
+}
+
+async fn record_launch_problem(
+    pool: &SqlitePool,
+    lane: &crate::storage::Lane,
+    kind: &str,
+    detail: &str,
+) -> crate::Result<()> {
+    tracing::warn!(key = %lane.key, kind, detail, "queued lane launch problem");
+    crate::storage::enqueue_lane_event(
+        pool,
+        Some(&lane.key),
+        &lane.lead_session_key,
+        kind,
+        &super::scrub(&format!("{}: {detail}", lane.key)),
+    )
+    .await?;
+    Ok(())
+}
 
 /// Promote queued lanes atomically with their history and launch event.
 /// The write lock makes the active-lane limit authoritative across callers.
@@ -597,7 +672,40 @@ pub async fn retry_queued(
     thresholds: &GuardThresholds,
 ) -> crate::Result<Vec<String>> {
     let mut launched = Vec::new();
-    for lane in crate::storage::list_lanes(pool, &["queued"]).await? {
+    let mut lanes = crate::storage::list_lanes(pool, &["queued"]).await?;
+    // list_lanes is newest-first; the longest-waiting lane gets the free slot.
+    lanes.reverse();
+    for lane in lanes {
+        // A failed launch is not retried (no repeated starter posts) until the lane row changes.
+        let failed_since_change: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key = ? AND kind = 'launch_failed' AND julianday(created_at) >= julianday(?))",
+        )
+        .bind(&lane.key)
+        .bind(lane.updated_at)
+        .fetch_one(pool)
+        .await?;
+        if failed_since_change {
+            continue;
+        }
+        let mut current = host.clone();
+        current.active_lanes = active_lane_count(pool).await?;
+        if current.can_launch(thresholds).is_hold() {
+            break;
+        }
+        let mut bot = None;
+        let thread = match (&lane.parent_channel_id, &lane.thread_channel_id) {
+            (Some(parent), None) => match create_launch_thread(&lane, parent).await {
+                Ok((bot_id, thread)) => {
+                    bot = Some(bot_id);
+                    Some(thread)
+                }
+                Err(error) => {
+                    record_launch_problem(pool, &lane, "launch_failed", &error).await?;
+                    continue;
+                }
+            },
+            _ => lane.thread_channel_id.clone(),
+        };
         let mut tx = pool.begin().await?;
         let changed = sqlx::query(
             "UPDATE lanes SET updated_at = updated_at WHERE key = ? AND status = 'queued'",
@@ -605,41 +713,26 @@ pub async fn retry_queued(
         .bind(&lane.key)
         .execute(&mut *tx)
         .await?;
-        if changed.rows_affected() == 0 {
+        current.active_lanes = active_lane_count(&mut *tx).await?;
+        if changed.rows_affected() == 0 || current.can_launch(thresholds).is_hold() {
             tx.rollback().await?;
-            continue;
-        }
-        let count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM lanes WHERE status IN ('working','blocked','not_done','done_claimed')",
-        )
-        .fetch_one(&mut *tx)
-        .await?;
-        let mut current = host.clone();
-        current.active_lanes =
-            u64::try_from(count).map_err(|error| crate::OmonError::Config(error.to_string()))?;
-        if current.can_launch(thresholds).is_hold() {
-            tx.rollback().await?;
+            if bot.is_some() {
+                let detail = format!(
+                    "thread {} created but lane was no longer launchable",
+                    thread.as_deref().unwrap_or_default()
+                );
+                record_launch_problem(pool, &lane, "launch_orphan_thread", &detail).await?;
+                // The thread id is not persisted, so the next tick creates another
+                // one: archive this orphan instead of leaving one per tick behind.
+                if let Some(thread) = thread.as_deref().and_then(|id| id.parse::<u64>().ok()) {
+                    archive_orphan_thread(thread).await;
+                }
+            }
+            if changed.rows_affected() == 0 {
+                continue;
+            }
             break;
         }
-        let thread = match (&lane.parent_channel_id, &lane.thread_channel_id) {
-            (Some(parent), None) => {
-                let parent = parent
-                    .parse::<u64>()
-                    .map_err(|error| crate::OmonError::Config(error.to_string()))?;
-                let threads = super::discord_threads::DiscordThreads::from_env()
-                    .map_err(|error| crate::OmonError::Config(error.to_string()))?;
-                let created = threads
-                    .create_thread(
-                        serenity::all::ChannelId::new(parent),
-                        &lane.key,
-                        &lane.title,
-                    )
-                    .await
-                    .map_err(|error| crate::OmonError::Config(error.to_string()))?;
-                Some(created.thread_channel_id.to_string())
-            }
-            _ => lane.thread_channel_id.clone(),
-        };
         let now = chrono::Utc::now();
         sqlx::query("UPDATE lanes SET status = 'working', thread_channel_id = ?, updated_at = ?, last_activity_at = ? WHERE key = ? AND status = 'queued'")
             .bind(thread).bind(now).bind(now).bind(&lane.key).execute(&mut *tx).await?;
@@ -650,6 +743,13 @@ pub async fn retry_queued(
             .bind(super::scrub(&format!("{}: queued lane launched", lane.key)))
             .bind(now).execute(&mut *tx).await?;
         tx.commit().await?;
+        if let Some(bot) = bot {
+            if let Err(error) = crate::storage::lanes::bind_lane_thread(pool, &lane.key, &bot).await
+            {
+                record_launch_problem(pool, &lane, "launch_bind_failed", &error.to_string())
+                    .await?;
+            }
+        }
         launched.push(lane.key);
     }
     Ok(launched)
@@ -713,7 +813,8 @@ impl Drop for HeavySlotGuard {
         if let Some(file) = self.file.take() {
             // Explicitly unlock the flock before closing descriptor.
             // Keep the PID for stale-owner diagnostics; never unlink the lock inode.
-            let _ = file.unlock();
+            // fs2's flock unlock; std's inherent File::unlock needs Rust 1.89 (MSRV is 1.88).
+            let _ = FileExt::unlock(&file);
             drop(file);
         }
     }
@@ -729,12 +830,15 @@ pub async fn try_acquire_heavy_slot(
     };
     tokio::fs::create_dir_all(&dir).await?;
 
-    let slots_count = max_slots.unwrap_or_else(|| {
-        std::env::var("OMON_HEAVY_SLOTS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_HEAVY_SLOTS)
-    });
+    // Zero slots could never be acquired and would hang `acquire_heavy_slot`.
+    let slots_count = max_slots
+        .unwrap_or_else(|| {
+            std::env::var("OMON_HEAVY_SLOTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(DEFAULT_HEAVY_SLOTS)
+        })
+        .max(1);
 
     for slot_idx in 0..slots_count {
         let slot_path = dir.join(format!("slot.{}", slot_idx));
@@ -988,6 +1092,19 @@ mod tests {
         let rep_disk_clear = watcher.check(&s_ok_disk);
         assert_eq!(rep_disk_clear, Some(GuardReport::Clear));
         assert_eq!(watcher.state(), GuardState::Clear);
+    }
+
+    #[tokio::test]
+    async fn zero_heavy_slots_is_clamped_instead_of_waiting_forever() {
+        let temp_dir = tempfile::tempdir().expect("create tempdir");
+        let guard = tokio::time::timeout(
+            Duration::from_secs(10),
+            acquire_heavy_slot(Some(temp_dir.path()), Some(0), Duration::from_millis(10)),
+        )
+        .await
+        .expect("a zero slot count must not hang")
+        .expect("acquire slot");
+        assert_eq!(guard.slot_index(), 0);
     }
 
     #[tokio::test]

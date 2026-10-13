@@ -216,6 +216,47 @@ async fn commit_source(
             stats.dropped += 1;
             continue;
         }
+        if source == InboxSourceKind::Mail {
+            // Mail items are keyed by Gmail thread id, so a follow-up message in an
+            // already-collected thread arrives as the same source_ref with a new
+            // snippet. Refresh the row and drop stale decisions so it is re-triaged.
+            let existing: Option<(String, String)> = sqlx::query_as(
+                "SELECT id, raw_hash FROM inbox_items WHERE source = ? AND source_ref = ?",
+            )
+            .bind(source.as_str())
+            .bind(&item.source_ref)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some((existing_id, existing_hash)) = existing {
+                if existing_hash == item.raw_hash {
+                    stats.duplicates += 1;
+                } else {
+                    sqlx::query(
+                        "UPDATE inbox_items SET author = ?, title = ?, snippet = ?, received_at = ?, \
+                         link = ?, raw_hash = ?, collected_at = ? WHERE id = ?",
+                    )
+                    .bind(&item.author)
+                    .bind(&item.title)
+                    .bind(&item.snippet)
+                    .bind(item.received_at)
+                    .bind(&item.link)
+                    .bind(&item.raw_hash)
+                    .bind(Utc::now())
+                    .bind(&existing_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    sqlx::query(
+                        "DELETE FROM inbox_decisions WHERE item_id = ? \
+                         AND status IN ('open', 'done', 'dismissed')",
+                    )
+                    .bind(&existing_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    stats.inserted += 1;
+                }
+                continue;
+            }
+        }
         let item_id = item.id();
         let result = sqlx::query(
             "INSERT INTO inbox_items(id, source, source_ref, thread_ref, author, title, snippet, received_at, link, raw_hash, collected_at) \

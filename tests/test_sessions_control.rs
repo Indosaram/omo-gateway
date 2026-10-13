@@ -245,7 +245,12 @@ async fn adopted_lane_reads_claim_then_settles_after_objection_window() {
     let target: Target = "local:session-1".parse().unwrap();
     std::fs::write(temp.path().join("proof.txt"), "proof ready\n").unwrap();
     let key = driver
-        .adopt(&target, "finish proof", "file proof.txt", "owner")
+        .adopt(
+            &target,
+            "finish proof",
+            "file proof.txt",
+            omon_gateway::lanes::kibitzer::DEFAULT_LEAD,
+        )
         .await
         .unwrap();
     assert_eq!(

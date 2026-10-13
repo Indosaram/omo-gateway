@@ -46,6 +46,7 @@ where
     let output = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
+        .kill_on_drop(true)
         .output()
         .await
         .map_err(|error| OmonError::ToolExecution(format!("{program} could not start: {error}")))?;
@@ -96,4 +97,51 @@ pub(super) fn optional_string(value: &serde_json::Value, keys: &[&str]) -> Optio
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned)
     })
+}
+
+#[cfg(test)]
+mod run_json_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Spawns a child that reports its pid through a FIFO and then sleeps for
+    /// 300s, drops the `run_json` future (as the 60s timeout in `collect_all`
+    /// does), and asserts the child exits promptly instead of running on.
+    #[tokio::test]
+    async fn dropped_run_json_future_kills_hung_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let fifo = dir.path().join("pid.fifo");
+        let c_path = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let script = format!("echo $$ > '{}'; exec sleep 300", fifo.display());
+        let mut fut = Box::pin(run_json("sh", ["-c", script.as_str()]));
+        let fifo_read = fifo.clone();
+        let pid_task = tokio::task::spawn_blocking(move || {
+            std::fs::read_to_string(fifo_read)
+                .unwrap()
+                .trim()
+                .parse::<i32>()
+                .unwrap()
+        });
+        let pid = tokio::select! {
+            _ = &mut fut => panic!("run_json finished before the child reported its pid"),
+            pid = pid_task => pid.unwrap(),
+        };
+        drop(fut);
+        let reaped = tokio::time::timeout(
+            Duration::from_secs(10),
+            tokio::task::spawn_blocking(move || {
+                let mut status = 0;
+                unsafe { libc::waitpid(pid, &mut status, 0) }
+            }),
+        )
+        .await;
+        if reaped.is_err() {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        assert!(
+            reaped.is_ok(),
+            "hung child {pid} survived dropping run_json"
+        );
+    }
 }

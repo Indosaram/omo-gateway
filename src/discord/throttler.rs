@@ -197,7 +197,11 @@ impl<T: DiscordMessageTransport + ?Sized> LiveEditThrottler<T> {
             }
         }
 
-        self.transport.start_typing(self.channel_id).await?;
+        // The typing indicator is cosmetic: its failure must never abort an
+        // update (especially the final one that carries the answer).
+        if let Err(error) = self.transport.start_typing(self.channel_id).await {
+            tracing::debug!(%error, "typing indicator failed; continuing live edit");
+        }
 
         if !is_final {
             let preview = truncate_live_preview(content, DISCORD_MESSAGE_LIMIT);
@@ -441,6 +445,66 @@ fn scan_fences(text: &str, open: &mut Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FailingTypingTransport {
+        typing_calls: AtomicU64,
+        edits: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl DiscordMessageTransport for FailingTypingTransport {
+        async fn start_typing(&self, _channel_id: ChannelId) -> Result<()> {
+            self.typing_calls.fetch_add(1, Ordering::SeqCst);
+            Err(crate::error::OmonError::Config("typing failed".into()))
+        }
+
+        async fn edit_message(
+            &self,
+            _channel_id: ChannelId,
+            _message_id: MessageId,
+            content: String,
+        ) -> Result<()> {
+            self.edits.lock().unwrap().push(content);
+            Ok(())
+        }
+
+        async fn send_message(
+            &self,
+            _channel_id: ChannelId,
+            _content: String,
+        ) -> Result<MessageId> {
+            Ok(MessageId::new(2))
+        }
+
+        async fn delete_message(
+            &self,
+            _channel_id: ChannelId,
+            _message_id: MessageId,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn final_update_is_delivered_even_when_typing_fails() {
+        let transport = Arc::new(FailingTypingTransport {
+            typing_calls: AtomicU64::new(0),
+            edits: std::sync::Mutex::new(Vec::new()),
+        });
+        let throttler = LiveEditThrottler::with_debounce(
+            transport.clone(),
+            ChannelId::new(1),
+            MessageId::new(1),
+            Duration::ZERO,
+        );
+        throttler.update("partial", false).await.unwrap();
+        throttler.update("final answer", true).await.unwrap();
+        assert_eq!(
+            transport.edits.lock().unwrap().last().map(String::as_str),
+            Some("final answer")
+        );
+        assert_eq!(transport.typing_calls.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn test_truncate_live_preview_empty_and_short() {

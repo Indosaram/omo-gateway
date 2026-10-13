@@ -42,7 +42,7 @@ fn test_lane_scrub_hosts() {
 #[test]
 fn test_lane_scrub_credentials() {
     let input = "Authorization: Bearer secret-token-xyz";
-    assert_eq!(scrub(input), "Authorization: Bearer <redacted>");
+    assert_eq!(scrub(input), "Authorization: <redacted>");
 
     let url = "https://user:password@secret.internal/v1";
     assert_eq!(scrub(url), "https://<redacted>@secret.internal/v1");

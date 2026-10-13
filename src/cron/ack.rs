@@ -16,7 +16,7 @@ pub const ACK_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Run `command` through `sh -c`, bounded by `timeout`.
 /// The child is killed when the timeout fires.
-pub async fn run_ack_command(command: &str, timeout: Duration) -> std::io::Result<Output> {
+pub async fn run_ack_command(command_line: &str, timeout: Duration) -> std::io::Result<Output> {
     // kill_on_drop: when the timeout drops the in-flight future, the child
     // is killed instead of left running.
     let (shell, arg) = if cfg!(windows) {
@@ -28,20 +28,37 @@ pub async fn run_ack_command(command: &str, timeout: Duration) -> std::io::Resul
     } else {
         ("sh", "-c")
     };
-    let child = tokio::process::Command::new(shell)
+    let mut command = tokio::process::Command::new(shell);
+    command
         .arg(arg)
-        .arg(command)
+        .arg(command_line)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        // Own process group so a timeout can kill grandchildren, not just `sh`.
+        command.process_group(0);
+    }
+    let child = command.spawn()?;
+    #[cfg(unix)]
+    let pid = child.id();
     let result = tokio::time::timeout(timeout, child.wait_with_output()).await;
     match result {
         Ok(output) => output,
-        Err(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            format!("ack command timed out after {timeout:?}: {command}"),
-        )),
+        Err(_) => {
+            #[cfg(unix)]
+            if let Some(pid) = pid {
+                // SAFETY: signalling the process group created above.
+                unsafe {
+                    libc::kill(-(pid as i32), libc::SIGKILL);
+                }
+            }
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("ack command timed out after {timeout:?}: {command_line}"),
+            ))
+        }
     }
 }
 
@@ -91,6 +108,38 @@ mod tests {
             .expect("failing command still yields output");
         assert!(!output.status.success());
         assert_eq!(output.status.code(), Some(3));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_grandchildren_of_the_ack_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("grandchild.pid");
+        // The background sleeper outlives `sh`; only a process-group kill stops it.
+        let command = format!("sleep 60 & echo $! > '{}'; wait", pid_file.display());
+        let result = run_ack_command(&command, Duration::from_secs(2)).await;
+        assert!(result.is_err());
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .expect("grandchild pid recorded before the timeout")
+            .trim()
+            .parse()
+            .unwrap();
+        // SIGKILL delivery is immediate but process teardown is asynchronous: wait on the
+        // observable state (ESRCH) with a bounded deadline.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            // SAFETY: signal 0 only probes for existence.
+            let gone = unsafe { libc::kill(pid, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            if gone {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "grandchild {pid} must be killed together with the ack shell"
+            );
+            tokio::task::yield_now().await;
+        }
     }
 
     #[tokio::test]

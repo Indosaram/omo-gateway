@@ -95,8 +95,12 @@ impl IMessageSource {
                         OmonError::ToolExecution("imsg message missing id/rowid".into())
                     })?;
                 let id = identifier(id, "imsg message id")?;
-                let text = optional_string(message, &["text", "text_content", "body"])
-                    .ok_or_else(|| OmonError::ToolExecution("imsg message missing text".into()))?;
+                newest = Some(newest.map_or(received, |old| old.max(received)));
+                // Attachment-only messages carry no text; skip them (cursor still
+                // advances) instead of wedging the whole source on every tick.
+                let Some(text) = optional_string(message, &["text", "text_content", "body"]) else {
+                    continue;
+                };
                 let mut item = InboxItem::new(InboxSourceKind::Imessage, id, text, received);
                 item.thread_ref = Some(chat_id.to_owned());
                 item.author =
@@ -106,7 +110,6 @@ impl IMessageSource {
                             .map(str::to_owned)
                     });
                 item.title = optional_string(chat, &["name", "display_name"]);
-                newest = Some(newest.map_or(received, |old| old.max(received)));
                 items.push(item);
             }
         }

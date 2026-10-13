@@ -35,9 +35,9 @@ pub use memory::{Memory, MemoryStore};
 pub use mirror::*;
 pub use models::*;
 pub use multiplexer::{
-    parse_channel_prompts, parse_profile_routes, AgentRunner, ChannelPromptConfig,
-    MultiplexerConfig, OutboundDispatcher, ProfileRoute, ProfileRouter, RestartLoopGuard,
-    ScaleToZero, SessionActor, SessionMultiplexer,
+    parse_channel_prompts, parse_profile_routes, try_parse_profile_routes, AgentRunner,
+    ChannelPromptConfig, MultiplexerConfig, OutboundDispatcher, ProfileRoute, ProfileRouter,
+    RestartLoopGuard, ScaleToZero, SessionActor, SessionMultiplexer,
 };
 pub use readiness::*;
 pub use security::*;

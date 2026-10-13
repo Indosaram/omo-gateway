@@ -181,7 +181,13 @@ pub async fn record_drop(
         "INSERT INTO inbox_filter_stats(day, source, rule, count) VALUES(?, ?, ?, 1) \
          ON CONFLICT(day, source, rule) DO UPDATE SET count=count+1",
     )
-    .bind(Utc::now().date_naive().to_string())
+    // KST day, matching the digest/usage windows that read these counts.
+    .bind(
+        Utc::now()
+            .with_timezone(&chrono_tz::Asia::Seoul)
+            .date_naive()
+            .to_string(),
+    )
     .bind(source.as_str())
     .bind(rule)
     .execute(&mut **tx)

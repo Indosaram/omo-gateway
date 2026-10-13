@@ -2,6 +2,7 @@ import React, { FormEvent, useEffect, useState } from 'react'
 import { Bot, Check, Cpu, Edit3, MessageSquare, Plus, Save, Sparkles, Terminal, Trash2, Wrench } from 'lucide-react'
 import { Badge, Button, Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, Dialog, Input, Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui'
 import { api, formatDate } from '../api'
+import { buildBotUpdatePayload } from '../lib/bot-payload'
 
 export interface BotRecord {
   bot_id: string
@@ -109,19 +110,11 @@ export function BotsPage() {
     if (!editingBot) return
     setSaving(true)
     try {
-      const toolsetsArray = formToolsets
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-
       await api.request(`/api/bots/${encodeURIComponent(editingBot.bot_id)}`, {
         method: 'PUT',
-        body: JSON.stringify({
-          name: formName,
-          model: formModel.trim() || null,
-          system_prompt: formPrompt.trim() || null,
-          enabled_toolsets: toolsetsArray.length > 0 ? toolsetsArray : null,
-        }),
+        body: JSON.stringify(
+          buildBotUpdatePayload({ name: formName, model: formModel, prompt: formPrompt, toolsets: formToolsets }),
+        ),
       })
 
       setDialogOpen(false)

@@ -7,7 +7,8 @@ mod router;
 pub use actor::{record_inbound_transcript, AgentRunner, OutboundDispatcher, SessionActor};
 pub use gc::ScaleToZero;
 pub use profile_routing::{
-    parse_channel_prompts, parse_profile_routes, ChannelPromptConfig, ProfileRoute, ProfileRouter,
+    parse_channel_prompts, parse_profile_routes, try_parse_profile_routes, ChannelPromptConfig,
+    ProfileRoute, ProfileRouter,
 };
 pub use restart_loop_guard::RestartLoopGuard;
 pub use router::{MultiplexerConfig, SessionMultiplexer};

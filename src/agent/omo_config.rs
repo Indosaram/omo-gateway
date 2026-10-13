@@ -35,9 +35,11 @@ pub fn validate_agent_backend_env() -> Result<()> {
 }
 
 /// Configuration for the OMO app-server WebSocket daemon backend.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OmoBackendConfig {
     pub appserver_url: String,
+    /// Bearer token for the app-server (grants tool execution): never serialized.
+    #[serde(default, skip_serializing)]
     pub auth_token: Option<String>,
     pub connect_timeout: Duration,
     pub request_timeout: Duration,
@@ -53,6 +55,26 @@ pub struct OmoBackendConfig {
     pub fallback_model: String,
     pub per_agent_workspace: bool,
     pub workspace_root: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for OmoBackendConfig {
+    /// Redacts `auth_token` so tracing output and panics never carry the secret.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OmoBackendConfig")
+            .field("appserver_url", &self.appserver_url)
+            .field("auth_token", &self.auth_token.as_ref().map(|_| "***"))
+            .field("connect_timeout", &self.connect_timeout)
+            .field("request_timeout", &self.request_timeout)
+            .field("total_timeout", &self.total_timeout)
+            .field("no_content_grace", &self.no_content_grace)
+            .field("initial_response_timeout", &self.initial_response_timeout)
+            .field("default_model", &self.default_model)
+            .field("fallback_model", &self.fallback_model)
+            .field("per_agent_workspace", &self.per_agent_workspace)
+            .field("workspace_root", &self.workspace_root)
+            .finish()
+    }
 }
 
 /// Default local daemon URL when neither lane configures an endpoint.
@@ -125,6 +147,21 @@ pub fn model_for_purpose(purpose: ModelPurpose) -> String {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| OMON_MODEL_SMALL.to_string()),
     }
+}
+
+/// `OMON_WORKSPACE_ROOT` when set and non-empty, else `$HOME/.omon/workspace`;
+/// `None` only when neither is available.
+fn default_workspace_root(
+    configured: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    configured
+        .filter(|root| !root.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|home| !home.is_empty())
+                .map(|home| PathBuf::from(home).join(".omon").join("workspace"))
+        })
 }
 
 impl Default for OmoBackendConfig {
@@ -233,13 +270,17 @@ impl OmoBackendConfig {
         // (digests, refactors) need minutes, not seconds. 기본 1800s(30분)로
         // 총 상한과 맞춰, 조용한 구간 때문에 총 상한보다 먼저 끊기는 일이 없게 한다.
         let request_timeout = match std::env::var("OMON_OMO_TURN_TIMEOUT_SECS") {
-            Ok(v) if !v.trim().is_empty() => {
-                Duration::from_secs(v.trim().parse::<u64>().map_err(|_| {
-                    OmonError::Config(format!(
+            Ok(v) if !v.trim().is_empty() => Duration::from_secs(
+                v.trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|secs| *secs > 0)
+                    .ok_or_else(|| {
+                        OmonError::Config(format!(
                         "invalid OMON_OMO_TURN_TIMEOUT_SECS: '{v}', expected a positive integer"
                     ))
-                })?)
-            }
+                    })?,
+            ),
             _ => Duration::from_secs(1800),
         };
 
@@ -249,7 +290,7 @@ impl OmoBackendConfig {
         // 기본 1800s(30분): 대화형 턴은 INTERACTIVE_TURN_CAP(1800s)까지 허용한다.
         let total_timeout = match std::env::var("OMON_OMO_TURN_TOTAL_TIMEOUT_SECS") {
             Ok(v) if !v.trim().is_empty() => Duration::from_secs(
-                v.trim().parse::<u64>().map_err(|_| {
+                v.trim().parse::<u64>().ok().filter(|secs| *secs > 0).ok_or_else(|| {
                     OmonError::Config(format!(
                         "invalid OMON_OMO_TURN_TOTAL_TIMEOUT_SECS: '{v}', expected a positive integer"
                     ))
@@ -290,7 +331,13 @@ impl OmoBackendConfig {
             Err(_) => true,
         };
 
-        let workspace_root = std::env::var_os("OMON_WORKSPACE_ROOT").map(PathBuf::from);
+        // Same zero-config default as the main runtime (`~/.omon/workspace`), so the
+        // lane, kibitzer, triage and judge-fallback backends that build their config
+        // straight from the environment get per-agent workspaces too.
+        let workspace_root = default_workspace_root(
+            std::env::var_os("OMON_WORKSPACE_ROOT"),
+            std::env::var_os("HOME"),
+        );
 
         Ok(Self {
             appserver_url,
@@ -325,7 +372,7 @@ impl OmoBackendConfig {
         Self::validate_url(&config.appserver_url)?;
 
         config.total_timeout = match std::env::var("OMON_OMO_CRON_TURN_TOTAL_TIMEOUT_SECS") {
-            Ok(v) if !v.trim().is_empty() => Duration::from_secs(v.trim().parse::<u64>().map_err(|_| {
+            Ok(v) if !v.trim().is_empty() => Duration::from_secs(v.trim().parse::<u64>().ok().filter(|secs| *secs > 0).ok_or_else(|| {
                 OmonError::Config(format!(
                     "invalid OMON_OMO_CRON_TURN_TOTAL_TIMEOUT_SECS: '{v}', expected a positive integer"
                 ))
@@ -351,11 +398,16 @@ impl OmoBackendConfig {
 pub fn lane_turn_timeout_from_env() -> Result<Duration> {
     match std::env::var("OMON_LANE_TURN_SECS") {
         Ok(v) if !v.trim().is_empty() => {
-            let secs = v.trim().parse::<u64>().map_err(|_| {
-                OmonError::Config(format!(
-                    "invalid OMON_LANE_TURN_SECS: '{v}', expected a positive integer"
-                ))
-            })?;
+            let secs = v
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|secs| *secs > 0)
+                .ok_or_else(|| {
+                    OmonError::Config(format!(
+                        "invalid OMON_LANE_TURN_SECS: '{v}', expected a positive integer"
+                    ))
+                })?;
             Ok(Duration::from_secs(secs))
         }
         _ => Ok(Duration::from_secs(DEFAULT_LANE_TURN_SECS)),
@@ -542,7 +594,12 @@ mod tests {
         std::env::remove_var("OMON_WORKSPACE_ROOT");
         let cfg = OmoBackendConfig::from_env().unwrap();
         assert!(cfg.per_agent_workspace);
-        assert_eq!(cfg.workspace_root, None);
+        assert_eq!(
+            cfg.workspace_root,
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".omon").join("workspace")),
+            "unset OMON_WORKSPACE_ROOT must fall back to ~/.omon/workspace"
+        );
 
         // Workspace root parsed
         std::env::set_var("OMON_WORKSPACE_ROOT", "/tmp/omon-test-ws");
@@ -574,6 +631,37 @@ mod tests {
     }
 
     #[test]
+    fn fixr5_default_workspace_root_precedence_and_empty_rejection() {
+        use std::ffi::OsString;
+        let home = Some(OsString::from("/home/u"));
+        assert_eq!(
+            default_workspace_root(Some("/srv/ws".into()), home.clone()),
+            Some(PathBuf::from("/srv/ws"))
+        );
+        // An empty override would resolve to the cwd; it must fall back instead.
+        assert_eq!(
+            default_workspace_root(Some("".into()), home.clone()),
+            Some(PathBuf::from("/home/u/.omon/workspace"))
+        );
+        assert_eq!(
+            default_workspace_root(None, home),
+            Some(PathBuf::from("/home/u/.omon/workspace"))
+        );
+        assert_eq!(default_workspace_root(None, None), None);
+    }
+
+    #[test]
+    fn fixr5_backend_config_debug_and_serialize_hide_auth_token() {
+        let config =
+            OmoBackendConfig::new("ws://127.0.0.1:1").with_auth_token(Some("super-secret-token"));
+        assert!(!format!("{config:?}").contains("super-secret-token"));
+        assert!(format!("{config:?}").contains("ws://127.0.0.1:1"));
+        assert!(!serde_json::to_string(&config)
+            .unwrap()
+            .contains("super-secret-token"));
+    }
+
+    #[test]
     fn test_lane_turn_timeout_env_contract() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("OMON_LANE_TURN_SECS");
@@ -595,6 +683,35 @@ mod tests {
         assert!(lane_turn_timeout_from_env().is_err());
         assert!(OmoBackendConfig::lane_from_env().is_err());
 
+        std::env::remove_var("OMON_LANE_TURN_SECS");
+    }
+
+    #[test]
+    fn fixr1_zero_timeouts_are_rejected() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        for var in [
+            "OMON_OMO_TURN_TIMEOUT_SECS",
+            "OMON_OMO_TURN_TOTAL_TIMEOUT_SECS",
+            "OMON_OMO_CRON_TURN_TOTAL_TIMEOUT_SECS",
+            "OMON_LANE_TURN_SECS",
+        ] {
+            std::env::remove_var(var);
+        }
+
+        std::env::set_var("OMON_OMO_TURN_TIMEOUT_SECS", "0");
+        assert!(OmoBackendConfig::from_env().is_err());
+        std::env::remove_var("OMON_OMO_TURN_TIMEOUT_SECS");
+
+        std::env::set_var("OMON_OMO_TURN_TOTAL_TIMEOUT_SECS", "0");
+        assert!(OmoBackendConfig::from_env().is_err());
+        std::env::remove_var("OMON_OMO_TURN_TOTAL_TIMEOUT_SECS");
+
+        std::env::set_var("OMON_OMO_CRON_TURN_TOTAL_TIMEOUT_SECS", "0");
+        assert!(OmoBackendConfig::cron_from_env().is_err());
+        std::env::remove_var("OMON_OMO_CRON_TURN_TOTAL_TIMEOUT_SECS");
+
+        std::env::set_var("OMON_LANE_TURN_SECS", "0");
+        assert!(lane_turn_timeout_from_env().is_err());
         std::env::remove_var("OMON_LANE_TURN_SECS");
     }
 }

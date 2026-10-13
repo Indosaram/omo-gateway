@@ -10,7 +10,7 @@ use omon_gateway::migrate::MigrateArgs;
 use omon_gateway::storage::init_pool;
 use omon_gateway::{
     authorized_cron_roots, canonical_authorized_directory,
-    cron_runs_retention_days_from_environment, cron_script_timeout_secs_from, parse_profile_routes,
+    cron_runs_retention_days_from_environment, cron_script_timeout_secs_from,
     prune_terminal_cron_runs, validate_agent_backend_env, AgentBackend, AgentCronExecutor,
     ApprovalPolicy, AttachmentDownloader, CronScheduler, CronTool, DeadTargetRegistry,
     DiscordAdapter, DiscordApprovalRequester, DiscordEgress, FileTool, HermesJob,
@@ -102,15 +102,16 @@ impl Config {
                 }
             }
         }
-        let allowed_users = env::var("DISCORD_ALLOWED_USERS")
-            .ok()
-            .map(|s| {
-                s.split(',')
-                    .filter_map(|p| p.trim().parse::<u64>().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let allowed_roles = parse_u64_list(optional_env("DISCORD_ALLOWED_ROLES").as_deref());
+        // A set-but-unparsable allowlist must refuse to start: an empty list
+        // silently enables open pairing prompts for every DM sender.
+        let allowed_users = parse_allowlist(
+            "DISCORD_ALLOWED_USERS",
+            optional_env("DISCORD_ALLOWED_USERS").as_deref(),
+        )?;
+        let allowed_roles = parse_allowlist(
+            "DISCORD_ALLOWED_ROLES",
+            optional_env("DISCORD_ALLOWED_ROLES").as_deref(),
+        )?;
         let allow_all_users =
             parse_bool_from(optional_env("DISCORD_ALLOW_ALL_USERS").as_deref(), false);
         let thread_sessions_per_user = parse_bool_from(
@@ -121,7 +122,10 @@ impl Config {
             optional_env("DISCORD_THREAD_REQUIRE_MENTION").as_deref(),
             false,
         );
-        let allowed_channels = parse_u64_list(optional_env("DISCORD_ALLOWED_CHANNELS").as_deref());
+        let allowed_channels = parse_allowlist(
+            "DISCORD_ALLOWED_CHANNELS",
+            optional_env("DISCORD_ALLOWED_CHANNELS").as_deref(),
+        )?;
         let ignored_channels = parse_u64_list(optional_env("DISCORD_IGNORED_CHANNELS").as_deref());
 
         let mut tokens = Vec::new();
@@ -173,8 +177,10 @@ impl Config {
                 vec![home]
             });
 
-        let mut profile_routes =
-            parse_profile_routes(&optional_env("DISCORD_PROFILE_ROUTES").unwrap_or_default());
+        let mut profile_routes = omon_gateway::try_parse_profile_routes(
+            &optional_env("DISCORD_PROFILE_ROUTES").unwrap_or_default(),
+        )
+        .map_err(|error| OmonError::Config(format!("invalid DISCORD_PROFILE_ROUTES: {error}")))?;
         let channel_prompt_routes = omon_gateway::parse_channel_prompts(
             &optional_env("DISCORD_CHANNEL_PROMPTS").unwrap_or_default(),
         );
@@ -308,12 +314,51 @@ impl OutboundDispatcher for SharedDispatcher {
 
 pub use omon_gateway::ledger::recover_pending_delivery_obligations;
 
+/// Combined `run` mode: the dashboard is served from the gateway runtime so it
+/// sees and resolves the gateway's own approvals and sessions.
+#[allow(clippy::too_many_arguments)]
+async fn attach_gateway_dashboard(
+    settings: &dashboard::DashboardSettings,
+    approval_requester: &DiscordApprovalRequester,
+    shared_dispatcher: &SharedDispatcher,
+    primary: Arc<dyn OutboundDispatcher>,
+    pool: SqlitePool,
+    multiplexer: SessionMultiplexer,
+    scheduler: CronScheduler,
+    tools: ToolRegistry,
+    config_view: serde_json::Value,
+    workspace_root: PathBuf,
+    skill_roots: Vec<PathBuf>,
+    bot_connections: usize,
+) -> dashboard::DashboardState {
+    let events = dashboard::WebDashboardDispatcher::new();
+    let composite: Arc<dyn OutboundDispatcher> =
+        Arc::new(dashboard::CompositeDispatcher::new(primary, events.clone()));
+    // Approvals and session output reach both Discord and the dashboard.
+    approval_requester.set_dispatcher(composite.clone()).await;
+    shared_dispatcher.set(composite).await;
+    dashboard::DashboardState::new(
+        pool,
+        Some(multiplexer),
+        scheduler,
+        tools,
+        approval_requester.guard().clone(),
+        events,
+        config_view,
+        workspace_root,
+        skill_roots,
+        bot_connections,
+        settings.web_root.clone(),
+    )
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct StartupAuthorization {
     pub allowed_users: Vec<u64>,
     pub allow_all_users: bool,
     pub allowed_channels: Vec<u64>,
     pub ignored_channels: Vec<u64>,
+    pub paired_users: Vec<u64>,
 }
 
 impl StartupAuthorization {
@@ -326,14 +371,20 @@ impl StartupAuthorization {
             if !self.ignored_channels.is_empty() && self.ignored_channels.contains(&channel_id) {
                 return false;
             }
-            if !self.allowed_channels.is_empty() && !self.allowed_channels.contains(&channel_id) {
+            // DMs are exempt from the channel allow-list, matching live ingress.
+            if session_key.guild_id.is_some()
+                && !self.allowed_channels.is_empty()
+                && !self.allowed_channels.contains(&channel_id)
+            {
                 return false;
             }
         }
         self.allow_all_users
             || actor
                 .and_then(|id| id.parse::<u64>().ok())
-                .is_some_and(|id| self.allowed_users.contains(&id))
+                .is_some_and(|id| {
+                    self.allowed_users.contains(&id) || self.paired_users.contains(&id)
+                })
     }
 }
 
@@ -413,6 +464,57 @@ async fn count_authorized_pending_recoveries(
     Ok(count)
 }
 
+/// Delivery-ledger claim of the unfinished turn, so the replayed turn completes
+/// the original claim instead of leaving it `in_progress` forever.
+async fn recovery_delivery_id(
+    pool: &SqlitePool,
+    storage_key: &str,
+    platform_message_id: Option<&str>,
+) -> Result<Option<String>> {
+    let Some(platform_message_id) = platform_message_id else {
+        return Ok(None);
+    };
+    let delivery_id: Option<String> = sqlx::query_scalar(
+        "SELECT message_id FROM delivery_ledger WHERE session_key = ? AND (platform_message_id = ? OR message_id = ?) ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(storage_key)
+    .bind(platform_message_id)
+    .bind(platform_message_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(delivery_id)
+}
+
+/// Rebuilds the event for a stored unfinished turn.
+///
+/// The stored transcript content is already the rendered prompt (attachment
+/// blocks and inlined file text included), so attachments are NOT re-attached:
+/// that would append the blocks a second time. The original message id is kept
+/// so the actor's `ON CONFLICT(id)` insert does not duplicate the user row, and
+/// the `[system] ` transcript prefix is mapped back to system origin.
+fn recovery_event(
+    session: &SessionKey,
+    unfinished: omon_gateway::storage::UnfinishedTurn,
+    delivery_id: Option<String>,
+) -> InboundEvent {
+    let (origin, content) = match unfinished.content.strip_prefix("[system] ") {
+        Some(rest) => (omon_gateway::EventOrigin::System, rest.to_owned()),
+        None => (omon_gateway::EventOrigin::User, unfinished.content.clone()),
+    };
+    InboundEvent {
+        id: Uuid::parse_str(&unfinished.message_id).unwrap_or_else(|_| Uuid::new_v4()),
+        session: session.clone(),
+        platform_message_id: String::new(),
+        delivery_id,
+        referenced_message_id: None,
+        author_id: None,
+        origin,
+        content,
+        attachments: Vec::new(),
+        received_at: unfinished.created_at,
+    }
+}
+
 pub async fn recover_resume_pending_sessions_with_auth(
     pool: &SqlitePool,
     multiplexer: &SessionMultiplexer,
@@ -445,25 +547,18 @@ pub async fn recover_resume_pending_sessions_with_auth(
                     continue;
                 }
             }
+            let delivery_id = recovery_delivery_id(
+                pool,
+                &storage_key,
+                unfinished.platform_message_id.as_deref(),
+            )
+            .await?;
             let cleared =
                 omon_gateway::storage::clear_session_resume_pending(pool, &storage_key).await?;
             if !cleared {
                 continue;
             }
-            let attachments: Vec<omon_gateway::MessageAttachment> =
-                serde_json::from_str(&unfinished.metadata_json).unwrap_or_default();
-            let event = InboundEvent {
-                id: Uuid::new_v4(),
-                session: session_key.clone(),
-                platform_message_id: String::new(),
-                delivery_id: None,
-                referenced_message_id: None,
-                author_id: None,
-                origin: omon_gateway::EventOrigin::User,
-                content: unfinished.content,
-                attachments,
-                received_at: chrono::Utc::now(),
-            };
+            let event = recovery_event(&session_key, unfinished, delivery_id);
             info!(
                 session = %session_key,
                 "re-dispatching unfinished user turn on restart recovery"
@@ -472,8 +567,9 @@ pub async fn recover_resume_pending_sessions_with_auth(
                 tracing::error!(
                     session = %session_key,
                     %error,
-                    "failed to route resumed session event"
+                    "failed to route resumed session event; marker restored for next boot"
                 );
+                omon_gateway::storage::mark_session_resume_pending(pool, &storage_key).await?;
             } else {
                 resumed_count += 1;
             }
@@ -556,6 +652,10 @@ pub fn build_cron_llm_config(
 
     if let Some(p) = provider.filter(|p| !p.trim().is_empty()) {
         if let Some(parsed) = parse_llm_provider(p) {
+            if parsed != config.provider {
+                // The base key belongs to the base provider.
+                config.api_key = None;
+            }
             config.provider = parsed;
         } else {
             warn!(provider = %p, "Unknown LLM provider override, keeping base provider");
@@ -563,10 +663,28 @@ pub fn build_cron_llm_config(
     }
 
     if let Some(b) = base_url.filter(|b| !b.trim().is_empty()) {
+        // Never send the base credential to a job-supplied endpoint.
+        config.api_key = None;
         config.base_url = Some(b.trim().to_string());
     }
 
     config
+}
+
+/// Owner Discord id for the inbox digest. OMON_OWNER_ID overrides the built-in owner.
+fn owner_id_from(raw: Option<&str>) -> String {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(omon_gateway::inbox::proposals::OWNER_ID)
+        .to_owned()
+}
+
+/// Gmail account polled by the mail watcher. OMON_MAIL_ACCOUNT overrides the built-in account.
+fn mail_account_from(raw: Option<&str>) -> String {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("freedomzero91@gmail.com")
+        .to_owned()
 }
 
 fn hermes_skill_dirs(hermes_root: &Path, home: &Path) -> Vec<PathBuf> {
@@ -604,7 +722,7 @@ async fn main() -> Result<()> {
 /// list; when the reads are still denied we surface the privacy pane so the
 /// user makes the single toggle that then sticks (the binary is signed with a
 /// stable Developer ID identity, so the grant survives rebuilds).
-fn ensure_full_disk_access() {
+fn ensure_full_disk_access(workspace_root: &Path) {
     let home = env::var("HOME").unwrap_or_default();
     let candidates = [
         format!("{home}/Library/Application Support/com.apple.TCC/TCC.db"),
@@ -641,16 +759,47 @@ fn ensure_full_disk_access() {
         info!("full disk access: granted (all protected probes readable)");
         return;
     }
+    let marker = workspace_root.join(FDA_PROMPTED_MARKER);
+    if !claim_fda_prompt(&marker) {
+        warn!(
+            denied = %denied.join(" | "),
+            "full disk access: denied; the privacy pane was already opened on an earlier boot"
+        );
+        return;
+    }
     warn!(
         denied = %denied.join(" | "),
-        "full disk access: denied — opening the privacy pane for a one-time toggle"
+        "full disk access: denied; opening the privacy pane once for a one-time toggle"
     );
-    let _ = std::process::Command::new("open")
-        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
-        .status();
+    if cfg!(target_os = "macos") {
+        if let Err(error) = tokio::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+            .spawn()
+        {
+            warn!(%error, "could not open the Full Disk Access privacy pane");
+        }
+    }
+}
+
+const FDA_PROMPTED_MARKER: &str = ".fda_prompted";
+
+/// True exactly once per workspace: the marker records that the privacy pane
+/// was already shown, so crash-looping launchd restarts do not re-open it.
+fn claim_fda_prompt(marker: &Path) -> bool {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(marker)
+        .is_ok()
 }
 
 async fn run_gateway() -> Result<()> {
+    run_gateway_with_dashboard(None).await
+}
+
+async fn run_gateway_with_dashboard(
+    dashboard_settings: Option<dashboard::DashboardSettings>,
+) -> Result<()> {
     if !parse_bool_from(optional_env("OMON_DISCORD_ENABLED").as_deref(), true) {
         if !parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
             return Err(OmonError::Config(
@@ -674,8 +823,10 @@ async fn run_gateway() -> Result<()> {
             });
         validate_agent_backend_env()?;
         let backend_config = OmoBackendConfig::from_env()?.with_workspace_root(workspace.clone());
-        let mut routes =
-            parse_profile_routes(&optional_env("DISCORD_PROFILE_ROUTES").unwrap_or_default());
+        let mut routes = omon_gateway::try_parse_profile_routes(
+            &optional_env("DISCORD_PROFILE_ROUTES").unwrap_or_default(),
+        )
+        .map_err(|error| OmonError::Config(format!("invalid DISCORD_PROFILE_ROUTES: {error}")))?;
         routes.extend(omon_gateway::parse_channel_prompts(
             &optional_env("DISCORD_CHANNEL_PROMPTS").unwrap_or_default(),
         ));
@@ -765,7 +916,7 @@ async fn run_gateway() -> Result<()> {
         return outcome;
     }
     let config = Config::from_env()?;
-    ensure_full_disk_access();
+    ensure_full_disk_access(&config.workspace_root);
     let pool = init_pool(&config.database_url).await?;
     let kibitzer = initialize_kibitzer(&pool).await?;
 
@@ -861,6 +1012,9 @@ async fn run_gateway() -> Result<()> {
         chrono::Utc::now(),
     );
     let mut drain_rx = drain_watcher.receiver();
+    // The boot scan already published any marker present at startup; that initial value
+    // must not count as a change, or a leftover marker would end the run immediately.
+    drain_rx.mark_unchanged();
     let mut multiplexer = SessionMultiplexer::with_profile_router(
         pool.clone(),
         runner.clone(),
@@ -904,6 +1058,7 @@ async fn run_gateway() -> Result<()> {
             .with_default_model(config.default_model.clone())
             .with_workspace_root(config.workspace_root.clone()),
     );
+    let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = discord_egress.clone();
     shared_dispatcher.set(discord_egress.clone()).await;
     approval_requester
         .set_dispatcher(discord_egress.clone())
@@ -933,6 +1088,11 @@ async fn run_gateway() -> Result<()> {
         allow_all_users: config.allow_all_users,
         allowed_channels: config.allowed_channels.clone(),
         ignored_channels: config.ignored_channels.clone(),
+        paired_users: {
+            let pairing = omon_gateway::discord::PairingStore::new(pool.clone());
+            pairing.init_cache().await?;
+            pairing.get_paired_user_ids().await
+        },
     };
     let pending_sessions_count = count_authorized_pending_recoveries(&pool, &auth).await?;
     if pending_sessions_count > 0 {
@@ -986,9 +1146,10 @@ async fn run_gateway() -> Result<()> {
     )
     .with_hermes_sync(cron_sync);
     // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
-    let owner = "414011632306618368";
+    let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
+    let owner = owner_id.as_str();
     // The lead DM belongs to the OmOMeow bot; other bots' DMs with the owner do not count.
-    let home: Option<String> = sqlx::query_scalar(
+    let home_dm: Option<String> = sqlx::query_scalar(
         "SELECT session_key FROM sessions WHERE session_key=? AND platform='discord' \
          AND guild_id IS NULL AND thread_id IS NULL AND user_id=?",
     )
@@ -996,9 +1157,9 @@ async fn run_gateway() -> Result<()> {
     .bind(owner)
     .fetch_optional(&pool)
     .await?;
-    if let Some(home) = home {
-        let home = home.parse::<SessionKey>()?;
-        omon_gateway::inbox::digest::register(&pool, &scheduler, &home, owner).await?;
+    if let Some(home_dm) = home_dm {
+        let home_dm = home_dm.parse::<SessionKey>()?;
+        omon_gateway::inbox::digest::register(&pool, &scheduler, &home_dm, owner).await?;
     } else {
         warn!("inbox digest not registered: owner home DM is not yet persisted");
     }
@@ -1111,6 +1272,13 @@ async fn run_gateway() -> Result<()> {
             briefs: config.workspace_root.join(".omo/cron-fix/briefs"),
         }),
     }))?;
+    // A restart during a remediation rerun would otherwise leave the problem stuck in
+    // `remediating` with nobody told.
+    match omon_gateway::cron::remediate::sweep_stale_remediating().await {
+        Ok(0) => {}
+        Ok(count) => info!(count, "re-escalated stale cron remediations"),
+        Err(error) => warn!(%error, "failed to sweep stale cron remediations"),
+    }
     let mut lane_tasks = spawn_lane_service(&pool, &lane_shutdown, kibitzer)?;
     lane_tasks.spawn(omon_gateway::cron::report::serve_native(
         pool.clone(),
@@ -1136,6 +1304,28 @@ async fn run_gateway() -> Result<()> {
         Ok(())
     });
 
+    let dashboard_shutdown = tokio_util::sync::CancellationToken::new();
+    let mut dashboard_server = None;
+    if let Some(settings) = dashboard_settings {
+        let state = attach_gateway_dashboard(
+            &settings,
+            &approval_requester,
+            &shared_dispatcher,
+            discord_egress_dispatcher.clone(),
+            pool.clone(),
+            multiplexer.clone(),
+            scheduler.clone(),
+            tools.clone(),
+            dashboard::config_view_from_gateway(&config, &settings),
+            config.workspace_root.clone(),
+            hermes_skill_dirs(&hermes_root, &home),
+            config.discord_bot_tokens.len(),
+        )
+        .await;
+        dashboard_server =
+            Some(dashboard::spawn_server(settings, state, dashboard_shutdown.clone()).await?);
+    }
+
     let mut join_set = tokio::task::JoinSet::new();
     for mut client in clients {
         join_set.spawn(async move { client.start().await });
@@ -1150,15 +1340,18 @@ async fn run_gateway() -> Result<()> {
     tokio::select! {
         result = lane_tasks.join_next(), if !lane_tasks.is_empty() => {
             lane_failure = lane_service_exit(result).err();
+            omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
             }
         }
         Some(res) = join_set.join_next() => {
-            if let Ok(Err(err)) = res {
+            if discord_client_failed(&res) {
                 discord_task_failed = true;
-                tracing::error!("Discord client exited with error: {:?}", err);
             }
+            omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            let _ = multiplexer.mark_in_flight_resume_pending().await;
         }
         signal = tokio::signal::ctrl_c() => {
             signal.map_err(|error| OmonError::Config(format!("failed to listen for Ctrl+C: {error}")))?;
@@ -1169,14 +1362,12 @@ async fn run_gateway() -> Result<()> {
                 sm.shutdown_all().await;
             }
         }
-        changed = drain_rx.changed() => {
-            if changed.is_ok() && *drain_rx.borrow() {
-                warn!("drain request detected via .drain_request.json marker; shutting down gracefully");
-                omon_gateway::global_debouncer().flush_all(&poise_data).await;
-                let _ = multiplexer.mark_in_flight_resume_pending().await;
-                for sm in shard_managers {
-                    sm.shutdown_all().await;
-                }
+        _ = wait_for_drain(&mut drain_rx) => {
+            warn!("drain request detected via .drain_request.json marker; shutting down gracefully");
+            omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            let _ = multiplexer.mark_in_flight_resume_pending().await;
+            for sm in shard_managers {
+                sm.shutdown_all().await;
             }
         }
         // Production stop paths (systemctl stop, launchctl kill, container
@@ -1203,6 +1394,10 @@ async fn run_gateway() -> Result<()> {
     }
 
     lane_shutdown.cancel();
+    dashboard_shutdown.cancel();
+    if let Some(server) = dashboard_server {
+        let _ = server.await;
+    }
     stop_inbox_collector(&mut inbox, inbox_shutdown).await;
     scheduler.shutdown().await;
     scale_to_zero.shutdown().await;
@@ -1219,6 +1414,21 @@ async fn run_gateway() -> Result<()> {
     }
     warn!("omo-gateway stopped");
     Ok(())
+}
+
+/// Resolves when the drain flag becomes true. A drain that was already active
+/// at boot is the initial value, so clearing or expiring it (true -> false) must
+/// not end the wait: only a transition to true does. A dropped sender never
+/// resolves, leaving shutdown to the other select arms.
+async fn wait_for_drain(drain_rx: &mut tokio::sync::watch::Receiver<bool>) {
+    loop {
+        if drain_rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        if *drain_rx.borrow() {
+            return;
+        }
+    }
 }
 
 struct LocalTranscriptOutput;
@@ -2051,16 +2261,110 @@ async fn run_kakao_event_timer(
     }
 }
 
+const WATCHER_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(5);
+const WATCHER_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+const WATCHER_HEALTHY_RUN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How one watcher child lifetime ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatcherExit {
+    /// Shutdown (or a closed event channel): do not restart.
+    Stop,
+    /// Failed or exited without doing its job: restart with growing backoff.
+    Failed,
+    /// Did its job and exited on its own: restart after the initial delay.
+    Completed,
+}
+
+fn next_watcher_backoff(current: std::time::Duration) -> std::time::Duration {
+    (current * 2).min(WATCHER_BACKOFF_MAX)
+}
+
+/// Sleeps for `delay`; false when shutdown arrived first.
+async fn watcher_backoff(
+    shutdown: &mut tokio::sync::watch::Receiver<bool>,
+    delay: std::time::Duration,
+) -> bool {
+    let sleep = tokio::time::sleep(delay);
+    tokio::pin!(sleep);
+    loop {
+        tokio::select! {
+            _ = &mut sleep => return true,
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+/// Restarts an inbox watcher child with bounded exponential backoff instead of
+/// letting one failure end the watcher until the gateway restarts.
+async fn supervise_watcher<F, Fut>(
+    name: &'static str,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    mut run_once: F,
+) where
+    F: FnMut(tokio::sync::watch::Receiver<bool>) -> Fut,
+    Fut: std::future::Future<Output = WatcherExit>,
+{
+    let mut delay = WATCHER_BACKOFF_INITIAL;
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        let started = tokio::time::Instant::now();
+        let wait = match run_once(shutdown.clone()).await {
+            WatcherExit::Stop => return,
+            WatcherExit::Completed => {
+                delay = WATCHER_BACKOFF_INITIAL;
+                delay
+            }
+            WatcherExit::Failed => {
+                if started.elapsed() >= WATCHER_HEALTHY_RUN {
+                    delay = WATCHER_BACKOFF_INITIAL;
+                }
+                let wait = delay;
+                delay = next_watcher_backoff(delay);
+                wait
+            }
+        };
+        warn!(
+            watcher = name,
+            retry_in_secs = wait.as_secs(),
+            "inbox watcher stopped; restarting after backoff"
+        );
+        if !watcher_backoff(&mut shutdown, wait).await {
+            return;
+        }
+    }
+}
+
 async fn run_imessage_event_watcher(
     pool: SqlitePool,
     sender: omon_gateway::inbox::watchers::InboxEventSender,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
+    supervise_watcher("imsg", shutdown, move |shutdown| {
+        let pool = pool.clone();
+        let sender = sender.clone();
+        async move { run_imessage_watch_once(&pool, &sender, shutdown).await }
+    })
+    .await;
+}
+
+/// One `imsg watch` child lifetime.
+async fn run_imessage_watch_once(
+    pool: &SqlitePool,
+    sender: &omon_gateway::inbox::watchers::InboxEventSender,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> WatcherExit {
     use std::process::Stdio;
     use tokio::io::AsyncBufReadExt;
     use tokio::process::Command;
 
-    let since_rowid = match omon_gateway::inbox::watchers::latest_imessage_rowid(&pool).await {
+    let since_rowid = match omon_gateway::inbox::watchers::latest_imessage_rowid(pool).await {
         Ok(rowid) => rowid,
         Err(error) => {
             warn!(%error, "could not read numeric iMessage watcher rowid; starting without --since-rowid");
@@ -2078,30 +2382,41 @@ async fn run_imessage_event_watcher(
         Ok(child) => child,
         Err(error) => {
             warn!(%error, "imsg watch could not start; check Full Disk Access and local CLI readiness");
-            return;
+            return WatcherExit::Failed;
         }
     };
     let Some(stdout) = child.stdout.take() else {
         warn!("imsg watch has no stdout pipe");
-        return;
+        return WatcherExit::Failed;
     };
     let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let mut exit = WatcherExit::Failed;
     loop {
         if *shutdown.borrow() {
+            exit = WatcherExit::Stop;
             break;
         }
         tokio::select! {
             changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() { break; }
+                if changed.is_err() || *shutdown.borrow() {
+                    exit = WatcherExit::Stop;
+                    break;
+                }
             }
             line = lines.next_line() => match line {
                 Ok(Some(line)) => {
                     if let Some(rowid) = omon_gateway::inbox::watchers::parse_imsg_watch_line(&line) {
                         tokio::select! {
-                            result = omon_gateway::inbox::watchers::on_imessage_event(&sender, Some(rowid)) => {
-                                if result.is_err() { break; }
+                            result = omon_gateway::inbox::watchers::on_imessage_event(sender, Some(rowid)) => {
+                                if result.is_err() {
+                                    exit = WatcherExit::Stop;
+                                    break;
+                                }
                             }
-                            _ = shutdown.changed() => break,
+                            _ = shutdown.changed() => {
+                                exit = WatcherExit::Stop;
+                                break;
+                            }
                         }
                     }
                 }
@@ -2116,7 +2431,7 @@ async fn run_imessage_event_watcher(
                     Ok(status) => warn!(?status, "imsg watch exited; check local permissions and CLI readiness"),
                     Err(error) => warn!(%error, "waiting for imsg watch failed"),
                 }
-                return;
+                return WatcherExit::Failed;
             }
         }
     }
@@ -2124,62 +2439,84 @@ async fn run_imessage_event_watcher(
         warn!(%error, "failed to stop imsg watch child");
     }
     let _ = child.wait().await;
+    exit
 }
 
 async fn run_mail_event_watcher(
     sender: omon_gateway::inbox::watchers::InboxEventSender,
-    mut shutdown: tokio::sync::watch::Receiver<bool>,
+    shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
+    supervise_watcher("mail", shutdown, move |shutdown| {
+        let sender = sender.clone();
+        async move { run_mail_watch_once(&sender, shutdown).await }
+    })
+    .await;
+}
+
+/// One `zele mail watch` child lifetime. Every output line raises a mail event
+/// as it arrives (coalesced when the channel is full), so a long-running watch
+/// is not silent until it exits.
+async fn run_mail_watch_once(
+    sender: &omon_gateway::inbox::watchers::InboxEventSender,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) -> WatcherExit {
     use std::process::Stdio;
     use tokio::io::AsyncBufReadExt;
     use tokio::process::Command;
+    use tokio::sync::mpsc::error::TrySendError;
 
-    loop {
-        if *shutdown.borrow() {
-            return;
+    let account = mail_account_from(optional_env("OMON_MAIL_ACCOUNT").as_deref());
+    let mut child = match Command::new("zele")
+        .args([
+            "mail",
+            "watch",
+            "--interval",
+            "60",
+            "--folder",
+            "inbox",
+            "--account",
+            account.as_str(),
+            "--filter",
+            "is:unread -category:promotions -category:social -category:updates",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) => {
+            warn!(%error, "zele mail watch could not start; check local CLI and credential readiness");
+            return WatcherExit::Failed;
         }
-        let mut child = match Command::new("zele")
-            .args([
-                "mail",
-                "watch",
-                "--interval",
-                "60",
-                "--folder",
-                "inbox",
-                "--account",
-                "freedomzero91@gmail.com",
-                "--filter",
-                "is:unread -category:promotions -category:social -category:updates",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) => {
-                warn!(%error, "zele mail watch could not start; check local CLI and credential readiness");
-                return;
-            }
-        };
-        let Some(stdout) = child.stdout.take() else {
-            warn!("zele mail watch has no stdout pipe");
-            return;
-        };
-        let mut lines = tokio::io::BufReader::new(stdout).lines();
-        let mut produced_event = false;
-        loop {
-            tokio::select! {
+    };
+    let Some(stdout) = child.stdout.take() else {
+        warn!("zele mail watch has no stdout pipe");
+        return WatcherExit::Failed;
+    };
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let mut produced_event = false;
+    let mut stop = false;
+    loop {
+        tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
-                    return;
+                    stop = true;
+                    break;
                 }
             }
             line = lines.next_line() => match line {
-                Ok(Some(line)) if !line.trim().is_empty() => produced_event = true,
+                Ok(Some(line)) if !line.trim().is_empty() => {
+                    produced_event = true;
+                    match sender.try_send(omon_gateway::inbox::watchers::InboxWatcherEvent::Mail) {
+                        Ok(()) | Err(TrySendError::Full(_)) => {}
+                        Err(TrySendError::Closed(_)) => {
+                            stop = true;
+                            break;
+                        }
+                    }
+                }
                 Ok(Some(_)) => {}
                 Ok(None) => break,
                 Err(error) => {
@@ -2187,31 +2524,26 @@ async fn run_mail_event_watcher(
                     break;
                 }
             }
-            }
         }
-        let status = match child.wait().await {
-            Ok(status) => status,
-            Err(error) => {
-                warn!(%error, "waiting for zele mail watch failed");
-                return;
-            }
-        };
-        if !status.success() {
+    }
+    if stop {
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        return WatcherExit::Stop;
+    }
+    match child.wait().await {
+        Ok(status) if status.success() && produced_event => WatcherExit::Completed,
+        Ok(status) => {
             warn!(
                 ?status,
-                "zele mail watch exited; check local account credential readiness"
+                produced_event,
+                "zele mail watch exited without a clean event run; check local account credential readiness"
             );
-            return;
+            WatcherExit::Failed
         }
-        if !produced_event {
-            warn!("zele mail watch exited without a message event");
-            return;
-        }
-        tokio::select! {
-            result = omon_gateway::inbox::watchers::on_mail_event(&sender) => {
-                if result.is_err() { return; }
-            }
-            _ = shutdown.changed() => return,
+        Err(error) => {
+            warn!(%error, "waiting for zele mail watch failed");
+            WatcherExit::Failed
         }
     }
 }
@@ -2230,6 +2562,22 @@ async fn stop_inbox_collector(
         Err(_) => {
             task.abort();
             let _ = task.await;
+        }
+    }
+}
+
+fn discord_client_failed<E: std::fmt::Debug>(
+    res: &std::result::Result<std::result::Result<(), E>, tokio::task::JoinError>,
+) -> bool {
+    match res {
+        Ok(Ok(())) => false,
+        Ok(Err(err)) => {
+            tracing::error!("Discord client exited with error: {:?}", err);
+            true
+        }
+        Err(join_error) => {
+            tracing::error!("Discord client task failed: {join_error}");
+            true
         }
     }
 }
@@ -2261,20 +2609,49 @@ fn approval_timeout_secs_from(raw: Option<&str>) -> u64 {
         .unwrap_or(900)
 }
 
+/// Unrecognised tokens fall back to `default` instead of silently reading as
+/// false, so a typo cannot disable a default-true safety flag.
 pub fn parse_bool_from(raw: Option<&str>, default: bool) -> bool {
-    match raw {
-        Some(value) => matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        None => default,
+    let Some(value) = raw else { return default };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => true,
+        "0" | "false" | "no" | "off" => false,
+        other => {
+            if !other.is_empty() {
+                warn!(
+                    value = other,
+                    default, "unrecognised boolean setting; using the default"
+                );
+            }
+            default
+        }
     }
+}
+
+// An allowlist that was set but parses to nothing would silently mean
+// "unrestricted"; refuse to start instead.
+fn parse_allowlist(name: &str, raw: Option<&str>) -> Result<Vec<u64>> {
+    let ids = parse_u64_list(raw);
+    if ids.is_empty() && raw.is_some_and(|s| !s.trim().is_empty()) {
+        return Err(OmonError::Config(format!(
+            "{name} is set but contains no valid numeric ids"
+        )));
+    }
+    Ok(ids)
 }
 
 pub fn parse_u64_list(raw: Option<&str>) -> Vec<u64> {
     raw.map(|s| {
         s.split(',')
-            .filter_map(|p| p.trim().parse::<u64>().ok())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .filter_map(|p| match p.parse::<u64>() {
+                Ok(id) => Some(id),
+                Err(_) => {
+                    warn!(entry = p, "ignoring unparsable id in list");
+                    None
+                }
+            })
             .collect()
     })
     .unwrap_or_default()
@@ -2686,8 +3063,14 @@ mod runner_tests {
         );
     }
 
+    /// Serializes tests that mutate process-global environment variables.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn default_model_precedence_matches_dashboard() {
+        let _env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         // Case 1: OMON_DEFAULT_MODEL=A, DEFAULT_MODEL=B -> both resolve A
         unsafe {
             std::env::set_var("OMON_DEFAULT_MODEL", "model_a");
@@ -2794,6 +3177,586 @@ mod runner_tests {
         let _ = std::fs::remove_dir_all(workspace_root);
     }
 
+    async fn fix_main_pending_session(
+        pool: &sqlx::SqlitePool,
+        user: &str,
+    ) -> omon_gateway::SessionKey {
+        let session_key =
+            omon_gateway::SessionKey::new("discord", None::<String>, "7", None::<String>, user);
+        let storage_key = session_key.storage_key();
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, 'discord', '7', ?, '{}')")
+            .bind(&storage_key)
+            .bind(user)
+            .execute(pool)
+            .await
+            .unwrap();
+        omon_gateway::storage::mark_session_resume_pending(pool, &storage_key)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, session_key, role, content, metadata_json)
+             VALUES ('fix-main-turn', ?, 'user', 'unfinished task', '[]')",
+        )
+        .bind(&storage_key)
+        .execute(pool)
+        .await
+        .unwrap();
+        session_key
+    }
+
+    struct FixMainNoopRunner;
+    #[async_trait::async_trait]
+    impl omon_gateway::AgentRunner for FixMainNoopRunner {
+        async fn run(
+            &self,
+            _session: &mut omon_gateway::SessionContext,
+            _event: omon_gateway::InboundEvent,
+        ) -> omon_gateway::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn fix_main_recovery_route_error_keeps_resume_pending() {
+        let pool = omon_gateway::storage::init_pool("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let session_key = fix_main_pending_session(&pool, "42").await;
+
+        // A draining multiplexer refuses every route() call.
+        let (_drain_tx, drain_rx) = tokio::sync::watch::channel(true);
+        let multiplexer = omon_gateway::SessionMultiplexer::new(
+            pool.clone(),
+            std::sync::Arc::new(FixMainNoopRunner),
+            omon_gateway::MultiplexerConfig::default(),
+        )
+        .with_drain_receiver(drain_rx);
+
+        let recovered = super::recover_resume_pending_sessions(&pool, &multiplexer)
+            .await
+            .unwrap();
+        assert_eq!(recovered, 0);
+        let pending = omon_gateway::storage::fetch_resume_pending_session_keys(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            pending,
+            vec![session_key],
+            "route failure must keep the session resume_pending for the next boot"
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_main_recovery_authorizes_paired_users() {
+        let pool = omon_gateway::storage::init_pool("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        fix_main_pending_session(&pool, "42").await;
+        let multiplexer = omon_gateway::SessionMultiplexer::new(
+            pool.clone(),
+            std::sync::Arc::new(FixMainNoopRunner),
+            omon_gateway::MultiplexerConfig::default(),
+        );
+        let auth = super::StartupAuthorization {
+            paired_users: vec![42],
+            ..Default::default()
+        };
+        let recovered =
+            super::recover_resume_pending_sessions_with_auth(&pool, &multiplexer, Some(&auth))
+                .await
+                .unwrap();
+        assert_eq!(recovered, 1, "paired user's pending turn must be recovered");
+    }
+
+    #[tokio::test]
+    async fn fix_r5_main_drain_wait_ignores_clearing_a_boot_time_drain() {
+        // A drain already active at boot is the receiver's initial value.
+        let (tx, mut rx) = tokio::sync::watch::channel(true);
+        let mut wait = Box::pin(super::wait_for_drain(&mut rx));
+        assert!(futures_util::poll!(wait.as_mut()).is_pending());
+
+        // Clearing the marker (true -> false) must not end the wait.
+        tx.send_replace(false);
+        assert!(
+            futures_util::poll!(wait.as_mut()).is_pending(),
+            "cancelling a drain must not shut the gateway down"
+        );
+
+        // A new drain request (false -> true) does.
+        tx.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+            .await
+            .expect("a drain request must resolve the wait");
+    }
+
+    #[tokio::test]
+    async fn fix_r5_main_boot_marker_from_a_real_watcher_does_not_end_the_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        omon_gateway::drain_control::write_drain_request(dir.path(), Some("test"), false).unwrap();
+        let watcher = omon_gateway::DrainWatcher::new(
+            dir.path().to_path_buf(),
+            std::time::Duration::from_secs(3),
+        );
+        assert!(watcher.scan_at("", chrono::Utc::now()));
+        let mut rx = watcher.receiver();
+        rx.mark_unchanged();
+        let mut wait = Box::pin(super::wait_for_drain(&mut rx));
+        assert!(
+            futures_util::poll!(wait.as_mut()).is_pending(),
+            "a marker already present at boot must not shut the gateway down"
+        );
+    }
+
+    #[tokio::test]
+    async fn fix_r5_main_drain_wait_stays_pending_when_sender_is_gone() {
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let mut wait = Box::pin(super::wait_for_drain(&mut rx));
+        assert!(futures_util::poll!(wait.as_mut()).is_pending());
+        drop(tx);
+        assert!(
+            futures_util::poll!(wait.as_mut()).is_pending(),
+            "a dropped drain sender must leave shutdown to the other arms"
+        );
+    }
+
+    #[test]
+    fn fix_r5_main_recovery_event_keeps_id_origin_and_does_not_reattach() {
+        let session =
+            omon_gateway::SessionKey::new("discord", None::<String>, "7", None::<String>, "42");
+        let id = uuid::Uuid::new_v4();
+        let attachments = serde_json::to_string(&vec![omon_gateway::MessageAttachment {
+            id: "a1".into(),
+            filename: "main.rs".into(),
+            url: "https://cdn.example/main.rs".into(),
+            content_type: None,
+            size_bytes: None,
+            local_path: None,
+            text_content: Some("fn main() {}".into()),
+        }])
+        .unwrap();
+        let turn = |content: &str| omon_gateway::storage::UnfinishedTurn {
+            message_id: id.to_string(),
+            content: content.to_owned(),
+            metadata_json: attachments.clone(),
+            created_at: chrono::Utc::now(),
+            platform_message_id: Some("p1".into()),
+        };
+
+        let user = super::recovery_event(
+            &session,
+            turn("look\n\n[Attachment: main.rs]"),
+            Some("d1".into()),
+        );
+        assert_eq!(user.id, id, "the stored message id must be reused");
+        assert_eq!(user.delivery_id.as_deref(), Some("d1"));
+        assert_eq!(user.origin, omon_gateway::EventOrigin::User);
+        assert!(
+            user.attachments.is_empty(),
+            "attachments are already rendered into the stored content"
+        );
+        assert_eq!(user.content, "look\n\n[Attachment: main.rs]");
+
+        let system = super::recovery_event(&session, turn("[system] lane finished"), None);
+        assert_eq!(system.origin, omon_gateway::EventOrigin::System);
+        assert_eq!(system.content, "lane finished");
+    }
+
+    #[tokio::test]
+    async fn fix_r5_main_recovery_reuses_message_id_and_ledger_delivery() {
+        let pool = omon_gateway::storage::init_pool("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let session_key =
+            omon_gateway::SessionKey::new("discord", None::<String>, "7", None::<String>, "42");
+        let storage_key = session_key.storage_key();
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, 'discord', '7', '42', '{}')")
+            .bind(&storage_key)
+            .execute(&pool)
+            .await
+            .unwrap();
+        omon_gateway::storage::mark_session_resume_pending(&pool, &storage_key)
+            .await
+            .unwrap();
+        let message_id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO messages (id, session_key, role, content, metadata_json, platform_message_id)
+             VALUES (?, ?, 'user', 'unfinished task', '[]', 'p1')",
+        )
+        .bind(message_id.to_string())
+        .bind(&storage_key)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO delivery_ledger (delivery_id,session_key,event_id,status,message_id,platform_message_id,received_at) VALUES ('d1',?,'e1','in_progress','discord:p1','p1','2020-01-01T00:00:00Z')")
+            .bind(&storage_key)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        struct Recorder(tokio::sync::mpsc::UnboundedSender<omon_gateway::InboundEvent>);
+        #[async_trait::async_trait]
+        impl omon_gateway::AgentRunner for Recorder {
+            async fn run(
+                &self,
+                _session: &mut omon_gateway::SessionContext,
+                event: omon_gateway::InboundEvent,
+            ) -> omon_gateway::Result<()> {
+                let _ = self.0.send(event);
+                Ok(())
+            }
+        }
+        let multiplexer = omon_gateway::SessionMultiplexer::new(
+            pool.clone(),
+            std::sync::Arc::new(Recorder(tx)),
+            omon_gateway::MultiplexerConfig::default(),
+        );
+
+        let recovered = super::recover_resume_pending_sessions(&pool, &multiplexer)
+            .await
+            .unwrap();
+        assert_eq!(recovered, 1);
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv())
+            .await
+            .expect("recovered turn must reach the runner")
+            .unwrap();
+        assert_eq!(event.id, message_id);
+        assert_eq!(event.delivery_id.as_deref(), Some("discord:p1"));
+        // The actor persists the inbound row before running the turn; the reused
+        // id must hit ON CONFLICT instead of adding a second user row.
+        let user_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_key = ? AND role = 'user'",
+        )
+        .bind(&storage_key)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(user_rows, 1, "recovery must not duplicate the user row");
+    }
+
+    #[test]
+    fn fix_r5_main_unknown_boolean_tokens_keep_the_default() {
+        for typo in ["enabled", "y", "t", "ture"] {
+            assert!(super::parse_bool_from(Some(typo), true), "{typo}");
+            assert!(!super::parse_bool_from(Some(typo), false), "{typo}");
+        }
+    }
+
+    #[test]
+    fn fix_r5_main_user_allowlist_must_parse() {
+        assert!(super::parse_allowlist("DISCORD_ALLOWED_USERS", Some("<@123>")).is_err());
+        assert!(super::parse_allowlist("DISCORD_ALLOWED_ROLES", Some("admins")).is_err());
+        assert_eq!(
+            super::parse_allowlist("DISCORD_ALLOWED_USERS", Some("1, 2")).unwrap(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn fix_r5_main_cron_llm_override_never_carries_the_base_key_elsewhere() {
+        let mut base = omon_gateway::LlmConfig::new(omon_gateway::LlmProvider::OpenAi, "gpt-4o");
+        base.api_key = Some("base-secret".into());
+
+        let model_only = super::build_cron_llm_config(&base, None, None, Some("gpt-4o-mini"));
+        assert_eq!(model_only.api_key.as_deref(), Some("base-secret"));
+        let same_provider = super::build_cron_llm_config(&base, Some("openai"), None, None);
+        assert_eq!(same_provider.api_key.as_deref(), Some("base-secret"));
+
+        let other_provider = super::build_cron_llm_config(&base, Some("anthropic"), None, None);
+        assert_eq!(other_provider.api_key, None);
+        let other_host =
+            super::build_cron_llm_config(&base, None, Some("https://attacker.example/v1"), None);
+        assert_eq!(other_host.api_key, None);
+    }
+
+    #[test]
+    fn fix_r5_main_owner_and_mail_account_are_configurable() {
+        assert_eq!(
+            super::owner_id_from(None),
+            omon_gateway::inbox::proposals::OWNER_ID
+        );
+        assert_eq!(
+            super::owner_id_from(Some("  ")),
+            omon_gateway::inbox::proposals::OWNER_ID
+        );
+        assert_eq!(super::owner_id_from(Some(" 123 ")), "123");
+        assert_eq!(super::mail_account_from(Some("a@b.c")), "a@b.c");
+        assert_eq!(super::mail_account_from(None), "freedomzero91@gmail.com");
+    }
+
+    #[test]
+    fn fix_r5_main_full_disk_access_prompt_is_claimed_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join(super::FDA_PROMPTED_MARKER);
+        assert!(super::claim_fda_prompt(&marker));
+        assert!(
+            !super::claim_fda_prompt(&marker),
+            "a restart must not reopen the privacy pane"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fix_r5_main_watcher_restarts_with_bounded_backoff() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = runs.clone();
+        let started = tokio::time::Instant::now();
+        super::supervise_watcher("test", shutdown_rx, move |_| {
+            let counter = counter.clone();
+            async move {
+                if counter.fetch_add(1, Ordering::SeqCst) < 2 {
+                    super::WatcherExit::Failed
+                } else {
+                    super::WatcherExit::Stop
+                }
+            }
+        })
+        .await;
+        assert_eq!(runs.load(Ordering::SeqCst), 3, "failures must be retried");
+        assert_eq!(
+            started.elapsed(),
+            super::WATCHER_BACKOFF_INITIAL * 3,
+            "backoff doubles between consecutive failures (5s + 10s)"
+        );
+        assert_eq!(
+            super::next_watcher_backoff(super::WATCHER_BACKOFF_MAX),
+            super::WATCHER_BACKOFF_MAX
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn fix_r5_main_watcher_backoff_wakes_on_shutdown() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let shutdown_tx = Arc::new(shutdown_tx);
+        let runs = Arc::new(AtomicUsize::new(0));
+        let counter = runs.clone();
+        super::supervise_watcher("test", shutdown_rx, move |_| {
+            let counter = counter.clone();
+            let shutdown_tx = shutdown_tx.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                shutdown_tx.send_replace(true);
+                super::WatcherExit::Failed
+            }
+        })
+        .await;
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "no restart after shutdown");
+    }
+
+    #[test]
+    fn startup_recovery_exempts_dms_from_channel_allowlist() {
+        let auth = super::StartupAuthorization {
+            allowed_users: vec![42],
+            allowed_channels: vec![111],
+            ..Default::default()
+        };
+        let dm =
+            omon_gateway::SessionKey::new("discord", None::<String>, "999", None::<String>, "42");
+        assert!(
+            auth.is_authorized(&dm),
+            "a DM must not be rejected by the guild channel allow-list"
+        );
+        let other_guild_channel =
+            omon_gateway::SessionKey::new("discord", Some("g"), "999", None::<String>, "42");
+        assert!(
+            !auth.is_authorized(&other_guild_channel),
+            "a guild channel outside the allow-list stays rejected"
+        );
+        let ignored = super::StartupAuthorization {
+            allowed_users: vec![42],
+            ignored_channels: vec![999],
+            ..Default::default()
+        };
+        assert!(!ignored.is_authorized(&dm), "ignored channels still apply");
+    }
+
+    #[tokio::test]
+    async fn fix_main_panicked_discord_client_counts_as_failure() {
+        async fn boom() -> std::result::Result<(), String> {
+            panic!("discord client panicked")
+        }
+        let mut join_set = tokio::task::JoinSet::new();
+        join_set.spawn(boom());
+        let res = join_set.join_next().await.unwrap();
+        assert!(res.is_err(), "precondition: task must end with JoinError");
+        assert!(super::discord_client_failed(&res));
+        let ok: std::result::Result<std::result::Result<(), String>, tokio::task::JoinError> =
+            Ok(Ok(()));
+        assert!(!super::discord_client_failed(&ok));
+        let err: std::result::Result<std::result::Result<(), String>, tokio::task::JoinError> =
+            Ok(Err("boom".into()));
+        assert!(super::discord_client_failed(&err));
+    }
+
+    #[tokio::test]
+    async fn fix_share_combined_dashboard_resolves_gateway_approvals() {
+        use axum::body::Body;
+        use axum::http::{Request, StatusCode};
+        use omon_gateway::{ApprovalRequester, OutboundAction, OutboundDispatcher};
+        use std::sync::Arc;
+        use tower::ServiceExt;
+
+        struct Primary(tokio::sync::mpsc::UnboundedSender<OutboundAction>);
+        #[async_trait::async_trait]
+        impl OutboundDispatcher for Primary {
+            async fn dispatch(&self, action: OutboundAction) -> omon_gateway::Result<()> {
+                let _ = self.0.send(action);
+                Ok(())
+            }
+        }
+        struct NoopCron;
+        #[async_trait::async_trait]
+        impl omon_gateway::CronTaskExecutor for NoopCron {
+            async fn execute(
+                &self,
+                _job: &omon_gateway::CronJob,
+            ) -> omon_gateway::Result<Option<String>> {
+                Ok(None)
+            }
+        }
+
+        let pool = omon_gateway::storage::init_pool("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let workspace_root =
+            std::env::temp_dir().join(format!("omon-test-share-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace_root).unwrap();
+
+        // Gateway-side runtime, wired the way run_gateway wires it.
+        let (primary_tx, mut primary_rx) = tokio::sync::mpsc::unbounded_channel();
+        let primary: Arc<dyn OutboundDispatcher> = Arc::new(Primary(primary_tx));
+        let guard = omon_gateway::SmartApprovalGuard::new();
+        let requester = Arc::new(omon_gateway::DiscordApprovalRequester::new(
+            guard,
+            std::time::Duration::from_secs(30),
+        ));
+        requester.set_dispatcher(primary.clone()).await;
+        let shared_dispatcher = super::SharedDispatcher::default();
+        shared_dispatcher.set(primary.clone()).await;
+        let multiplexer = omon_gateway::SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(FixMainNoopRunner),
+            omon_gateway::MultiplexerConfig::default(),
+        );
+        let scheduler = omon_gateway::CronScheduler::new(pool.clone(), Arc::new(NoopCron));
+        let settings = super::dashboard::DashboardSettings {
+            enabled: true,
+            host: "127.0.0.1".into(),
+            port: 19744,
+            insecure: false,
+            web_root: workspace_root.clone(),
+        };
+
+        let state = super::attach_gateway_dashboard(
+            &settings,
+            &requester,
+            &shared_dispatcher,
+            primary,
+            pool.clone(),
+            multiplexer,
+            scheduler,
+            omon_gateway::ToolRegistry::new(),
+            serde_json::json!({}),
+            workspace_root.clone(),
+            vec![],
+            1,
+        )
+        .await;
+        let detached = state.detached_from_gateway;
+        let app = super::dashboard::router(state);
+
+        // An approval raised through the gateway's own requester/guard.
+        let session =
+            omon_gateway::SessionKey::new("discord", Some("bot1"), "123", None::<String>, "42");
+        let pending_requester = requester.clone();
+        let decision = tokio::spawn(async move {
+            pending_requester
+                .request_approval(&session, "rm -rf build", "cleanup")
+                .await
+        });
+        let delivered = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match primary_rx.recv().await {
+                    Some(OutboundAction::ApprovalRequest { request_id, .. }) => break request_id,
+                    Some(_) => continue,
+                    None => panic!("primary dispatcher closed"),
+                }
+            }
+        })
+        .await
+        .expect("approval must reach the Discord egress");
+
+        let pending = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/approvals/pending")
+                    .header("Host", "127.0.0.1:19744")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(pending.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_slice(
+            &axum::body::to_bytes(pending.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        println!("FIX-SHARE pending={body}");
+        let listed = body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == serde_json::json!(delivered));
+        assert!(listed, "gateway approval must be listed by the dashboard");
+
+        let resolved = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/approvals/{delivered}/resolve"))
+                    .header("Host", "127.0.0.1:19744")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"decision": "once"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved.status(), StatusCode::OK);
+        let decision = tokio::time::timeout(std::time::Duration::from_secs(5), decision)
+            .await
+            .expect("requester must observe the dashboard decision")
+            .unwrap();
+        assert!(matches!(decision, Ok(omon_gateway::ApprovalDecision::Once)));
+        assert!(!detached, "combined dashboard shares the gateway runtime");
+        let _ = std::fs::remove_dir_all(workspace_root);
+    }
+
+    #[test]
+    fn fix_main_allowlist_rejects_all_invalid_entries() {
+        assert!(super::parse_allowlist("DISCORD_ALLOWED_CHANNELS", Some("abc, chan-x")).is_err());
+        assert_eq!(
+            super::parse_allowlist("DISCORD_ALLOWED_CHANNELS", Some("1, bad, 2")).unwrap(),
+            vec![1, 2]
+        );
+        assert!(super::parse_allowlist("DISCORD_ALLOWED_CHANNELS", None)
+            .unwrap()
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn recovery_rechecks_current_owner_authorization() {
         let pool = omon_gateway::storage::init_pool("sqlite::memory:")
@@ -2850,6 +3813,7 @@ mod runner_tests {
             allow_all_users: false,
             allowed_channels: vec![],
             ignored_channels: vec![],
+            paired_users: vec![],
         };
 
         let recovered =
@@ -2865,6 +3829,9 @@ mod runner_tests {
 
     #[test]
     fn cron_and_interactive_share_one_daemon() {
+        let _env = ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         unsafe {
             std::env::remove_var("OMON_OMO_APPSERVER_URL");
             std::env::remove_var("OMON_OMO_CRON_APPSERVER_URL");
@@ -2890,7 +3857,6 @@ mod runner_tests {
             write_drain_request, AgentRunner, DrainWatcher, InboundEvent, MultiplexerConfig,
             OmonError, SessionContext, SessionKey, SessionMultiplexer,
         };
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
 
         let pool = omon_gateway::storage::init_pool("sqlite::memory:")
@@ -2905,23 +3871,23 @@ mod runner_tests {
         let watcher = DrainWatcher::new(state_dir.clone(), std::time::Duration::from_millis(10));
         let epoch = omon_gateway::current_instantiation_epoch().to_string();
 
-        let processed = Arc::new(AtomicUsize::new(0));
-        struct CountingRunner(Arc<AtomicUsize>);
+        let (processed_tx, mut processed_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        struct CountingRunner(tokio::sync::mpsc::UnboundedSender<String>);
         #[async_trait::async_trait]
         impl AgentRunner for CountingRunner {
             async fn run(
                 &self,
                 _session: &mut SessionContext,
-                _event: InboundEvent,
+                event: InboundEvent,
             ) -> Result<(), OmonError> {
-                self.0.fetch_add(1, Ordering::SeqCst);
+                let _ = self.0.send(event.content);
                 Ok(())
             }
         }
 
         let mux = SessionMultiplexer::new(
             pool.clone(),
-            Arc::new(CountingRunner(processed.clone())),
+            Arc::new(CountingRunner(processed_tx)),
             MultiplexerConfig::default(),
         )
         .with_drain_receiver(watcher.receiver());
@@ -2942,6 +3908,15 @@ mod runner_tests {
         write_drain_request(&state_dir, Some("operator"), false).unwrap();
         watcher.scan_at(&epoch, chrono::Utc::now());
 
+        // Work accepted before the drain still runs to completion.
+        for expected in ["turn 1", "turn 2"] {
+            let got = tokio::time::timeout(std::time::Duration::from_secs(10), processed_rx.recv())
+                .await
+                .expect("accepted turn must be processed while draining")
+                .unwrap();
+            assert_eq!(got, expected);
+        }
+
         // m3 must be rejected because gateway is draining
         let m3 = InboundEvent::message(session.clone(), "m3", "turn 3");
         let err = mux.route(m3).await.unwrap_err();
@@ -2955,6 +3930,11 @@ mod runner_tests {
         let m4 = InboundEvent::message(session.clone(), "m4", "turn 4");
         let res4 = mux.route(m4).await;
         assert!(res4.is_ok(), "m4 must be accepted after drain is reversed");
+        let got = tokio::time::timeout(std::time::Duration::from_secs(10), processed_rx.recv())
+            .await
+            .expect("m4 must be processed after drain is reversed")
+            .unwrap();
+        assert_eq!(got, "turn 4");
 
         let _ = std::fs::remove_dir_all(state_dir);
     }
@@ -3524,7 +4504,7 @@ mod runner_tests {
                             super::super::StartupAuthorization { allow_all_users: true, ..Default::default() }
                         } else {
                             super::super::StartupAuthorization { allowed_users: vec![42], allow_all_users: false,
-                                allowed_channels: vec![202,203], ignored_channels: vec![] }
+                                allowed_channels: vec![202,203], ignored_channels: vec![], paired_users: vec![] }
                         };
                         if authorization == Authorization::Deferral {
                             for allowed_users in [vec![99], vec![]] {

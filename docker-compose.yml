@@ -24,9 +24,13 @@ services:
       APPROVAL_MODE: ${APPROVAL_MODE:-smart}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
-      - ./data:/app/data
-      - ./workspace:/app/workspace
+      - omon-data:/app/data
+      - omon-workspace:/app/workspace
     init: true
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  omon-data:
+  omon-workspace:

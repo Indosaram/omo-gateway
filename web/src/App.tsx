@@ -37,6 +37,17 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react'
+import {
+  type ChatTurn,
+  createChatTurn,
+  hasAssistantReplyAfter,
+  isStopSettled,
+  latestMessagePages,
+  mergeStatusMessages,
+} from './lib/chat-turn'
+import { appendLogs } from './lib/log-merge'
+import { approvalSessionLabel, diskUsage } from './lib/status-view'
+import { isAutoLoadableImageSrc } from './lib/remote-image'
 
 import {
   AllowlistRecord,
@@ -302,9 +313,8 @@ function OverviewPage({ status, onNavigate }: { status: StatusResponse | null; o
     )
   }
 
-  const diskTotal = status.disk.workspace_total_bytes || 1
-  const diskAvail = status.disk.workspace_available_bytes || 0
-  const diskUsedPercent = Math.round(((diskTotal - diskAvail) / diskTotal) * 100)
+  const disk = diskUsage(status.disk)
+  const diskUsedPercent = disk?.percent ?? 0
 
   return (
     <div className="space-y-6 w-full">
@@ -316,7 +326,7 @@ function OverviewPage({ status, onNavigate }: { status: StatusResponse | null; o
             <Sparkles className="w-4 h-4 text-primary" />
           </CardHeader>
           <CardContent>
-            <div className="text-xl font-bold font-mono text-foreground truncate">{status.model}</div>
+            <div className="text-xl font-bold font-mono text-foreground truncate">{status.model || 'unknown'}</div>
             <p className="text-[11px] text-muted-foreground mt-1">
               Providers: OpenAI-compatible / Anthropic
             </p>
@@ -382,17 +392,19 @@ function OverviewPage({ status, onNavigate }: { status: StatusResponse | null; o
                   <HardDrive className="w-3.5 h-3.5" /> Workspace Disk Usage
                 </span>
                 <span className="font-mono font-medium">
-                  {formatBytes(diskTotal - diskAvail)} / {formatBytes(diskTotal)} ({diskUsedPercent}%)
+                  {disk ? `${formatBytes(disk.used)} / ${formatBytes(disk.total)} (${diskUsedPercent}%)` : 'unknown'}
                 </span>
               </div>
-              <div className="w-full bg-secondary rounded-full h-2 overflow-hidden border border-border">
-                <div
-                  className={`h-full transition-all rounded-full ${
-                    diskUsedPercent > 90 ? 'bg-destructive' : diskUsedPercent > 75 ? 'bg-amber-500' : 'bg-primary'
-                  }`}
-                  style={{ width: `${Math.min(100, diskUsedPercent)}%` }}
-                />
-              </div>
+              {disk ? (
+                <div className="w-full bg-secondary rounded-full h-2 overflow-hidden border border-border">
+                  <div
+                    className={`h-full transition-all rounded-full ${
+                      diskUsedPercent > 90 ? 'bg-destructive' : diskUsedPercent > 75 ? 'bg-amber-500' : 'bg-primary'
+                    }`}
+                    style={{ width: `${Math.min(100, diskUsedPercent)}%` }}
+                  />
+                </div>
+              ) : null}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
@@ -469,6 +481,40 @@ function OverviewPage({ status, onNavigate }: { status: StatusResponse | null; o
 /* =========================================================================
    2. CHAT PLAYGROUND PAGE
    ========================================================================= */
+/** Renders an image, but only fetches a remote one after the user clicks it. */
+function GuardedImage({
+  src,
+  alt,
+  className,
+}: {
+  src?: string
+  alt?: string
+  className?: string
+}) {
+  const [allowed, setAllowed] = useState(false)
+  if (!src) return null
+  if (allowed || isAutoLoadableImageSrc(src, window.location.origin)) {
+    return <img src={src} alt={alt ?? ''} className={className} loading="lazy" referrerPolicy="no-referrer" />
+  }
+  let host = src
+  try {
+    host = new URL(src, window.location.origin).host
+  } catch {
+    // Keep the raw value as the label.
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => setAllowed(true)}
+      className="my-2 inline-flex items-center gap-1.5 rounded-md border border-border/80 bg-secondary/60 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+      title={src}
+    >
+      <ExternalLink className="w-3 h-3" />
+      Load remote image from {host}
+    </button>
+  )
+}
+
 function ChatPlaygroundPage({
   initialSessionId,
   onClearInitialSession,
@@ -482,6 +528,9 @@ function ChatPlaygroundPage({
   const [input, setInput] = useState('')
   const [streamingContent, setStreamingContent] = useState('')
   const [isSending, setIsSending] = useState(false)
+  const [isStopping, setIsStopping] = useState(false)
+  // Mid-turn status text is relayed live only (the server does not persist it).
+  const [statusMessages, setStatusMessages] = useState<SessionMessage[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -498,38 +547,52 @@ function ChatPlaygroundPage({
     } catch {}
   }, [])
 
-  const loadMessages = useCallback(async (id: string) => {
-    if (!id || id === 'web-default' || id.startsWith('web-')) {
-      // Ephemeral web sessions start clean unless saved
-      try {
-        const data = await api.sessionMessages(id)
-        setMessages(data.items || [])
-      } catch {
-        setMessages([])
-      }
-      return
-    }
-    try {
-      const data = await api.sessionMessages(id)
-      setMessages(data.items || [])
-    } catch {
-      setMessages([])
-    }
+  const currentSessionRef = useRef(currentSessionId)
+  currentSessionRef.current = currentSessionId
+  const turnRef = useRef<ChatTurn | null>(null)
+
+  const fetchLatestMessages = useCallback(async (id: string): Promise<SessionMessage[]> => {
+    const perPage = 50
+    const first = await api.sessionMessages(id, 1, perPage)
+    const pages = latestMessagePages(first.total ?? 0, perPage)
+    return pages.includes(1) && pages.length === 1
+      ? first.items || []
+      : (await Promise.all(pages.map((page) => api.sessionMessages(id, page, perPage)))).flatMap((data) => data.items || [])
   }, [])
+
+  const loadMessages = useCallback(async (id: string) => {
+    try {
+      const items = await fetchLatestMessages(id)
+      if (currentSessionRef.current === id) setMessages(items)
+    } catch {
+      if (currentSessionRef.current === id) setMessages([])
+    }
+  }, [fetchLatestMessages])
 
   useEffect(() => {
     loadSessions()
   }, [loadSessions])
 
   useEffect(() => {
+    // A turn belongs to the session it was sent in; switching abandons it.
+    turnRef.current?.abandon()
+    turnRef.current = null
+    setIsSending(false)
+    setStreamingContent('')
+    setStatusMessages([])
     if (currentSessionId) {
       loadMessages(currentSessionId)
     }
   }, [currentSessionId, loadMessages])
 
+  const displayMessages = useMemo(
+    () => mergeStatusMessages(messages, statusMessages),
+    [messages, statusMessages],
+  )
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, streamingContent])
+  }, [displayMessages, streamingContent])
 
   const handleSendMessage = async (e: FormEvent) => {
     e.preventDefault()
@@ -539,6 +602,11 @@ function ChatPlaygroundPage({
     setInput('')
     setIsSending(true)
     setStreamingContent('')
+    setStatusMessages([])
+    const baseSequence = messages.reduce(
+      (max, m) => (m.id.startsWith('temp-') ? max : Math.max(max, m.sequence)),
+      0,
+    )
 
     // Append temporary optimistic message
     const tempUserMsg: SessionMessage = {
@@ -550,85 +618,89 @@ function ChatPlaygroundPage({
     }
     setMessages((prev) => [...prev, tempUserMsg])
 
+    const turnSessionId = currentSessionId
     try {
       // Connect WebSocket for streaming response
-      const ws = new WebSocket(socketUrl(`/api/sessions/${encodeURIComponent(currentSessionId)}/ws`))
-      let accumulatedResponse = ''
+      const ws = new WebSocket(socketUrl(`/api/sessions/${encodeURIComponent(turnSessionId)}/ws`))
+      const turn: ChatTurn = createChatTurn({
+        isCurrent: () => currentSessionRef.current === turnSessionId && turnRef.current === turn,
+        onChunk: (content) => setStreamingContent(content),
+        onStatus: (content) =>
+          setStatusMessages((prev) => [
+            ...prev,
+            {
+              id: `status-${Date.now()}-${prev.length}`,
+              sequence: 0,
+              role: 'assistant',
+              content,
+              created_at: new Date().toISOString(),
+            },
+          ]),
+        onDone: ({ error }) => {
+          turnRef.current = null
+          setStreamingContent('')
+          setIsSending(false)
+          loadMessages(turnSessionId)
+          if (error) alert(`Chat error: ${error}`)
+        },
+        close: () => ws.close(),
+        fallback: () => api.postChat(turnSessionId, userText),
+        // The POST only queues the turn; wait for the assistant reply to be persisted.
+        awaitReply: async () => {
+          for (let attempt = 0; attempt < 120; attempt += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 1000))
+            if (turnRef.current !== turn || currentSessionRef.current !== turnSessionId) return
+            try {
+              if (hasAssistantReplyAfter(await fetchLatestMessages(turnSessionId), baseSequence)) return
+            } catch {}
+          }
+        },
+      })
+      turnRef.current = turn
 
       ws.onopen = () => {
+        turn.opened()
         ws.send(JSON.stringify({ type: 'message', content: userText }))
       }
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          if (data.type === 'stream_chunk') {
-            accumulatedResponse = data.content
-            setStreamingContent(accumulatedResponse)
-          } else if (data.type === 'final') {
-            accumulatedResponse = data.content
-            setStreamingContent('')
-            loadMessages(currentSessionId)
-            setIsSending(false)
-            ws.close()
-          } else if (data.type === 'event' && data.event) {
-            const ev = data.event
-            if (ev.type === 'stream' && ev.chunk) {
-              accumulatedResponse = ev.chunk.content
-              if (ev.chunk.is_final) {
-                setStreamingContent('')
-                loadMessages(currentSessionId)
-                setIsSending(false)
-                ws.close()
-              } else {
-                setStreamingContent(accumulatedResponse)
-              }
-            } else if (ev.is_final || ev.type === 'final') {
-              setStreamingContent('')
-              loadMessages(currentSessionId)
-              setIsSending(false)
-              ws.close()
-            }
-          } else if (data.type === 'error') {
-            setIsSending(false)
-            setStreamingContent('')
-            alert(`Error: ${data.message}`)
-            ws.close()
-          }
-        } catch {
-          accumulatedResponse += event.data
-          setStreamingContent(accumulatedResponse)
-        }
-      }
-
-      ws.onerror = async () => {
-        // Fallback to HTTP POST
-        try {
-          await api.postChat(currentSessionId, userText)
-          setTimeout(() => {
-            loadMessages(currentSessionId)
-            setIsSending(false)
-          }, 1500)
-        } catch (err: any) {
-          setIsSending(false)
-          alert(`Chat error: ${err.message}`)
-        }
+      ws.onmessage = (event) => turn.frame(String(event.data))
+      ws.onclose = () => turn.closed()
+      // Fallback to HTTP POST; the turn completes once the POST resolves.
+      ws.onerror = () => {
+        void turn.socketError()
       }
     } catch {
       setIsSending(false)
     }
   }
 
-  const handleStopTurn = async () => {
-    try {
-      const ws = new WebSocket(socketUrl(`/api/sessions/${encodeURIComponent(currentSessionId)}/ws`))
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ type: 'stop' }))
-        setTimeout(() => ws.close(), 500)
+  const handleStopTurn = () => {
+    if (isStopping) return
+    const sessionId = currentSessionId
+    // Detach the stopped turn first: the actor releases typing twice while stopping, and
+    // those stale releases must not be read as the end of a turn sent afterwards.
+    turnRef.current?.abandon()
+    turnRef.current = null
+    setIsStopping(true)
+    setStreamingContent('')
+    let settled = false
+    const settle = () => {
+      if (settled) return
+      settled = true
+      ws.close()
+      setIsStopping(false)
+      if (currentSessionRef.current === sessionId) {
+        setIsSending(false)
+        loadMessages(sessionId)
       }
-      setIsSending(false)
-      setStreamingContent('')
-    } catch {}
+    }
+    // Input stays locked until the server confirms the stop (after the final release).
+    const ws = new WebSocket(socketUrl(`/api/sessions/${encodeURIComponent(sessionId)}/ws`))
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'stop' }))
+    ws.onmessage = (event) => {
+      if (isStopSettled(String(event.data))) settle()
+    }
+    ws.onerror = settle
+    ws.onclose = settle
   }
 
   return (
@@ -713,7 +785,13 @@ function ChatPlaygroundPage({
               <RefreshCw className="w-3 h-3 mr-1" /> Reload
             </Button>
             {isSending ? (
-              <Button variant="destructive" size="sm" className="h-7 text-xs" onClick={handleStopTurn}>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={handleStopTurn}
+                disabled={isStopping}
+              >
                 <Pause className="w-3 h-3 mr-1" /> Stop
               </Button>
             ) : null}
@@ -722,7 +800,7 @@ function ChatPlaygroundPage({
 
         {/* Message Feed */}
         <CardContent className="flex-1 overflow-y-auto p-4 space-y-4 font-sans text-sm">
-          {messages.length === 0 && !streamingContent ? (
+          {displayMessages.length === 0 && !streamingContent ? (
             <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground space-y-2">
               <Bot className="w-10 h-10 text-muted-foreground/40" />
               <p className="text-sm font-medium">Session initialized and ready</p>
@@ -732,7 +810,7 @@ function ChatPlaygroundPage({
             </div>
           ) : null}
 
-          {messages.map((m) => {
+          {displayMessages.map((m) => {
             const isUser = m.role === 'user'
             const isTool = m.role === 'tool'
 
@@ -801,11 +879,11 @@ function ChatPlaygroundPage({
                     <div className="prose prose-invert max-w-none text-sm leading-relaxed break-words space-y-2">
                       <ReactMarkdown
                         components={{
-                          img: ({ node, ...props }) => (
-                            <img
-                              {...props}
+                          img: ({ src, alt }) => (
+                            <GuardedImage
+                              src={typeof src === 'string' ? src : undefined}
+                              alt={alt}
                               className="max-w-full rounded-md border border-border/80 my-2 shadow-sm object-contain max-h-96"
-                              loading="lazy"
                             />
                           ),
                           p: ({ children }) => <p className="mb-2 last:mb-0 whitespace-pre-wrap">{children}</p>,
@@ -833,14 +911,13 @@ function ChatPlaygroundPage({
                       {imageMatches.length > 0 && !m.content.includes('![') ? (
                         <div className="grid grid-cols-1 gap-2 pt-2 border-t border-border/40">
                           {imageMatches.map((imgUrl, i) => (
-                            <a key={i} href={imgUrl} target="_blank" rel="noreferrer" className="block">
-                              <img
+                            <div key={i} className="block">
+                              <GuardedImage
                                 src={imgUrl}
                                 alt="Message attachment"
                                 className="max-w-full rounded-md border border-border/80 shadow-sm object-contain max-h-96 hover:opacity-95 transition-opacity"
-                                loading="lazy"
                               />
-                            </a>
+                            </div>
                           ))}
                         </div>
                       ) : null}
@@ -864,7 +941,19 @@ function ChatPlaygroundPage({
                 <Bot className="w-3.5 h-3.5" />
               </div>
               <div className="max-w-2xl rounded-lg px-4 py-3 text-sm bg-card border border-primary/30 text-foreground shadow-sm">
-                <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                <ReactMarkdown
+                  components={{
+                    img: ({ src, alt }) => (
+                      <GuardedImage
+                        src={typeof src === 'string' ? src : undefined}
+                        alt={alt}
+                        className="max-w-full rounded-md border border-border/80 my-2 shadow-sm object-contain max-h-96"
+                      />
+                    ),
+                  }}
+                >
+                  {streamingContent}
+                </ReactMarkdown>
                 <span className="inline-block w-2 h-4 ml-1 bg-primary animate-pulse align-middle" />
               </div>
             </div>
@@ -1354,7 +1443,7 @@ function SecuritySettingsPage({ onReloadStatus }: { onReloadStatus: () => void }
               {approvals.map((a) => (
                 <div key={a.id} className="p-4 rounded-lg border border-border bg-secondary/30 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-xs font-mono font-semibold text-foreground">{a.session_id}</span>
+                    <span className="text-xs font-mono font-semibold text-foreground">{approvalSessionLabel(a.session)}</span>
                     <Badge variant="destructive">Approval Required</Badge>
                   </div>
                   <pre className="p-3 rounded-md bg-background/80 border border-border text-xs font-mono overflow-x-auto text-amber-300">
@@ -1429,7 +1518,11 @@ function LiveLogsPage() {
   const logsEndRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    api.logs().then((l) => setLogs(l.items || []))
+    // The socket replays the recent tail too; entries are deduped by id.
+    api
+      .logs()
+      .then((l) => setLogs((prev) => appendLogs(l.items || [], prev)))
+      .catch(() => {})
 
     const ws = new WebSocket(socketUrl('/api/logs/ws'))
     ws.onopen = () => setConnected(true)
@@ -1439,21 +1532,22 @@ function LiveLogsPage() {
         const data = JSON.parse(event.data)
         if (data && typeof data === 'object') {
           if (data.type === 'log' && data.entry) {
-            setLogs((prev) => [...prev.slice(-400), data.entry])
+            setLogs((prev) => appendLogs(prev, [data.entry]))
           } else if (data.type === 'warning' && data.message) {
-            setLogs((prev) => [
-              ...prev.slice(-400),
-              {
-                id: Date.now(),
-                timestamp: new Date().toISOString(),
-                level: 'WARN',
-                target: 'system',
-                message: data.message,
-                fields: {},
-              },
-            ])
+            setLogs((prev) =>
+              appendLogs(prev, [
+                {
+                  id: Date.now(),
+                  timestamp: new Date().toISOString(),
+                  level: 'WARN',
+                  target: 'system',
+                  message: data.message,
+                  fields: {},
+                },
+              ]),
+            )
           } else if (data.message) {
-            setLogs((prev) => [...prev.slice(-400), data])
+            setLogs((prev) => appendLogs(prev, [data]))
           }
         }
       } catch {}

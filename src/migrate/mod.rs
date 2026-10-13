@@ -183,6 +183,25 @@ async fn run_after_config(
         return Ok(summary);
     }
 
+    // Validate every store before touching Hermes processes or LaunchAgents.
+    let preflight = cutover_cron_stores(env, &paths.hermes_root, &pool, true)
+        .await
+        .map_err(|error| step_error("cron cutover", "gateway-down, cron cutover", error))?;
+    if let Some(store) = preflight
+        .stores
+        .iter()
+        .find(|store| !store.unverified_jobs.is_empty())
+    {
+        return Err(step_error(
+            "cron cutover",
+            "gateway-down, cron cutover",
+            OmonError::Config(format!(
+                "Hermes cron job hermes:{}:{} payload does not match imported cron_jobs or has not been imported; Hermes gateway left running",
+                store.profile, store.unverified_jobs[0]
+            )),
+        ));
+    }
+
     let gateway = bring_gateway_down(env, &paths.hermes_root, &paths.launch_agents_dir, false)
         .map_err(|error| step_error("gateway-down", "cron cutover", error))?;
     summary.pids_stopped = gateway.pids_terminated;

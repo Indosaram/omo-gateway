@@ -153,12 +153,14 @@ export const api = {
   sessions: (search?: string) =>
     request<ApiList<SessionRecord>>(search ? `/api/sessions?search=${encodeURIComponent(search)}` : '/api/sessions'),
   session: (id: string) => request<SessionRecord>(`/api/sessions/${encodeURIComponent(id)}`),
-  sessionMessages: (id: string) =>
-    request<ApiList<SessionMessage>>(`/api/sessions/${encodeURIComponent(id)}/messages`),
+  sessionMessages: (id: string, page = 1, perPage = 50) =>
+    request<ApiList<SessionMessage>>(
+      `/api/sessions/${encodeURIComponent(id)}/messages?page=${page}&per_page=${perPage}`,
+    ),
   deleteSession: (id: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   postChat: (id: string, message: string) =>
-    request<{ response: string }>(`/api/sessions/${encodeURIComponent(id)}/chat`, {
+    request<{ queued: boolean; direct_reply?: boolean; session_id: string }>(`/api/sessions/${encodeURIComponent(id)}/chat`, {
       method: 'POST',
       body: JSON.stringify({ message }),
     }),

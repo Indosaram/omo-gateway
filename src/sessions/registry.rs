@@ -29,6 +29,11 @@ pub struct StaleListing {
     pub age_seconds: u64,
 }
 
+/// Host names reach `ssh` as an argument; reject empty, spaced, or option-like names.
+fn valid_host(host: &str) -> bool {
+    !host.is_empty() && !host.starts_with('-') && !host.chars().any(char::is_whitespace)
+}
+
 pub fn probe_ssh_hosts(config: &str) -> Vec<String> {
     let mut hosts = Vec::new();
     for line in config.lines() {
@@ -41,6 +46,7 @@ pub fn probe_ssh_hosts(config: &str) -> Vec<String> {
         }
         for host in words {
             if !host.contains(['*', '?', '!'])
+                && !host.starts_with('-')
                 && host != "local"
                 && !hosts.iter().any(|seen| seen == host)
             {
@@ -93,12 +99,9 @@ pub async fn seed_hosts_file(
 }
 
 pub fn write_hosts_file(path: &Path, hosts: &[String]) -> Result<(), RegistryError> {
-    if hosts
-        .iter()
-        .any(|host| host.is_empty() || host.chars().any(char::is_whitespace))
-    {
+    if !hosts.iter().all(|host| valid_host(host)) {
         return Err(RegistryError::InvalidHosts(
-            "host names must be non-empty and whitespace-free".into(),
+            "host names must be non-empty, whitespace-free and must not start with '-'".into(),
         ));
     }
     if let Some(parent) = path.parent() {
@@ -216,6 +219,7 @@ impl CommandRunner for ProcessCommandRunner {
                 "BatchMode=yes".to_owned(),
                 "-o".to_owned(),
                 "ConnectTimeout=5".to_owned(),
+                "--".to_owned(),
                 machine.to_owned(),
             ];
             args.extend(argv.iter().cloned());
@@ -282,10 +286,12 @@ impl<R: CommandRunner + 'static> SessionRegistry<R> {
                     if let Ok(saved) = serde_json::from_slice::<CachedListing>(&bytes) {
                         if let Ok(age) = saved.saved_at.elapsed() {
                             if age <= STALE_TTL {
-                                self.listings.write().await.insert(
-                                    machine.clone(),
-                                    (Instant::now() - age, saved.sessions),
-                                );
+                                if let Some(at) = Instant::now().checked_sub(age) {
+                                    self.listings
+                                        .write()
+                                        .await
+                                        .insert(machine.clone(), (at, saved.sessions));
+                                }
                             }
                         }
                     }
@@ -453,7 +459,7 @@ pub fn configured_hosts() -> Result<Vec<String>, RegistryError> {
             .split(',')
             .map(str::trim)
             .map(|host| {
-                if host.is_empty() || host.chars().any(char::is_whitespace) {
+                if !valid_host(host) {
                     Err(RegistryError::InvalidHosts(configured.clone()))
                 } else {
                     Ok(host.to_owned())
@@ -478,12 +484,9 @@ fn read_seeded_hosts(path: &Path) -> Result<Vec<String>, RegistryError> {
     let bytes = std::fs::read(path).map_err(|_| RegistryError::SshConfig(path.to_path_buf()))?;
     let hosts: Vec<String> = serde_json::from_slice(&bytes)
         .map_err(|error| RegistryError::InvalidHosts(error.to_string()))?;
-    if hosts
-        .iter()
-        .any(|host| host.is_empty() || host.chars().any(char::is_whitespace))
-    {
+    if !hosts.iter().all(|host| valid_host(host)) {
         return Err(RegistryError::InvalidHosts(
-            "host names must be non-empty and whitespace-free".into(),
+            "host names must be non-empty, whitespace-free and must not start with '-'".into(),
         ));
     }
     Ok(hosts)
@@ -784,5 +787,23 @@ mod tests {
         let hosts = vec!["omarchy".to_owned()];
         write_hosts_file(&path, &hosts).unwrap();
         assert_eq!(read_seeded_hosts(&path).unwrap(), hosts);
+    }
+
+    #[test]
+    fn option_like_hosts_are_rejected_everywhere() {
+        assert!(!valid_host("-oProxyCommand=touch_pwned"));
+        assert!(valid_host("omarchy"));
+        assert_eq!(
+            probe_ssh_hosts("Host -oProxyCommand=x omarchy"),
+            vec!["omarchy"]
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-hosts.json");
+        assert!(write_hosts_file(&path, &["-oProxyCommand=x".to_owned()]).is_err());
+        std::fs::write(&path, br#"["-oProxyCommand=x"]"#).unwrap();
+        assert!(matches!(
+            read_seeded_hosts(&path),
+            Err(RegistryError::InvalidHosts(_))
+        ));
     }
 }

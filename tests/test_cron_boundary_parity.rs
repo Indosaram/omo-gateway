@@ -507,12 +507,13 @@ async fn sync_isolates_bad_jobs_and_rearms_changed_once() {
     );
 
     // --- PHASE 6: DELIVERY FAILURE POPULATES LAST_DELIVERY_ERROR ---
-    // Update valid-daily to deliver to discord:42, make it due, and trigger delivery failure
+    // Update valid-daily to deliver to discord:42, make it due, and trigger delivery failure.
+    // The profile timezone is Asia/Seoul, so the 09:00 local occurrence is 2026-09-06T00:00:00Z.
     *fail_job_id.lock().unwrap() = None;
     *fail_delivery.lock().unwrap() = true;
-    let delivery_test_time = instant("2026-09-06T09:00:00Z");
+    let delivery_test_time = instant("2026-09-06T00:00:00Z");
     *clock.lock().unwrap() = delivery_test_time;
-    *completed_at.lock().unwrap() = instant("2026-09-06T09:01:00Z");
+    *completed_at.lock().unwrap() = instant("2026-09-06T00:01:00Z");
 
     let updated_delivery_jobs = json!({
         "jobs": [
@@ -520,7 +521,7 @@ async fn sync_isolates_bad_jobs_and_rearms_changed_once() {
                 "id": "valid-daily",
                 "prompt": "daily report",
                 "enabled": true,
-                "next_run_at": "2026-09-06T09:00:00Z",
+                "next_run_at": "2026-09-06T00:00:00Z",
                 "schedule": {"kind": "cron", "expr": "0 9 * * *"},
                 "deliver": "discord:42"
             }
@@ -535,7 +536,10 @@ async fn sync_isolates_bad_jobs_and_rearms_changed_once() {
     sync.sync_at(delivery_test_time).await.unwrap();
 
     let ran_delivery_job = scheduler.run_due_jobs().await.unwrap();
-    assert!(ran_delivery_job >= 1, "valid-daily must be due at 09:00");
+    assert!(
+        ran_delivery_job >= 1,
+        "valid-daily must be due at 09:00 Asia/Seoul"
+    );
     let _ = tokio::time::timeout(Duration::from_secs(5), executions.recv())
         .await
         .unwrap();

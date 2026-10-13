@@ -119,6 +119,32 @@ impl AudioFrameBuffer {
     }
 }
 
+/// Joins every PCM frame into one sample stream; frames must share one format
+/// so the WAV header written from the first frame stays valid for all of them.
+fn concat_pcm_frames(
+    first: &AudioFrame,
+    first_samples: &[i16],
+    frames: &[AudioFrame],
+) -> Result<Vec<i16>> {
+    let mut samples = Vec::with_capacity(first_samples.len());
+    samples.extend_from_slice(first_samples);
+    for frame in &frames[1..] {
+        match &frame.payload {
+            AudioPayload::Pcm(more)
+                if frame.sample_rate == first.sample_rate && frame.channels == first.channels =>
+            {
+                samples.extend_from_slice(more);
+            }
+            _ => {
+                return Err(OmonError::Multiplexer(
+                    "STT frames must all be PCM with one sample rate and channel count".into(),
+                ));
+            }
+        }
+    }
+    Ok(samples)
+}
+
 #[async_trait]
 pub trait SpeechToText: Send + Sync + 'static {
     async fn transcribe(&self, frames: &[AudioFrame]) -> Result<String>;
@@ -138,7 +164,14 @@ impl OpenAiSpeechToText {
             api_key: api_key.into(),
             base_url: base_url.into(),
             model: "whisper-1".to_string(),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "failed to build STT HTTP client; using defaults");
+                    reqwest::Client::new()
+                }),
         }
     }
 }
@@ -150,8 +183,14 @@ impl SpeechToText for OpenAiSpeechToText {
             return Ok(String::new());
         };
         let (bytes, filename) = match &first.payload {
+            AudioPayload::Opus(_) if frames.len() > 1 => {
+                return Err(OmonError::Multiplexer(
+                    "STT cannot transcribe multiple Opus frames as one stream".into(),
+                ));
+            }
             AudioPayload::Opus(opus_bytes) => (opus_bytes.clone(), "audio.ogg"),
-            AudioPayload::Pcm(pcm_samples) => {
+            AudioPayload::Pcm(first_samples) => {
+                let pcm_samples = concat_pcm_frames(first, first_samples, frames)?;
                 let mut wav = Vec::new();
                 let sample_rate = first.sample_rate;
                 let channels = first.channels;
@@ -169,7 +208,7 @@ impl SpeechToText for OpenAiSpeechToText {
                 wav.extend_from_slice(&16u16.to_le_bytes());
                 wav.extend_from_slice(b"data");
                 wav.extend_from_slice(&data_size.to_le_bytes());
-                for sample in pcm_samples {
+                for sample in &pcm_samples {
                     wav.extend_from_slice(&sample.to_le_bytes());
                 }
                 (wav, "audio.wav")
@@ -296,5 +335,53 @@ impl VoiceAudioPipeline {
 
     pub async fn receive(&self) -> Option<AudioFrame> {
         self.receiver.lock().await.recv().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pcm_frames_are_all_concatenated_for_transcription() {
+        let frames = [
+            AudioFrame::pcm(0, None, 0, vec![1, 2]),
+            AudioFrame::pcm(0, None, 1, vec![3, 4]),
+        ];
+        let AudioPayload::Pcm(first) = &frames[0].payload else {
+            unreachable!()
+        };
+        let joined = concat_pcm_frames(&frames[0], first, &frames).unwrap();
+        assert_eq!(joined, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn mismatched_pcm_frames_are_rejected_instead_of_dropped() {
+        let mut other = AudioFrame::pcm(0, None, 1, vec![3]);
+        other.sample_rate = 16_000;
+        let frames = [AudioFrame::pcm(0, None, 0, vec![1]), other];
+        let AudioPayload::Pcm(first) = &frames[0].payload else {
+            unreachable!()
+        };
+        assert!(concat_pcm_frames(&frames[0], first, &frames).is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn openai_stt_request_times_out_when_server_never_responds() {
+        // The kernel backlog completes the TCP handshake, but nothing ever replies.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let stt = OpenAiSpeechToText::new("test-key", base_url);
+        let frame = AudioFrame::pcm(0, None, 0, vec![0; 4]);
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(600),
+            stt.transcribe(&[frame]),
+        )
+        .await;
+
+        let result = outcome.expect("STT request must time out on its own instead of hanging");
+        assert!(result.is_err());
+        drop(listener);
     }
 }

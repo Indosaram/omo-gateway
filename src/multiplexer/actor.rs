@@ -19,6 +19,10 @@ use crate::{
 /// are rejected to avoid unbounded memory growth.
 const MAX_PENDING_EVENTS: usize = 64;
 
+/// How many recently completed inbound `platform_message_id`s an actor remembers in memory.
+/// Completion is otherwise inferred from the transcript (an assistant reply after the user row).
+const MAX_REMEMBERED_COMPLETED_INBOUND: usize = 256;
+
 pub use crate::agent::AgentBackend;
 pub use crate::agent::AgentBackend as AgentRunner;
 
@@ -74,6 +78,10 @@ pub(crate) enum ActorCommand {
         model: String,
         reply: oneshot::Sender<Result<()>>,
     },
+    SetYolo {
+        yolo: bool,
+        reply: oneshot::Sender<Result<()>>,
+    },
     Reset {
         reply: oneshot::Sender<Result<()>>,
     },
@@ -85,6 +93,8 @@ pub(crate) enum ActorCommand {
 enum TurnOutcome {
     Completed(Result<()>),
     Stopped(oneshot::Sender<Result<bool>>),
+    /// A mid-turn `/reset`: the turn is abandoned but the actor keeps serving the session.
+    Reset(oneshot::Sender<Result<()>>),
     Shutdown,
 }
 
@@ -102,6 +112,11 @@ pub struct SessionActor {
     /// Outcome channel for the turn currently being executed, when the sender asked for one.
     pending_ack: Option<oneshot::Sender<Result<()>>>,
     inbox_event_tx: Option<crate::inbox::watchers::InboxEventSender>,
+    /// Kept so a reset can rebuild the profile-derived defaults (toolsets, prompt, model).
+    profile_router: Option<Arc<ProfileRouter>>,
+    /// Inbound `platform_message_id`s whose turn finished successfully in this actor. A transcript
+    /// row alone only proves the message was persisted, not that its turn completed.
+    completed_inbound_ids: VecDeque<String>,
 }
 
 impl SessionActor {
@@ -197,6 +212,16 @@ impl SessionActor {
                         %error,
                         "failed to route resumed session event"
                     );
+                    // Keep the marker so the next boot retries instead of losing the turn.
+                    if let Err(mark_error) =
+                        crate::storage::mark_session_resume_pending(pool, &storage_key).await
+                    {
+                        tracing::error!(
+                            session = %session_key,
+                            error = %mark_error,
+                            "failed to restore resume_pending marker after routing failure"
+                        );
+                    }
                 } else {
                     resumed_count += 1;
                 }
@@ -240,6 +265,8 @@ impl SessionActor {
             binding_cleared: false,
             pending_ack: None,
             inbox_event_tx,
+            profile_router,
+            completed_inbound_ids: VecDeque::new(),
         })
     }
 
@@ -302,12 +329,10 @@ impl SessionActor {
                     self.dirty = true;
 
                     if !event.platform_message_id.is_empty() {
-                        match crate::storage::has_platform_message_id(
-                            &self.pool,
-                            &self.context.key.storage_key(),
-                            &event.platform_message_id,
-                        )
-                        .await
+                        let storage_key = self.context.key.storage_key();
+                        match self
+                            .inbound_turn_completed(&storage_key, &event.platform_message_id)
+                            .await
                         {
                             Ok(true) => {
                                 tracing::info!(
@@ -320,7 +345,24 @@ impl SessionActor {
                                 self.resolve_pending_ack(Ok(()));
                                 continue;
                             }
-                            Ok(false) => {}
+                            Ok(false) => {
+                                // A stale row from a failed or interrupted attempt must not
+                                // survive next to the fresh attempt's transcript row.
+                                if let Err(error) = discard_unfinished_inbound(
+                                    &self.pool,
+                                    &storage_key,
+                                    &event.platform_message_id,
+                                )
+                                .await
+                                {
+                                    tracing::warn!(
+                                        session = %self.context.key,
+                                        platform_message_id = %event.platform_message_id,
+                                        %error,
+                                        "failed to discard stale unfinished inbound row"
+                                    );
+                                }
+                            }
                             Err(error) => {
                                 tracing::warn!(
                                     session = %self.context.key,
@@ -362,6 +404,8 @@ impl SessionActor {
                     let delivery_id = event.delivery_id.clone();
                     let cancellation = CancellationToken::new();
                     let mut turn_context = self.context.clone();
+                    let model_at_turn_start = self.context.state.active_model.clone();
+                    let yolo_at_turn_start = self.context.state.yolo;
 
                     // Immediately broadcast typing indicator when turn execution begins
                     if !turn_context.key.user_id.starts_with("cron:") {
@@ -485,14 +529,15 @@ impl SessionActor {
                                         self.dirty = true;
                                         let _ = reply.send(Ok(()));
                                     }
-                                    Some(ActorCommand::Reset { reply }) => {
-                                        cancellation.cancel();
-                                        self.context.state.metadata.remove("omo_thread_id");
-                                        self.binding_cleared = true;
-                                        self.context.state = crate::SessionState::default();
+                                    Some(ActorCommand::SetYolo { yolo, reply }) => {
+                                        self.context.state.yolo = yolo;
                                         self.dirty = true;
                                         let _ = reply.send(Ok(()));
-                                        break TurnOutcome::Shutdown;
+                                    }
+                                    Some(ActorCommand::Reset { reply }) => {
+                                        cancellation.cancel();
+                                        self.binding_cleared = true;
+                                        break TurnOutcome::Reset(reply);
                                     }
                                     Some(ActorCommand::GetContext { reply }) => {
                                         let _ = reply.send(self.context.clone());
@@ -528,18 +573,34 @@ impl SessionActor {
                     };
                     drop(run);
 
-                    // Durable remote binding must never be lost on failure or overwritten by a stale actor copy.
-                    if let Some(thread_id) = turn_context.state.metadata.get("omo_thread_id") {
-                        self.context
-                            .state
-                            .metadata
-                            .insert("omo_thread_id".into(), thread_id.clone());
+                    // Durable remote binding must never be lost on failure or overwritten by a stale actor copy,
+                    // unless a mid-turn reset deliberately cleared it.
+                    if !self.binding_cleared {
+                        if let Some(thread_id) = turn_context.state.metadata.get("omo_thread_id") {
+                            self.context
+                                .state
+                                .metadata
+                                .insert("omo_thread_id".into(), thread_id.clone());
+                        }
                     }
 
                     match outcome {
                         TurnOutcome::Completed(mut result) => {
                             if result.is_ok() {
+                                // A mid-turn /model switch must survive the turn-start snapshot.
+                                let mid_turn_model = (self.context.state.active_model
+                                    != model_at_turn_start)
+                                    .then(|| self.context.state.active_model.take());
+                                // Likewise a mid-turn /yolo toggle.
+                                let mid_turn_yolo = (self.context.state.yolo != yolo_at_turn_start)
+                                    .then_some(self.context.state.yolo);
                                 self.context = turn_context;
+                                if let Some(model) = mid_turn_model {
+                                    self.context.state.active_model = model;
+                                }
+                                if let Some(yolo) = mid_turn_yolo {
+                                    self.context.state.yolo = yolo;
+                                }
                                 if let Err(error) = self.flush_if_dirty().await {
                                     tracing::error!(
                                         session = %self.context.key,
@@ -563,6 +624,9 @@ impl SessionActor {
                                 }
                             } else {
                                 self.dirty = false;
+                            }
+                            if result.is_ok() && !platform_message_id.is_empty() {
+                                self.remember_completed_inbound(&platform_message_id);
                             }
                             self.complete_delivery(delivery_id.as_deref(), &result)
                                 .await;
@@ -632,6 +696,17 @@ impl SessionActor {
                             )));
                             let _ = reply.send(cancel_res.map(|_| true));
                         }
+                        TurnOutcome::Reset(reply) => {
+                            let _ = self
+                                .interrupt_turn(event_id, delivery_id.as_deref(), "session reset")
+                                .await;
+                            self.release_typing().await;
+                            self.resolve_pending_ack(Err(OmonError::Multiplexer(
+                                "session reset".into(),
+                            )));
+                            self.reset_state().await;
+                            let _ = reply.send(self.flush_if_dirty().await);
+                        }
                         TurnOutcome::Shutdown => {
                             let _ = self
                                 .interrupt_turn(
@@ -641,13 +716,16 @@ impl SessionActor {
                                 )
                                 .await;
                             self.release_typing().await;
-                            if let Err(error) = crate::storage::mark_session_resume_pending(
-                                &self.pool,
-                                &self.context.key.storage_key(),
-                            )
-                            .await
-                            {
-                                tracing::error!(session = %self.context.key, %error, "failed to mark resume_pending on shutdown");
+                            // A mid-turn reset intentionally abandons the turn; do not resume it.
+                            if !self.binding_cleared {
+                                if let Err(error) = crate::storage::mark_session_resume_pending(
+                                    &self.pool,
+                                    &self.context.key.storage_key(),
+                                )
+                                .await
+                                {
+                                    tracing::error!(session = %self.context.key, %error, "failed to mark resume_pending on shutdown");
+                                }
                             }
                             self.resolve_pending_ack(Err(OmonError::Multiplexer(
                                 "session actor shutting down".into(),
@@ -700,12 +778,16 @@ impl SessionActor {
                     let flush_res = self.flush_if_dirty().await;
                     let _ = reply.send(flush_res);
                 }
+                ActorCommand::SetYolo { yolo, reply } => {
+                    self.last_active_at = tokio::time::Instant::now();
+                    self.context.state.yolo = yolo;
+                    self.dirty = true;
+                    let flush_res = self.flush_if_dirty().await;
+                    let _ = reply.send(flush_res);
+                }
                 ActorCommand::Reset { reply } => {
                     self.last_active_at = tokio::time::Instant::now();
-                    self.context.state.metadata.remove("omo_thread_id");
-                    self.binding_cleared = true;
-                    self.context.state = crate::SessionState::default();
-                    self.dirty = true;
+                    self.reset_state().await;
                     let flush_res = self.flush_if_dirty().await;
                     let _ = reply.send(flush_res);
                 }
@@ -763,7 +845,16 @@ impl SessionActor {
         while let Ok(command) = self.receiver.try_recv() {
             pending_events.push_back(command);
         }
-        if !pending_events.is_empty() {
+        // Only queued turns need a resume; a stray activity/idle probe does not.
+        let has_pending_turn = pending_events.iter().any(|command| {
+            matches!(
+                command,
+                ActorCommand::Event(_)
+                    | ActorCommand::EventWithAck { .. }
+                    | ActorCommand::EventIfIdle { .. }
+            )
+        });
+        if has_pending_turn {
             if let Err(error) = crate::storage::mark_session_resume_pending(
                 &self.pool,
                 &self.context.key.storage_key(),
@@ -775,6 +866,13 @@ impl SessionActor {
         }
         for command in pending_events {
             match command {
+                ActorCommand::Event(event) => {
+                    self.complete_delivery(
+                        event.delivery_id.as_deref(),
+                        &Err(OmonError::Multiplexer("session actor shutting down".into())),
+                    )
+                    .await;
+                }
                 ActorCommand::EventWithAck { ack, .. } => {
                     let _ = ack.send(Err(OmonError::Multiplexer(
                         "session actor shutting down".into(),
@@ -798,6 +896,29 @@ impl SessionActor {
             return Err(error);
         }
         Ok(())
+    }
+
+    /// Clears the session to the state a brand-new session would get, including the
+    /// profile-derived defaults (toolset restrictions, system prompt, model), and drops the
+    /// remote conversation binding.
+    async fn reset_state(&mut self) {
+        let fresh = match fresh_context(
+            &self.pool,
+            self.context.key.clone(),
+            self.profile_router.as_deref(),
+        )
+        .await
+        {
+            Ok(context) => context.state,
+            Err(error) => {
+                tracing::error!(session = %self.context.key, %error, "failed to rebuild profile defaults on reset");
+                crate::SessionState::default()
+            }
+        };
+        self.context.state = fresh;
+        self.context.state.metadata.remove("omo_thread_id");
+        self.binding_cleared = true;
+        self.dirty = true;
     }
 
     async fn interrupt_turn(
@@ -836,10 +957,88 @@ impl SessionActor {
         }
     }
 
+    /// Whether the turn for an already persisted inbound `platform_message_id` finished, so a
+    /// redelivery can be skipped. A bare transcript row is not proof: `persist_inbound` writes it
+    /// before the turn runs, so a failed or interrupted turn leaves the same row behind.
+    async fn inbound_turn_completed(
+        &self,
+        storage_key: &str,
+        platform_message_id: &str,
+    ) -> Result<bool> {
+        if !crate::storage::has_platform_message_id(&self.pool, storage_key, platform_message_id)
+            .await?
+        {
+            return Ok(false);
+        }
+        if self
+            .completed_inbound_ids
+            .iter()
+            .any(|id| id == platform_message_id)
+        {
+            return Ok(true);
+        }
+        // The delivery ledger is authoritative when it knows this message: a failed or reclaimed
+        // (in progress) claim means the earlier attempt did not finish, even if it left an
+        // assistant row behind. It also survives actor eviction and covers silent turns.
+        let ledger_status: Option<String> = sqlx::query_scalar(
+            "SELECT status FROM delivery_ledger
+             WHERE session_key = ? AND platform_message_id = ?
+             ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(storage_key)
+        .bind(platform_message_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        if let Some(status) = ledger_status {
+            return Ok(status == "delivered");
+        }
+        // Answered = an assistant row follows the user row before any later user row.
+        let answered: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                 SELECT 1 FROM messages u
+                 WHERE u.session_key = ? AND u.platform_message_id = ? AND u.role = 'user'
+                   AND EXISTS (
+                       SELECT 1 FROM messages a
+                       WHERE a.session_key = u.session_key AND a.role = 'assistant'
+                         AND a.sequence > u.sequence
+                         AND NOT EXISTS (
+                             SELECT 1 FROM messages n
+                             WHERE n.session_key = u.session_key AND n.role = 'user'
+                               AND n.sequence > u.sequence AND n.sequence < a.sequence
+                         )
+                   )
+             )",
+        )
+        .bind(storage_key)
+        .bind(platform_message_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(answered)
+    }
+
+    fn remember_completed_inbound(&mut self, platform_message_id: &str) {
+        if self
+            .completed_inbound_ids
+            .iter()
+            .any(|id| id == platform_message_id)
+        {
+            return;
+        }
+        if self.completed_inbound_ids.len() >= MAX_REMEMBERED_COMPLETED_INBOUND {
+            self.completed_inbound_ids.pop_front();
+        }
+        self.completed_inbound_ids
+            .push_back(platform_message_id.to_string());
+    }
+
     async fn rollback_partial_history(&self, event_id: uuid::Uuid) -> Result<()> {
+        // Only assistant rows are partial output of the interrupted turn. User rows after the
+        // turn's own row are steered messages that the user really sent and must be kept.
         sqlx::query(
             "DELETE FROM messages
-             WHERE session_key = ? AND sequence > (
+             WHERE session_key = ? AND role = 'assistant'
+               AND COALESCE(json_extract(metadata_json, '$.mirror'), 0) <> 1
+               AND sequence > (
                  SELECT sequence FROM messages WHERE id = ? AND session_key = ?
              ) AND NOT EXISTS (
                  SELECT 1 FROM delivery_obligations
@@ -878,7 +1077,7 @@ impl SessionActor {
 
     async fn persist_inbound(&self, event: &InboundEvent) -> Result<()> {
         ensure_session(&self.pool, &self.context).await?;
-        sqlx::query(
+        let inserted = sqlx::query(
             "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at, platform_message_id)
              VALUES (?, ?, 'user', ?, ?, ?, ?)
              ON CONFLICT(id) DO NOTHING",
@@ -895,6 +1094,16 @@ impl SessionActor {
         })
         .execute(&self.pool)
         .await?;
+        // An owner message in the lead's home DM is what the kibitzer exists to react to.
+        // A replayed event (row already present) is not a new owner message.
+        if inserted.rows_affected() == 1
+            && event.origin == crate::EventOrigin::User
+            && self.is_kibitzer_lead()
+        {
+            if let Err(error) = self.arm_kibitzer().await {
+                tracing::warn!(session = %self.context.key, %error, "failed to arm kibitzer for owner message");
+            }
+        }
         if event.origin == crate::EventOrigin::User
             && event.session.platform == "discord"
             && !event.platform_message_id.is_empty()
@@ -908,6 +1117,20 @@ impl SessionActor {
             }
         }
         Ok(())
+    }
+
+    fn is_kibitzer_lead(&self) -> bool {
+        let lead = std::env::var("OMON_LANE_DEFAULT_LEAD")
+            .unwrap_or_else(|_| crate::lanes::kibitzer::DEFAULT_LEAD.to_string());
+        SessionKey::from_storage_key(lead.trim())
+            .is_ok_and(|lead| lead.storage_key() == self.context.key.storage_key())
+    }
+
+    async fn arm_kibitzer(&self) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        crate::lanes::kibitzer::arm_owner(&mut tx, &self.context.key).await?;
+        tx.commit().await?;
+        crate::lanes::runner::wake(&self.pool).await
     }
 
     async fn flush_if_dirty(&mut self) -> Result<()> {
@@ -949,6 +1172,23 @@ impl SessionActor {
         .await?;
         Ok(())
     }
+}
+
+/// Removes the user row left by a failed or interrupted attempt at the same platform message so
+/// the redelivered attempt does not leave a duplicate row in the transcript.
+async fn discard_unfinished_inbound(
+    pool: &SqlitePool,
+    storage_key: &str,
+    platform_message_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM messages WHERE session_key = ? AND platform_message_id = ? AND role = 'user'",
+    )
+    .bind(storage_key)
+    .bind(platform_message_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
@@ -1100,44 +1340,52 @@ async fn load_context(
                 updated_at,
             })
         }
-        None => {
-            let mut context = SessionContext::new(key);
-            let mut bot_profile_model: Option<String> = None;
-            let mut bot_name: Option<String> = None;
-            if let Some(bot_id) = context.key.bot_id.as_deref() {
-                if let Ok(Some((name, model, prompt, toolsets))) = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
-                    "SELECT name, model, system_prompt, enabled_toolsets FROM bot_profiles WHERE bot_id = ?"
-                )
-                .bind(bot_id)
-                .fetch_optional(pool)
-                .await {
-                    bot_name = name;
-                    bot_profile_model = model;
-                    if prompt.is_some() {
-                        context.state.system_prompt = prompt;
-                    }
-                    if toolsets.is_some() {
-                        context.state.enabled_toolsets = toolsets.map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
-                    }
-                }
-            }
+        None => fresh_context(pool, key, profile_router).await,
+    }
+}
 
-            if context.state.active_model.is_none() {
-                if is_owner_lead_session(&context.key, bot_name.as_deref()) {
-                    context.state.active_model = Some(crate::agent::model_for_purpose(
-                        crate::agent::ModelPurpose::Lead,
-                    ));
-                } else if let Some(model) = bot_profile_model {
-                    context.state.active_model = Some(model);
-                }
+/// Builds the context a session gets when it has no stored state: the bot profile and
+/// profile-router defaults applied over an empty state.
+async fn fresh_context(
+    pool: &SqlitePool,
+    key: SessionKey,
+    profile_router: Option<&ProfileRouter>,
+) -> Result<SessionContext> {
+    let mut context = SessionContext::new(key);
+    let mut bot_profile_model: Option<String> = None;
+    let mut bot_name: Option<String> = None;
+    if let Some(bot_id) = context.key.bot_id.as_deref() {
+        if let Ok(Some((name, model, prompt, toolsets))) = sqlx::query_as::<_, (Option<String>, Option<String>, Option<String>, Option<String>)>(
+            "SELECT name, model, system_prompt, enabled_toolsets FROM bot_profiles WHERE bot_id = ?"
+        )
+        .bind(bot_id)
+        .fetch_optional(pool)
+        .await {
+            bot_name = name;
+            bot_profile_model = model;
+            if prompt.is_some() {
+                context.state.system_prompt = prompt;
             }
-
-            if let Some(router) = profile_router {
-                router.apply_to_session(&mut context);
+            if toolsets.is_some() {
+                context.state.enabled_toolsets = toolsets.map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
             }
-            Ok(context)
         }
     }
+
+    if context.state.active_model.is_none() {
+        if is_owner_lead_session(&context.key, bot_name.as_deref()) {
+            context.state.active_model = Some(crate::agent::model_for_purpose(
+                crate::agent::ModelPurpose::Lead,
+            ));
+        } else if let Some(model) = bot_profile_model {
+            context.state.active_model = Some(model);
+        }
+    }
+
+    if let Some(router) = profile_router {
+        router.apply_to_session(&mut context);
+    }
+    Ok(context)
 }
 
 async fn ensure_session(pool: &SqlitePool, context: &SessionContext) -> Result<()> {
@@ -1333,6 +1581,325 @@ mod tests {
         assert_eq!(steered_rx.recv().await.as_deref(), Some("focus on tests"));
 
         barrier.wait().await;
+        drop(cmd_tx);
+        handle.await.unwrap();
+    }
+
+    async fn spawn_blocking_actor(
+        db: &Database,
+        key: &SessionKey,
+    ) -> (
+        mpsc::Sender<ActorCommand>,
+        mpsc::UnboundedReceiver<String>,
+        Arc<Barrier>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let (started_tx, started_rx) = mpsc::unbounded_channel();
+        let barrier = Arc::new(Barrier::new(2));
+        let runner = Arc::new(TurnRecordingRunner {
+            started: started_tx,
+            barrier: barrier.clone(),
+            completed: mpsc::unbounded_channel().0,
+        });
+        let (cmd_tx, cmd_rx) = mpsc::channel(32);
+        let actor = SessionActor::load(
+            key.clone(),
+            cmd_rx,
+            runner,
+            None,
+            db.pool().clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        (cmd_tx, started_rx, barrier, tokio::spawn(actor.run()))
+    }
+
+    #[tokio::test]
+    async fn mid_turn_set_model_survives_turn_completion() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-mid-turn-model");
+        let (cmd_tx, mut started_rx, barrier, handle) = spawn_blocking_actor(&db, &key).await;
+
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::SetModel {
+                model: "mid-turn-model".into(),
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap().unwrap();
+
+        // WaitIdle sent mid-turn is queued and only answered after the turn finalizes.
+        let (idle_tx, idle_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::WaitIdle { reply: idle_tx })
+            .await
+            .unwrap();
+        barrier.wait().await;
+        idle_rx.await.unwrap();
+        let (ctx_tx, ctx_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::GetContext { reply: ctx_tx })
+            .await
+            .unwrap();
+        let context = ctx_rx.await.unwrap();
+        assert_eq!(
+            context.state.active_model.as_deref(),
+            Some("mid-turn-model"),
+            "a /model switch during a turn must not be reverted when the turn completes"
+        );
+
+        drop(cmd_tx);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mid_turn_set_yolo_survives_turn_completion() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-mid-turn-yolo");
+        let (cmd_tx, mut started_rx, barrier, handle) = spawn_blocking_actor(&db, &key).await;
+
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::SetYolo {
+                yolo: true,
+                reply: reply_tx,
+            })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap().unwrap();
+
+        let (idle_tx, idle_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::WaitIdle { reply: idle_tx })
+            .await
+            .unwrap();
+        barrier.wait().await;
+        idle_rx.await.unwrap();
+        let (ctx_tx, ctx_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::GetContext { reply: ctx_tx })
+            .await
+            .unwrap();
+        assert!(
+            ctx_rx.await.unwrap().state.yolo,
+            "a /yolo toggle during a turn must not be reverted when the turn completes"
+        );
+        drop(cmd_tx);
+        handle.await.unwrap();
+
+        let persisted: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(key.storage_key())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let state: SessionState = serde_json::from_str(&persisted).unwrap();
+        assert!(state.yolo, "flush after the turn must persist yolo=true");
+    }
+
+    #[tokio::test]
+    async fn mid_turn_reset_does_not_restore_thread_binding_or_mark_resume_pending() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-mid-turn-reset");
+        let mut state = SessionState::default();
+        state
+            .metadata
+            .insert("omo_thread_id".into(), serde_json::json!("old-thread"));
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, guild_id, channel_id, user_id, state_json) VALUES (?, 'discord', 'guild', 'channel', 'actor-mid-turn-reset', ?)",
+        )
+        .bind(key.storage_key())
+        .bind(serde_json::to_string(&state).unwrap())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let (cmd_tx, mut started_rx, _barrier, handle) = spawn_blocking_actor(&db, &key).await;
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::Reset { reply: reply_tx })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap().unwrap();
+        drop(cmd_tx);
+        handle.await.unwrap();
+
+        let (thread_id, resume_pending): (Option<String>, i64) = sqlx::query_as(
+            "SELECT json_extract(state_json, '$.metadata.omo_thread_id'), resume_pending FROM sessions WHERE session_key = ?",
+        )
+        .bind(key.storage_key())
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(thread_id, None, "reset must not resurrect the old binding");
+        assert_eq!(resume_pending, 0, "reset must not schedule a resume");
+    }
+
+    #[tokio::test]
+    async fn shutdown_drain_fails_queued_plain_event_delivery() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-drain-plain-event");
+        let ledger = DeliveryLedgerService::new(db.pool().clone());
+        let (cmd_tx, mut started_rx, _barrier, handle) = spawn_blocking_actor(&db, &key).await;
+
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        let delivery_id = "delivery_queued_plain";
+        let mut queued = InboundEvent::message(key.clone(), "msg-2", "queued");
+        queued.delivery_id = Some(delivery_id.to_string());
+        ledger
+            .record_incoming_as(&queued, delivery_id)
+            .await
+            .unwrap();
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(queued)))
+            .await
+            .unwrap();
+
+        // Closing the command channel ends the actor while the plain event is still queued.
+        drop(cmd_tx);
+        handle.await.unwrap();
+
+        let entry = ledger.get(delivery_id).await.unwrap().unwrap();
+        assert_eq!(
+            entry.status, "failed",
+            "dropped queued event must be released as failed, not left in_progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn idle_reset_keeps_profile_toolset_restriction() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let mut key = test_session("actor-reset-profile");
+        key.bot_id = Some("bot-restricted".into());
+        sqlx::query(
+            "INSERT INTO bot_profiles (bot_id, name, system_prompt, enabled_toolsets) VALUES ('bot-restricted', 'restricted', 'profile prompt', 'web')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let (cmd_tx, _started_rx, _barrier, handle) = spawn_blocking_actor(&db, &key).await;
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::Reset { reply: reply_tx })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap().unwrap();
+
+        let (ctx_tx, ctx_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::GetContext { reply: ctx_tx })
+            .await
+            .unwrap();
+        let state = ctx_rx.await.unwrap().state;
+        assert_eq!(
+            state.enabled_toolsets,
+            Some(vec!["web".to_string()]),
+            "reset must keep the profile's toolset restriction"
+        );
+        assert_eq!(state.system_prompt.as_deref(), Some("profile prompt"));
+        drop(cmd_tx);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mid_turn_reset_keeps_actor_serving_the_session() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-mid-turn-reset-alive");
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let (completed_tx, mut completed_rx) = mpsc::unbounded_channel();
+        let barrier = Arc::new(Barrier::new(2));
+        let runner = Arc::new(TurnRecordingRunner {
+            started: started_tx,
+            barrier,
+            completed: completed_tx,
+        });
+        let (cmd_tx, cmd_rx) = mpsc::channel(32);
+        let actor = SessionActor::load(
+            key.clone(),
+            cmd_rx,
+            runner,
+            None,
+            db.pool().clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let handle = tokio::spawn(actor.run());
+
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::Reset { reply: reply_tx })
+            .await
+            .unwrap();
+        reply_rx.await.unwrap().unwrap();
+
+        // A message sent right after the reset must still run on the same actor.
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "msg-2",
+                "after-reset",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("after-reset"));
+        assert_eq!(completed_rx.recv().await.as_deref(), Some("after-reset"));
+        assert!(!handle.is_finished(), "actor must survive a mid-turn reset");
         drop(cmd_tx);
         handle.await.unwrap();
     }
@@ -2125,5 +2692,239 @@ mod tests {
                 "lane B completed and released typing"
             );
         }
+    }
+
+    struct FlakyRunner {
+        runs: std::sync::atomic::AtomicUsize,
+        fail_first: bool,
+    }
+
+    #[async_trait]
+    impl AgentRunner for FlakyRunner {
+        async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
+            let previous = self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail_first && previous == 0 {
+                return Err(OmonError::Llm("boom".into()));
+            }
+            Ok(())
+        }
+    }
+
+    async fn run_event_until_idle(cmd_tx: &mpsc::Sender<ActorCommand>, event: InboundEvent) {
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(event)))
+            .await
+            .unwrap();
+        let (idle_tx, idle_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::WaitIdle { reply: idle_tx })
+            .await
+            .unwrap();
+        idle_rx.await.unwrap();
+    }
+
+    async fn spawn_flaky_actor(
+        db: &Database,
+        key: &SessionKey,
+        runner: Arc<FlakyRunner>,
+    ) -> (mpsc::Sender<ActorCommand>, tokio::task::JoinHandle<()>) {
+        let (cmd_tx, cmd_rx) = mpsc::channel(32);
+        let actor = SessionActor::load(
+            key.clone(),
+            cmd_rx,
+            runner,
+            None,
+            db.pool().clone(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        (cmd_tx, tokio::spawn(actor.run()))
+    }
+
+    #[tokio::test]
+    async fn redelivery_of_a_failed_turn_runs_again_instead_of_being_skipped() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let key = test_session("actor-failed-redelivery");
+        let runner = Arc::new(FlakyRunner {
+            runs: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: true,
+        });
+        let (cmd_tx, handle) = spawn_flaky_actor(&db, &key, runner.clone()).await;
+
+        let delivery_id = "claim-failed-redelivery";
+        let ledger = DeliveryLedgerService::new(pool.clone());
+        let mut first = InboundEvent::message(key.clone(), "plat-failed-1", "please run");
+        first.delivery_id = Some(delivery_id.to_string());
+        assert!(ledger
+            .record_incoming_as(&first, delivery_id)
+            .await
+            .unwrap());
+        run_event_until_idle(&cmd_tx, first).await;
+        assert_eq!(runner.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            ledger.get(delivery_id).await.unwrap().unwrap().status,
+            "failed"
+        );
+
+        // The failed delivery is reclaimed and redelivered with the same platform message id.
+        let mut second = InboundEvent::message(key.clone(), "plat-failed-1", "please run");
+        second.delivery_id = Some(delivery_id.to_string());
+        assert!(ledger
+            .record_incoming_as(&second, delivery_id)
+            .await
+            .unwrap());
+        run_event_until_idle(&cmd_tx, second).await;
+
+        assert_eq!(
+            runner.runs.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "a failed turn must not be skipped as an already processed replay"
+        );
+        assert_eq!(
+            ledger.get(delivery_id).await.unwrap().unwrap().status,
+            "delivered"
+        );
+        let user_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM messages WHERE session_key = ? AND role = 'user' AND platform_message_id = 'plat-failed-1'",
+        )
+        .bind(key.storage_key())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            user_rows, 1,
+            "the stale row of the failed attempt must be replaced"
+        );
+
+        drop(cmd_tx);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn redelivery_of_a_completed_turn_is_still_skipped() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-completed-redelivery");
+        let runner = Arc::new(FlakyRunner {
+            runs: std::sync::atomic::AtomicUsize::new(0),
+            fail_first: false,
+        });
+        let (cmd_tx, handle) = spawn_flaky_actor(&db, &key, runner.clone()).await;
+
+        run_event_until_idle(
+            &cmd_tx,
+            InboundEvent::message(key.clone(), "plat-done-1", "once"),
+        )
+        .await;
+        run_event_until_idle(
+            &cmd_tx,
+            InboundEvent::message(key.clone(), "plat-done-1", "once"),
+        )
+        .await;
+        assert_eq!(runner.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        drop(cmd_tx);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupt_rollback_keeps_steered_user_rows() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let key = test_session("actor-rollback-steered");
+        let (cmd_tx, mut started_rx, _barrier, handle) = spawn_blocking_actor(&db, &key).await;
+
+        cmd_tx
+            .send(ActorCommand::Event(Box::new(InboundEvent::message(
+                key.clone(),
+                "plat-turn-1",
+                "blocking",
+            ))))
+            .await
+            .unwrap();
+        assert_eq!(started_rx.recv().await.as_deref(), Some("blocking"));
+
+        // A steered message lands in the transcript mid-turn, followed by partial assistant output.
+        record_inbound_transcript(
+            db.pool(),
+            &InboundEvent::message(key.clone(), "plat-steer-1", "steered guidance"),
+        )
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at) VALUES (?, ?, 'assistant', 'partial', '{}', ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(key.storage_key())
+        .bind(Utc::now())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        cmd_tx
+            .send(ActorCommand::Stop { reply: reply_tx })
+            .await
+            .unwrap();
+        assert!(reply_rx.await.unwrap().unwrap());
+        drop(cmd_tx);
+        handle.await.unwrap();
+
+        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT role, platform_message_id FROM messages WHERE session_key = ? ORDER BY sequence",
+        )
+        .bind(key.storage_key())
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("user".to_string(), Some("plat-turn-1".to_string())),
+                ("user".to_string(), Some("plat-steer-1".to_string())),
+            ],
+            "rollback must drop partial assistant output but keep the steered user message"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_route_keeps_resume_pending_marker() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let key = test_session("actor-recovery-marker");
+        record_inbound_transcript(
+            &pool,
+            &InboundEvent::message(key.clone(), "plat-recover-1", "resume me"),
+        )
+        .await
+        .unwrap();
+        crate::storage::mark_session_resume_pending(&pool, &key.storage_key())
+            .await
+            .unwrap();
+
+        // A draining multiplexer refuses the re-dispatch, so recovery cannot make progress.
+        let (_drain_tx, drain_rx) = tokio::sync::watch::channel(true);
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(FlakyRunner {
+                runs: std::sync::atomic::AtomicUsize::new(0),
+                fail_first: false,
+            }),
+            crate::multiplexer::MultiplexerConfig::default(),
+        )
+        .with_drain_receiver(drain_rx);
+
+        let recovered = SessionActor::recover_resume_pending_sessions(&pool, &multiplexer)
+            .await
+            .unwrap();
+        assert_eq!(recovered, 0);
+        assert_eq!(
+            crate::storage::count_resume_pending_sessions(&pool)
+                .await
+                .unwrap(),
+            1,
+            "the marker must survive a failed re-dispatch so the next boot retries"
+        );
     }
 }

@@ -50,8 +50,10 @@ impl MailSource {
                 .or_else(|| row.get("id").and_then(Value::as_str))
                 .ok_or_else(|| OmonError::ToolExecution("mail thread missing thread_id".into()))?;
             let thread = id;
-            let snippet = optional_string(row, &["snippet", "summary", "preview"])
-                .ok_or_else(|| OmonError::ToolExecution("mail thread missing snippet".into()))?;
+            // A thread without a snippet is dropped by commit_source's empty-snippet
+            // rule instead of failing the whole collection batch.
+            let snippet =
+                optional_string(row, &["snippet", "summary", "preview"]).unwrap_or_default();
             let received_at = date(row)?;
             let item_secs = received_at.timestamp();
             newest_ts = Some(newest_ts.map_or(item_secs, |cur| cur.max(item_secs)));

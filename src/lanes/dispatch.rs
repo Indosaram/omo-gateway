@@ -50,12 +50,21 @@ impl EventDispatcher {
         }
         let mut groups = BTreeMap::<String, Vec<LaneEvent>>::new();
         for event in take_undelivered_events(&self.pool, None).await? {
-            if event.kind == "cron_problem"
-                && crate::cron::remediate::handle_event(&event.body, &event.lead_session_key)
-                    .await?
-            {
-                self.receipt(&[event.id], now, "cron_remediation").await?;
-                continue;
+            if event.kind == "cron_problem" {
+                // One bad cron problem must not block every other lead's events.
+                match crate::cron::remediate::handle_event(&event.body, &event.lead_session_key)
+                    .await
+                {
+                    Ok(true) => {
+                        self.receipt(&[event.id], now, "cron_remediation").await?;
+                        continue;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        tracing::warn!(event_id = event.id, %error, "cron problem handling failed; event remains queued");
+                        continue;
+                    }
+                }
             }
             groups
                 .entry(event.lead_session_key.clone())
@@ -201,7 +210,7 @@ impl EventDispatcher {
 
 fn critical(event: &LaneEvent) -> bool {
     match event.kind.as_str() {
-        "done_claimed" | "dead" | "not_done" | "inbox_urgent" => true,
+        "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed" => true,
         "cron_problem" => event.body.contains("needs_owner"),
         _ => false,
     }

@@ -12,7 +12,9 @@ use crate::Result;
 /// Returns [`crate::OmonError`] if executing the SQLite update statement fails.
 pub async fn wipe_omo_thread_bindings(pool: &SqlitePool) -> Result<u64> {
     let result = sqlx::query(
-        "UPDATE sessions SET state_json = json_remove(state_json, '$.metadata.omo_thread_id') WHERE json_extract(state_json, '$.metadata.omo_thread_id') IS NOT NULL",
+        "UPDATE sessions SET state_json = json_remove(state_json, '$.metadata.omo_thread_id')
+         WHERE CASE WHEN json_valid(state_json)
+               THEN json_extract(state_json, '$.metadata.omo_thread_id') END IS NOT NULL",
     )
     .execute(pool)
     .await?;
@@ -111,6 +113,27 @@ mod tests {
             parsed_3.metadata.get("hermes_cron_job_id").unwrap(),
             "cron-job-bbb"
         );
+
+        // A malformed state_json row must not abort the whole UPDATE.
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json)
+             VALUES ('sess-bad', 'discord', 'c4', 'u4', 'not json'),
+                    ('sess-4', 'discord', 'c5', 'u5', ?)",
+        )
+        .bind(r#"{"metadata":{"omo_thread_id":"thread-444"}}"#)
+        .execute(pool)
+        .await
+        .unwrap();
+        let after_malformed = wipe_omo_thread_bindings(pool)
+            .await
+            .expect("malformed state_json must not fail the wipe");
+        assert_eq!(after_malformed, 1);
+        let bad: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = 'sess-bad'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(bad, "not json");
 
         // Subsequent wipe should be a no-op (idempotent)
         let second_wipe_count = wipe_omo_thread_bindings(pool)

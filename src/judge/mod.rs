@@ -18,6 +18,18 @@ use uuid::Uuid;
 /// and Slack tokens.
 /// Task 19 replaces this implementation with unified outbound scrubbing.
 pub fn scrub_for_external(input: &str) -> String {
+    scrub_with_cap(input, 4000)
+}
+
+/// Diffs are the evidence under judgment, so they get a much larger explicit
+/// cap than prompt/state text instead of the 4000-char prompt cap.
+const MAX_DIFF_SCRUB_CHARS: usize = 200_000;
+
+fn scrub_diff_for_external(input: &str) -> String {
+    scrub_with_cap(input, MAX_DIFF_SCRUB_CHARS)
+}
+
+fn scrub_with_cap(input: &str, cap: usize) -> String {
     let mut scrubbed = input.to_string();
 
     if let Ok(home) = std::env::var("HOME") {
@@ -44,8 +56,8 @@ pub fn scrub_for_external(input: &str) -> String {
         .replace_all(&scrubbed, "[REDACTED_TOKEN]")
         .to_string();
 
-    if scrubbed.chars().count() > 4000 {
-        scrubbed = scrubbed.chars().take(4000).collect();
+    if scrubbed.chars().count() > cap {
+        scrubbed = scrubbed.chars().take(cap).collect();
     }
 
     scrubbed
@@ -542,7 +554,7 @@ impl JudgeFallback for Fallback {
                 serde_json::json!({
                     "instruction": "Evaluate the git diff against the prompt. Return ONLY a single JSON object in the format: {\"fulfills\": <0.0-1.0>, \"clean\": <0.0-1.0>, \"risk\": <nonnegative number>}",
                     "purpose": purpose, "prompt": scrub_for_external(prompt),
-                    "state": scrub_for_external(trimmed),
+                    "state": scrub_diff_for_external(trimmed),
                     "contract": {"fulfills": "number in [0,1]", "clean": "number in [0,1]", "risk": "nonnegative number"}
                 }),
             )
@@ -746,11 +758,41 @@ impl JevCli {
         let Some(pool) = &self.pool else {
             return Ok((0, 0));
         };
+        let (jev_count, fallback_count) = Self::query_persisted_counts(pool).await?;
+        let mut st = self.state.lock();
+        st.kst_day = current_kst_date();
+        st.jev_calls_today = jev_count;
+        st.fallback_calls_today = fallback_count;
+
+        Ok((jev_count, fallback_count))
+    }
+
+    /// Raise the in-memory daily counts to what the database already holds. Every `JevCli`
+    /// instance writes the same `judge_calls` table, so this makes the daily caps global
+    /// across instances and across restarts, even when `init()` was never called.
+    async fn refresh_counts(&self) {
+        let Some(pool) = &self.pool else {
+            return;
+        };
+        match Self::query_persisted_counts(pool).await {
+            Ok((jev_count, fallback_count)) => {
+                let mut st = self.state.lock();
+                self.check_day_reset(&mut st);
+                st.jev_calls_today = st.jev_calls_today.max(jev_count);
+                st.fallback_calls_today = st.fallback_calls_today.max(fallback_count);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to refresh persisted judge call counts");
+            }
+        }
+    }
+
+    async fn query_persisted_counts(pool: &SqlitePool) -> Result<(usize, usize), JudgeError> {
         let today = current_kst_date();
         let kst_start_utc = today
             .and_hms_opt(0, 0, 0)
-            .map(|dt| dt - chrono::Duration::hours(9))
-            .unwrap_or_else(|| Utc::now().naive_utc());
+            .map(|dt| dt.and_utc() - chrono::Duration::hours(9))
+            .unwrap_or_else(Utc::now);
 
         let row: (i64, i64) = sqlx::query_as(
             "SELECT 
@@ -764,15 +806,7 @@ impl JevCli {
         .await
         .map_err(|e| JudgeError::Database(e.to_string()))?;
 
-        let jev_count = row.0.max(0) as usize;
-        let fallback_count = row.1.max(0) as usize;
-
-        let mut st = self.state.lock();
-        st.kst_day = today;
-        st.jev_calls_today = jev_count;
-        st.fallback_calls_today = fallback_count;
-
-        Ok((jev_count, fallback_count))
+        Ok((row.0.max(0) as usize, row.1.max(0) as usize))
     }
 
     fn check_day_reset(&self, state: &mut JevState) {
@@ -830,9 +864,9 @@ impl JevCli {
                     return Some(format!("jev 응답 실패: {scrubbed_reason}, flash 대체 중"));
                 }
             }
-        } else {
-            state.consecutive_failures = 0;
         }
+        // A non-trigger failure neither opens the breaker nor resets the streak; only a
+        // success clears it, so interleaved 5xx/io errors cannot hide a 401/429 run.
         None
     }
 
@@ -858,6 +892,8 @@ impl JevCli {
 
     async fn handle_breaker_alert(&self, alert_opt: Option<String>) {
         if let Some(msg) = alert_opt {
+            // Without an alerter the breaker opening would be invisible; always log it.
+            tracing::warn!(alert = %msg, "judge circuit breaker opened");
             if let Some(alerter) = &self.alerter {
                 let _ = alerter.send_owner_alert(&msg).await;
             }
@@ -888,37 +924,61 @@ fn default_judge_bin() -> PathBuf {
     }
 }
 
-pub fn ensure_typesafe_env() {
-    load_typesafe_env();
-}
-
-fn load_typesafe_env() {
-    if std::env::var("TYPESAFE_API_KEY").is_ok()
-        && std::env::var("TYPESAFE_URL").is_ok()
-        && std::env::var("TYPESAFE_MODEL").is_ok()
-    {
-        return;
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let zshenv_path = Path::new(&home).join(".zshenv");
-        if let Ok(content) = std::fs::read_to_string(zshenv_path) {
-            for line in content.lines() {
-                let trimmed = line.trim();
-                let clean = trimmed.strip_prefix("export ").unwrap_or(trimmed);
-                if let Some((k, v)) = clean.split_once('=') {
-                    let k = k.trim();
-                    let v = v.trim().trim_matches('"').trim_matches('\'');
-                    if (k == "TYPESAFE_API_KEY" || k == "TYPESAFE_URL" || k == "TYPESAFE_MODEL")
-                        && std::env::var(k).is_err()
-                        && !v.is_empty()
-                        && !v.contains('$')
-                    {
-                        std::env::set_var(k, v);
+/// Reads the `TYPESAFE_*` settings from `~/.zshenv` once. The values are handed to the judge
+/// child through `Command::env`, never through `std::env::set_var`, so no async worker thread
+/// mutates the process environment and the API key is not inherited by unrelated children.
+fn typesafe_env_from_zshenv() -> &'static [(&'static str, String)] {
+    static CACHE: std::sync::OnceLock<Vec<(&'static str, String)>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        const KEYS: [&str; 3] = ["TYPESAFE_API_KEY", "TYPESAFE_URL", "TYPESAFE_MODEL"];
+        let mut found: Vec<(&'static str, String)> = Vec::new();
+        let Ok(home) = std::env::var("HOME") else {
+            return found;
+        };
+        let Ok(content) = std::fs::read_to_string(Path::new(&home).join(".zshenv")) else {
+            return found;
+        };
+        for line in content.lines() {
+            let trimmed = line.trim();
+            let clean = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+            if let Some((k, v)) = clean.split_once('=') {
+                let k = k.trim();
+                let v = v.trim().trim_matches('"').trim_matches('\'');
+                if let Some(&key) = KEYS.iter().find(|candidate| **candidate == k) {
+                    if !v.is_empty() && !v.contains('$') {
+                        found.retain(|(existing, _)| *existing != key);
+                        found.push((key, v.to_string()));
                     }
                 }
             }
         }
+        found
+    })
+}
+
+/// Primes the `.zshenv` cache at startup so later judge calls do no file IO on first use.
+pub fn ensure_typesafe_env() {
+    let _ = typesafe_env_from_zshenv();
+}
+
+/// Passes `.zshenv` `TYPESAFE_*` values to the judge child, without overriding the process env.
+fn apply_typesafe_env(command: &mut tokio::process::Command) {
+    for (key, value) in typesafe_env_from_zshenv() {
+        if std::env::var(key).is_err() {
+            command.env(key, value);
+        }
     }
+}
+
+/// True for failures that should count toward the circuit breaker: an HTTP 401/429 status
+/// (as a whole token, not a substring of an id or port) or an auth/rate-limit message.
+fn is_breaker_trigger(stderr: &str) -> bool {
+    static TRIGGER: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    TRIGGER
+        .get_or_init(|| {
+            Regex::new(r"(?i)\b(?:401|429)\b|unauthorized|rate[ _-]?limit").expect("valid regex")
+        })
+        .is_match(stderr)
 }
 
 async fn run_bounded(
@@ -992,7 +1052,14 @@ struct StateArg {
 fn prepare_state_arg(scrubbed_state: &str) -> Result<StateArg, JudgeError> {
     if scrubbed_state.len() > 500 || scrubbed_state.contains('\n') {
         let temp_path = std::env::temp_dir().join(format!("jev_state_{}.txt", Uuid::new_v4()));
-        let mut f = std::fs::File::create(&temp_path).map_err(JudgeError::Io)?;
+        use std::os::unix::fs::OpenOptionsExt;
+        // The scrubbed state can still be sensitive and /tmp may be shared: owner-only access.
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp_path)
+            .map_err(JudgeError::Io)?;
         f.write_all(scrubbed_state.as_bytes())
             .map_err(JudgeError::Io)?;
         f.flush().map_err(JudgeError::Io)?;
@@ -1022,6 +1089,7 @@ impl Judge for JevCli {
         let scrubbed_state = scrub_for_external(state);
         let start = Instant::now();
 
+        self.refresh_counts().await;
         let breaker_open = self.is_breaker_open();
         let must_fallback = !self.jev_enabled || breaker_open.is_some();
 
@@ -1070,8 +1138,7 @@ impl Judge for JevCli {
             cmd.arg("-o").arg(*opt);
         }
         cmd.arg("-q");
-
-        load_typesafe_env();
+        apply_typesafe_env(&mut cmd);
 
         let timeout_res = run_bounded(cmd, Duration::from_secs(5)).await;
 
@@ -1088,10 +1155,7 @@ impl Judge for JevCli {
                     return Ok(Choice::new(stdout));
                 }
 
-                let is_trigger = stderr.contains("401")
-                    || stderr.contains("429")
-                    || stderr.contains("Unauthorized")
-                    || stderr.contains("RateLimit");
+                let is_trigger = is_breaker_trigger(&stderr);
                 let alert = self.record_failure(
                     is_trigger,
                     &format!(
@@ -1177,6 +1241,7 @@ impl Judge for JevCli {
         let scrubbed_state = scrub_for_external(state);
         let start = Instant::now();
 
+        self.refresh_counts().await;
         let breaker_open = self.is_breaker_open();
         let must_fallback = !self.jev_enabled || breaker_open.is_some();
 
@@ -1222,8 +1287,7 @@ impl Judge for JevCli {
         }
         cmd.arg("-i").arg(scrub_for_external(instructions));
         cmd.arg("-q");
-
-        load_typesafe_env();
+        apply_typesafe_env(&mut cmd);
 
         let timeout_res = run_bounded(cmd, Duration::from_secs(5)).await;
 
@@ -1244,10 +1308,7 @@ impl Judge for JevCli {
                     }
                 }
 
-                let is_trigger = stderr.contains("401")
-                    || stderr.contains("429")
-                    || stderr.contains("Unauthorized")
-                    || stderr.contains("RateLimit");
+                let is_trigger = is_breaker_trigger(&stderr);
                 let alert =
                     self.record_failure(is_trigger, &format!("HTTP error: {}", stderr.trim()));
                 self.handle_breaker_alert(alert).await;
@@ -1329,6 +1390,7 @@ impl Judge for JevCli {
         let prompt = scrubbed_prompt.as_str();
         let start = Instant::now();
 
+        self.refresh_counts().await;
         let breaker_open = self.is_breaker_open();
         let must_fallback = !self.jev_enabled || breaker_open.is_some();
 
@@ -1436,7 +1498,7 @@ impl Judge for JevCli {
             return Ok(verdict);
         }
 
-        let scrubbed_diff = scrub_for_external(trimmed_diff);
+        let scrubbed_diff = scrub_diff_for_external(trimmed_diff);
 
         let bin = self.binary_path.clone().unwrap_or_else(default_judge_bin);
         let mut cmd = tokio::process::Command::new(bin);
@@ -1448,18 +1510,26 @@ impl Judge for JevCli {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
         cmd.kill_on_drop(true);
-
-        load_typesafe_env();
+        apply_typesafe_env(&mut cmd);
 
         let mut child = cmd.spawn()?;
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            let _ = stdin.write_all(scrubbed_diff.as_bytes()).await;
-            let _ = stdin.flush().await;
-        }
+        let stdin = child.stdin.take();
+        let payload = scrubbed_diff.into_bytes();
+        // The diff can exceed the pipe buffer, so the write must share the deadline with
+        // the wait: a child that never reads stdin would otherwise block this call forever.
+        let run = async move {
+            let write = async move {
+                if let Some(mut stdin) = stdin {
+                    use tokio::io::AsyncWriteExt;
+                    let _ = stdin.write_all(&payload).await;
+                    let _ = stdin.flush().await;
+                }
+            };
+            let (_, output) = tokio::join!(write, child.wait_with_output());
+            output
+        };
 
-        let timeout_res =
-            tokio::time::timeout(Duration::from_secs(15), child.wait_with_output()).await;
+        let timeout_res = tokio::time::timeout(Duration::from_secs(15), run).await;
         let timeout_res = match timeout_res {
             Ok(Ok(out)) => Ok(out),
             Ok(Err(io)) => Err(JudgeError::Io(io)),
@@ -1485,10 +1555,7 @@ impl Judge for JevCli {
                     }
                 }
 
-                let is_trigger = stderr.contains("401")
-                    || stderr.contains("429")
-                    || stderr.contains("Unauthorized")
-                    || stderr.contains("RateLimit");
+                let is_trigger = is_breaker_trigger(&stderr);
                 let alert =
                     self.record_failure(is_trigger, &format!("diff failure: {}", stderr.trim()));
                 self.handle_breaker_alert(alert).await;
@@ -1682,5 +1749,80 @@ impl JevCli {
         } else {
             Ok((purpose.conservative_diff(), false))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn breaker_trigger_matches_status_tokens_not_substrings() {
+        assert!(is_breaker_trigger("Error: 429 Too Many Requests"));
+        assert!(is_breaker_trigger("HTTP 401 Unauthorized"));
+        assert!(is_breaker_trigger("RateLimit exceeded"));
+        assert!(!is_breaker_trigger("request id req-14012 failed with 500"));
+        assert!(!is_breaker_trigger("connect to 127.0.0.1:4290 refused"));
+    }
+
+    #[tokio::test]
+    async fn non_trigger_failures_do_not_reset_the_breaker_streak() {
+        let judge = JevCli::new(None, None, None, None);
+        for _ in 0..4 {
+            judge.record_failure(true, "429");
+        }
+        judge.record_failure(false, "HTTP 500");
+        assert!(judge.is_breaker_open().is_none());
+        judge.record_failure(true, "429");
+        assert!(judge.is_breaker_open().is_some());
+    }
+
+    #[tokio::test]
+    async fn success_still_clears_the_breaker_streak() {
+        let judge = JevCli::new(None, None, None, None);
+        for _ in 0..4 {
+            judge.record_failure(true, "429");
+        }
+        judge.record_success();
+        judge.record_failure(true, "429");
+        assert!(judge.is_breaker_open().is_none());
+    }
+
+    #[test]
+    fn state_temp_file_is_owner_only() {
+        let state = format!("line one\n{}", "x".repeat(600));
+        let arg = prepare_state_arg(&state).unwrap();
+        assert_eq!(arg.args[0], "--file");
+        let mode = std::fs::metadata(&arg.args[1])
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[tokio::test]
+    async fn daily_cap_counts_calls_made_by_other_instances() {
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        for id in ["earlier-1", "earlier-2"] {
+            sqlx::query("INSERT INTO judge_calls(id,purpose,kind,ms,outcome,used_fallback,created_at) VALUES(?,'lane_size','choice',1,'small',0,?)")
+                .bind(id)
+                .bind(Utc::now())
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        // A fresh instance that never called init(), as the runner/kibitzer/settler build them.
+        let judge = JevCli::new(None, Some(db.pool().clone()), None, None)
+            .with_caps(2, 50)
+            .with_jev_enabled(true);
+        let choice = judge
+            .choice(Purpose::LaneSize, "state", "size", &["small", "large"])
+            .await
+            .unwrap();
+        assert!(choice.is_capped, "cap must be shared across instances");
+        db.close().await;
     }
 }

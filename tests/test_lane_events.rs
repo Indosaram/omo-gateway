@@ -353,7 +353,7 @@ async fn missing_destination_never_calls_sink() {
         0
     );
     let post = queued_post(&database).await;
-    assert_eq!(post.state, PostState::Pending);
+    assert_eq!(post.state, PostState::Failed);
     assert!(post.error.is_some());
     assert!(received.try_recv().is_err());
 }

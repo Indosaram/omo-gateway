@@ -2036,6 +2036,9 @@ async fn test_omo_backend_e2e_thread_lifecycle_and_streaming() {
     let mut session = SessionContext::new(session_key.clone());
     session.state.system_prompt = Some("You are a helpful test persona.".to_string());
     session.state.active_model = Some("claude-3-5-sonnet".to_string());
+    // The default gateway policy auto-approves daemon tool requests; a session
+    // without the terminal toolset is what yields the denial asserted below.
+    session.state.enabled_toolsets = Some(Vec::new());
 
     // When: First turn executes
     let event1 = InboundEvent::message(session_key.clone(), "msg-1", "Say hello");
@@ -2422,6 +2425,8 @@ async fn test_omo_backend_deadline_interrupts_looping_turn() {
     let dispatcher = Arc::new(CapturingDispatcher::new());
     let backend = OmoBackend::new(config, dispatcher.clone());
 
+    // Cron turns keep an absolute total deadline; interactive turns renew
+    // theirs on every inbound frame, so a delta stream never expires them.
     let session_key = SessionKey::new(
         "discord",
         Some("guild-1"),
@@ -2430,6 +2435,10 @@ async fn test_omo_backend_deadline_interrupts_looping_turn() {
         "user-1",
     );
     let mut session = SessionContext::new(session_key.clone());
+    session
+        .state
+        .metadata
+        .insert("cron_scheduler_delivery".into(), json!(true));
 
     // When: the turn runs past the whole-turn deadline
     let event = InboundEvent::message(session_key.clone(), "msg-1", "Loop forever");
@@ -2876,6 +2885,8 @@ async fn test_omo_backend_aborts_turn_on_repeated_approval_denials() {
     let backend = OmoBackend::new(config, dispatcher);
     let session_key = SessionKey::new("discord", None::<String>, "chan", None::<String>, "cron");
     let mut session = SessionContext::new(session_key.clone());
+    // Denials come from the toolset gate: the default policy auto-approves.
+    session.state.enabled_toolsets = Some(Vec::new());
 
     // When: the denials accumulate
     let result = backend

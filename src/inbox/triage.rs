@@ -417,9 +417,13 @@ impl Triage {
                         let actions =
                             super::proposals::GatewayActions::from_env(self.pool.clone())?;
                         for proposal in pending {
-                            proposals
+                            // One failing proposal must not skip the rest of the loop.
+                            if let Err(error) = proposals
                                 .auto_lookup(proposal.number, true, &actions)
-                                .await?;
+                                .await
+                            {
+                                tracing::warn!(%error, number = proposal.number, "inbox auto lookup proposal failed");
+                            }
                         }
                     }
                     Ok::<(), OmonError>(())

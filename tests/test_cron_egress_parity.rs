@@ -130,13 +130,20 @@ async fn reminder_retains_bot_and_thread() {
         .expect("job must exist");
     let payload = job.payload().unwrap();
 
-    let deliver = payload
-        .get("deliver")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
+    let destinations = omon_gateway::delivery_destinations(&payload).unwrap();
     assert_eq!(
-        deliver, "discord:42:43",
-        "Reminder must retain channel and thread delivery coordinates (discord:42:43)"
+        destinations.len(),
+        1,
+        "Reminder must resolve to exactly one destination"
+    );
+    assert_eq!(
+        destinations[0].chat_id, "42",
+        "Reminder must retain the channel delivery coordinate"
+    );
+    assert_eq!(
+        destinations[0].thread_id.as_deref(),
+        Some("43"),
+        "Reminder must retain the thread delivery coordinate"
     );
     let job_bot_id = payload.get("bot_id").and_then(serde_json::Value::as_str);
     assert_eq!(
