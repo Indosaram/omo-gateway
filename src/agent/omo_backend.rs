@@ -963,6 +963,7 @@ impl OmoBackend {
         let mut started_ids: std::collections::HashSet<String> = Default::default();
         let mut approval_denials: u32 = 0;
         let mut messages_delivered: usize = 0;
+        let mut last_relay_at: Option<tokio::time::Instant> = None;
         // The agent already produced a message: it is composing, so no more progress steers.
         let mut agent_message_seen = false;
         let steer_quiet_threshold = Duration::from_secs(12);
@@ -1590,6 +1591,21 @@ impl OmoBackend {
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
                             // If the agent emitted an initial status/plan message before invoking tools,
                             // immediately deliver it to Discord so the user is never left waiting in silence.
+                            // The first status goes out as the acknowledgement. After that a
+                            // narration is relayed only once enough time has passed, so a quick
+                            // task is "ack, then answer" and a long one gets an occasional update
+                            // instead of a message before every tool call.
+                            if !is_cron_session
+                                && !is_lane
+                                && !full_content.trim().is_empty()
+                                && !should_relay_interim(
+                                    messages_delivered,
+                                    last_relay_at,
+                                    tokio::time::Instant::now(),
+                                )
+                            {
+                                full_content.clear();
+                            }
                             if !is_cron_session && !is_lane && !full_content.trim().is_empty() {
                                 let scrubbed = filter_reasoning(&full_content);
                                 if !scrubbed.trim().is_empty() && !is_explicit_silence(&scrubbed) {
@@ -1599,6 +1615,7 @@ impl OmoBackend {
                                     if self.relay_status(session, scrubbed, reply_to.clone()).await
                                     {
                                         messages_delivered += 1;
+                                        last_relay_at = Some(tokio::time::Instant::now());
                                         full_content.clear();
                                     }
                                 } else {
@@ -1821,6 +1838,28 @@ impl OmoBackend {
     }
 }
 
+/// Minimum spacing between two interim status messages after the acknowledgement.
+const INTERIM_REPORT_INTERVAL: Duration = Duration::from_secs(180);
+
+/// Whether an interim narration should reach the user: always the first one (the
+/// acknowledgement), afterwards only when the previous one is old enough.
+fn should_relay_interim(
+    messages_delivered: usize,
+    last_relay_at: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    messages_delivered == 0
+        || last_relay_at.is_none_or(|at| now.duration_since(at) >= INTERIM_REPORT_INTERVAL)
+}
+
+/// Errors that mean the app-server stopped sending this turn's events at all, as
+/// opposed to the model failing or the turn being refused.
+fn is_backend_stall(error: &OmonError) -> bool {
+    let message = error.to_string();
+    message.contains("agent produced no output within")
+        || message.contains("no activity from server")
+}
+
 #[async_trait]
 impl AgentBackend for OmoBackend {
     async fn run(&self, session: &mut SessionContext, event: InboundEvent) -> Result<()> {
@@ -1962,7 +2001,7 @@ impl AgentBackend for OmoBackend {
             .or(self.config.default_model.as_deref())
             .map(str::to_owned);
         let mut fallback_eligible = false;
-        let result = self
+        let mut result = self
             .execute_turn(
                 ws,
                 thread_id,
@@ -1975,6 +2014,36 @@ impl AgentBackend for OmoBackend {
                 briefings.as_ref(),
             )
             .await;
+        // A turn that got no frames back is how a wedged app-server looks from here (it
+        // accepts the prompt, runs it, and never forwards the events). Restart the daemon
+        // this gateway owns and run the turn once more instead of surfacing the error.
+        if result.as_ref().is_err_and(is_backend_stall)
+            && crate::agent::force_restart_owned_daemon(&self.config.appserver_url).await
+        {
+            tracing::warn!(
+                session = %session.key,
+                error = ?result,
+                "omo app-server stopped forwarding turn events; restarted it, retrying the turn once"
+            );
+            let deadline = tokio::time::Instant::now() + effective_total_timeout;
+            let (ws, thread_id) = self
+                .setup_turn(session, deadline, effective_total_timeout)
+                .await?;
+            fallback_eligible = false;
+            result = self
+                .execute_turn(
+                    ws,
+                    thread_id,
+                    session,
+                    event.clone(),
+                    deadline,
+                    effective_total_timeout,
+                    None,
+                    &mut fallback_eligible,
+                    briefings.as_ref(),
+                )
+                .await;
+        }
         if result.is_err()
             && fallback_eligible
             && primary_model
@@ -2283,8 +2352,48 @@ mod active_turn_staleness_tests {
 #[cfg(test)]
 mod fixr5_agent_tests {
     use serde_json::json;
+    use std::time::Duration;
 
-    use super::{ensure_cron_ttsr_disabled, frame_is_turn_progress};
+    use super::{
+        ensure_cron_ttsr_disabled, frame_is_turn_progress, is_backend_stall, should_relay_interim,
+        INTERIM_REPORT_INTERVAL,
+    };
+
+    #[test]
+    fn interim_reports_are_the_ack_then_spaced_updates() {
+        let start = tokio::time::Instant::now();
+        // The first narration is the acknowledgement.
+        assert!(should_relay_interim(0, None, start));
+        // Narrations right after it are held back.
+        assert!(!should_relay_interim(
+            1,
+            Some(start),
+            start + Duration::from_secs(20)
+        ));
+        // A long task gets an update once the interval has passed.
+        assert!(should_relay_interim(
+            1,
+            Some(start),
+            start + INTERIM_REPORT_INTERVAL
+        ));
+    }
+
+    #[test]
+    fn only_missing_turn_events_count_as_a_backend_stall() {
+        use crate::OmonError;
+        assert!(is_backend_stall(&OmonError::Llm(
+            "turn interrupted: agent produced no output within 45s of starting the prompt".into()
+        )));
+        assert!(is_backend_stall(&OmonError::Llm(
+            "timeout during turn streaming: no activity from server".into()
+        )));
+        assert!(!is_backend_stall(&OmonError::Llm(
+            "turn exceeded total deadline of 1800s; turn/interrupt sent".into()
+        )));
+        assert!(!is_backend_stall(&OmonError::Llm(
+            "turn/start error: model rejected".into()
+        )));
+    }
 
     #[test]
     fn steer_acks_and_unrelated_frames_do_not_count_as_turn_progress() {

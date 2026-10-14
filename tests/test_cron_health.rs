@@ -402,11 +402,14 @@ async fn delivery_lead_subprocess_helper() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    // Then: problems persist regardless of route validity; events have valid routes only.
+    // Then: problems persist regardless of route validity; an unset lead routes to the
+    // built-in owner DM, and only an invalid one produces no event.
     assert_eq!(problems, 1);
-    let expected = std::env::var("OMON_LANE_DEFAULT_LEAD")
+    let configured = std::env::var("OMON_LANE_DEFAULT_LEAD")
         .ok()
-        .and_then(|value| omon_gateway::SessionKey::from_storage_key(&value).ok());
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| omon_gateway::lanes::kibitzer::DEFAULT_LEAD.to_owned());
+    let expected = omon_gateway::SessionKey::from_storage_key(&configured).ok();
     assert_eq!(events, i64::from(expected.is_some()));
     if let Some(expected) = expected {
         let lead: String = sqlx::query_scalar(

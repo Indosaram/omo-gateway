@@ -956,11 +956,30 @@ impl HermesStore {
 pub struct HermesStoreSynchronizer {
     pool: SqlitePool,
     stores: Vec<HermesStore>,
+    /// Profiles whose store file is currently missing; the warning is logged once per
+    /// absence instead of on every sync tick.
+    missing: std::sync::Arc<std::sync::Mutex<HashSet<String>>>,
 }
 
 impl HermesStoreSynchronizer {
     pub fn new(pool: SqlitePool, stores: Vec<HermesStore>) -> Self {
-        Self { pool, stores }
+        Self {
+            pool,
+            stores,
+            missing: std::sync::Arc::new(std::sync::Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Records whether `profile`'s store file exists; true when that changed.
+    fn note_store_presence(&self, profile: &str, present: bool) -> bool {
+        let Ok(mut missing) = self.missing.lock() else {
+            return true;
+        };
+        if present {
+            missing.remove(profile)
+        } else {
+            missing.insert(profile.to_owned())
+        }
     }
 
     pub fn selected_profiles() -> Option<Vec<String>> {
@@ -1034,11 +1053,16 @@ impl HermesStoreSynchronizer {
             // A missing store file loads as empty; treating that as "every job
             // was removed" would delete all mirrors on a transient absence.
             if !store.jobs_path().exists() {
-                tracing::warn!(
-                    profile = store.profile(),
-                    "Hermes store file missing; keeping mirrored jobs"
-                );
+                if self.note_store_presence(store.profile(), false) {
+                    tracing::warn!(
+                        profile = store.profile(),
+                        "Hermes store file missing; keeping mirrored jobs"
+                    );
+                }
                 continue;
+            }
+            if self.note_store_presence(store.profile(), true) {
+                tracing::info!(profile = store.profile(), "Hermes store file is back");
             }
             let source = store.jobs_path().to_string_lossy().into_owned();
             let timezone = store.timezone().await;
@@ -1212,6 +1236,32 @@ mod tests {
 
     use super::*;
     use crate::Database;
+
+    #[tokio::test]
+    async fn missing_hermes_store_warns_once_per_absence() {
+        let database = Database::connect("sqlite::memory:").await.unwrap();
+        let sync = HermesStoreSynchronizer::new(database.pool().clone(), Vec::new());
+        assert!(
+            sync.note_store_presence("advisor", false),
+            "first absence is logged"
+        );
+        assert!(
+            !sync.note_store_presence("advisor", false),
+            "repeat absence is quiet"
+        );
+        assert!(
+            sync.note_store_presence("advisor", true),
+            "return is logged"
+        );
+        assert!(
+            !sync.note_store_presence("advisor", true),
+            "steady presence is quiet"
+        );
+        assert!(
+            sync.note_store_presence("advisor", false),
+            "a new absence is logged again"
+        );
+    }
 
     #[tokio::test]
     async fn prune_rejects_retention_that_overflows_instead_of_panicking() {

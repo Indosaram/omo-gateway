@@ -21,6 +21,18 @@ use tokio::time::{sleep, timeout, Instant};
 
 static SPAWN_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+/// Daemon children this gateway owns, by app-server URL, so a backend that stops
+/// answering can be restarted from the turn path without threading the supervisor
+/// through every caller.
+type ChildSlot = Arc<Mutex<Option<Child>>>;
+type OwnedDaemons = std::collections::HashMap<String, std::sync::Weak<Mutex<Option<Child>>>>;
+static OWNED_DAEMONS: LazyLock<std::sync::Mutex<OwnedDaemons>> = LazyLock::new(Default::default);
+/// When each URL was last force-restarted; a slow model must not turn into a restart loop.
+static LAST_FORCED_RESTART: LazyLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
+    LazyLock::new(Default::default);
+/// Minimum spacing between two forced restarts of the same daemon.
+const FORCED_RESTART_MIN_INTERVAL: Duration = Duration::from_secs(120);
+
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const READY_WAIT_AFTER_SPAWN: Duration = Duration::from_secs(30);
 /// First delay before a restart attempt; it doubles per consecutive failure.
@@ -262,6 +274,78 @@ fn prepare_token_file(cfg: &OmoBackendConfig) -> Result<Option<std::path::PathBu
         })
 }
 
+/// Where the gateway records the pid of the daemon it spawned for `listen_url`, so the
+/// next gateway can tell its own leftover daemon from an externally managed one.
+fn daemon_pid_path(listen_url: &str) -> Option<std::path::PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    Some(
+        std::path::PathBuf::from(home)
+            .join(".omon")
+            .join(format!("omo-appserver-{}.pid", listen_port(listen_url))),
+    )
+}
+
+fn record_daemon_pid(listen_url: &str, pid: Option<u32>) {
+    let (Some(path), Some(pid)) = (daemon_pid_path(listen_url), pid) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        create_private_dir(dir);
+    }
+    if let Err(error) = std::fs::write(&path, pid.to_string()) {
+        tracing::warn!(path = %path.display(), %error, "failed to record omo app-server pid");
+    }
+}
+
+/// The pid recorded by a previous gateway, if that process is still an
+/// `app-server --listen <listen_url>` daemon. Anything else is left alone.
+fn leftover_daemon_pid(listen_url: &str) -> Option<u32> {
+    let path = daemon_pid_path(listen_url)?;
+    let pid: u32 = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
+    let output = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let command = String::from_utf8_lossy(&output.stdout);
+    let needle = format!("--listen {listen_url}");
+    (command.contains("app-server") && command.contains(&needle)).then_some(pid)
+}
+
+fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Stops a daemon a previous gateway spawned (it outlives a gateway restart, still holds
+/// the port, and would otherwise be mistaken for an external daemon nobody can restart).
+async fn reclaim_leftover_daemon(listen_url: &str) {
+    let Some(pid) = leftover_daemon_pid(listen_url) else {
+        return;
+    };
+    tracing::warn!(%listen_url, pid, "stopping omo app-server left behind by a previous gateway");
+    for signal in ["-TERM", "-KILL"] {
+        let _ = std::process::Command::new("kill")
+            .args([signal, &pid.to_string()])
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && process_alive(pid) {
+            sleep(Duration::from_millis(100)).await;
+        }
+        if !process_alive(pid) {
+            break;
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline && probe_readyz(listen_url, READY_PROBE_TIMEOUT).await {
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// Build the spawn command for a local daemon. Exposed for tests.
 ///
 /// With a token file the daemon enforces the same bearer token the backend
@@ -323,7 +407,7 @@ fn autospawn_enabled() -> bool {
 /// restarts it, retrying with capped exponential backoff for as long as the
 /// gateway runs, if it dies. Killing the supervisor kills the daemon.
 pub struct OmoDaemonSupervisor {
-    child: Arc<Mutex<Option<Child>>>,
+    child: ChildSlot,
     shutdown: Arc<AtomicBool>,
 }
 
@@ -348,6 +432,7 @@ impl OmoDaemonSupervisor {
         if !autospawn_enabled() || !is_local_url(&cfg.appserver_url) {
             return Ok(None);
         }
+        reclaim_leftover_daemon(&cfg.appserver_url).await;
         if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
             tracing::debug!(url = %cfg.appserver_url, "external omo app-server already serving");
             return Ok(None);
@@ -365,10 +450,14 @@ impl OmoDaemonSupervisor {
                 ))
             })?;
 
+        record_daemon_pid(&cfg.appserver_url, child.id());
         let supervisor = Self {
             child: Arc::new(Mutex::new(Some(child))),
             shutdown: Arc::new(AtomicBool::new(false)),
         };
+        if let Ok(mut owned) = OWNED_DAEMONS.lock() {
+            owned.insert(cfg.appserver_url.clone(), Arc::downgrade(&supervisor.child));
+        }
 
         let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
         while Instant::now() < deadline {
@@ -477,6 +566,7 @@ impl OmoDaemonSupervisor {
                 }
                 match daemon_command(&bin, &url, token_file.as_deref()).spawn() {
                     Ok(child) => {
+                        record_daemon_pid(&url, child.id());
                         child_slot.lock().await.replace(child);
                         let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
                         let mut ready = false;
@@ -536,6 +626,59 @@ impl Drop for OmoDaemonSupervisor {
     }
 }
 
+/// Kills the gateway-owned daemon serving `url` (SIGKILL: a wedged app-server can ignore
+/// SIGTERM for minutes) and waits until its supervisor has a replacement answering
+/// readyz. Returns false when the daemon is not owned by this gateway, a forced restart
+/// happened too recently, or no replacement became ready in time.
+pub async fn force_restart_owned_daemon(url: &str) -> bool {
+    {
+        let Ok(mut last) = LAST_FORCED_RESTART.lock() else {
+            return false;
+        };
+        if last
+            .get(url)
+            .is_some_and(|at| at.elapsed() < FORCED_RESTART_MIN_INTERVAL)
+        {
+            tracing::warn!(%url, "omo app-server was force-restarted recently; not restarting again");
+            return false;
+        }
+        last.insert(url.to_owned(), Instant::now());
+    }
+    let slot = OWNED_DAEMONS
+        .lock()
+        .ok()
+        .and_then(|owned| owned.get(url).and_then(std::sync::Weak::upgrade));
+    let Some(slot) = slot else {
+        tracing::warn!(%url, "omo app-server is not owned by this gateway; cannot restart it");
+        return false;
+    };
+    {
+        let mut guard = slot.lock().await;
+        let Some(child) = guard.as_mut() else {
+            return false;
+        };
+        tracing::warn!(%url, pid = ?child.id(), "force-restarting unresponsive omo app-server");
+        let _ = child.start_kill();
+        // Reap it here so the supervisor sees the exit on its next poll.
+        let _ = timeout(Duration::from_secs(5), child.wait()).await;
+    }
+    let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN + RESTART_BACKOFF_MAX;
+    while Instant::now() < deadline {
+        let replaced = slot
+            .lock()
+            .await
+            .as_mut()
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+        if replaced && probe_readyz(url, READY_PROBE_TIMEOUT).await {
+            tracing::info!(%url, "omo app-server replacement ready after forced restart");
+            return true;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
+    tracing::error!(%url, "omo app-server did not come back after forced restart");
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +725,7 @@ mod tests {
             "daemon_exiting_child_is_restarted_past_the_old_budget"
                 | "daemon_unready_replacement_is_killed_and_retried"
                 | "daemon_ensure_owned_local_surface"
+                | "force_restart_replaces_the_owned_daemon_and_throttles"
                 | "test_daemon_command_arguments"
         ) {
             assert!(
@@ -805,6 +949,162 @@ while True:
         println!(
             "public ensure: owned HTTP-200 child ready, shutdown child reaped, socket refused"
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn leftover_daemon_from_a_previous_gateway_is_reclaimed() {
+        if isolated_home("leftover_daemon_from_a_previous_gateway_is_reclaimed").await {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cfg = OmoBackendConfig::new(format!("ws://{}", port.local_addr().unwrap()));
+        drop(port);
+        let bin = dir.path().join("ready-daemon");
+        std::fs::write(
+            &bin,
+            r#"#!/bin/sh
+''''test -x /opt/homebrew/bin/python3 && exec /opt/homebrew/bin/python3 "$0" "$@"; exec /usr/bin/python3 "$0" "$@" # '''
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', int(sys.argv[3].rsplit(':', 1)[1])))
+s.listen()
+while True:
+    c, _ = s.accept()
+    c.recv(4096)
+    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n')
+    c.close()
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::env::set_var("OMON_OMO_BIN", &bin);
+
+        // Given: a daemon a previous gateway spawned, still serving, recorded in the pidfile.
+        let mut leftover = std::process::Command::new(&bin)
+            .args([
+                "app-server",
+                "--listen",
+                &cfg.appserver_url,
+                "--ws-auth",
+                "off",
+            ])
+            .spawn()
+            .unwrap();
+        let leftover_pid = leftover.id();
+        let ready_by = Instant::now() + Duration::from_secs(10);
+        while !probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
+            assert!(
+                Instant::now() < ready_by,
+                "fixture daemon never became ready"
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
+        record_daemon_pid(&cfg.appserver_url, Some(leftover_pid));
+
+        // When: a new gateway ensures its daemon.
+        let supervisor = timeout(Duration::from_secs(30), OmoDaemonSupervisor::ensure(&cfg))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("the leftover is reclaimed, so this gateway owns the new daemon");
+
+        // Then: the leftover is gone and the owned child serves the URL.
+        let _ = leftover.wait();
+        assert!(
+            !process_alive(leftover_pid),
+            "leftover daemon must be stopped"
+        );
+        let owned_pid = supervisor.child.lock().await.as_ref().and_then(Child::id);
+        assert!(owned_pid.is_some_and(|pid| pid != leftover_pid));
+        assert!(probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await);
+        let recorded =
+            std::fs::read_to_string(daemon_pid_path(&cfg.appserver_url).unwrap()).unwrap();
+        assert_eq!(Some(recorded.trim().parse::<u32>().unwrap()), owned_pid);
+        supervisor.kill();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn unrelated_pid_in_the_pidfile_is_never_killed() {
+        if isolated_home("unrelated_pid_in_the_pidfile_is_never_killed").await {
+            return;
+        }
+        let url = "ws://127.0.0.1:1";
+        let mut bystander = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        record_daemon_pid(url, Some(bystander.id()));
+        assert_eq!(leftover_daemon_pid(url), None);
+        reclaim_leftover_daemon(url).await;
+        assert!(
+            process_alive(bystander.id()),
+            "a non-daemon process must survive"
+        );
+        let _ = bystander.kill();
+        let _ = bystander.wait();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn force_restart_replaces_the_owned_daemon_and_throttles() {
+        if isolated_home("force_restart_replaces_the_owned_daemon_and_throttles").await {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cfg = OmoBackendConfig::new(format!("ws://{}", port.local_addr().unwrap()));
+        drop(port);
+        let bin = dir.path().join("ready-daemon");
+        std::fs::write(
+            &bin,
+            r#"#!/bin/sh
+''''test -x /opt/homebrew/bin/python3 && exec /opt/homebrew/bin/python3 "$0" "$@"; exec /usr/bin/python3 "$0" "$@" # '''
+import socket, sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', int(sys.argv[3].rsplit(':', 1)[1])))
+s.listen()
+while True:
+    c, _ = s.accept()
+    c.recv(4096)
+    c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n')
+    c.close()
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::env::set_var("OMON_OMO_BIN", &bin);
+        let supervisor = timeout(Duration::from_secs(10), OmoDaemonSupervisor::ensure(&cfg))
+            .await
+            .unwrap()
+            .unwrap()
+            .expect("ensure must own the spawned daemon");
+        let first_pid = supervisor.child.lock().await.as_ref().and_then(Child::id);
+
+        assert!(force_restart_owned_daemon(&cfg.appserver_url).await);
+        let second_pid = supervisor.child.lock().await.as_ref().and_then(Child::id);
+        assert!(second_pid.is_some());
+        assert_ne!(
+            first_pid, second_pid,
+            "a new daemon process must be serving"
+        );
+        assert!(probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await);
+
+        // A second stall right after must not trigger another restart.
+        assert!(!force_restart_owned_daemon(&cfg.appserver_url).await);
+        assert_eq!(
+            supervisor.child.lock().await.as_ref().and_then(Child::id),
+            second_pid
+        );
+        // A daemon this gateway does not own is never touched.
+        assert!(!force_restart_owned_daemon("ws://127.0.0.1:1").await);
+        supervisor.kill();
     }
 
     #[tokio::test]

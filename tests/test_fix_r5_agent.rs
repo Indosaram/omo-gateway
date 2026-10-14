@@ -155,6 +155,74 @@ async fn mid_turn_status_is_a_visible_message_not_a_stream_chunk_or_the_reply() 
 }
 
 #[tokio::test]
+async fn only_the_first_status_is_relayed_then_the_final_answer() {
+    // Given: a turn that narrates before every tool call, then answers.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        serve_until_turn_start(&mut ws).await;
+        send(&mut ws, ack()).await;
+        for (index, text) in ["On it.", "Reading the log.", "Found 3 failures."]
+            .into_iter()
+            .enumerate()
+        {
+            send(&mut ws, agent_message(&format!("m-{index}"), text)).await;
+            send(
+                &mut ws,
+                json!({"method":"item/started","params":{"threadId":"r1","turnId":"t2",
+                    "item":{"id":format!("tool-{index}"),"type":"commandExecution"}}}),
+            )
+            .await;
+        }
+        send(&mut ws, agent_message("m-final", "Report")).await;
+        send(&mut ws, terminal()).await;
+        let _ = stop_rx.await;
+    });
+    let dispatcher = Arc::new(Recorder::default());
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address}")),
+        dispatcher.clone(),
+    );
+    let (key, mut session) = resumed_session("ack-only");
+
+    // When: the turn runs to completion.
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        backend.run(&mut session, InboundEvent::message(key, "m", "go")),
+    )
+    .await
+    .expect("bounded run");
+    let _ = stop_tx.send(());
+    tokio::time::timeout(Duration::from_secs(5), peer)
+        .await
+        .expect("bounded peer")
+        .unwrap();
+
+    // Then: the user sees one acknowledgement and the final answer, nothing between.
+    result.expect("turn succeeds");
+    let actions = dispatcher.0.lock().clone();
+    let sent: Vec<&str> = actions
+        .iter()
+        .filter_map(|action| match action {
+            OutboundAction::SendMessage { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent, vec!["On it."]);
+    let finals: Vec<&str> = actions
+        .iter()
+        .filter_map(|action| match action {
+            OutboundAction::Stream { chunk, .. } if chunk.is_final => Some(chunk.content.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finals, vec!["Report"]);
+}
+
+#[tokio::test]
 async fn cron_briefings_survive_a_model_fallback_and_are_consumed_after_the_ack() {
     // Given: a pending cron briefing and a primary model the daemon rejects.
     let pool = omon_gateway::storage::init_pool("sqlite::memory:")

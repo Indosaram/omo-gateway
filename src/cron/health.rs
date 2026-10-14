@@ -286,16 +286,20 @@ async fn record_problem(
 }
 
 fn default_lead() -> Option<String> {
-    match std::env::var("OMON_LANE_DEFAULT_LEAD") {
-        Ok(lead) => match SessionKey::from_storage_key(&lead) {
-            Ok(session) => Some(session.storage_key()),
-            Err(error) => {
-                tracing::warn!(%error, "invalid OMON_LANE_DEFAULT_LEAD; cron problem recorded without event");
-                None
-            }
-        },
+    lead_from(std::env::var("OMON_LANE_DEFAULT_LEAD").ok().as_deref())
+}
+
+/// Same rule as the rest of the gateway: an unset or blank override means the built-in
+/// owner home DM, so a cron problem always reaches a lead.
+fn lead_from(value: Option<&str>) -> Option<String> {
+    let lead = value
+        .map(str::trim)
+        .filter(|lead| !lead.is_empty())
+        .unwrap_or(crate::lanes::kibitzer::DEFAULT_LEAD);
+    match SessionKey::from_storage_key(lead) {
+        Ok(session) => Some(session.storage_key()),
         Err(error) => {
-            tracing::warn!(%error, "OMON_LANE_DEFAULT_LEAD unavailable; cron problem recorded without event");
+            tracing::warn!(%error, "invalid OMON_LANE_DEFAULT_LEAD; cron problem recorded without event");
             None
         }
     }
@@ -314,6 +318,21 @@ fn watch_enabled_from(value: Option<&str>) -> bool {
             )
         })
         .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod lead_tests {
+    use super::lead_from;
+
+    #[test]
+    fn unset_or_blank_lead_falls_back_to_the_owner_dm() {
+        let owner = crate::SessionKey::from_storage_key(crate::lanes::kibitzer::DEFAULT_LEAD)
+            .unwrap()
+            .storage_key();
+        assert_eq!(lead_from(None), Some(owner.clone()));
+        assert_eq!(lead_from(Some("  ")), Some(owner));
+        assert_eq!(lead_from(Some("not a key")), None);
+    }
 }
 
 #[cfg(test)]

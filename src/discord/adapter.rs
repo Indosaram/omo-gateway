@@ -2530,6 +2530,19 @@ fn receive_watchdog_threshold() -> u64 {
     )
 }
 
+/// A healthy-looking runner heartbeat does not prove the session still
+/// receives dispatches, so silence past this multiple of the threshold forces a
+/// restart regardless of runner health.
+const RECEIVE_WATCHDOG_ZOMBIE_CEILING_FACTOR: u64 = 3;
+
+fn watchdog_should_restart(silence_secs: u64, threshold_secs: u64, runner_healthy: bool) -> bool {
+    if silence_secs < threshold_secs {
+        return false;
+    }
+    !runner_healthy
+        || silence_secs >= threshold_secs.saturating_mul(RECEIVE_WATCHDOG_ZOMBIE_CEILING_FACTOR)
+}
+
 /// Restart the shard when no gateway dispatch has arrived for the silence
 /// window: a healthy Discord connection delivers events constantly, so a
 /// long quiet stretch while connected means the session is a zombie that
@@ -2544,6 +2557,7 @@ fn spawn_receive_watchdog(shard_manager: Arc<serenity::ShardManager>) {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         ticker.tick().await;
+        let mut last_skip_log_ms = 0u64;
         loop {
             ticker.tick().await;
             let last_event = last_event_ms.load(Ordering::Relaxed);
@@ -2567,22 +2581,34 @@ fn spawn_receive_watchdog(shard_manager: Arc<serenity::ShardManager>) {
                 });
             drop(runners);
 
-            if is_runner_healthy {
-                tracing::debug!(
-                    silence_secs,
-                    threshold_secs,
-                    "Discord receive watchdog: dispatch silent but shard runner reports healthy connected heartbeat; skipping restart"
-                );
-                // Advance the marker to give another full silence window before checking again
-                last_event_ms.store(now_ms(), Ordering::Relaxed);
+            if !watchdog_should_restart(silence_secs, threshold_secs, is_runner_healthy) {
+                // The last-dispatch marker stays untouched so the zombie
+                // ceiling can be reached; only the skip log is rate-limited.
+                let now = now_ms();
+                if now.saturating_sub(last_skip_log_ms) >= threshold_secs.saturating_mul(1000) {
+                    last_skip_log_ms = now;
+                    tracing::debug!(
+                        silence_secs,
+                        threshold_secs,
+                        "Discord receive watchdog: dispatch silent but shard runner reports healthy connected heartbeat; skipping restart until zombie ceiling"
+                    );
+                }
                 continue;
             }
 
-            tracing::error!(
-                silence_secs,
-                threshold_secs,
-                "Discord receive watchdog: no gateway events and shard runner unhealthy; restarting shard"
-            );
+            if is_runner_healthy {
+                tracing::warn!(
+                    silence_secs,
+                    threshold_secs,
+                    "Discord receive watchdog: shard runner looks healthy but no gateway dispatch reached the zombie ceiling; restarting shard"
+                );
+            } else {
+                tracing::error!(
+                    silence_secs,
+                    threshold_secs,
+                    "Discord receive watchdog: no gateway events and shard runner unhealthy; restarting shard"
+                );
+            }
             last_event_ms.store(now_ms(), Ordering::Relaxed);
             shard_manager.restart_shard(serenity::all::ShardId(0)).await;
         }
@@ -5946,6 +5972,30 @@ mod receive_watchdog_tests {
     fn threshold_invalid_value_falls_back_to_default() {
         assert_eq!(receive_watchdog_threshold_from(Some("soon")), 1200);
         assert_eq!(receive_watchdog_threshold_from(Some("-5")), 1200);
+    }
+
+    #[test]
+    fn restart_decision_below_threshold_never_restarts() {
+        assert!(!watchdog_should_restart(1199, 1200, false));
+        assert!(!watchdog_should_restart(1199, 1200, true));
+    }
+
+    #[test]
+    fn restart_decision_unhealthy_runner_restarts_at_threshold() {
+        assert!(watchdog_should_restart(1200, 1200, false));
+        assert!(watchdog_should_restart(1800, 1200, false));
+    }
+
+    #[test]
+    fn restart_decision_healthy_runner_skips_until_ceiling() {
+        assert!(!watchdog_should_restart(1200, 1200, true));
+        assert!(!watchdog_should_restart(3599, 1200, true));
+    }
+
+    #[test]
+    fn restart_decision_healthy_runner_restarts_at_ceiling() {
+        assert!(watchdog_should_restart(3600, 1200, true));
+        assert!(watchdog_should_restart(5721, 1200, true));
     }
 }
 
