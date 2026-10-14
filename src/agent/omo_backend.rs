@@ -961,6 +961,9 @@ impl OmoBackend {
         let mut assistant_error = None;
         let mut total_tool_calls: usize = 0;
         let mut started_ids: std::collections::HashSet<String> = Default::default();
+        // Tool items started but not yet completed. A tool runs silently (a subagent task, a long
+        // command), so a frame gap while one is open is work in progress, not a wedged server.
+        let mut open_tool_ids: std::collections::HashSet<String> = Default::default();
         let mut approval_denials: u32 = 0;
         let mut messages_delivered: usize = 0;
         let mut last_relay_at: Option<tokio::time::Instant> = None;
@@ -1213,7 +1216,7 @@ impl OmoBackend {
             } else {
                 self.config.request_timeout
             };
-            if now >= last_activity_at + inactivity_timeout {
+            if open_tool_ids.is_empty() && now >= last_activity_at + inactivity_timeout {
                 if let Some(turn_id) = &turn_id {
                     let interrupt = json!({
                         "jsonrpc": "2.0",
@@ -1224,16 +1227,22 @@ impl OmoBackend {
                     let _ = ws.send(Message::text(interrupt.to_string())).await;
                 }
                 self.active_turns.lock().remove(&session.key.storage_key());
-                return Err(OmonError::Llm(
-                    "timeout during turn streaming: no activity from server".into(),
-                ));
+                // After a tool ran, re-running the prompt would repeat its side effects, so only a
+                // turn that did no tool work is reported as a stall the caller may restart and retry.
+                return Err(OmonError::Llm(if total_tool_calls == 0 {
+                    "timeout during turn streaming: no activity from server".into()
+                } else {
+                    "timeout during turn streaming: server went silent after tool calls".into()
+                }));
             }
 
             let mut next_timeout = effective_work_deadline;
             if !turn_started_ack {
                 next_timeout = next_timeout.min(ack_deadline);
             }
-            next_timeout = next_timeout.min(last_activity_at + inactivity_timeout);
+            if open_tool_ids.is_empty() {
+                next_timeout = next_timeout.min(last_activity_at + inactivity_timeout);
+            }
             if awaiting_first_response {
                 next_timeout = next_timeout.min(prompt_started_at + initial_response_timeout);
             }
@@ -1584,11 +1593,15 @@ impl OmoBackend {
                         continue;
                     };
                     let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                    if !is_started {
+                        open_tool_ids.remove(item_id);
+                    }
 
                     if is_started && !item_id.is_empty() && started_ids.insert(item_id.to_string())
                     {
                         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
+                            open_tool_ids.insert(item_id.to_string());
                             // If the agent emitted an initial status/plan message before invoking tools,
                             // immediately deliver it to Discord so the user is never left waiting in silence.
                             // The first status goes out as the acknowledgement. After that a
@@ -2392,6 +2405,10 @@ mod fixr5_agent_tests {
         )));
         assert!(!is_backend_stall(&OmonError::Llm(
             "turn/start error: model rejected".into()
+        )));
+        // Silence after tool work must not restart the daemon and re-run the prompt.
+        assert!(!is_backend_stall(&OmonError::Llm(
+            "timeout during turn streaming: server went silent after tool calls".into()
         )));
     }
 

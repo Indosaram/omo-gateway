@@ -485,6 +485,39 @@ fn deadlines_parse_without_model_in_owner_timezone() {
 }
 
 #[tokio::test]
+async fn stale_relative_deadline_raises_no_urgent_event() {
+    // Given: "오늘" written twelve days before triage runs
+    let (db, mut triage, _, _) = fixture("owner_must_act", "valid").await;
+    let sent = now() - chrono::Duration::days(12);
+    let mut item = InboxItem::new(
+        InboxSourceKind::Mail,
+        "old-today",
+        "통을 따로 오늘 주문할게요",
+        sent,
+    );
+    item.author = Some("friend@example.com".into());
+    let src = Source(vec![item]);
+    let results = collect_all(db.pool(), &[&src], &PrefilterRules::default()).await;
+    // When
+    triage.collected(&results, now(), true).await.unwrap();
+    triage
+        .due(now() + chrono::Duration::seconds(120), true)
+        .await
+        .unwrap();
+    // Then: the deadline resolves to the send day, which has passed
+    assert_eq!(
+        parse_due_at("오늘 주문", sent),
+        Some(Utc.with_ymd_and_hms(2026, 9, 29, 14, 59, 0).unwrap())
+    );
+    let due: Option<String> = sqlx::query_scalar("SELECT due_at FROM inbox_decisions")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert!(due.is_none());
+    assert_eq!(count(&db, "lane_events").await, 0);
+}
+
+#[tokio::test]
 async fn zero_fallback_cap_still_admits_successful_jev_classification() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();

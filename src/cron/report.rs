@@ -281,17 +281,31 @@ impl NativeServer {
                 .map_err(|e| OmonError::Config(e.to_string()))?;
         }
         let listener = {
-            // Create the socket 0600 from the start instead of chmod-ing after bind.
-            // SAFETY: umask only swaps the process file-creation mask; the bind below is synchronous.
-            let previous = unsafe { libc::umask(0o177) };
-            let bound = tokio::net::UnixListener::bind(&path);
-            unsafe { libc::umask(previous) };
+            // The process umask is shared by every thread, so it must not be changed here.
+            // Bind inside a private 0700 directory, restrict the socket, then rename it in.
+            use std::os::unix::fs::PermissionsExt;
+            let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+            // Short name: sun_path is 104 bytes on macOS and tempdirs are already long.
+            let staging = parent.join(format!(
+                ".cs{}",
+                &uuid::Uuid::new_v4().simple().to_string()[..8]
+            ));
+            tokio::fs::create_dir(&staging)
+                .await
+                .map_err(|e| OmonError::Config(e.to_string()))?;
+            let staged = staging.join("s");
+            let bound = async {
+                tokio::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o700))
+                    .await?;
+                let listener = tokio::net::UnixListener::bind(&staged)?;
+                tokio::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o600)).await?;
+                tokio::fs::rename(&staged, &path).await?;
+                std::io::Result::Ok(listener)
+            }
+            .await;
+            let _ = tokio::fs::remove_dir_all(&staging).await;
             bound.map_err(|e| OmonError::Config(e.to_string()))?
         };
-        use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .await
-            .map_err(|e| OmonError::Config(e.to_string()))?;
         Ok(Self { path, listener })
     }
 

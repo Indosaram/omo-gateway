@@ -12,6 +12,8 @@ use crate::{OmonError, Result};
 #[serde(default)]
 pub struct PrefilterRules {
     pub owner_kakao_name: String,
+    /// KakaoTalk sender names that are the owner himself; his own messages never need his action.
+    pub owner_kakao_authors: Vec<String>,
     pub kakao_keywords: Vec<String>,
     pub excluded_kakao_rooms: HashSet<String>,
     pub owner_discord_id: String,
@@ -22,6 +24,7 @@ impl Default for PrefilterRules {
     fn default() -> Self {
         Self {
             owner_kakao_name: String::new(),
+            owner_kakao_authors: vec!["윤인도".to_owned()],
             kakao_keywords: Vec::new(),
             excluded_kakao_rooms: ["18491246151592761".to_owned()].into_iter().collect(),
             owner_discord_id: "414011632306618368".to_owned(),
@@ -89,6 +92,9 @@ impl PrefilterRules {
                 if self.excluded_kakao_rooms.contains(room) {
                     return Some("kakao_excluded_room");
                 }
+                if self.owner_kakao_authors.iter().any(|name| name == author) {
+                    return Some("kakao_owner_author");
+                }
                 let room_type = item.room_type.as_deref().unwrap_or_default();
                 if matches!(room_type, "OM" | "OD" | "PlusChat") {
                     let matches_owner = !self.owner_kakao_name.is_empty()
@@ -116,6 +122,18 @@ impl PrefilterRules {
                 }
                 if item.snippet.starts_with("[Web발신]") || item.snippet.starts_with("(광고)") {
                     return Some("imessage_ad");
+                }
+                if contains_any(
+                    &text,
+                    &[
+                        "인증 코드",
+                        "인증코드",
+                        "보안 코드",
+                        "verification code",
+                        "security code",
+                    ],
+                ) {
+                    return Some("imessage_otp");
                 }
                 None
             }

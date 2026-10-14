@@ -285,13 +285,28 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
     // Rebuild the lane's changed files at their real paths so the judge sees
     // "done.txt added" rather than an opaque patch file: the base commit holds
     // the start-of-lane contents and the index holds the current contents.
+    // `git diff --name-only` lists paths from the repository root, so a lane whose cwd is a
+    // subdirectory must read the working-tree side from the top level, not from cwd.
+    let toplevel = PathBuf::from(
+        git(cwd, &["rev-parse", "--show-toplevel"])
+            .await?
+            .trim_end_matches(['\n', '\r']),
+    );
     let listed = tokio::time::timeout(
         Duration::from_secs(30),
         tokio::process::Command::new("git")
             .arg("-C")
             .arg(cwd)
             .env("GIT_INDEX_FILE", &index)
-            .args(["diff", "--cached", "--name-only", "-z", revision, "--"])
+            .args([
+                "diff",
+                "--cached",
+                "--name-only",
+                "--no-relative",
+                "-z",
+                revision,
+                "--",
+            ])
             .kill_on_drop(true)
             .output(),
     )
@@ -319,7 +334,7 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
         }
         // Size both sides before reading them, so one huge artifact is skipped
         // without loading it, and later files still reach the judge.
-        let new_len = match tokio::fs::metadata(cwd.join(&path)).await {
+        let new_len = match tokio::fs::metadata(toplevel.join(&path)).await {
             Ok(meta) => Some(meta.len() as usize),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(super::runner::io_error(error)),
@@ -356,7 +371,7 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
             .await
             .map_err(super::runner::io_error)?;
         let old = shown.status.success().then_some(shown.stdout);
-        let new = match tokio::fs::read(cwd.join(&path)).await {
+        let new = match tokio::fs::read(toplevel.join(&path)).await {
             Ok(bytes) => Some(bytes),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(super::runner::io_error(error)),
@@ -708,6 +723,25 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(names.trim(), "src/a.rs");
+    }
+
+    #[tokio::test]
+    async fn lane_in_a_subdirectory_still_sees_its_added_file() {
+        let (_dir, repo, revision) = commit_fixture().await;
+        let crate_dir = repo.join("crates/foo");
+        tokio::fs::create_dir_all(&crate_dir).await.unwrap();
+        tokio::fs::write(crate_dir.join("NEW.md"), "added\n")
+            .await
+            .unwrap();
+        let input = lane_diff_input(&crate_dir, &revision).await.unwrap();
+        assert_eq!((input.2, input.3), (0, 1));
+        let names = git(
+            &input.0,
+            &["diff", "--cached", "--name-status", input.1.as_str()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(names.trim(), "A\tcrates/foo/NEW.md");
     }
 
     #[tokio::test]

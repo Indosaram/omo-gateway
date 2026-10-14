@@ -9,7 +9,7 @@ use axum::http::{Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::{Json, Router};
 use chrono::Utc;
-use omon_gateway::lanes::guard::{retry_queued, GuardThresholds, HostSample};
+use omon_gateway::lanes::guard::{retry_queued, GuardThresholds, HostSample, LAUNCH_RETRY_BACKOFF};
 use omon_gateway::storage::{get_lane, insert_lane, Database, Lane};
 use serde_json::{json, Value};
 use serenity::all::{GuildChannel, Message};
@@ -72,7 +72,7 @@ async fn handle(method: Method, uri: Uri, bytes: Bytes) -> Response {
             "avatar": null, "bot": true
         }))
         .into_response(),
-        ("POST", ["channels", "999", "messages"]) => (
+        ("POST", ["channels", "999" | "998", "messages"]) => (
             StatusCode::NOT_FOUND,
             Json(json!({"code": 10003, "message": "Unknown Channel"})),
         )
@@ -235,7 +235,7 @@ async fn one_lanes_discord_failure_neither_aborts_the_pass_nor_reposts() {
         .await
         .unwrap();
     assert!(second.is_empty());
-    // The failed lane is not retried (no new starter post) until its row changes.
+    // The failed lane is not retried (no new starter post) within LAUNCH_RETRY_BACKOFF.
     assert_eq!(requests_to("/api/v10/channels/999/messages"), 1);
     assert_eq!(
         get_lane(database.pool(), "bad")
@@ -245,6 +245,35 @@ async fn one_lanes_discord_failure_neither_aborts_the_pass_nor_reposts() {
             .status,
         "queued"
     );
+}
+
+#[tokio::test]
+async fn failed_launch_is_retried_after_the_backoff() {
+    server();
+    let dir = tempfile::tempdir().unwrap();
+    let database = db(&dir).await;
+    queued(&database, "flaky", Some("998"), 30).await;
+    let first = retry_queued(database.pool(), &host(), &thresholds(5))
+        .await
+        .unwrap();
+    assert!(first.is_empty());
+    assert_eq!(event_kinds(&database, "flaky").await, ["launch_failed"]);
+    // Within the backoff the lane is skipped.
+    retry_queued(database.pool(), &host(), &thresholds(5))
+        .await
+        .unwrap();
+    assert_eq!(requests_to("/api/v10/channels/998/messages"), 1);
+    // Age the failure past the backoff; the lane row itself is untouched.
+    let backoff_minutes = LAUNCH_RETRY_BACKOFF.as_secs() as i64 / 60 + 1;
+    sqlx::query("UPDATE lane_events SET created_at = ? WHERE lane_key = 'flaky'")
+        .bind(Utc::now() - chrono::Duration::minutes(backoff_minutes))
+        .execute(database.pool())
+        .await
+        .unwrap();
+    retry_queued(database.pool(), &host(), &thresholds(5))
+        .await
+        .unwrap();
+    assert_eq!(requests_to("/api/v10/channels/998/messages"), 2);
 }
 
 #[tokio::test]

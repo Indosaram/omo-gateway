@@ -19,6 +19,15 @@ path = "src/lib.rs"
 name = "omo-gateway"
 path = "src/entry.rs"
 
+# macOS 27 / ld 27: stripping proc-macro dylibs (sqlx-macros) leaves a
+# "mis-aligned LINKEDIT string pool" that dlopen rejects, so release builds
+# fail. Keep symbols until the toolchain is fixed.
+[profile.release]
+strip = "none"
+
+[profile.release.build-override]
+strip = "none"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1.43", features = ["full", "test-util"] }

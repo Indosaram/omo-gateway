@@ -88,6 +88,7 @@ struct Item {
     author: Option<String>,
     title: Option<String>,
     snippet: String,
+    received_at: DateTime<Utc>,
 }
 
 impl Item {
@@ -200,7 +201,7 @@ impl Triage {
 
     async fn flush(&mut self, now: DateTime<Utc>, all: bool) -> Result<usize> {
         let items: Vec<Item> = sqlx::query_as(
-            "SELECT i.id, i.source, i.author, i.title, i.snippet FROM inbox_items i LEFT JOIN inbox_decisions d ON d.item_id=i.id WHERE d.item_id IS NULL ORDER BY i.collected_at, i.id"
+            "SELECT i.id, i.source, i.author, i.title, i.snippet, i.received_at FROM inbox_items i LEFT JOIN inbox_decisions d ON d.item_id=i.id WHERE d.item_id IS NULL ORDER BY i.collected_at, i.id"
         ).fetch_all(&self.pool).await?;
         let mut stored = 0;
         for chunk in items.chunks(BATCH_SIZE) {
@@ -246,8 +247,10 @@ impl Triage {
                 class,
                 parse_due_at(
                     &format!("{} {}", item.title.as_deref().unwrap_or(""), item.snippet),
-                    now,
-                ),
+                    item.received_at,
+                )
+                // A relative deadline that already passed is not an upcoming one.
+                .filter(|due| *due >= now),
             ));
         }
         // These classifications need no writer and must survive its failure.
@@ -461,8 +464,9 @@ impl Triage {
 }
 
 /// ISO dates/timestamps and explicit today/tomorrow deadlines, in owner KST.
+/// Relative words resolve against `sent_at`, the moment the message was received.
 /// No inference of dates from a model response.
-pub fn parse_due_at(text: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+pub fn parse_due_at(text: &str, sent_at: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let re =
         regex::Regex::new(r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))?\b")
             .ok()?;
@@ -484,8 +488,8 @@ pub fn parse_due_at(text: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     } else {
         return None;
     };
-    let date =
-        now.with_timezone(&chrono_tz::Asia::Seoul).date_naive() + chrono::Duration::days(offset);
+    let date = sent_at.with_timezone(&chrono_tz::Asia::Seoul).date_naive()
+        + chrono::Duration::days(offset);
     let clock = regex::Regex::new(r"\b([0-2]\d):([0-5]\d)\b").ok()?;
     let (hour, minute) = match clock.captures(text) {
         Some(c) => (

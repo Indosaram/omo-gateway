@@ -870,7 +870,8 @@ async fn api_readiness(State(state): State<DashboardState>) -> Response {
     let backend_ok = backend_check.status == "ok";
     // The backend gates readiness when this dashboard serves chat, or when a backend was
     // configured explicitly; a bare read-only dashboard does not depend on it.
-    let ready = db_ok && workspace_ok && disk_ok && (backend_ok || !(chat_ok || backend_configured));
+    let ready =
+        db_ok && workspace_ok && disk_ok && (backend_ok || !(chat_ok || backend_configured));
     let status = if ready {
         StatusCode::OK
     } else {
@@ -1210,13 +1211,30 @@ async fn delete_session(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Response, ApiError> {
     let storage_id = resolve_storage_id(&state.pool, &id).await?;
+    // cron_jobs.session_key cascades on delete; refuse instead of silently dropping jobs.
+    let bound_jobs: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM cron_jobs WHERE session_key = ?")
+            .bind(&storage_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if bound_jobs > 0 {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            format!("session has {bound_jobs} cron job(s); delete or move them first"),
+        ));
+    }
     if let (Some(mux), Some(key)) = (&state.multiplexer, parse_storage_key(&storage_id)) {
         let _ = mux.stop(&key).await;
     }
-    let result = sqlx::query("DELETE FROM sessions WHERE session_key = ?")
-        .bind(&storage_id)
-        .execute(&state.pool)
-        .await?;
+    // NOT EXISTS keeps a job registered after the count from being cascaded away.
+    let result = sqlx::query(
+        "DELETE FROM sessions WHERE session_key = ? \
+         AND NOT EXISTS (SELECT 1 FROM cron_jobs WHERE session_key = ?)",
+    )
+    .bind(&storage_id)
+    .bind(&storage_id)
+    .execute(&state.pool)
+    .await?;
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("session"));
     }
@@ -4192,6 +4210,28 @@ mod tests {
         assert_eq!(body["status"], "degraded");
         assert_eq!(body["checks"]["backend"], false);
         assert_eq!(body["checks"]["database"], true);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_session_with_cron_jobs_is_refused() {
+        let state = test_state().await;
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES ('web:bound', 'web', 'bound', 'dashboard', '{}')")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let mut spec = CronJobSpec::new("@every 5m", json!({"content": "ping"}));
+        spec.session_key = Some("web:bound".into());
+        state
+            .scheduler
+            .register_with_id("bound-job", spec)
+            .await
+            .unwrap();
+        let response = router(state.clone())
+            .oneshot(fix_r5_request("DELETE", "/api/sessions/web:bound", None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        assert!(state.scheduler.get("bound-job").await.unwrap().is_some());
     }
 
     #[tokio::test]

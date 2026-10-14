@@ -23,6 +23,61 @@ const MAX_PENDING_EVENTS: usize = 64;
 /// Completion is otherwise inferred from the transcript (an assistant reply after the user row).
 const MAX_REMEMBERED_COMPLETED_INBOUND: usize = 256;
 
+/// A queued Discord message dropped at shutdown has no transcript row, and the live path
+/// already advanced the backfill cursor past it, so neither restart recovery nor backfill
+/// would ever see it again. Moving the cursor back to just before it lets the next
+/// startup backfill fetch and route it.
+async fn rewind_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
+    if event.session.platform != "discord" {
+        return;
+    }
+    let (Some(bot_id), Ok(own_id)) = (
+        event.session.bot_id.as_deref(),
+        event.platform_message_id.trim().parse::<u64>(),
+    ) else {
+        return;
+    };
+    // A debounced batch carries only its last message id; its earlier messages are
+    // constituents of the same delivery and must be refetched too.
+    let earliest_constituent: Option<i64> = match event.delivery_id.as_deref() {
+        Some(delivery_id) => sqlx::query_scalar(
+            "SELECT MIN(CAST(substr(constituent_id, 9) AS INTEGER))
+             FROM delivery_ledger_constituents
+             WHERE parent_delivery_id = ? AND constituent_id LIKE 'discord:%'",
+        )
+        .bind(delivery_id)
+        .fetch_one(pool)
+        .await
+        .ok()
+        .flatten(),
+        None => None,
+    };
+    let message_id = earliest_constituent
+        .and_then(|id| u64::try_from(id).ok())
+        .filter(|id| *id > 0)
+        .map_or(own_id, |id| id.min(own_id));
+    let channel_id = event
+        .session
+        .thread_id
+        .as_deref()
+        .unwrap_or(&event.session.channel_id);
+    let before = message_id.saturating_sub(1).to_string();
+    // Cursor ids are numeric strings; compare as integers so "9" < "10".
+    let result = sqlx::query(
+        "UPDATE discord_bot_cursors SET last_message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE bot_id = ? AND channel_id = ? AND CAST(last_message_id AS INTEGER) >= ?",
+    )
+    .bind(&before)
+    .bind(bot_id)
+    .bind(channel_id)
+    .bind(message_id as i64)
+    .execute(pool)
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(%error, channel_id, "failed to rewind backfill cursor for a dropped queued message");
+    }
+}
+
 pub use crate::agent::AgentBackend;
 pub use crate::agent::AgentBackend as AgentRunner;
 
@@ -872,6 +927,7 @@ impl SessionActor {
                         &Err(OmonError::Multiplexer("session actor shutting down".into())),
                     )
                     .await;
+                    rewind_backfill_cursor(&self.pool, &event).await;
                 }
                 ActorCommand::EventWithAck { ack, .. } => {
                     let _ = ack.send(Err(OmonError::Multiplexer(

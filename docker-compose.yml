@@ -23,6 +23,12 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       APPROVAL_MODE: ${APPROVAL_MODE:-smart}
       RUST_LOG: ${RUST_LOG:-info}
+      # The image ships no omo CLI, so the agent backend is the host's omo app-server.
+      OMON_OMO_AUTOSPAWN: "off"
+      OMON_OMO_APPSERVER_URL: ${OMON_OMO_APPSERVER_URL:-ws://host.docker.internal:19742}
+      OMON_OMO_APPSERVER_AUTH_TOKEN: ${OMON_OMO_APPSERVER_AUTH_TOKEN:-${OMON_OMO_AUTH_TOKEN:-}}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - omon-data:/app/data
       - omon-workspace:/app/workspace

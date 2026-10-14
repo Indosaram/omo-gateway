@@ -911,18 +911,48 @@ pub async fn handle_event(
                 if new_message.content.trim() == "제안" {
                     let pending = proposals.pending(&channel).await?;
                     if !pending.is_empty() {
-                        let text = pending
-                            .iter()
-                            .map(|p| p.display())
-                            .collect::<Vec<_>>()
-                            .join("\n\n");
-                        let message = new_message.channel_id.send_message(&ctx.http,
-                            serenity::CreateMessage::new().content(format!("{text}\n\n이 메시지에 답장으로 '<번호> 해'를 보내 승인하세요."))
-                                .allowed_mentions(crate::lanes::discord_threads::lane_allowed_mentions())).await?;
-                        for proposal in pending {
-                            proposals
-                                .presented(proposal.number, &channel, &message.id.to_string())
+                        // Discord rejects messages over the limit, so the list is packed into
+                        // several messages, split only between proposals, and each proposal is
+                        // bound to the message that shows it so a reply to any chunk approves it.
+                        const FOOTER: &str =
+                            "\n\n이 메시지에 답장으로 '<번호> 해'를 보내 승인하세요.";
+                        let budget = DISCORD_MESSAGE_LIMIT - FOOTER.chars().count();
+                        let mut groups: Vec<(String, Vec<i64>)> = Vec::new();
+                        for proposal in &pending {
+                            let mut entry = proposal.display();
+                            if entry.chars().count() > budget {
+                                entry = entry.chars().take(budget.saturating_sub(1)).collect();
+                                entry.push('…');
+                            }
+                            match groups.last_mut() {
+                                Some((text, numbers))
+                                    if text.chars().count() + 2 + entry.chars().count()
+                                        <= budget =>
+                                {
+                                    text.push_str("\n\n");
+                                    text.push_str(&entry);
+                                    numbers.push(proposal.number);
+                                }
+                                _ => groups.push((entry, vec![proposal.number])),
+                            }
+                        }
+                        for (text, numbers) in groups {
+                            let message = new_message
+                                .channel_id
+                                .send_message(
+                                    &ctx.http,
+                                    serenity::CreateMessage::new()
+                                        .content(format!("{text}{FOOTER}"))
+                                        .allowed_mentions(
+                                            crate::lanes::discord_threads::lane_allowed_mentions(),
+                                        ),
+                                )
                                 .await?;
+                            for number in numbers {
+                                proposals
+                                    .presented(number, &channel, &message.id.to_string())
+                                    .await?;
+                            }
                         }
                     }
                     return Ok(());
@@ -3443,6 +3473,8 @@ impl DiscordEgress {
         };
 
         active.throttler.update(&processed_content, true).await?;
+        // A delivered reply proves the channel works again, so the dead-target probe heals it.
+        self.dead_targets.clear_for_bot(&identity, channel_id);
         *last_sequence = Some(chunk.sequence);
         drop(last_sequence);
 

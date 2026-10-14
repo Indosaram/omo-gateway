@@ -294,16 +294,41 @@ fn record_daemon_pid(listen_url: &str, pid: Option<u32>) {
     if let Some(dir) = path.parent() {
         create_private_dir(dir);
     }
-    if let Err(error) = std::fs::write(&path, pid.to_string()) {
+    // The owner pid lets a later process tell a daemon whose gateway died (reclaim it) from
+    // one a still-running gateway or dashboard is serving (leave it alone).
+    let record = format!("{pid} {}", std::process::id());
+    if let Err(error) = std::fs::write(&path, record) {
         tracing::warn!(path = %path.display(), %error, "failed to record omo app-server pid");
     }
 }
 
+/// The pidfile names a daemon spawned by another omon process that is still running.
+fn daemon_owned_by_other_live_process(listen_url: &str) -> bool {
+    let Some(record) =
+        daemon_pid_path(listen_url).and_then(|path| std::fs::read_to_string(path).ok())
+    else {
+        return false;
+    };
+    record
+        .split_whitespace()
+        .nth(1)
+        .and_then(|owner| owner.parse::<u32>().ok())
+        .is_some_and(|owner| owner != std::process::id() && process_alive(owner))
+}
+
 /// The pid recorded by a previous gateway, if that process is still an
-/// `app-server --listen <listen_url>` daemon. Anything else is left alone.
+/// `app-server --listen <listen_url>` daemon and the process that spawned it is gone.
+/// Anything else is left alone.
 fn leftover_daemon_pid(listen_url: &str) -> Option<u32> {
     let path = daemon_pid_path(listen_url)?;
-    let pid: u32 = std::fs::read_to_string(path).ok()?.trim().parse().ok()?;
+    let record = std::fs::read_to_string(path).ok()?;
+    let mut fields = record.split_whitespace();
+    let pid: u32 = fields.next()?.parse().ok()?;
+    if let Some(owner) = fields.next().and_then(|owner| owner.parse::<u32>().ok()) {
+        if owner != std::process::id() && process_alive(owner) {
+            return None;
+        }
+    }
     let output = std::process::Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
         .output()
@@ -343,6 +368,29 @@ async fn reclaim_leftover_daemon(listen_url: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline && probe_readyz(listen_url, READY_PROBE_TIMEOUT).await {
         sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// The senpi app-server drops turn events after a thread is reloaded unless its
+/// TurnEngine subscription is patched; every omo/senpi reinstall wipes the patch.
+/// None when the bundle is not found (custom install), Some(false) when unpatched.
+fn senpi_subscription_patch_present(chunks_dir: &std::path::Path) -> Option<bool> {
+    let worker = std::fs::read_to_string(chunks_dir.join("session-worker.js")).ok()?;
+    Some(worker.contains("_turnEngineSubscribed"))
+}
+
+fn warn_if_senpi_unpatched() {
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
+    let chunks = std::path::PathBuf::from(home)
+        .join(".bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/chunks");
+    if senpi_subscription_patch_present(&chunks) == Some(false) {
+        tracing::warn!(
+            path = %chunks.display(),
+            "senpi app-server subscription patch is missing (wiped by an omo/senpi update); \
+             stalled turns will be recovered by restarting the app-server, but replies may lag"
+        );
     }
 }
 
@@ -432,8 +480,24 @@ impl OmoDaemonSupervisor {
         if !autospawn_enabled() || !is_local_url(&cfg.appserver_url) {
             return Ok(None);
         }
+        warn_if_senpi_unpatched();
         reclaim_leftover_daemon(&cfg.appserver_url).await;
         if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
+            // A daemon spawned by another live omon process (a standalone dashboard) dies
+            // with that process; supervise the port so this one takes over afterwards.
+            if daemon_owned_by_other_live_process(&cfg.appserver_url) {
+                tracing::info!(url = %cfg.appserver_url, "omo app-server owned by another omon process; supervising for takeover");
+                let token_file = prepare_token_file(cfg)?;
+                let supervisor = Self {
+                    child: Arc::new(Mutex::new(None)),
+                    shutdown: Arc::new(AtomicBool::new(false)),
+                };
+                if let Ok(mut owned) = OWNED_DAEMONS.lock() {
+                    owned.insert(cfg.appserver_url.clone(), Arc::downgrade(&supervisor.child));
+                }
+                supervisor.spawn_watcher(cfg.appserver_url.clone(), bin, token_file);
+                return Ok(Some(supervisor));
+            }
             tracing::debug!(url = %cfg.appserver_url, "external omo app-server already serving");
             return Ok(None);
         }
@@ -555,14 +619,23 @@ impl OmoDaemonSupervisor {
                     return;
                 }
                 // A forked survivor or an external daemon may have taken over
-                // the port; adopt it instead of spawning a child that would
-                // die on bind conflict forever.
+                // the port; use it instead of spawning a child that would die on
+                // bind conflict, but keep supervising: when that daemon goes away
+                // (a standalone dashboard exiting), this gateway respawns its own.
                 if probe_readyz(&url, READY_PROBE_TIMEOUT).await {
                     tracing::info!(
                         url = %url,
                         "port already serving after daemon exit; deferring to the external daemon"
                     );
-                    return;
+                    while probe_readyz(&url, READY_PROBE_TIMEOUT).await {
+                        if shutdown.load(Ordering::Acquire) {
+                            return;
+                        }
+                        sleep(Duration::from_secs(5)).await;
+                    }
+                    failures = 0;
+                    healthy_since = Some(Instant::now());
+                    continue;
                 }
                 match daemon_command(&bin, &url, token_file.as_deref()).spawn() {
                     Ok(child) => {
@@ -951,6 +1024,24 @@ while True:
         );
     }
 
+    #[test]
+    fn senpi_patch_detection_reads_the_worker_bundle() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(senpi_subscription_patch_present(dir.path()), None);
+        std::fs::write(
+            dir.path().join("session-worker.js"),
+            "this.subscribedThreadIds.has(t)",
+        )
+        .unwrap();
+        assert_eq!(senpi_subscription_patch_present(dir.path()), Some(false));
+        std::fs::write(
+            dir.path().join("session-worker.js"),
+            "e.session._turnEngineSubscribed||",
+        )
+        .unwrap();
+        assert_eq!(senpi_subscription_patch_present(dir.path()), Some(true));
+    }
+
     #[tokio::test]
     #[cfg(unix)]
     async fn leftover_daemon_from_a_previous_gateway_is_reclaimed() {
@@ -1023,8 +1114,35 @@ while True:
         assert!(probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await);
         let recorded =
             std::fs::read_to_string(daemon_pid_path(&cfg.appserver_url).unwrap()).unwrap();
-        assert_eq!(Some(recorded.trim().parse::<u32>().unwrap()), owned_pid);
+        let mut fields = recorded.split_whitespace();
+        assert_eq!(
+            fields.next().and_then(|pid| pid.parse::<u32>().ok()),
+            owned_pid
+        );
+        assert_eq!(
+            fields.next().and_then(|owner| owner.parse::<u32>().ok()),
+            Some(std::process::id())
+        );
         supervisor.kill();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn daemon_owned_by_a_live_process_is_not_reclaimed() {
+        if isolated_home("daemon_owned_by_a_live_process_is_not_reclaimed").await {
+            return;
+        }
+        let url = "ws://127.0.0.1:1";
+        let mut owner = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let path = daemon_pid_path(url).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, format!("{} {}", owner.id(), owner.id())).unwrap();
+        assert_eq!(leftover_daemon_pid(url), None);
+        let _ = owner.kill();
+        let _ = owner.wait();
     }
 
     #[tokio::test]

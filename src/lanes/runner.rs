@@ -1334,7 +1334,20 @@ impl LaneRunner {
             .bind(key)
             .fetch_one(&self.pool)
             .await?;
-            let mut quiet_check = tokio::time::interval(std::time::Duration::from_secs(60));
+            // The 20-minute quiet window counts from this turn's start, not from the end of a
+            // previous turn that may have finished long ago (blocked, idle, or gateway down).
+            sqlx::query(
+                "UPDATE lanes SET last_activity_at = ?, stale_posted_at = NULL WHERE key = ? AND status = 'working'",
+            )
+            .bind(chrono::Utc::now())
+            .bind(key)
+            .execute(&self.pool)
+            .await?;
+            // tokio intervals tick immediately; the first quiet check waits one period.
+            let mut quiet_check = tokio::time::interval_at(
+                tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(60),
+            );
             quiet_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut turn_tasks = JoinSet::new();
             let backend = self.backend.clone();

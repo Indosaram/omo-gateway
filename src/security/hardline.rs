@@ -22,7 +22,9 @@ fn build_hardline_rm_path(path_alt: &str) -> String {
 static HARDLINE_PATTERNS: LazyLock<Vec<HardlineRule>> = LazyLock::new(|| {
     let cmdpos = r"(?:^|[\n`]|[$]\()\s*(?:(?:\S*/)?sudo\s+(?:-[^\s]+\s+(?:[^-\s]\S*\s+)?)*)?(?:(?:\S*/)?env\s+(?:-[^\s]+\s+(?:[^-\s=]+\s+)?|\w+=\S*\s+)*)?(?:(?:exec|nohup|setsid|time)\s+)*\s*(?:\S*/)?";
     let rm_prefix = format!(r"{cmdpos}rm\s+(?:[^\s;&|\n]+\s+)*");
-    let hardline_system_dirs = r"/home|/home/\*|/root|/root/\*|/etc|/etc/\*|/usr|/usr/\*|/var|/var/\*|/bin|/bin/\*|/sbin|/sbin/\*|/boot|/boot/\*|/lib|/lib/\*|/System|/System/\*";
+    // `/etc/`, `//etc`, `/./etc/.` and `/etc//` name the same directory as `/etc`.
+    let hardline_system_dirs =
+        r"(?:/+\.?)*/+(?:home|root|etc|usr|var|bin|sbin|boot|lib|System)(?:/+\.?)*(?:/\*)?";
 
     let root_rm_path = build_hardline_rm_path(r"/(?:/|[.]/|[.][.]/)*(?:[.]|[.][.])?\**|/ \*");
     let sys_rm_path = build_hardline_rm_path(hardline_system_dirs);
@@ -267,6 +269,36 @@ mod deny_bypass_tests {
                 match_user_deny_rule(wrapped, &deny),
                 Some("npm publish *"),
                 "wrapper-prefixed command must still be denied: {wrapped}"
+            );
+        }
+    }
+
+    #[test]
+    fn system_directory_spellings_are_all_hardline() {
+        use super::detect_hardline_command;
+        for blocked in [
+            "rm -rf /etc",
+            "rm -rf /etc/",
+            "rm -rf //etc",
+            "rm -rf /./usr/",
+            "rm -rf /var/.",
+            "rm -rf /home/",
+            "rm -rf /etc/*",
+        ] {
+            assert!(
+                detect_hardline_command(blocked).is_some(),
+                "must be hardline: {blocked}"
+            );
+        }
+        for allowed in [
+            "rm -rf /etc/nginx/sites-enabled/old",
+            "rm -rf /usr/local/tmp",
+            "rm -rf /tmp/etc",
+            "rm -rf /etcetera",
+        ] {
+            assert!(
+                detect_hardline_command(allowed).is_none(),
+                "must not be hardline: {allowed}"
             );
         }
     }

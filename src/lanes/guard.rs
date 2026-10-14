@@ -589,6 +589,8 @@ impl GuardWatcher {
 
 pub const GUARD_INTERVAL: Duration = Duration::from_secs(60);
 const LAUNCH_DISCORD_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a failed queued-lane launch waits before the next attempt.
+pub const LAUNCH_RETRY_BACKOFF: Duration = Duration::from_secs(10 * 60);
 
 async fn active_lane_count<'e>(
     executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
@@ -676,12 +678,14 @@ pub async fn retry_queued(
     // list_lanes is newest-first; the longest-waiting lane gets the free slot.
     lanes.reverse();
     for lane in lanes {
-        // A failed launch is not retried (no repeated starter posts) until the lane row changes.
+        // A failed launch is not retried (no repeated starter posts) until the lane row changes
+        // or the backoff passes, so a transient Discord error cannot strand the lane in `queued`.
         let failed_since_change: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key = ? AND kind = 'launch_failed' AND julianday(created_at) >= julianday(?))",
+            "SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key = ? AND kind = 'launch_failed' AND julianday(created_at) >= julianday(?) AND julianday(created_at) > julianday('now') - ?)",
         )
         .bind(&lane.key)
         .bind(lane.updated_at)
+        .bind(LAUNCH_RETRY_BACKOFF.as_secs_f64() / 86_400.0)
         .fetch_one(pool)
         .await?;
         if failed_since_change {

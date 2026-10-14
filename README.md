@@ -191,6 +191,8 @@ cargo run --release
 docker compose up -d
 ```
 
+The image does not include the `omo` CLI, so the container connects to an `omo app-server` running on the host (`OMON_OMO_APPSERVER_URL`, default `ws://host.docker.internal:19742`; set `OMON_OMO_APPSERVER_AUTH_TOKEN` if the server uses `--ws-auth`). Start the host daemon listening on an address the container can reach before `docker compose up`.
+
 SQLite data and the agent workspace persist in the named volumes `omon-data` and `omon-workspace`, which are writable by the image's non-root user (uid 10001). Bind mounts of `./data` and `./workspace` would be root-owned on Linux and break the database.
 
 ### 3. Run as macOS Background Service (LaunchAgent)

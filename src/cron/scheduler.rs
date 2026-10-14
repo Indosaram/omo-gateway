@@ -2794,10 +2794,56 @@ pub fn newest_missed_occurrence(
 fn normalize_cron_expression(expression: &str) -> String {
     let parts: Vec<&str> = expression.split_whitespace().collect();
     if parts.len() == 5 {
-        format!("0 {expression}")
+        let mut fields = parts.clone();
+        let day_of_week = unix_day_of_week_to_crate(parts[4]);
+        fields[4] = &day_of_week;
+        format!("0 {}", fields.join(" "))
     } else {
         expression.to_string()
     }
+}
+
+/// Standard 5-field cron (croniter, crontab, the dashboard picker) numbers weekdays 0-7 with
+/// Sunday as 0 or 7; the `cron` crate numbers them 1-7 with Sunday as 1. Numeric items
+/// (values, ranges, steps) are expanded to the Unix day set and re-emitted as an explicit
+/// crate list; names, `*` and anything unparseable pass through so the crate reports them.
+fn unix_day_of_week_to_crate(field: &str) -> String {
+    fn unix_days(item: &str) -> Option<Vec<u32>> {
+        let (range, step) = match item.split_once('/') {
+            Some((range, step)) => (range, step.parse::<u32>().ok().filter(|s| *s > 0)?),
+            None => (item, 1),
+        };
+        let (start, end) = match range.split_once('-') {
+            Some((start, end)) => (start.parse::<u32>().ok()?, end.parse::<u32>().ok()?),
+            // A bare `n/step` runs from n to Saturday (6), like croniter and `*/step` = 0,2,4,6.
+            None if item.contains('/') => (range.parse::<u32>().ok()?, 6),
+            None => {
+                let day = range.parse::<u32>().ok()?;
+                (day, day)
+            }
+        };
+        (start <= end && end <= 7).then(|| (start..=end).step_by(step as usize).collect())
+    }
+    field
+        .split(',')
+        .map(|item| match unix_days(item) {
+            Some(days) => {
+                let mut crate_days: Vec<u32> = days
+                    .into_iter()
+                    .map(|day| if day == 7 { 1 } else { day + 1 })
+                    .collect();
+                crate_days.sort_unstable();
+                crate_days.dedup();
+                crate_days
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }
+            None => item.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn parse_interval(expression: &str) -> Result<Option<Duration>> {
@@ -2879,6 +2925,55 @@ pub fn next_run_after_failure(
 mod tests {
     use super::*;
 
+    #[test]
+    fn five_field_weekdays_use_unix_numbering() {
+        use chrono::{Datelike, Weekday};
+        // 2026-10-10 is a Saturday.
+        let saturday = DateTime::parse_from_rfc3339("2026-10-10T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut at = saturday;
+        let mut days = Vec::new();
+        for _ in 0..5 {
+            at = next_run("0 9 * * 1-5", at).unwrap();
+            days.push(at.weekday());
+        }
+        assert_eq!(
+            days,
+            [
+                Weekday::Mon,
+                Weekday::Tue,
+                Weekday::Wed,
+                Weekday::Thu,
+                Weekday::Fri
+            ]
+        );
+        assert_eq!(
+            next_run("0 9 * * 0", saturday).unwrap().weekday(),
+            Weekday::Sun
+        );
+        assert_eq!(
+            next_run("0 9 * * 7", saturday).unwrap().weekday(),
+            Weekday::Sun
+        );
+        assert_eq!(
+            next_run("0 9 * * 6,0", saturday).unwrap().weekday(),
+            Weekday::Sun
+        );
+        assert_eq!(
+            next_run("0 9 * * MON", saturday).unwrap().weekday(),
+            Weekday::Mon
+        );
+        assert_eq!(unix_day_of_week_to_crate("5-7"), "1,6,7");
+        assert_eq!(unix_day_of_week_to_crate("0-6/2"), "1,3,5,7");
+        // Unix 1-7/2 = Mon,Wed,Fri,Sun -> crate 2,4,6,1.
+        assert_eq!(unix_day_of_week_to_crate("1-7/2"), "1,2,4,6");
+        assert_eq!(unix_day_of_week_to_crate("7-7"), "1");
+        assert_eq!(unix_day_of_week_to_crate("1/2"), "2,4,6");
+        assert_eq!(unix_day_of_week_to_crate("1,FRI"), "2,FRI");
+        assert_eq!(unix_day_of_week_to_crate("*/2"), "*/2");
+        assert_eq!(unix_day_of_week_to_crate("*"), "*");
+    }
     #[test]
     fn failure_backoff_scales_exponentially_and_clamps() {
         assert_eq!(failure_backoff_duration(0), Duration::ZERO);

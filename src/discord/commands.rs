@@ -1244,7 +1244,9 @@ pub async fn thread(
                 return Ok(());
             }
 
-            let builder = serenity::CreateThread::new(name.trim());
+            // Without a type Discord creates a private thread only the bot can see.
+            let builder =
+                serenity::CreateThread::new(name.trim()).kind(serenity::ChannelType::PublicThread);
             let created_thread = channel_id
                 .create_thread(ctx.serenity_context(), builder)
                 .await?;

@@ -91,7 +91,8 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         done: &str,
         lead: &str,
     ) -> Result<String> {
-        if goal.trim().is_empty() || lead.trim().is_empty() {
+        let lead = lead.trim();
+        if goal.trim().is_empty() || lead.is_empty() {
             return Err(invalid("goal and lead must not be empty"));
         }
         // Same rule as `lanes::cli`: an unparsable lead would be stored and never woken.
@@ -485,7 +486,7 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
             ));
         }
     }
-    let script = "import os,subprocess,sys; os.chdir(sys.argv[1])\ndef git(path,*args):\n r=subprocess.run(['git','-C',path,*args],capture_output=True,text=True)\n if r.returncode: raise RuntimeError(r.stderr)\n return r.stdout\np=subprocess.run(['git','rev-parse','--is-inside-work-tree'],capture_output=True,text=True)\nif p.returncode:\n if 'not a git repository' in p.stderr: sys.exit(0)\n raise RuntimeError(p.stderr)\npaths=[os.getcwd()]+[l[9:] for l in git(os.getcwd(),'worktree','list','--porcelain').splitlines() if l.startswith('worktree ')]\nfor path in dict.fromkeys(paths):\n if git(path,'status','--porcelain','--untracked-files=no').strip(): raise RuntimeError('uncommitted '+path)\n if git(path,'remote').strip() and git(path,'log','--branches','--not','--remotes','--oneline').strip(): raise RuntimeError('unpushed '+path)";
+    let script = "import os,subprocess,sys; os.chdir(sys.argv[1])\ndef git(path,*args):\n r=subprocess.run(['git','-C',path,*args],capture_output=True,text=True)\n if r.returncode: raise RuntimeError(r.stderr)\n return r.stdout\np=subprocess.run(['git','rev-parse','--is-inside-work-tree'],capture_output=True,text=True)\nif p.returncode:\n if 'not a git repository' in p.stderr: sys.exit(0)\n raise RuntimeError(p.stderr)\nstart=float(sys.argv[2]) if len(sys.argv)>2 and sys.argv[2] else None\ncwd=os.getcwd()\ndef include(path):\n if path==cwd or path.startswith(cwd+os.sep): return True\n if not os.path.exists(path): return False\n st=os.stat(path)\n return start is None or getattr(st,'st_birthtime',st.st_ctime)>=start\npaths=[cwd]+[l[9:] for l in git(cwd,'worktree','list','--porcelain').splitlines() if l.startswith('worktree ')]\nfor path in dict.fromkeys(paths):\n if not include(path): continue\n if git(path,'status','--porcelain','--untracked-files=no').strip(): raise RuntimeError('uncommitted '+path)\n if git(path,'remote').strip() and git(path,'log','HEAD','--not','--remotes','--oneline').strip(): raise RuntimeError('unpushed '+path)";
     let output = control
         .output(
             target,
@@ -494,6 +495,10 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
                 "-c".into(),
                 script.into(),
                 lane.cwd.clone(),
+                // Linked worktrees outside the cwd count only if created after the lane started.
+                lane.created_at
+                    .map(|at| format!("{:.3}", at.timestamp_millis() as f64 / 1000.0))
+                    .unwrap_or_default(),
             ],
         )
         .await;

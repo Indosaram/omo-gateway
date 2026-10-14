@@ -823,6 +823,17 @@ async fn run_gateway_with_dashboard(
             });
         validate_agent_backend_env()?;
         let backend_config = OmoBackendConfig::from_env()?.with_workspace_root(workspace.clone());
+        // The Discord path and the dashboard spawn the local daemon; a headless gateway that
+        // skipped this had no app-server at all, so every lane, lead and cron turn failed.
+        let _daemon_supervisor = OmoDaemonSupervisor::ensure(&backend_config).await?;
+        let headless_cron_config =
+            OmoBackendConfig::cron_from_env()?.with_workspace_root(workspace.clone());
+        let _cron_daemon_supervisor =
+            if headless_cron_config.appserver_url == backend_config.appserver_url {
+                None
+            } else {
+                OmoDaemonSupervisor::ensure(&headless_cron_config).await?
+            };
         let mut routes = omon_gateway::try_parse_profile_routes(
             &optional_env("DISCORD_PROFILE_ROUTES").unwrap_or_default(),
         )
@@ -837,11 +848,8 @@ async fn run_gateway_with_dashboard(
             workspace.clone(),
         );
         let cron_backend = Arc::new(
-            OmoBackend::new(
-                OmoBackendConfig::cron_from_env()?.with_workspace_root(workspace.clone()),
-                Arc::new(LocalTranscriptOutput),
-            )
-            .with_pool(pool.clone()),
+            OmoBackend::new(headless_cron_config, Arc::new(LocalTranscriptOutput))
+                .with_pool(pool.clone()),
         );
         let scheduler = CronScheduler::new(
             pool.clone(),

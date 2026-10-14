@@ -439,6 +439,35 @@ async fn pure_prefilter_mail_kakao_imessage_rules() {
     multi.room_type = Some("MultiChat".into());
     assert_eq!(rules.drop_reason(&multi), None);
 
+    let mut own_message = item(InboxSourceKind::Kakao, "k-own", "오늘만좀봐줘요");
+    own_message.room_type = Some("DirectChat".into());
+    own_message.author = Some("윤인도".into());
+    assert_eq!(rules.drop_reason(&own_message), Some("kakao_owner_author"));
+
+    let mut otp = item(
+        InboxSourceKind::Imessage,
+        "i-otp",
+        "[국제발신] G-683968 - Google 인증 코드입니다.",
+    );
+    otp.author = Some("00614664531".into());
+    assert_eq!(rules.drop_reason(&otp), Some("imessage_otp"));
+
+    let mut stripe = item(
+        InboxSourceKind::Imessage,
+        "i-stripe",
+        "Your Stripe verification code is: 087462.",
+    );
+    stripe.author = Some("+447873398241".into());
+    assert_eq!(rules.drop_reason(&stripe), Some("imessage_otp"));
+
+    let mut request = item(
+        InboxSourceKind::Imessage,
+        "i-request",
+        "강의자료는 jhkj1224@korea.kr로 보내주시면 됩니다",
+    );
+    request.author = Some("+821099995218".into());
+    assert_eq!(rules.drop_reason(&request), None);
+
     // iMessage rules
     let mut shortcode = item(
         InboxSourceKind::Imessage,
