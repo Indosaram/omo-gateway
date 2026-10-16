@@ -171,10 +171,14 @@ async fn execute(command: SessionsCommand) -> Result<i32, ControlError> {
         }
         SessionsCommand::WatchTick { once: _ } => {
             let database = database().await?;
-            let mut watcher = Watcher::new(
+            let mut watcher = Watcher::with_policy(
                 database.pool().clone(),
                 control,
                 std::time::Duration::from_secs(60),
+                watch::NotifyPolicy {
+                    notify_after: std::time::Duration::ZERO,
+                    quiet_hours: None,
+                },
             );
             let notices = watcher.tick().await.map_err(failure)?;
             for notice in notices {

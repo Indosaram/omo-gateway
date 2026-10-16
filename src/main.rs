@@ -1426,10 +1426,11 @@ async fn run_gateway_with_dashboard(
             SessionKey::from_storage_key(&default_lead()),
         ) {
             (Ok(control), Ok(owner_dm)) => {
-                let watcher = omon_gateway::sessions::watch::Watcher::new(
+                let watcher = omon_gateway::sessions::watch::Watcher::with_policy(
                     pool.clone(),
                     control,
                     omon_gateway::sessions::watch::interval_from_env(),
+                    omon_gateway::sessions::watch::NotifyPolicy::from_env(),
                 );
                 lane_tasks.spawn(watcher.serve(
                     discord_egress_dispatcher.clone(),

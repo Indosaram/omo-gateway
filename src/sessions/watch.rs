@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Timelike, Utc};
 use sqlx::SqlitePool;
 use tokio_util::sync::CancellationToken;
 
@@ -13,6 +13,65 @@ use super::registry::CommandRunner;
 use crate::{OutboundAction, OutboundDispatcher, Result, SessionKey};
 
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
+/// A question or blocked session is only reported after it has gone unanswered this long,
+/// so the owner is not pinged for questions they are about to answer at the terminal.
+pub const DEFAULT_NOTIFY_AFTER: Duration = Duration::from_secs(30 * 60);
+/// Owner sleep window in KST (start hour inclusive, end hour exclusive). Nothing is sent
+/// inside it; held notices go out after it ends if still unanswered.
+pub const DEFAULT_QUIET_HOURS: (u32, u32) = (0, 8);
+const KST: TimeDelta = TimeDelta::hours(9);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotifyPolicy {
+    pub notify_after: Duration,
+    pub quiet_hours: Option<(u32, u32)>,
+}
+
+impl Default for NotifyPolicy {
+    fn default() -> Self {
+        Self {
+            notify_after: DEFAULT_NOTIFY_AFTER,
+            quiet_hours: Some(DEFAULT_QUIET_HOURS),
+        }
+    }
+}
+
+impl NotifyPolicy {
+    /// `OMON_SESSION_NOTIFY_AFTER_SECS` (default 1800) and `OMON_SESSION_QUIET_HOURS`
+    /// (`"0-8"` KST by default, `"off"` disables).
+    pub fn from_env() -> Self {
+        let mut policy = Self::default();
+        if let Some(secs) = std::env::var("OMON_SESSION_NOTIFY_AFTER_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+        {
+            policy.notify_after = Duration::from_secs(secs);
+        }
+        if let Ok(value) = std::env::var("OMON_SESSION_QUIET_HOURS") {
+            policy.quiet_hours = parse_quiet_hours(&value);
+        }
+        policy
+    }
+
+    fn is_quiet(&self, now: DateTime<Utc>) -> bool {
+        let Some((start, end)) = self.quiet_hours else {
+            return false;
+        };
+        let hour = (now + KST).hour();
+        if start <= end {
+            (start..end).contains(&hour)
+        } else {
+            hour >= start || hour < end
+        }
+    }
+}
+
+fn parse_quiet_hours(value: &str) -> Option<(u32, u32)> {
+    let (start, end) = value.trim().split_once('-')?;
+    let start = start.trim().parse::<u32>().ok().filter(|h| *h < 24)?;
+    let end = end.trim().parse::<u32>().ok().filter(|h| *h <= 24)?;
+    (start != end).then_some((start, end % 24))
+}
 
 pub async fn watch(pool: &SqlitePool, target: &str) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO session_watches(target, added_at) VALUES(?, ?)")
@@ -52,6 +111,8 @@ pub struct Watcher<R> {
     control: SessionControl<R>,
     interval: Duration,
     streaming: Option<HashMap<String, bool>>,
+    policy: NotifyPolicy,
+    first_seen: HashMap<String, DateTime<Utc>>,
 }
 
 fn display_name(session: &LiveSession) -> &str {
@@ -72,6 +133,16 @@ fn session_notices(
     let name = compact(display_name(session), 40);
     let shown = format!("{machine}:{}", short_id(&session.session_id));
     let mut notices = Vec::new();
+    if session.blocking_question && session.questions.is_empty() {
+        notices.push(Notice {
+            dedupe_key: format!("b:{target}:{}", session.message_count),
+            target: target.to_owned(),
+            kind: "blocked".into(),
+            text: format!(
+                "⛔ {machine} · {name}: 터미널에서 답해야 하는 질문을 기다리고 있어요 (`{shown}`)"
+            ),
+        });
+    }
     for pending in &session.questions {
         let first = pending.questions.first();
         let question = first
@@ -82,24 +153,19 @@ fn session_notices(
             .filter(|options| !options.is_empty())
             .map(|options| format!("\n선택지: {options}"))
             .unwrap_or_default();
+        let question = compact(&question.replace(['\n', '\r'], " "), 160);
+        // Keyed by question text, not request id: an agent that re-asks the same question
+        // (new request id) must not re-notify.
+        let hint = if session.blocking_question {
+            "\n→ 터미널에서 답해 주세요".to_owned()
+        } else {
+            format!("\n→ `/sessions answer target:{shown} text:…`")
+        };
         notices.push(Notice {
-            dedupe_key: format!("q:{target}:{}", pending.request_id),
+            dedupe_key: format!("q:{target}:{}", short_hash(&question)),
             target: target.to_owned(),
             kind: "question".into(),
-            text: format!(
-                "❓ {machine} · {name}: {}{options}\n→ `/sessions answer target:{shown} text:…`",
-                compact(&question.replace(['\n', '\r'], " "), 160)
-            ),
-        });
-    }
-    if session.blocking_question {
-        notices.push(Notice {
-            dedupe_key: format!("b:{target}:{}", session.message_count),
-            target: target.to_owned(),
-            kind: "blocked".into(),
-            text: format!(
-                "⛔ {machine} · {name}: 터미널에서 답해야 하는 질문을 기다리고 있어요 (`{shown}`)"
-            ),
+            text: format!("❓ {machine} · {name}: {question}{options}{hint}"),
         });
     }
     if watched && was_streaming == Some(true) && !session.streaming {
@@ -116,13 +182,30 @@ fn session_notices(
     notices
 }
 
+fn short_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(text.as_bytes());
+    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 impl<R: CommandRunner + 'static> Watcher<R> {
     pub fn new(pool: SqlitePool, control: SessionControl<R>, interval: Duration) -> Self {
+        Self::with_policy(pool, control, interval, NotifyPolicy::default())
+    }
+
+    pub fn with_policy(
+        pool: SqlitePool,
+        control: SessionControl<R>,
+        interval: Duration,
+        policy: NotifyPolicy,
+    ) -> Self {
         Self {
             pool,
             control,
             interval,
             streaming: None,
+            policy,
+            first_seen: HashMap::new(),
         }
     }
 
@@ -130,6 +213,12 @@ impl<R: CommandRunner + 'static> Watcher<R> {
     /// tick of a process only records baselines; question notices are deduplicated in SQLite
     /// and therefore never repeat across restarts.
     pub async fn tick(&mut self) -> Result<Vec<Notice>> {
+        self.tick_at(Utc::now()).await
+    }
+
+    /// Questions and blocked sessions are held until they stay unanswered for
+    /// `notify_after`; nothing is released during quiet hours.
+    pub async fn tick_at(&mut self, now: DateTime<Utc>) -> Result<Vec<Notice>> {
         let overview = collect(&self.control, 300).await;
         let watched = watched(&self.pool).await?;
         let previous = self.streaming.take();
@@ -158,8 +247,26 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             }
         }
         self.streaming = Some(current);
+        let present: std::collections::HashSet<&str> =
+            notices.iter().map(|n| n.dedupe_key.as_str()).collect();
+        self.first_seen
+            .retain(|key, _| present.contains(key.as_str()));
+        let quiet = self.policy.is_quiet(now);
+        let wait = TimeDelta::from_std(self.policy.notify_after).unwrap_or(TimeDelta::zero());
         let mut fresh = Vec::new();
         for notice in notices {
+            if notice.kind != "completion" {
+                let seen = *self
+                    .first_seen
+                    .entry(notice.dedupe_key.clone())
+                    .or_insert(now);
+                if now - seen < wait {
+                    continue;
+                }
+            }
+            if quiet {
+                continue;
+            }
             let sent: bool = sqlx::query_scalar(
                 "SELECT EXISTS(SELECT 1 FROM session_watch_notices WHERE dedupe_key = ?)",
             )
@@ -307,11 +414,99 @@ mod tests {
     }
 
     fn watcher(pool: &SqlitePool, runner: Arc<Scripted>) -> Watcher<Scripted> {
-        Watcher::new(
+        policy_watcher(
+            pool,
+            runner,
+            NotifyPolicy {
+                notify_after: Duration::ZERO,
+                quiet_hours: None,
+            },
+        )
+    }
+
+    fn policy_watcher(
+        pool: &SqlitePool,
+        runner: Arc<Scripted>,
+        policy: NotifyPolicy,
+    ) -> Watcher<Scripted> {
+        Watcher::with_policy(
             pool.clone(),
             SessionControl::new(runner, vec!["omarchy".into()]),
             DEFAULT_INTERVAL,
+            policy,
         )
+    }
+
+    fn kst(hour: u32, minute: u32) -> DateTime<Utc> {
+        use chrono::TimeZone;
+        Utc.with_ymd_and_hms(2026, 10, 16, hour, minute, 0).unwrap() - KST
+    }
+
+    #[tokio::test]
+    async fn question_is_held_until_unanswered_for_notify_after() {
+        let pool = pool().await;
+        let runner = Arc::new(Scripted {
+            snapshot: Mutex::new(live(false, true, 3)),
+            remote_down: false,
+        });
+        let mut watcher = policy_watcher(&pool, runner.clone(), NotifyPolicy::default());
+        assert!(watcher.tick_at(kst(14, 0)).await.unwrap().is_empty());
+        assert!(watcher.tick_at(kst(14, 29)).await.unwrap().is_empty());
+        let notices = watcher.tick_at(kst(14, 30)).await.unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].kind, "question");
+
+        // Answered before the wait ran out: never sent.
+        let mut answered = policy_watcher(&pool, runner.clone(), NotifyPolicy::default());
+        *runner.snapshot.lock() = live(false, true, 3);
+        answered.tick_at(kst(15, 0)).await.unwrap();
+        *runner.snapshot.lock() = live(false, false, 4);
+        assert!(answered.tick_at(kst(15, 40)).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn quiet_hours_hold_notices_until_morning() {
+        let pool = pool().await;
+        let runner = Arc::new(Scripted {
+            snapshot: Mutex::new(live(false, true, 3)),
+            remote_down: false,
+        });
+        let mut watcher = policy_watcher(&pool, runner, NotifyPolicy::default());
+        assert!(watcher.tick_at(kst(1, 0)).await.unwrap().is_empty());
+        assert!(watcher.tick_at(kst(3, 0)).await.unwrap().is_empty());
+        assert!(watcher.tick_at(kst(7, 59)).await.unwrap().is_empty());
+        assert_eq!(watcher.tick_at(kst(8, 0)).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn reasking_the_same_question_does_not_notify_again() {
+        let pool = pool().await;
+        let runner = Arc::new(Scripted {
+            snapshot: Mutex::new(live(false, true, 3)),
+            remote_down: false,
+        });
+        let mut watcher = watcher(&pool, runner.clone());
+        let notices = watcher.tick().await.unwrap();
+        assert_eq!(notices.len(), 1);
+        watcher.mark_sent(&notices[0]).await.unwrap();
+        let mut reasked = live(false, true, 9);
+        reasked["sessions"][0]["questions"][0]["request_id"] = json!("toolu_2");
+        *runner.snapshot.lock() = reasked;
+        assert!(watcher.tick().await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn quiet_hours_parse_and_wrap_midnight() {
+        assert_eq!(parse_quiet_hours("0-8"), Some((0, 8)));
+        assert_eq!(parse_quiet_hours("23-7"), Some((23, 7)));
+        assert_eq!(parse_quiet_hours("off"), None);
+        let policy = NotifyPolicy {
+            notify_after: Duration::ZERO,
+            quiet_hours: Some((23, 7)),
+        };
+        assert!(policy.is_quiet(kst(23, 30)));
+        assert!(policy.is_quiet(kst(6, 59)));
+        assert!(!policy.is_quiet(kst(7, 0)));
     }
 
     #[tokio::test]
@@ -397,8 +592,10 @@ mod tests {
         let notices = session_notices(&session, "omarchy:01a13dca-860b-799b", false, None);
         assert_eq!(
             notices.iter().map(|n| n.kind.as_str()).collect::<Vec<_>>(),
-            ["question", "blocked"]
+            ["question"],
+            "one message per question, not a second blocked ping"
         );
-        assert!(notices[1].text.contains("터미널"));
+        assert!(notices[0].text.contains("터미널"));
+        assert!(!notices[0].text.contains("/sessions answer"));
     }
 }
