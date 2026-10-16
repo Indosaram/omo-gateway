@@ -219,7 +219,7 @@ pub async fn session_purpose(
     if session.key.channel_id == "cron:inbox-triage" {
         return Ok(Some(Purpose::InboxWrite));
     }
-    if session.key.platform == "discord" {
+    if session.key.platform == "discord" || session.key.platform == crate::slack::PLATFORM {
         return Ok(Some(Purpose::Lead));
     }
     Ok(None)

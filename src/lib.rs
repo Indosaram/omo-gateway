@@ -16,6 +16,7 @@ pub mod profiles;
 pub mod readiness;
 pub mod security;
 pub mod sessions;
+pub mod slack;
 pub mod storage;
 pub mod tools;
 pub mod usage;

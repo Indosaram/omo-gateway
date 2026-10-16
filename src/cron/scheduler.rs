@@ -2354,32 +2354,40 @@ impl CronScheduler {
         destination: &crate::HermesOrigin,
         content: &str,
     ) -> Result<()> {
-        let channel_id = destination.chat_id.parse::<u64>().map_err(|_| {
-            OmonError::Config(format!(
-                "invalid Discord channel ID: {}",
-                destination.chat_id
-            ))
-        })?;
-        let notification = CronNotification {
-            job_id: job.id.clone(),
-            channel_id,
-            content: content.to_string(),
-            triggered_at: (self.clock)(),
+        let platform = if destination.platform.eq_ignore_ascii_case("slack") {
+            "slack"
+        } else {
+            "discord"
         };
-        let _ = self.notifications.send(notification);
+        if platform == "discord" {
+            let channel_id = destination.chat_id.parse::<u64>().map_err(|_| {
+                OmonError::Config(format!(
+                    "invalid Discord channel ID: {}",
+                    destination.chat_id
+                ))
+            })?;
+            let notification = CronNotification {
+                job_id: job.id.clone(),
+                channel_id,
+                content: content.to_string(),
+                triggered_at: (self.clock)(),
+            };
+            let _ = self.notifications.send(notification);
+        }
         let profile = job.profile();
         let mut session = job
             .session_key
             .as_deref()
             .and_then(|key| SessionKey::from_storage_key(key).ok())
             .filter(|parsed| {
-                parsed.channel_id == destination.chat_id
+                parsed.platform == platform
+                    && parsed.channel_id == destination.chat_id
                     && parsed.thread_id.as_deref() == destination.thread_id.as_deref()
                     && (destination.bot_id.is_none() || parsed.bot_id == destination.bot_id)
             })
             .unwrap_or_else(|| {
                 let session = SessionKey::new(
-                    "discord",
+                    platform,
                     None::<String>,
                     destination.chat_id.clone(),
                     destination.thread_id.clone(),
@@ -2393,7 +2401,7 @@ impl CronScheduler {
                     None => session,
                 }
             });
-        if session.bot_id.is_none() && !profile.is_empty() {
+        if platform == "discord" && session.bot_id.is_none() && !profile.is_empty() {
             session = session.with_bot_id(profile);
         }
 
@@ -2575,12 +2583,20 @@ pub fn delivery_destinations(payload: &Value) -> Result<Vec<crate::HermesOrigin>
             if part.is_empty() || part == "local" {
                 continue;
             }
+            if let Some(slack) = super::store::slack_destination(part, None) {
+                let key = ("slack".to_string(), slack.chat_id.clone(), slack.thread_id.clone());
+                if seen.insert(key) {
+                    destinations.push(slack);
+                }
+                continue;
+            }
             if part == "origin" || part == "all" || part == "discord" {
                 if let Some(origin_val) = payload.get("origin") {
                     if let Ok(origin) =
                         serde_json::from_value::<crate::HermesOrigin>(origin_val.clone())
                     {
-                        if origin.platform.eq_ignore_ascii_case("discord")
+                        if (origin.platform.eq_ignore_ascii_case("discord")
+                            || origin.platform.eq_ignore_ascii_case("slack"))
                             && !origin.chat_id.is_empty()
                         {
                             let key = (

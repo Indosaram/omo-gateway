@@ -1175,10 +1175,23 @@ async fn run_gateway_with_dashboard(
             .with_default_model(config.default_model.clone())
             .with_workspace_root(config.workspace_root.clone()),
     );
-    let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = discord_egress.clone();
-    shared_dispatcher.set(discord_egress.clone()).await;
+    let slack_config =
+        omon_gateway::slack::SlackConfig::from_env(&config.workspace_root).map(Arc::new);
+    let slack_egress = slack_config.as_ref().map(|slack| {
+        Arc::new(omon_gateway::slack::SlackEgress::new(
+            omon_gateway::slack::SlackApi::new(slack.bot_token.clone()),
+        ))
+    });
+    let mut platform_router =
+        omon_gateway::multiplexer::PlatformRouter::new(discord_egress.clone());
+    if let Some(slack_egress) = &slack_egress {
+        platform_router =
+            platform_router.with_platform(omon_gateway::slack::PLATFORM, slack_egress.clone());
+    }
+    let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = Arc::new(platform_router);
+    shared_dispatcher.set(discord_egress_dispatcher.clone()).await;
     approval_requester
-        .set_dispatcher(discord_egress.clone())
+        .set_dispatcher(discord_egress_dispatcher.clone())
         .await;
     approval_requester
         .set_heartbeat(multiplexer.activity_heartbeat())
@@ -1192,7 +1205,8 @@ async fn run_gateway_with_dashboard(
     let imported = cron_sync.sync().await?;
     info!(imported, "synchronized Hermes cron stores");
 
-    let recovered = recover_pending_delivery_obligations(&pool, discord_egress.clone()).await?;
+    let recovered =
+        recover_pending_delivery_obligations(&pool, discord_egress_dispatcher.clone()).await?;
     info!(
         recovered,
         "recovered pending outbound delivery obligations on boot"
@@ -1259,7 +1273,7 @@ async fn run_gateway_with_dashboard(
                 cron_script_timeout_secs: config.cron_script_timeout_secs,
             }),
         }),
-        discord_egress,
+        discord_egress_dispatcher.clone(),
     )
     .with_hermes_sync(cron_sync);
     // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
@@ -1344,6 +1358,7 @@ async fn run_gateway_with_dashboard(
             "invalid primary Discord bot identity {default_bot_id}"
         ))
     })?);
+    let approval_guard_for_slack = approval_guard.clone();
     let adapter = DiscordAdapter::new(poise_data.clone()).with_approval_guard(approval_guard);
 
     let mut clients = Vec::new();
@@ -1466,6 +1481,34 @@ async fn run_gateway_with_dashboard(
         .await;
         dashboard_server =
             Some(dashboard::spawn_server(settings, state, dashboard_shutdown.clone()).await?);
+    }
+
+    if let (Some(slack_config), Some(slack_egress)) = (slack_config.clone(), slack_egress.clone()) {
+        match omon_gateway::slack::runtime::build(omon_gateway::slack::runtime::SlackDeps {
+            config: slack_config,
+            egress: slack_egress,
+            commands: omon_gateway::slack::commands::SlackCommandDeps {
+                multiplexer: multiplexer.clone(),
+                pool: pool.clone(),
+                approvals: approval_guard_for_slack.clone(),
+                tools: poise_data.tools.clone(),
+                mcp_endpoints: poise_data.mcp_endpoints.clone(),
+                tool_registry: poise_data.tool_registry.clone(),
+                llm: poise_data.llm.clone(),
+                started_at: poise_data.started_at,
+            },
+        })
+        .await
+        {
+            Ok(runtime) => {
+                info!(bot = %runtime.bot_user_id, team = %runtime.team_id, "omo-gateway listening on Slack");
+                lane_tasks.spawn(omon_gateway::slack::runtime::supervise(
+                    Arc::new(runtime),
+                    lane_shutdown.clone(),
+                ));
+            }
+            Err(error) => warn!(%error, "Slack is configured but could not start; Discord continues"),
+        }
     }
 
     let mut join_set = tokio::task::JoinSet::new();

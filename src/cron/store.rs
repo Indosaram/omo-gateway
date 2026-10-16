@@ -645,6 +645,14 @@ impl HermesJob {
                 continue;
             }
 
+            if let Some(slack) = slack_destination(trimmed, bot_id.as_ref()) {
+                let key = ("slack".to_string(), slack.chat_id.clone(), slack.thread_id.clone());
+                if seen.insert(key) {
+                    destinations.push(slack);
+                }
+                continue;
+            }
+
             let is_discord_prefixed = trimmed
                 .get(..8)
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("discord:"));
@@ -719,10 +727,12 @@ impl HermesJob {
             {
                 let mut resolved = false;
                 if let Some(ref origin) = self.origin {
-                    if origin.platform.eq_ignore_ascii_case("discord") && !origin.chat_id.is_empty()
+                    if (origin.platform.eq_ignore_ascii_case("discord")
+                        || origin.platform.eq_ignore_ascii_case("slack"))
+                        && !origin.chat_id.is_empty()
                     {
                         let key = (
-                            "discord".to_string(),
+                            origin.platform.to_ascii_lowercase(),
                             origin.chat_id.clone(),
                             origin.thread_id.clone(),
                         );
@@ -805,6 +815,32 @@ impl HermesJob {
         let targets = self.discord_destinations()?;
         Ok(targets.into_iter().next())
     }
+}
+
+/// `slack:<channel>` or `slack:<channel>:<thread_ts>`; Slack ids are not numeric, so this must
+/// run before the Discord parsers that treat `a:b` as numeric channel and thread ids.
+pub(crate) fn slack_destination(target: &str, bot_id: Option<&String>) -> Option<HermesOrigin> {
+    let rest = target
+        .get(..6)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("slack:"))
+        .map(|_| target[6..].trim())?;
+    let (chat_id, thread_id) = match rest.split_once(':') {
+        Some((channel, thread)) => (channel.trim(), Some(thread.trim()).filter(|t| !t.is_empty())),
+        None => (rest, None),
+    };
+    let chat_id = chat_id.trim_start_matches('#');
+    if chat_id.is_empty() {
+        return None;
+    }
+    Some(HermesOrigin {
+        platform: "slack".into(),
+        chat_id: chat_id.to_owned(),
+        thread_id: thread_id.map(str::to_owned),
+        user_id: None,
+        chat_name: None,
+        bot_id: bot_id.cloned(),
+        extra: HashMap::new(),
+    })
 }
 
 #[derive(Clone, Debug)]

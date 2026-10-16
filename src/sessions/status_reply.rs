@@ -47,6 +47,10 @@ pub fn owner_id() -> String {
 }
 
 pub fn owner_dm(key: &SessionKey, author: &str, owner: &str) -> bool {
+    if key.platform == crate::slack::PLATFORM {
+        let slack_owner = crate::slack::owner_id();
+        return author == slack_owner && key.guild_id.is_none() && key.user_id == slack_owner;
+    }
     author == owner
         && key.guild_id.is_none()
         && ((key.platform == "discord" && key.user_id == owner)

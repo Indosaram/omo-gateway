@@ -311,6 +311,19 @@ impl Tool for CronTool {
                     }
                     args["_session_key"] = Value::String(session.storage_key());
                 }
+                if session.platform.eq_ignore_ascii_case("slack")
+                    && (args.get("deliver").is_none()
+                        || args.get("deliver").and_then(Value::as_str) == Some("local"))
+                {
+                    args["deliver"] = Value::String(match &session.thread_id {
+                        Some(thread) => format!("slack:{}:{thread}", session.channel_id),
+                        None => format!("slack:{}", session.channel_id),
+                    });
+                    if let Some(ref bid) = session.bot_id {
+                        args["bot_id"] = Value::String(bid.clone());
+                    }
+                    args["_session_key"] = Value::String(session.storage_key());
+                }
             }
         }
         self.execute(args).await

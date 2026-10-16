@@ -1161,7 +1161,7 @@ impl SessionActor {
             }
         }
         if event.origin == crate::EventOrigin::User
-            && event.session.platform == "discord"
+            && (event.session.platform == "discord" || event.session.platform == crate::slack::PLATFORM)
             && !event.platform_message_id.is_empty()
         {
             let index = crate::MessageSearchIndex::new(self.pool.clone());
@@ -1248,6 +1248,9 @@ async fn discard_unfinished_inbound(
 }
 
 fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
+    if key.platform == crate::slack::PLATFORM {
+        return key.guild_id.is_none() && key.user_id == crate::slack::owner_id();
+    }
     if key.platform != "discord" {
         return false;
     }

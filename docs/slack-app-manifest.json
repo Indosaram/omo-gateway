@@ -1,0 +1,169 @@
+{
+  "display_information": {
+    "name": "OmOMeow",
+    "description": "omo-gateway personal agent",
+    "background_color": "#2c2d30"
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "OmOMeow",
+      "always_online": true
+    },
+    "slash_commands": [
+      {
+        "command": "/omo-model",
+        "description": "omo-gateway model",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-reset",
+        "description": "omo-gateway reset",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-stop",
+        "description": "omo-gateway stop",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-status",
+        "description": "omo-gateway status",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-tools",
+        "description": "omo-gateway tools",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-skill",
+        "description": "omo-gateway skill",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-skills",
+        "description": "omo-gateway skills",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-memory",
+        "description": "omo-gateway memory",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-cron",
+        "description": "omo-gateway cron",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-steer",
+        "description": "omo-gateway steer",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-undo",
+        "description": "omo-gateway undo",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-retry",
+        "description": "omo-gateway retry",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-compress",
+        "description": "omo-gateway compress",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-title",
+        "description": "omo-gateway title",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-thread",
+        "description": "omo-gateway thread",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-deny",
+        "description": "omo-gateway deny",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-yolo",
+        "description": "omo-gateway yolo",
+        "usage_hint": "[args]",
+        "should_escape": false
+      },
+      {
+        "command": "/omo-sessions",
+        "description": "omo-gateway sessions",
+        "usage_hint": "[args]",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "chat:write.public",
+        "commands",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "reactions:read",
+        "reactions:write",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}
