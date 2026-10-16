@@ -1,0 +1,3 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions interrupt local:01a142d8-f428-74b8-aaf0-3e8e336bce6c
+{"error":"session command failed (4): {\"ok\": false, \"error\": \"unknown_session\"}","ok":false}
+rc=4

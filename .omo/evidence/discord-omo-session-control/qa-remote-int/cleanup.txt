@@ -1,0 +1,3 @@
+tmux kill rc=0
+rm rc=0
+tmux gone

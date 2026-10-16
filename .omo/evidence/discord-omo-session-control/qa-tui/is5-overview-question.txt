@@ -1,0 +1,26 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions overview
+🖥️ local — 작업 중 2 · 답변 대기 2 · 대기 11
+🟢 The user explicitly invoked the  · ~/code/project/omon-gateway · 9초 전 (KST) · `local:01a1428d-5e53`
+  ↳ IS-4 needs a rerun. The interrupt itself returned `ok`, but the `sleep 240` was launched a
+🟢 main 브랜치 머지 상태 확인 · ~/code/project · 12초 전 (KST) · `local:01a13ef3-c94a`
+  ↳ Waiting on the monitors.
+❓ omon-qa-tui · /private/var/folders/zh/7cc25lt91b1_ · 27초 전 (KST) · `local:01a142df-89f7`
+  ↳ Pick one [Alpha] [Beta]
+❓ CLIProxyAPI 업스트림 기능 캐시 프록시 비교 · /Volumes/T9-Mac/project/mahoquot · 9분 전 (KST) · `local:01a128b6-228f`
+  ↳ 계획 42개 중 F2 하나만 남았습니다. Mac의 54545를 잡고 있는 ssh 터널 서비스(launchd 자동 재시작, 18801 등 포워딩)를 잠깐 내렸다 올
+⚪ Update aside RE run results · `local:01a13e55-c122`
+⚪ Find past motion graphics se · `local:01a13f08-0289`
+⚪ Review stalled build session · `local:01a1402b-6112`
+⚪ 브랜드 컨셉과 계정 생성 계획 · `local:01a0e6c8-ee3b`
+⚪ Oliver Heldens AI Music Prod · `local:01a11b4f-8aeb`
+⚪ aisde RE 결과 커밋 여부 확인 · `local:01a13e56-4211`
+⚪ Research cmux orca herdr use · `local:01a13a7d-1d76`
+⚪ 세션 유실 시 재연결 재시도 점검 · `local:01a134db-3a8c`
+… 외 3개 대기
+🖥️ omarchy — 작업 중 1 · 답변 대기 0 · 대기 3
+🟢 Fix CPU and memory waste issues · ~/mhc · 24초 전 (KST) · `omarchy:01a13dca-860b`
+  ↳ result and every tool argument. It then cut the result to a 400–600 character head. A larg
+⚪ Verify mhc build runs · `omarchy:01a1401b-cecc`
+⚪ Fix CPU and memory leaks · `omarchy:01a13e32-4d99`
+⚪ Diagnose slow mhc startup ti · `omarchy:01a13e03-2981`
+rc=0

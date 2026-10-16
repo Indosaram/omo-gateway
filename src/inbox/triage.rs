@@ -18,6 +18,8 @@ pub const BATCH_SIZE: usize = 20;
 /// 6000-char cap below still bounds each turn.
 pub const WRITING_BATCH_SIZE: usize = BATCH_SIZE;
 pub const BATCH_WINDOW: Duration = Duration::from_secs(120);
+/// Messages received longer ago than this are filed as fyi without a model call.
+pub const STALE_AFTER_HOURS: i64 = 24;
 const INSTRUCTIONS: &str = "owner_must_act = needs the owner's own decision, signature, payment or a personal reply; bot_can_handle = a coding/ops task an agent can do alone without speaking as the owner; fyi = information only; ignore = ads/promotions";
 const OPTIONS: &[&str] = &["owner_must_act", "bot_can_handle", "fyi", "ignore"];
 
@@ -57,7 +59,7 @@ impl Class {
             )),
         }
     }
-    fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Owner => "owner",
             Self::Bot => "bot",
@@ -65,6 +67,13 @@ impl Class {
             Self::Ignore => "ignore",
         }
     }
+}
+
+/// Fixed Korean fallback reason used when the reason writer times out or fails (incident 2026-10-16).
+pub const FALLBACK_REASON_PREFIX: &str = "자동 분류(사유 작성 실패): ";
+
+pub fn fallback_reason(class: Class) -> String {
+    format!("{}{}", FALLBACK_REASON_PREFIX, class.as_str())
 }
 
 #[derive(Debug, Serialize)]
@@ -216,10 +225,73 @@ impl Triage {
         Ok(stored)
     }
 
+    /// Batches actionable writing items and requests reasons + proposed actions from the writer.
+    ///
+    /// Incident 2026-10-16: writer turn timeouts or malformed JSON returned from this method
+    /// must be caught and logged rather than aborting triage, so that jev classifications
+    /// still get persisted with a fallback reason instead of entering an infinite retry loop.
+    async fn write_batch(&self, chunk: &[WritingItem]) -> Result<Vec<WritingDecision>> {
+        let mut writing = chunk
+            .iter()
+            .map(|item| WritingItem {
+                id: item.id.clone(),
+                class: item.class,
+                text: item.text.clone(),
+            })
+            .collect::<Vec<_>>();
+        while serde_json::to_string(&writing)
+            .map_err(|error| OmonError::Config(error.to_string()))?
+            .chars()
+            .count()
+            > 6000
+        {
+            for item in &mut writing {
+                item.text = item
+                    .text
+                    .chars()
+                    .take(item.text.chars().count() / 2)
+                    .collect();
+            }
+        }
+        let raw = self.writer.write(&writing).await?;
+        let value: serde_json::Value =
+            serde_json::from_str(&raw).map_err(|error| OmonError::Config(error.to_string()))?;
+        let rows = value
+            .as_array()
+            .ok_or_else(|| OmonError::Config("inbox response must be an array".into()))?;
+        if rows.iter().any(|row| {
+            !row.as_object()
+                .is_some_and(|o| o.contains_key("proposed_action"))
+        }) {
+            return Err(OmonError::Config(
+                "inbox response missing proposed_action".into(),
+            ));
+        }
+        let parsed: Vec<WritingDecision> =
+            serde_json::from_value(value).map_err(|error| OmonError::Config(error.to_string()))?;
+        let mut seen = HashSet::new();
+        for row in &parsed {
+            if !seen.insert(&row.id) || row.reason.trim().is_empty() {
+                return Err(OmonError::Config(
+                    "duplicate inbox id or empty reason".into(),
+                ));
+            }
+            if !writing.iter().any(|item| item.id == row.id) {
+                tracing::warn!(item_id = %row.id, "unknown inbox triage response id ignored");
+            }
+        }
+        Ok(parsed)
+    }
+
     async fn classify(&self, items: &[Item], now: DateTime<Utc>) -> Result<usize> {
         let mut classified = Vec::with_capacity(items.len());
         let mut writing = Vec::new();
         for item in items {
+            // Backlog that arrives late is history, not a new task for the owner.
+            if now - item.received_at > chrono::Duration::hours(STALE_AFTER_HOURS) {
+                classified.push((item, Class::Fyi, None));
+                continue;
+            }
             let text = item.text();
             let choice = self
                 .judge
@@ -267,57 +339,19 @@ impl Triage {
         }
         tx.commit().await?;
         let mut decisions = Vec::new();
-        for writing in writing.chunks(WRITING_BATCH_SIZE) {
-            let mut writing = writing
-                .iter()
-                .map(|item| WritingItem {
-                    id: item.id.clone(),
-                    class: item.class,
-                    text: item.text.clone(),
-                })
-                .collect::<Vec<_>>();
-            while serde_json::to_string(&writing)
-                .map_err(|error| OmonError::Config(error.to_string()))?
-                .chars()
-                .count()
-                > 6000
-            {
-                for item in &mut writing {
-                    item.text = item
-                        .text
-                        .chars()
-                        .take(item.text.chars().count() / 2)
-                        .collect();
+        for chunk in writing.chunks(WRITING_BATCH_SIZE) {
+            match self.write_batch(chunk).await {
+                Ok(parsed) => decisions.extend(parsed),
+                Err(error) => {
+                    // Incident 2026-10-16: On 2026-10-15/16 the 180s writer turn timed out 10 times.
+                    // Propagating Err left items pending, re-running every 5m and paying jev + writer
+                    // each time. Catch errors here and fall back to storing jev classifications.
+                    tracing::warn!(
+                        %error,
+                        "inbox triage reason writer failed; falling back to jev classification"
+                    );
                 }
             }
-            let raw = self.writer.write(&writing).await?;
-            let value: serde_json::Value =
-                serde_json::from_str(&raw).map_err(|error| OmonError::Config(error.to_string()))?;
-            let rows = value
-                .as_array()
-                .ok_or_else(|| OmonError::Config("inbox response must be an array".into()))?;
-            if rows.iter().any(|row| {
-                !row.as_object()
-                    .is_some_and(|o| o.contains_key("proposed_action"))
-            }) {
-                return Err(OmonError::Config(
-                    "inbox response missing proposed_action".into(),
-                ));
-            }
-            let parsed: Vec<WritingDecision> = serde_json::from_value(value)
-                .map_err(|error| OmonError::Config(error.to_string()))?;
-            let mut seen = HashSet::new();
-            for row in &parsed {
-                if !seen.insert(&row.id) || row.reason.trim().is_empty() {
-                    return Err(OmonError::Config(
-                        "duplicate inbox id or empty reason".into(),
-                    ));
-                }
-                if !writing.iter().any(|item| item.id == row.id) {
-                    tracing::warn!(item_id = %row.id, "unknown inbox triage response id ignored");
-                }
-            }
-            decisions.extend(parsed);
         }
         let proposals =
             super::proposals::Proposals::new(self.pool.clone(), super::proposals::OWNER_ID).await?;
@@ -325,17 +359,18 @@ impl Triage {
         let mut stored = informational;
         for (item, class, due_at) in classified {
             let row = decisions.iter().find(|row| row.id == item.id);
+            // Incident 2026-10-16: If writer failed, timed out, or omitted this item,
+            // persist with fallback reason and model='jev' so the item leaves pending.
+            let fallback = row.is_none().then(|| fallback_reason(class));
             let (reason, action, model) = match class {
-                Class::Owner | Class::Bot => {
-                    let Some(row) = row else {
-                        continue;
-                    };
-                    (
+                Class::Owner | Class::Bot => match row {
+                    Some(row) => (
                         row.reason.as_str(),
                         row.proposed_action.as_deref(),
                         self.writer.model(),
-                    )
-                }
+                    ),
+                    None => (fallback.as_deref().unwrap_or(""), None, "jev"),
+                },
                 Class::Fyi | Class::Ignore => continue,
             };
             let inserted = sqlx::query("INSERT INTO inbox_decisions(item_id,class,reason,due_at,proposed_action,status,decided_at,model) VALUES(?,?,?,?,?,'open',?,?) ON CONFLICT(item_id) DO NOTHING")

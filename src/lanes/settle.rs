@@ -252,7 +252,13 @@ impl Drop for DiffInput {
 }
 
 async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
-    const MAX_DIFF: usize = 256 * 1024;
+    // Measured 2026-10-16: typesafe-judge diff succeeds at 64 KiB of diff text
+    // and fails at 96 KiB with "400 Bad Request max_tokens_exceeded" (exiting 0
+    // but emitting an Error, causing "jev unavailable"). The budget counts old +
+    // new bytes per file while the judge sees unified diff text; keeping the
+    // file budget at 48 KiB ensures the resulting diff stays comfortably below
+    // the API token limit.
+    const MAX_DIFF: usize = 48 * 1024;
     let mut input = DiffInput(
         std::env::temp_dir().join(format!("omon-done-diff-{}", uuid::Uuid::new_v4())),
         String::new(),
@@ -316,9 +322,7 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
     if !listed.status.success() {
         return Err(OmonError::Config("done_diff listing failed".into()));
     }
-    let mut budget = MAX_DIFF;
-    let mut omitted = 0usize;
-    let mut changes = Vec::new();
+    let mut candidates = Vec::new();
     for raw in listed
         .stdout
         .split(|byte| *byte == 0)
@@ -357,7 +361,18 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
         } else {
             None
         };
-        if old_len.unwrap_or(0).saturating_add(new_len.unwrap_or(0)) > budget {
+        let total_len = old_len.unwrap_or(0).saturating_add(new_len.unwrap_or(0));
+        candidates.push((path, total_len));
+    }
+    // Sort changed paths smallest-first (old_len + new_len ascending) so many
+    // small source edits fit before one large artifact consumes the judge budget.
+    candidates.sort_by_key(|(_, len)| *len);
+
+    let mut budget = MAX_DIFF;
+    let mut omitted = 0usize;
+    let mut changes = Vec::new();
+    for (path, total_len) in candidates {
+        if total_len > budget {
             omitted += 1;
             continue;
         }

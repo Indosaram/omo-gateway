@@ -1,0 +1,1 @@
+{"action":"wait","sessionId":"rpc-3","until":"idle","outcome":"already_idle","waited_ms":0,"state":{"isStreaming":false,"pendingMessageCount":0,"lastAbortSource":null}}

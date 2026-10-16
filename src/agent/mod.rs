@@ -19,5 +19,7 @@ pub use omo_config::{
     OmoBackendConfig, OMON_MODEL_LARGE, OMON_MODEL_LARGE_DEFAULT, OMON_MODEL_LEAD,
     OMON_MODEL_LEAD_DEFAULT, OMON_MODEL_SMALL, OMON_MODEL_SMALL_DEFAULT,
 };
-pub use omo_daemon::{force_restart_owned_daemon, OmoDaemonSupervisor};
+pub use omo_daemon::{
+    force_restart_owned_daemon, forced_restart_since, wait_owned_daemon_ready, OmoDaemonSupervisor,
+};
 pub use workspace_migration::wipe_omo_thread_bindings;

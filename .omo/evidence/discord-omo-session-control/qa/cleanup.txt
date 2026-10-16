@@ -1,0 +1,5 @@
+$ cleanup
+{"action":"close","sessionId":"rpc-3","closed":true,"reason":"client_close"}
+0
+0
+0

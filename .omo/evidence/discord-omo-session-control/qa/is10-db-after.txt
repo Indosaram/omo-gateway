@@ -1,0 +1,3 @@
+$ sqlite3 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-sessions.Ll75gqdkYl/qa.db select l.status, l.external_target, e.released_at is not null from lanes l join external_sessions e on e.lane_key=l.key
+closed||1
+rc=0

@@ -486,7 +486,14 @@ pub async fn execute_native_cron(
                 OmonError::ToolExecution(format!("failed to spawn cron script: {error}"))
             })?;
             let _pid = child.id();
-            let res = tokio::time::timeout(timeout, child.wait_with_output()).await;
+            // Kill the tree while the child is still owned: `timeout` would drop the wait future
+            // first, and kill_on_drop then kills the root before its descendants are found.
+            let wait = child.wait_with_output();
+            tokio::pin!(wait);
+            let res = tokio::select! {
+                out = &mut wait => Ok(out),
+                () = tokio::time::sleep(timeout) => Err(()),
+            };
             let out = match res {
                 Ok(Ok(out)) => out,
                 Ok(Err(err)) => {
@@ -497,9 +504,7 @@ pub async fn execute_native_cron(
                 Err(_) => {
                     #[cfg(unix)]
                     if let Some(pid) = _pid {
-                        unsafe {
-                            libc::kill(-(pid as i32), libc::SIGKILL);
-                        }
+                        kill_process_tree(pid);
                     }
                     return Err(OmonError::ToolExecution(format!(
                         "cron script timed out for {}",
@@ -1010,7 +1015,13 @@ pub async fn run_cron_script(
                 OmonError::ToolExecution(format!("failed to spawn {}: {error}", path.display()))
             })?;
         let _pid = child.id();
-        let res = tokio::time::timeout(timeout, child.wait_with_output()).await;
+        // See execute_native_cron: the tree must be killed before the child is dropped.
+        let wait = child.wait_with_output();
+        tokio::pin!(wait);
+        let res = tokio::select! {
+            out = &mut wait => Ok(out),
+            () = tokio::time::sleep(timeout) => Err(()),
+        };
         let out = match res {
             Ok(Ok(out)) => out,
             Ok(Err(err)) => {
@@ -1022,9 +1033,7 @@ pub async fn run_cron_script(
             Err(_) => {
                 #[cfg(unix)]
                 if let Some(pid) = _pid {
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGKILL);
-                    }
+                    kill_process_tree(pid);
                 }
                 return Err(OmonError::ToolExecution(format!(
                     "Hermes cron script timed out: {}",
@@ -1130,6 +1139,127 @@ pub fn resolve_workspace_instructions(workdir: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// Collects all descendant process IDs for the given `root` process.
+///
+/// Executes `ps -A -o pid=,ppid=` to capture a snapshot of the process tree.
+/// Parses the output into a parent-to-children map and performs a breadth-first search
+/// starting from `root`.
+#[cfg(unix)]
+fn collect_descendant_pids(root: i32) -> Vec<i32> {
+    if root <= 1 {
+        return Vec::new();
+    }
+
+    // Try `ps` in PATH first, falling back to `/bin/ps` if standard PATH lookup fails.
+    let output = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid="])
+        .output()
+        .or_else(|_| {
+            std::process::Command::new("/bin/ps")
+                .args(["-A", "-o", "pid=,ppid="])
+                .output()
+        });
+
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+
+    if !output.status.success() {
+        return Vec::new();
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut parent_to_children: std::collections::HashMap<i32, Vec<i32>> =
+        std::collections::HashMap::new();
+
+    for line in stdout.lines() {
+        let mut parts = line.split_whitespace();
+        if let (Some(pid_str), Some(ppid_str)) = (parts.next(), parts.next()) {
+            if let (Ok(pid), Ok(ppid)) = (pid_str.parse::<i32>(), ppid_str.parse::<i32>()) {
+                parent_to_children.entry(ppid).or_default().push(pid);
+            }
+        }
+    }
+
+    let mut descendants = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    let mut visited = std::collections::HashSet::new();
+
+    queue.push_back(root);
+    visited.insert(root);
+
+    while let Some(parent) = queue.pop_front() {
+        if let Some(children) = parent_to_children.get(&parent) {
+            for &child in children {
+                if visited.insert(child) {
+                    descendants.push(child);
+                    queue.push_back(child);
+                }
+            }
+        }
+    }
+
+    descendants
+}
+
+/// Kills the entire process tree rooted at `root_pid`, including descendants that moved
+/// into their own process groups (incident 2026-10-16).
+///
+/// Incident context: VPN-Mall script (bash) used `set -m` so its `omo` child ran in a
+/// separate process group; the gateway's previous group-only SIGKILL (`kill(-pid, SIGKILL)`)
+/// killed bash, but `omo` survived 22 more minutes in its own process group, leaving orphaned
+/// state.
+///
+/// Root fix: Snapshot the parent->child tree first via `ps -A -o pid=,ppid=`, SIGKILL each
+/// descendant and its process group BEFORE killing the root. This guarantees descendants are
+/// not reparented to init/launchd before their PIDs are discovered and signaled.
+#[cfg(unix)]
+pub fn kill_process_tree(root_pid: u32) {
+    if root_pid <= 1 {
+        return;
+    }
+    let root = root_pid as i32;
+    let descendants = collect_descendant_pids(root);
+
+    // Kill descendants leaves-first, signaling both individual PID and any process group
+    // headed by the descendant (or reported via getpgid) before touching the root.
+    for &pid in descendants.iter().rev() {
+        if pid > 1 {
+            // SAFETY: libc::getpgid takes a process ID by value.
+            let pgid = unsafe { libc::getpgid(pid) };
+            if pgid > 1 && pgid != root {
+                // SAFETY: libc::kill with negative pid signals the process group whose pgid equals `pgid`.
+                unsafe {
+                    libc::kill(-pgid, libc::SIGKILL);
+                }
+            }
+            // SAFETY: libc::kill accepts process ID and signal number by value.
+            // When subshells or background jobs run with job control enabled (e.g. bash `set -m`),
+            // the job leader's pid becomes its process group id, so signaling -pid terminates the group.
+            // Signaling positive pid terminates the individual process.
+            unsafe {
+                if pid != root {
+                    libc::kill(-pid, libc::SIGKILL);
+                }
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+    }
+
+    // Finally kill the root process group and the root process itself.
+    // SAFETY: libc::kill accepts process ID and signal number by value.
+    // -root signals the root's process group; root signals the root process itself.
+    unsafe {
+        libc::kill(-root, libc::SIGKILL);
+        libc::kill(root, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+pub fn kill_process_tree(_root_pid: u32) {
+    // Windows process cleanup is handled via Job Objects or kill_on_drop.
 }
 
 #[cfg(test)]

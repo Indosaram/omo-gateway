@@ -100,6 +100,8 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             return Err(invalid("lead must be a session storage key"));
         }
         parse_signals(done).map_err(invalid)?;
+        let (resolved, _) = self.control.resolve(target).await.map_err(invalid)?;
+        let target = &resolved;
         let session = self
             .control
             .session(target, "send")
@@ -238,13 +240,30 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         if adoption.sent_at.is_none() {
             return Ok(0);
         }
+        let is_numeric_cursor = adoption
+            .cursor
+            .as_deref()
+            .and_then(|c| c.parse::<i64>().ok());
+        let read_cursor = if is_numeric_cursor.is_some() {
+            None
+        } else {
+            adoption.cursor.as_deref()
+        };
         let output = self
             .control
-            .read(&target, 100, adoption.cursor.as_deref())
+            .read(&target, 100, read_cursor)
             .await
             .map_err(invalid)?;
         let cursor = next_cursor(&output).ok_or_else(|| invalid("read response has no cursor"))?;
         let items = assistant_items(&output)?;
+        let items: Vec<(String, String)> = if let Some(last_seq) = is_numeric_cursor {
+            items
+                .into_iter()
+                .filter(|(id, _)| id.parse::<i64>().map(|seq| seq > last_seq).unwrap_or(true))
+                .collect()
+        } else {
+            items
+        };
         let activity = LaneActivity::new(self.pool.clone(), self.clock.clone());
         let mut count = 0;
         for (id, text) in items {
@@ -514,12 +533,38 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
 }
 
 fn next_cursor(value: &Value) -> Option<String> {
-    value
+    let items = value
+        .get("items")
+        .or_else(|| value.get("messages"))
+        .or_else(|| value.get("entries"))
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array());
+    let seqs: Vec<i64> = items
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get("seq").and_then(|s| {
+                s.as_i64()
+                    .or_else(|| s.as_str().and_then(|text| text.parse::<i64>().ok()))
+            })
+        })
+        .collect();
+    // A seq-numbered transcript is tracked by its highest seq, never by the reader's opaque
+    // paging cursor; an empty transcript starts at 0 so a fresh session can be adopted.
+    if let Some(max) = seqs.iter().max() {
+        return Some(max.to_string());
+    }
+    let opaque = value
         .get("nextCursor")
         .or_else(|| value.get("next_cursor"))
         .or_else(|| value.get("cursor"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .map(str::to_owned);
+    match (opaque, items) {
+        (Some(cursor), _) => Some(cursor),
+        (None, Some(items)) if items.is_empty() && value.get("kind").is_some() => Some("0".into()),
+        _ => None,
+    }
 }
 
 fn assistant_items(value: &Value) -> Result<Vec<(String, String)>> {
@@ -544,10 +589,26 @@ fn assistant_items(value: &Value) -> Result<Vec<(String, String)>> {
             .get("id")
             .or_else(|| entry.get("itemId"))
             .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                entry.get("seq").and_then(|s| {
+                    s.as_i64()
+                        .map(|seq| seq.to_string())
+                        .or_else(|| s.as_str().map(str::to_owned))
+                })
+            })
             .ok_or_else(|| invalid("assistant message has no stable id"))?;
-        items.push((id.to_owned(), text));
+        items.push((id, text));
     }
     Ok(items)
+}
+
+fn extract_blocks_text(blocks: &[Value]) -> Option<String> {
+    let parts: Vec<&str> = blocks
+        .iter()
+        .filter_map(|block| block.get("text").and_then(Value::as_str))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
 fn entry_text(entry: &Value) -> Option<String> {
@@ -556,14 +617,15 @@ fn entry_text(entry: &Value) -> Option<String> {
         .filter(|value| !value.is_null())
         .or_else(|| entry.get("content"))?;
     match content {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(blocks) => {
-            let parts: Vec<&str> = blocks
-                .iter()
-                .filter_map(|block| block.get("text").and_then(Value::as_str))
-                .collect();
-            (!parts.is_empty()).then(|| parts.join("\n"))
+        Value::String(text) => {
+            if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(text) {
+                if let Some(extracted) = extract_blocks_text(&blocks) {
+                    return Some(extracted);
+                }
+            }
+            Some(text.clone())
         }
+        Value::Array(blocks) => extract_blocks_text(blocks),
         _ => None,
     }
 }
@@ -601,6 +663,78 @@ mod tests {
             vec![
                 ("blocks".to_owned(), "a\nb".to_owned()),
                 ("plain".to_owned(), "done".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn next_cursor_prefers_highest_seq_over_paging_cursor() {
+        let page_with_next_cursor = json!({
+            "items": [
+                {"seq": 10, "role": "assistant", "content": "hello"},
+                {"seq": 15, "role": "assistant", "content": "world"}
+            ],
+            "next_cursor": "cursor-abc"
+        });
+        assert_eq!(next_cursor(&page_with_next_cursor).as_deref(), Some("15"));
+
+        let page_with_camel_case = json!({
+            "messages": [
+                {"id": "m1", "role": "assistant", "content": "hello"}
+            ],
+            "nextCursor": "cursor-xyz"
+        });
+        assert_eq!(
+            next_cursor(&page_with_camel_case).as_deref(),
+            Some("cursor-xyz")
+        );
+
+        let page_seq_only = json!({
+            "kind": "thread_read",
+            "thread_id": "t1",
+            "items": [
+                {"seq": 12, "role": "user", "content": "q"},
+                {"seq": 18, "role": "assistant", "content": "a"},
+                {"seq": 15, "role": "assistant", "content": "b"}
+            ],
+            "truncated": false
+        });
+        assert_eq!(next_cursor(&page_seq_only).as_deref(), Some("18"));
+
+        let empty_page = json!({
+            "items": []
+        });
+        assert_eq!(next_cursor(&empty_page), None);
+
+        let empty_thread =
+            json!({"kind": "ok", "thread_id": "t1", "items": [], "truncated": false});
+        assert_eq!(next_cursor(&empty_thread).as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn assistant_items_accepts_seq_and_json_encoded_blocks() {
+        let json_blocks_str = serde_json::to_string(&json!([
+            {"type": "text", "text": "first line"},
+            {"type": "tool_use", "id": "t1"},
+            {"type": "text", "text": "second line"}
+        ]))
+        .unwrap();
+
+        let page = json!({
+            "items": [
+                {"seq": 42, "role": "assistant", "content": json_blocks_str},
+                {"seq": "43", "role": "assistant", "content": "simple string"},
+                {"seq": 44, "role": "assistant", "content": [{"type": "text", "text": "array block"}]},
+                {"seq": 45, "role": "user", "content": "user query"}
+            ]
+        });
+
+        assert_eq!(
+            assistant_items(&page).unwrap(),
+            vec![
+                ("42".to_owned(), "first line\nsecond line".to_owned()),
+                ("43".to_owned(), "simple string".to_owned()),
+                ("44".to_owned(), "array block".to_owned())
             ]
         );
     }

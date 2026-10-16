@@ -722,7 +722,8 @@ async fn main() -> Result<()> {
 /// list; when the reads are still denied we surface the privacy pane so the
 /// user makes the single toggle that then sticks (the binary is signed with a
 /// stable Developer ID identity, so the grant survives rebuilds).
-fn ensure_full_disk_access(workspace_root: &Path) {
+/// Returns true if all protected probes were readable, false if access was denied.
+fn ensure_full_disk_access(workspace_root: &Path) -> bool {
     let home = env::var("HOME").unwrap_or_default();
     let candidates = [
         format!("{home}/Library/Application Support/com.apple.TCC/TCC.db"),
@@ -757,7 +758,7 @@ fn ensure_full_disk_access(workspace_root: &Path) {
     }
     if denied.is_empty() {
         info!("full disk access: granted (all protected probes readable)");
-        return;
+        return true;
     }
     let marker = workspace_root.join(FDA_PROMPTED_MARKER);
     if !claim_fda_prompt(&marker) {
@@ -765,7 +766,7 @@ fn ensure_full_disk_access(workspace_root: &Path) {
             denied = %denied.join(" | "),
             "full disk access: denied; the privacy pane was already opened on an earlier boot"
         );
-        return;
+        return false;
     }
     warn!(
         denied = %denied.join(" | "),
@@ -777,6 +778,79 @@ fn ensure_full_disk_access(workspace_root: &Path) {
             .spawn()
         {
             warn!(%error, "could not open the Full Disk Access privacy pane");
+        }
+    }
+    false
+}
+
+/// Single marker file for the Full Disk Access owner DM. Its content is the binary identity
+/// (size + mtime), so a new deploy re-alerts once while crash-loop restarts of the same binary
+/// do not, and markers never accumulate (incident 2026-10-16).
+const FDA_DM_MARKER: &str = ".fda_dm_prompted";
+
+/// Sends a Discord DM alert to the owner if Full Disk Access is missing.
+/// Dispatched at most once per binary identity (sized and timestamped marker)
+/// to notify the owner upon new deployment without spamming on crash loops
+/// (incident 2026-10-16).
+async fn notify_owner_fda_denied_if_needed(
+    workspace_root: &Path,
+    http: &serenity::http::Http,
+    owner_id: &str,
+) {
+    let current_exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => {
+            warn!(%error, "could not determine current executable path for FDA notice");
+            PathBuf::from("omo-gateway")
+        }
+    };
+    let (size, mtime) = match tokio::fs::metadata(&current_exe).await {
+        Ok(meta) => {
+            let size = meta.len();
+            let mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            (size, mtime)
+        }
+        Err(error) => {
+            warn!(%error, "could not read metadata of current executable for FDA marker");
+            (0, 0)
+        }
+    };
+    let identity = format!("{size}:{mtime}");
+    let marker_path = workspace_root.join(FDA_DM_MARKER);
+    if tokio::fs::read_to_string(&marker_path)
+        .await
+        .is_ok_and(|seen| seen.trim() == identity)
+    {
+        return;
+    }
+
+    let message = format!(
+        "⚠️ omo-gateway에 전체 디스크 접근 권한이 없습니다. iMessage 수집이 중단됩니다. 시스템 설정 → 개인정보 보호 및 보안 → 전체 디스크 접근 권한에서 {}를 켜 주세요.",
+        current_exe.display()
+    );
+
+    let recipient = serde_json::json!({
+        "recipient_id": owner_id,
+    });
+
+    match http.create_private_channel(&recipient).await {
+        Ok(channel) => {
+            if let Err(error) = channel.say(http, &message).await {
+                warn!(%error, "failed to send Full Disk Access denial alert to owner via Discord DM");
+            } else {
+                info!(marker = %marker_path.display(), "notified owner of missing Full Disk Access via Discord DM");
+                if let Err(error) = tokio::fs::write(&marker_path, &identity).await {
+                    warn!(%error, path = %marker_path.display(), "could not record FDA DM marker");
+                }
+            }
+        }
+        Err(error) => {
+            warn!(%error, "failed to create private DM channel with owner for FDA alert");
         }
     }
 }
@@ -795,6 +869,33 @@ fn claim_fda_prompt(marker: &Path) -> bool {
 
 async fn run_gateway() -> Result<()> {
     run_gateway_with_dashboard(None).await
+}
+
+/// Fetches the Discord bot user for the provided HTTP client, retrying transient
+/// transport-level network errors (DNS, connect, timeout, reqwest errors) with
+/// exponential backoff (2s doubling to 60s cap). Permanent HTTP status errors
+/// (e.g. 401 unauthorized due to invalid token) fail fast immediately (incident 2026-10-16).
+async fn fetch_current_user_with_retry(
+    http: &serenity::http::Http,
+) -> Result<serenity::model::user::CurrentUser> {
+    let mut backoff = std::time::Duration::from_secs(2);
+    const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+
+    loop {
+        match http.get_current_user().await {
+            Ok(user) => return Ok(user),
+            Err(serenity::Error::Http(serenity::http::HttpError::Request(error))) => {
+                warn!(
+                    %error,
+                    retry_in_secs = backoff.as_secs(),
+                    "transient network failure during Discord bot identity lookup; retrying after backoff"
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 async fn run_gateway_with_dashboard(
@@ -924,7 +1025,7 @@ async fn run_gateway_with_dashboard(
         return outcome;
     }
     let config = Config::from_env()?;
-    ensure_full_disk_access(&config.workspace_root);
+    let fda_granted = ensure_full_disk_access(&config.workspace_root);
     let pool = init_pool(&config.database_url).await?;
     let kibitzer = initialize_kibitzer(&pool).await?;
 
@@ -1040,7 +1141,7 @@ async fn run_gateway_with_dashboard(
     let mut default_bot_id = None;
     for token in &config.discord_bot_tokens {
         let http = Arc::new(serenity::http::Http::new(token));
-        let bot_id = http.get_current_user().await?.id.to_string();
+        let bot_id = fetch_current_user_with_retry(&http).await?.id.to_string();
         if default_bot_id.is_none() {
             default_bot_id = Some(bot_id.clone());
         }
@@ -1052,6 +1153,14 @@ async fn run_gateway_with_dashboard(
     }
     let default_bot_id = default_bot_id
         .ok_or_else(|| OmonError::Config("no Discord bot identities were configured".into()))?;
+
+    if !fda_granted {
+        if let Some(default_http) = bot_http_clients.get(&default_bot_id) {
+            let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
+            notify_owner_fda_denied_if_needed(&config.workspace_root, default_http, &owner_id)
+                .await;
+        }
+    }
     let dead_targets = Arc::new(
         DeadTargetRegistry::new()
             .with_pool(pool.clone())
@@ -1311,6 +1420,30 @@ async fn run_gateway_with_dashboard(
         drain_watcher.serve(watcher_shutdown).await;
         Ok(())
     });
+    if parse_bool_from(optional_env("OMON_SESSION_WATCH_ENABLED").as_deref(), true) {
+        match (
+            omon_gateway::sessions::control::SessionControl::from_environment(),
+            SessionKey::from_storage_key(&default_lead()),
+        ) {
+            (Ok(control), Ok(owner_dm)) => {
+                let watcher = omon_gateway::sessions::watch::Watcher::new(
+                    pool.clone(),
+                    control,
+                    omon_gateway::sessions::watch::interval_from_env(),
+                );
+                lane_tasks.spawn(watcher.serve(
+                    discord_egress_dispatcher.clone(),
+                    owner_dm,
+                    lane_shutdown.clone(),
+                ));
+            }
+            (control, owner_dm) => warn!(
+                control_error = ?control.err().map(|error| error.to_string()),
+                owner_error = ?owner_dm.err().map(|error| error.to_string()),
+                "session watcher not started"
+            ),
+        }
+    }
 
     let dashboard_shutdown = tokio_util::sync::CancellationToken::new();
     let mut dashboard_server = None;
@@ -2274,14 +2407,117 @@ const WATCHER_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(
 const WATCHER_HEALTHY_RUN: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// How one watcher child lifetime ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum WatcherExit {
     /// Shutdown (or a closed event channel): do not restart.
     Stop,
     /// Failed or exited without doing its job: restart with growing backoff.
-    Failed,
+    Failed { stderr_tail: String },
     /// Did its job and exited on its own: restart after the initial delay.
     Completed,
+}
+
+const WATCHER_STDERR_TAIL_MAX_BYTES: usize = 2048;
+
+/// Keeps the most recent stderr output lines up to a bounded byte size (~2 KiB).
+/// Older lines are dropped from the front when total byte length exceeds the limit
+/// (incident 2026-10-16).
+#[derive(Debug, Clone)]
+pub(crate) struct StderrTailBuffer {
+    max_bytes: usize,
+    total_bytes: usize,
+    lines: std::collections::VecDeque<String>,
+}
+
+impl StderrTailBuffer {
+    pub(crate) fn new(max_bytes: usize) -> Self {
+        Self {
+            max_bytes,
+            total_bytes: 0,
+            lines: std::collections::VecDeque::new(),
+        }
+    }
+
+    pub(crate) fn push_line(&mut self, line: &str) {
+        let line_len = line.len();
+        let line = if line_len > self.max_bytes {
+            let start = line_len - self.max_bytes;
+            let mut char_start = start;
+            while char_start < line_len && !line.is_char_boundary(char_start) {
+                char_start += 1;
+            }
+            &line[char_start..]
+        } else {
+            line
+        };
+
+        let added_bytes = line.len() + if self.lines.is_empty() { 0 } else { 1 };
+        self.lines.push_back(line.to_string());
+        self.total_bytes += added_bytes;
+
+        while self.total_bytes > self.max_bytes && self.lines.len() > 1 {
+            if let Some(front) = self.lines.pop_front() {
+                let removed = front.len() + 1;
+                self.total_bytes = self.total_bytes.saturating_sub(removed);
+            }
+        }
+    }
+
+    pub(crate) fn render(&self) -> String {
+        let mut out = String::with_capacity(self.total_bytes);
+        for (i, line) in self.lines.iter().enumerate() {
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(line);
+        }
+        out
+    }
+}
+
+fn spawn_stderr_tail_collector(
+    stderr: Option<tokio::process::ChildStderr>,
+) -> tokio::task::JoinHandle<String> {
+    tokio::spawn(async move {
+        let Some(stderr) = stderr else {
+            return String::new();
+        };
+        use tokio::io::AsyncBufReadExt;
+        let mut lines = tokio::io::BufReader::new(stderr).lines();
+        let mut buffer = StderrTailBuffer::new(WATCHER_STDERR_TAIL_MAX_BYTES);
+        while let Ok(Some(line)) = lines.next_line().await {
+            buffer.push_line(&line);
+        }
+        buffer.render()
+    })
+}
+
+/// Combines a child's stderr tail with the non-event lines it printed on stdout, so a
+/// watcher that reports failures on stdout (imsg) still explains why it exited.
+fn join_tails(stderr_tail: String, stdout_noise: &StderrTailBuffer) -> String {
+    let stdout_tail = stdout_noise.render();
+    match (stderr_tail.is_empty(), stdout_tail.is_empty()) {
+        (_, true) => stderr_tail,
+        (true, false) => stdout_tail,
+        (false, false) => format!("{stderr_tail}\n{stdout_tail}"),
+    }
+}
+
+async fn reap_stderr_tail(handle: tokio::task::JoinHandle<String>) -> String {
+    tokio::time::timeout(std::time::Duration::from_millis(500), handle)
+        .await
+        .ok()
+        .and_then(|res| res.ok())
+        .unwrap_or_default()
+}
+
+/// Returns true if the stdout line from `zele mail watch` represents a real mail event.
+/// Comment/header lines starting with '#' (e.g. `# Watching inbox every 60s (Ctrl+C to stop)`)
+/// and blank lines are ignored so immediate exits are not classified as completed runs
+/// (incident 2026-10-16).
+pub(crate) fn is_mail_event_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    !trimmed.is_empty() && !trimmed.starts_with('#')
 }
 
 fn next_watcher_backoff(current: std::time::Duration) -> std::time::Duration {
@@ -2318,18 +2554,34 @@ async fn supervise_watcher<F, Fut>(
     Fut: std::future::Future<Output = WatcherExit>,
 {
     let mut delay = WATCHER_BACKOFF_INITIAL;
+    let mut last_fda_error: Option<String> = None;
     loop {
         if *shutdown.borrow() {
             return;
         }
         let started = tokio::time::Instant::now();
-        let wait = match run_once(shutdown.clone()).await {
+        let outcome = run_once(shutdown.clone()).await;
+        let wait = match outcome {
             WatcherExit::Stop => return,
             WatcherExit::Completed => {
+                last_fda_error = None;
                 delay = WATCHER_BACKOFF_INITIAL;
                 delay
             }
-            WatcherExit::Failed => {
+            WatcherExit::Failed { stderr_tail } => {
+                if name == "imsg"
+                    && (stderr_tail.contains("Operation not permitted")
+                        || stderr_tail.contains("Cannot access Messages database")
+                        || stderr_tail.contains("authorization denied"))
+                    && last_fda_error.as_deref() != Some(stderr_tail.as_str())
+                {
+                    tracing::error!(
+                        watcher = name,
+                        stderr_tail = %stderr_tail,
+                        "imsg watcher failed due to missing Full Disk Access; grant Full Disk Access to omo-gateway in System Settings to resume iMessage collection"
+                    );
+                    last_fda_error = Some(stderr_tail);
+                }
                 if started.elapsed() >= WATCHER_HEALTHY_RUN {
                     delay = WATCHER_BACKOFF_INITIAL;
                 }
@@ -2383,22 +2635,30 @@ async fn run_imessage_watch_once(
         .args(omon_gateway::inbox::watchers::imsg_watch_args(since_rowid))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
     {
         Ok(child) => child,
         Err(error) => {
             warn!(%error, "imsg watch could not start; check Full Disk Access and local CLI readiness");
-            return WatcherExit::Failed;
+            return WatcherExit::Failed {
+                stderr_tail: String::new(),
+            };
         }
     };
+    let stderr_task = spawn_stderr_tail_collector(child.stderr.take());
     let Some(stdout) = child.stdout.take() else {
         warn!("imsg watch has no stdout pipe");
-        return WatcherExit::Failed;
+        let stderr_tail = reap_stderr_tail(stderr_task).await;
+        return WatcherExit::Failed { stderr_tail };
     };
     let mut lines = tokio::io::BufReader::new(stdout).lines();
-    let mut exit = WatcherExit::Failed;
+    // imsg reports errors such as a Full Disk Access denial on stdout, not stderr.
+    let mut stdout_noise = StderrTailBuffer::new(WATCHER_STDERR_TAIL_MAX_BYTES);
+    let mut exit = WatcherExit::Failed {
+        stderr_tail: String::new(),
+    };
     loop {
         if *shutdown.borrow() {
             exit = WatcherExit::Stop;
@@ -2413,7 +2673,11 @@ async fn run_imessage_watch_once(
             }
             line = lines.next_line() => match line {
                 Ok(Some(line)) => {
-                    if let Some(rowid) = omon_gateway::inbox::watchers::parse_imsg_watch_line(&line) {
+                    let Some(rowid) = omon_gateway::inbox::watchers::parse_imsg_watch_line(&line) else {
+                        stdout_noise.push_line(&line);
+                        continue;
+                    };
+                    {
                         tokio::select! {
                             result = omon_gateway::inbox::watchers::on_imessage_event(sender, Some(rowid)) => {
                                 if result.is_err() {
@@ -2435,19 +2699,39 @@ async fn run_imessage_watch_once(
                 }
             },
             status = child.wait() => {
+                let stderr_tail = join_tails(reap_stderr_tail(stderr_task).await, &stdout_noise);
                 match status {
-                    Ok(status) => warn!(?status, "imsg watch exited; check local permissions and CLI readiness"),
-                    Err(error) => warn!(%error, "waiting for imsg watch failed"),
+                    Ok(status) => warn!(
+                        ?status,
+                        stderr_tail = %stderr_tail,
+                        "imsg watch exited; check local permissions and CLI readiness"
+                    ),
+                    Err(error) => warn!(
+                        %error,
+                        stderr_tail = %stderr_tail,
+                        "waiting for imsg watch failed"
+                    ),
                 }
-                return WatcherExit::Failed;
+                return WatcherExit::Failed { stderr_tail };
             }
         }
     }
     if let Err(error) = child.kill().await {
         warn!(%error, "failed to stop imsg watch child");
     }
-    let _ = child.wait().await;
-    exit
+    let status = child.wait().await;
+    let stderr_tail = join_tails(reap_stderr_tail(stderr_task).await, &stdout_noise);
+    match exit {
+        WatcherExit::Failed { .. } => {
+            warn!(
+                ?status,
+                stderr_tail = %stderr_tail,
+                "imsg watch exited; check local permissions and CLI readiness"
+            );
+            WatcherExit::Failed { stderr_tail }
+        }
+        other => other,
+    }
 }
 
 async fn run_mail_event_watcher(
@@ -2489,19 +2773,23 @@ async fn run_mail_watch_once(
         ])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
     {
         Ok(child) => child,
         Err(error) => {
             warn!(%error, "zele mail watch could not start; check local CLI and credential readiness");
-            return WatcherExit::Failed;
+            return WatcherExit::Failed {
+                stderr_tail: String::new(),
+            };
         }
     };
+    let stderr_task = spawn_stderr_tail_collector(child.stderr.take());
     let Some(stdout) = child.stdout.take() else {
         warn!("zele mail watch has no stdout pipe");
-        return WatcherExit::Failed;
+        let stderr_tail = reap_stderr_tail(stderr_task).await;
+        return WatcherExit::Failed { stderr_tail };
     };
     let mut lines = tokio::io::BufReader::new(stdout).lines();
     let mut produced_event = false;
@@ -2515,7 +2803,7 @@ async fn run_mail_watch_once(
                 }
             }
             line = lines.next_line() => match line {
-                Ok(Some(line)) if !line.trim().is_empty() => {
+                Ok(Some(line)) if is_mail_event_line(&line) => {
                     produced_event = true;
                     match sender.try_send(omon_gateway::inbox::watchers::InboxWatcherEvent::Mail) {
                         Ok(()) | Err(TrySendError::Full(_)) => {}
@@ -2537,21 +2825,29 @@ async fn run_mail_watch_once(
     if stop {
         let _ = child.kill().await;
         let _ = child.wait().await;
+        let _ = reap_stderr_tail(stderr_task).await;
         return WatcherExit::Stop;
     }
-    match child.wait().await {
+    let status = child.wait().await;
+    let stderr_tail = reap_stderr_tail(stderr_task).await;
+    match status {
         Ok(status) if status.success() && produced_event => WatcherExit::Completed,
         Ok(status) => {
             warn!(
                 ?status,
                 produced_event,
+                stderr_tail = %stderr_tail,
                 "zele mail watch exited without a clean event run; check local account credential readiness"
             );
-            WatcherExit::Failed
+            WatcherExit::Failed { stderr_tail }
         }
         Err(error) => {
-            warn!(%error, "waiting for zele mail watch failed");
-            WatcherExit::Failed
+            warn!(
+                %error,
+                stderr_tail = %stderr_tail,
+                "waiting for zele mail watch failed"
+            );
+            WatcherExit::Failed { stderr_tail }
         }
     }
 }
@@ -3520,7 +3816,9 @@ mod runner_tests {
             let counter = counter.clone();
             async move {
                 if counter.fetch_add(1, Ordering::SeqCst) < 2 {
-                    super::WatcherExit::Failed
+                    super::WatcherExit::Failed {
+                        stderr_tail: String::new(),
+                    }
                 } else {
                     super::WatcherExit::Stop
                 }
@@ -3554,7 +3852,9 @@ mod runner_tests {
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
                 shutdown_tx.send_replace(true);
-                super::WatcherExit::Failed
+                super::WatcherExit::Failed {
+                    stderr_tail: String::new(),
+                }
             }
         })
         .await;
@@ -5728,5 +6028,82 @@ mod runner_tests {
         );
 
         let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn imsg_stdout_error_reaches_the_exit_tail() {
+        let mut noise = super::StderrTailBuffer::new(super::WATCHER_STDERR_TAIL_MAX_BYTES);
+        noise.push_line("unable to open database file (code: 14)");
+        noise.push_line("Permission Error: Cannot access Messages database");
+        let tail = super::join_tails(String::new(), &noise);
+        assert!(tail.contains("Cannot access Messages database"));
+        assert_eq!(
+            super::join_tails("err".into(), &noise).lines().next(),
+            Some("err")
+        );
+        let empty = super::StderrTailBuffer::new(8);
+        assert_eq!(super::join_tails("err".into(), &empty), "err");
+    }
+
+    #[test]
+    fn test_is_mail_event_line_ignores_comments_and_blank_lines() {
+        // Incident 2026-10-16: zele prints a header line at startup:
+        // "# Watching inbox every 60s (Ctrl+C to stop)"
+        // This must not be treated as an event.
+        assert!(!super::is_mail_event_line(
+            "# Watching inbox every 60s (Ctrl+C to stop)"
+        ));
+        assert!(!super::is_mail_event_line("   # indented comment"));
+        assert!(!super::is_mail_event_line(""));
+        assert!(!super::is_mail_event_line("   \t  \n"));
+
+        // Real mail events / output lines
+        assert!(super::is_mail_event_line("new message arrived"));
+        assert!(super::is_mail_event_line(
+            "{\"id\": \"msg-123\", \"subject\": \"hello\"}"
+        ));
+        assert!(super::is_mail_event_line("  mail item 42  "));
+    }
+
+    #[test]
+    fn test_stderr_tail_buffer_bounded_capacity() {
+        use super::StderrTailBuffer;
+
+        let mut buf = StderrTailBuffer::new(20);
+        assert_eq!(buf.render(), "");
+
+        // Appending lines within capacity preserves everything
+        buf.push_line("line 1");
+        assert_eq!(buf.render(), "line 1");
+        buf.push_line("line 2");
+        assert_eq!(buf.render(), "line 1\nline 2");
+
+        // Pushing another line that exceeds capacity drops older lines from front
+        buf.push_line("line 3 is long");
+        let rendered = buf.render();
+        assert!(
+            rendered.len() <= 20,
+            "rendered len {} must be <= 20",
+            rendered.len()
+        );
+        assert!(rendered.ends_with("line 3 is long"));
+        assert!(!rendered.contains("line 1"));
+
+        // Pushing a single line larger than capacity truncates it safely
+        let mut small_buf = StderrTailBuffer::new(10);
+        small_buf.push_line("0123456789extra_content");
+        let truncated = small_buf.render();
+        assert!(
+            truncated.len() <= 10,
+            "rendered len {} must be <= 10",
+            truncated.len()
+        );
+        assert!(truncated.ends_with("extra_content") || truncated.ends_with("ontent"));
+
+        // Handles multi-byte UTF-8 safely without panicking on char boundaries
+        let mut utf8_buf = StderrTailBuffer::new(10);
+        utf8_buf.push_line("한글메시지테스트");
+        let rendered_utf8 = utf8_buf.render();
+        assert!(rendered_utf8.len() <= 10);
     }
 }

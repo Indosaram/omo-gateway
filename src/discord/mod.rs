@@ -4,6 +4,7 @@ pub mod attachments;
 pub mod buttons;
 pub mod commands;
 pub mod pairing;
+pub mod session_commands;
 pub mod table_render;
 pub mod throttler;
 

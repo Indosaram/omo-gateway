@@ -1,0 +1,17 @@
+$ DATABASE_URL=sqlite:///var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-is9.hPEo8nLYbL/omon_gateway.db /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway profile apply-block --bot-id 1465631383862120451 --block-file bot_profiles/blocks/lanes.md
+{
+  "after": {
+    "characters": 6406,
+    "sha256": "3b362161d22a182d7e1f466249a221240b799835477bc1a00c557684f81301d3"
+  },
+  "before": {
+    "characters": 6572,
+    "sha256": "3e910672ba61b9e4fb648820785ede895f1c15c6aaa1f589bf03d511435deaf8"
+  },
+  "bot_id": "1465631383862120451"
+}
+rc=0
+scratch row has new section:
+1|1|1
+live row sha256 (before=814f73c7bc79417a0ef5d54268aab79cf904c364ec4b33f524465ca86bd416ea):
+814f73c7bc79417a0ef5d54268aab79cf904c364ec4b33f524465ca86bd416ea  -

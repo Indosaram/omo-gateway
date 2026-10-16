@@ -1,0 +1,3 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions send local:01a142d8-f428-74b8-aaf0-3e8e336bce6c --text Run the bash command: sleep 300 ; then say done.
+{"deduplicated":false,"delivery":{"kind":"queued","queue_position":2},"delivery_id":"8465d0da-90db-402c-845a-81baa3a6ec11","effective_mode":"auto","endpoint_kind":"rpc_host","kind":"ok","message_seq":2,"thread_id":"01a142d8-f428-74b8-aaf0-3e8e336bce6c"}
+rc=0

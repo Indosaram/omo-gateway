@@ -1,0 +1,4 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions send omarchy:01a142d8-fad9-74ca-b118-ac833e7e893a --text Reply with exactly the two words QA-REMOTE-OK.
+Second line is part of the same message.
+{"deduplicated":false,"delivery":{"kind":"started","turn_id":"0"},"delivery_id":"44d4893b-6057-49f3-a014-1c92eef508e2","effective_mode":"follow_up","endpoint_kind":"tui","kind":"ok","message_seq":1,"thread_id":"01a142d8-fad9-74ca-b118-ac833e7e893a"}
+rc=0

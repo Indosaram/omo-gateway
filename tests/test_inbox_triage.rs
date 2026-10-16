@@ -250,20 +250,32 @@ async fn one_owner_item_waits_for_deadline_and_enqueues_once() {
 }
 
 #[tokio::test]
-async fn invalid_writing_and_unknown_ids_leave_decisions_pending() {
+async fn invalid_writing_and_unknown_ids_persist_with_fallback_reason() {
     for mode in ["malformed", "missing", "unknown"] {
         // Given
         let (db, mut triage, _, _) = fixture("owner_must_act", mode).await;
         let results = collect_all(db.pool(), &[&source(1)], &PrefilterRules::default()).await;
         triage.collected(&results, now(), true).await.unwrap();
-        // When
-        let result = triage
+        // When: Incident 2026-10-16: invalid writer output no longer errors or leaves items pending;
+        // it falls back to jev classification so the items leave pending.
+        let stored = triage
             .due(now() + chrono::Duration::seconds(120), true)
-            .await;
+            .await
+            .unwrap();
         // Then
-        assert_eq!(result.is_err(), mode != "unknown");
-        assert_eq!(count(&db, "inbox_decisions").await, 0);
-        assert_eq!(count(&db, "lane_events").await, 0);
+        assert_eq!(stored, 1);
+        assert_eq!(count(&db, "inbox_decisions").await, 1);
+        assert_eq!(count(&db, "lane_events").await, 1);
+        let (class, reason, model): (String, String, Option<String>) = sqlx::query_as(
+            "SELECT class, reason, model FROM inbox_decisions WHERE class = 'owner'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(class, "owner");
+        assert_eq!(reason, "자동 분류(사유 작성 실패): owner");
+        assert_eq!(model.as_deref(), Some("jev"));
+        assert!(triage.deadline().is_none());
     }
 }
 
@@ -283,84 +295,127 @@ async fn fallback_or_capped_judgment_never_reaches_writer() {
 }
 
 #[tokio::test]
-async fn pending_writing_recovers_at_next_deadline_without_new_insert() {
+async fn recovering_writer_settles_at_first_deadline_with_fallback() {
     for mode in ["recover-malformed", "recover-unknown"] {
         let (db, mut triage, _, writer) = fixture("owner_must_act", mode).await;
         let src = source(1);
         let results = collect_all(db.pool(), &[&src], &PrefilterRules::default()).await;
         triage.collected(&results, now(), true).await.unwrap();
         let first = now() + chrono::Duration::seconds(120);
-        let result = triage.due(first, true).await;
-        assert_eq!(result.is_err(), mode == "recover-malformed");
-        assert_eq!(
-            triage.deadline(),
-            Some(first + chrono::Duration::seconds(120))
-        );
+        // Incident 2026-10-16: On writer failure or unparsed output, triage persists
+        // the fallback decision on the first deadline rather than deferring to a retry deadline.
+        let stored = triage.due(first, true).await.unwrap();
+        assert_eq!(stored, 1);
+        assert_eq!(count(&db, "inbox_decisions").await, 1);
+        assert_eq!(count(&db, "lane_events").await, 1);
+        assert!(triage.deadline().is_none());
+        assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+
+        // Duplicate collection or subsequent due calls do not re-run writer
         let duplicates = collect_all(db.pool(), &[&src], &PrefilterRules::default()).await;
         triage.collected(&duplicates, first, true).await.unwrap();
         triage.due(first, true).await.unwrap();
         assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
-        triage
-            .due(first + chrono::Duration::seconds(120), true)
-            .await
-            .unwrap();
         assert_eq!(count(&db, "inbox_decisions").await, 1);
-        assert_eq!(count(&db, "lane_events").await, 1);
         assert!(triage.deadline().is_none());
     }
 }
 
 #[tokio::test]
-async fn writing_failure_preserves_information_and_bounds_recovery() {
+async fn writing_failure_persists_all_items_with_fallback_without_retry_loop() {
     let (db, mut triage, _, writer) = fixture("mixed", "failure").await;
     let results = collect_all(db.pool(), &[&source(4)], &PrefilterRules::default()).await;
     triage.collected(&results, now(), true).await.unwrap();
-    assert!(triage
+    // Incident 2026-10-16: writer failure no longer errors; all 4 items are persisted
+    // (informational keep instructions, owner/bot receive fallback reason) without retrying.
+    let stored = triage
         .due(now() + chrono::Duration::seconds(120), true)
         .await
-        .is_err());
-    assert_eq!(count(&db, "inbox_decisions").await, 2);
+        .unwrap();
+    assert_eq!(stored, 4);
+    assert_eq!(count(&db, "inbox_decisions").await, 4);
     let classes: Vec<String> =
         sqlx::query_scalar("SELECT class FROM inbox_decisions ORDER BY class")
             .fetch_all(db.pool())
             .await
             .unwrap();
-    assert_eq!(classes, ["fyi", "ignore"]);
-    assert_eq!(
-        triage.deadline(),
-        Some(now() + chrono::Duration::seconds(240))
-    );
-    for seconds in [240, 360, 480] {
-        let _result = triage
-            .due(now() + chrono::Duration::seconds(seconds), true)
-            .await;
-    }
+    assert_eq!(classes, ["bot", "fyi", "ignore", "owner"]);
     assert!(triage.deadline().is_none());
-    triage
-        .due(now() + chrono::Duration::seconds(600), true)
-        .await
-        .unwrap();
-    assert_eq!(writer.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+    let owner_reason: String =
+        sqlx::query_scalar("SELECT reason FROM inbox_decisions WHERE class='owner'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(owner_reason, "자동 분류(사유 작성 실패): owner");
+    let bot_reason: String =
+        sqlx::query_scalar("SELECT reason FROM inbox_decisions WHERE class='bot'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(bot_reason, "자동 분류(사유 작성 실패): bot");
 }
 
 #[tokio::test]
-async fn persistent_writer_failure_stops_after_three_recovery_deadlines() {
+async fn persistent_writer_failure_settles_immediately_without_retry_loop() {
     let (db, mut triage, _, writer) = fixture("owner_must_act", "failure").await;
     let results = collect_all(db.pool(), &[&source(1)], &PrefilterRules::default()).await;
     triage.collected(&results, now(), true).await.unwrap();
-    for seconds in [120, 240, 360, 480] {
-        assert!(triage
-            .due(now() + chrono::Duration::seconds(seconds), true)
-            .await
-            .is_err());
-    }
-    assert!(triage.deadline().is_none());
-    triage
-        .due(now() + chrono::Duration::seconds(600), true)
+    // Incident 2026-10-16: On writer failure, the item is persisted immediately
+    // with fallback reason; it does not retry 4 times across recovery deadlines.
+    let stored = triage
+        .due(now() + chrono::Duration::seconds(120), true)
         .await
         .unwrap();
-    assert_eq!(writer.calls.load(Ordering::SeqCst), 4);
-    assert_eq!(count(&db, "inbox_decisions").await, 0);
+    assert_eq!(stored, 1);
+    assert!(triage.deadline().is_none());
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(count(&db, "inbox_decisions").await, 1);
+    let reason: String =
+        sqlx::query_scalar("SELECT reason FROM inbox_decisions WHERE class = 'owner'")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert_eq!(reason, "자동 분류(사유 작성 실패): owner");
+}
+
+#[tokio::test]
+async fn writer_error_persists_fallback_reason_and_clears_pending() {
+    // Incident 2026-10-16: On writer turn timeout or error, persist jev classifications
+    // with a fallback reason so items leave "pending" without an infinite retry loop.
+    let (db, mut triage, _judge, writer) = fixture("owner_must_act", "failure").await;
+    let results = collect_all(db.pool(), &[&source(20)], &PrefilterRules::default()).await;
+
+    // classify/collected returns Ok
+    let stored = triage.collected(&results, now(), true).await.unwrap();
+    assert_eq!(stored, 20);
+    assert_eq!(writer.calls.load(Ordering::SeqCst), 1);
+
+    // owner_must_act item gets an inbox_decisions row with the fallback reason and class owner
+    let (class, reason, proposed_action, model): (String, String, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT class, reason, proposed_action, model FROM inbox_decisions WHERE class = 'owner'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(class, "owner");
+    assert_eq!(reason, "자동 분류(사유 작성 실패): owner");
+    assert_eq!(proposed_action, None);
+    assert_eq!(model.as_deref(), Some("jev"));
+
+    // no inbox item remains pending
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM inbox_items i LEFT JOIN inbox_decisions d ON d.item_id=i.id WHERE d.item_id IS NULL",
+    )
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
+    assert_eq!(pending, 0);
+
+    // urgent due_at events are still emitted for owner items
+    assert_eq!(count(&db, "lane_events").await, 20);
+    assert!(triage.deadline().is_none());
 }
 
 #[tokio::test]
@@ -487,7 +542,7 @@ fn deadlines_parse_without_model_in_owner_timezone() {
 #[tokio::test]
 async fn stale_relative_deadline_raises_no_urgent_event() {
     // Given: "오늘" written twelve days before triage runs
-    let (db, mut triage, _, _) = fixture("owner_must_act", "valid").await;
+    let (db, mut triage, judge, _) = fixture("owner_must_act", "valid").await;
     let sent = now() - chrono::Duration::days(12);
     let mut item = InboxItem::new(
         InboxSourceKind::Mail,
@@ -515,6 +570,13 @@ async fn stale_relative_deadline_raises_no_urgent_event() {
         .unwrap();
     assert!(due.is_none());
     assert_eq!(count(&db, "lane_events").await, 0);
+    // Late backlog is history: filed as fyi without asking the model.
+    let class: String = sqlx::query_scalar("SELECT class FROM inbox_decisions")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    assert_eq!(class, "fyi");
+    assert_eq!(judge.calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

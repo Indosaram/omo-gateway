@@ -1,0 +1,2 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions watch-tick --once
+rc=0

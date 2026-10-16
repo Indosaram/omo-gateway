@@ -1,0 +1,3 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions adopt omarchy:01a142d8-fad9 --goal QA adopt probe --done file /tmp/omon-qa-adopt-nonexistent --lead 7:discord|-|19:1536981942963150899|-|18:414011632306618368
+{"key":"external-26549ee046154a0e913c60406119d570","kind":"external","status":"working","target":"omarchy:01a142d8-fad9"}
+rc=0

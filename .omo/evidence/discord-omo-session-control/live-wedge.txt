@@ -1,0 +1,8 @@
+before pid=32128 ppid=32007 21:47:39
+readyz=200
+SIGSTOP 32128 at 21:47:39
+RECOVERED old=32128 new=48023 ppid=32007 after=50s at 21:48:43
+2026-10-16T12:47:18.094279Z  INFO omon_gateway::discord::adapter: Discord client ready bot_name=OmOMeow bot_id=1465631383862120451
+2026-10-16T12:48:38.531707Z  WARN omon_gateway::agent::omo_daemon: omo app-server alive but not answering readyz; killing it url=ws://127.0.0.1:19742 pid=Some(32128) missed=3
+2026-10-16T12:48:38.541134Z  WARN omon_gateway::agent::omo_daemon: omo app-server daemon is down; restarting after backoff url=ws://127.0.0.1:19742 retry_in_secs=2.0
+2026-10-16T12:48:40.954165Z  INFO omon_gateway::agent::omo_daemon: restarted omo app-server daemon ready url=ws://127.0.0.1:19742

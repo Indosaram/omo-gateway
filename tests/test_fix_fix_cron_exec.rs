@@ -430,3 +430,67 @@ fn lane_cwd_fallback_is_not_a_developer_path() {
         .unwrap_or_else(std::env::temp_dir);
     assert_eq!(lane.cwd, expected);
 }
+
+// Incident 2026-10-16: A timed-out cron script must kill its whole process tree,
+// including descendants that moved into their own process group via `set -m`.
+#[cfg(unix)]
+#[tokio::test]
+async fn timed_out_cron_script_kills_whole_process_tree_including_new_process_group() {
+    let temp = tempfile::tempdir().unwrap();
+    let pid_file = temp.path().join("grandchild.pid");
+    let script = format!(
+        "(set -m; sh -c 'sleep 300' & echo $! > '{}'; wait)",
+        pid_file.display()
+    );
+    let payload = json!({
+        "script": script,
+        "timeout_secs": 2,
+    });
+    let job = cron_job("timeout_tree_job", &payload);
+    let acked = Arc::new(Mutex::new(0));
+    let backend: Arc<dyn AgentBackend> = Arc::new(AckingBackend {
+        acked_in_backend: acked,
+    });
+
+    let res =
+        omon_gateway::cron::execute_native_cron(&backend, temp.path(), &job, &payload, 30).await;
+
+    let err = res.expect_err("cron script with sleep 300 must time out after 2s");
+    assert!(
+        err.to_string().contains("timed out"),
+        "error should indicate timeout, got: {err}"
+    );
+
+    let pid_str = std::fs::read_to_string(&pid_file).expect("grandchild PID file must be written");
+    let grandchild_pid: i32 = pid_str
+        .trim()
+        .parse()
+        .expect("grandchild PID must be an integer");
+    assert!(grandchild_pid > 1, "grandchild PID must be valid (> 1)");
+
+    // Bounded poll for process reaping up to 5s.
+    let start = std::time::Instant::now();
+    let mut process_alive = true;
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        // SAFETY: libc::kill with signal 0 checks process existence without sending a signal.
+        let ret = unsafe { libc::kill(grandchild_pid, 0) };
+        if ret != 0 {
+            process_alive = false;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    if process_alive {
+        // SAFETY: Cleanup in case of test failure so orphan processes do not linger.
+        unsafe {
+            libc::kill(-grandchild_pid, libc::SIGKILL);
+            libc::kill(grandchild_pid, libc::SIGKILL);
+        }
+    }
+
+    assert!(
+        !process_alive,
+        "grandchild process {grandchild_pid} survived the cron script timeout"
+    );
+}

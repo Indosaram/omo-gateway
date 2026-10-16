@@ -11,7 +11,10 @@
 set -u
 
 LABEL="${WATCHDOG_LABEL:-ai.omon.gateway}"
-GATEWAY_PATTERN="${WATCHDOG_GATEWAY_PATTERN:-/target/release/omo-gateway run}"
+# Incident 2026-10-16: launchd runs the signed copy in ~/.omon/bin; the legacy target/release
+# path is still accepted so this script (run live from the repo) never restarts a healthy
+# gateway that has not been redeployed yet. pgrep -f takes an extended regex.
+GATEWAY_PATTERN="${WATCHDOG_GATEWAY_PATTERN:-(/\.omon/bin|/target/release)/omo-gateway run}"
 DASHBOARD_URL="${WATCHDOG_DASHBOARD_URL:-http://127.0.0.1:9119/api/health}"
 APPSERVER_URL="${WATCHDOG_APPSERVER_URL:-http://127.0.0.1:19742/readyz}"
 SENPI_CHUNKS="${WATCHDOG_SENPI_CHUNKS:-$HOME/.bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/chunks}"

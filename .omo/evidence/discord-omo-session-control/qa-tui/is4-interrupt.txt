@@ -1,0 +1,3 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions interrupt local:01a142df-89f7
+{"ok":true,"target":"local:01a142df-89f7-71ce-834a-9365b4b604f5"}
+rc=0

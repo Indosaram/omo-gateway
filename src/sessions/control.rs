@@ -1,9 +1,10 @@
 use std::{fmt, str::FromStr, sync::Arc, time::Duration};
 
 use clap::ValueEnum;
-use serde_json::Value;
+use serde_json::{json, Value};
 use thiserror::Error;
 
+use super::probe::{answers_for, PendingQuestion, Probe, ProbeError};
 use super::registry::{
     CommandOutput, CommandRunner, ProcessCommandRunner, RegistryError, Session, SessionRegistry,
 };
@@ -83,8 +84,10 @@ pub enum ControlError {
     NotRunning,
     #[error("session does not advertise {0} control")]
     Unsupported(&'static str),
-    #[error("remote multiline text is unsupported; stdin/text-file support has not been verified")]
-    RemoteMultiline,
+    #[error("target matches several sessions: {0}")]
+    Ambiguous(String),
+    #[error("session control failed: {0}")]
+    Probe(String),
     #[error("text must not be empty or contain NUL")]
     InvalidText,
     #[error("session command timed out")]
@@ -101,13 +104,12 @@ impl ControlError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::NotRunning => 3,
-            Self::InvalidTarget
-            | Self::Unsupported(_)
-            | Self::RemoteMultiline
-            | Self::InvalidText => 2,
+            Self::InvalidTarget | Self::Unsupported(_) | Self::Ambiguous(_) | Self::InvalidText => {
+                2
+            }
             Self::Registry(error) => error.exit_code(),
             Self::Command { code, .. } if (1..=5).contains(code) => *code,
-            Self::Command { .. } | Self::Timeout | Self::Json(_) => 5,
+            Self::Probe(_) | Self::Command { .. } | Self::Timeout | Self::Json(_) => 5,
         }
     }
 }
@@ -162,6 +164,148 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         &self.registry
     }
 
+    pub fn runner(&self) -> Arc<R> {
+        self.runner.clone()
+    }
+
+    pub async fn resolve(&self, target: &Target) -> Result<(Target, Session), ControlError> {
+        let list = SessionRegistry::new(self.runner.clone(), vec![target.machine.clone()])
+            .list_all()
+            .await;
+        let machine_error = list
+            .errors
+            .into_iter()
+            .find(|error| error.machine == target.machine);
+
+        // Daemon-hosted sessions list a host-local id ("rpc-2") that `omo thread` rejects;
+        // the durable id is the only address every subcommand accepts, so it is canonical.
+        let sessions: Vec<Session> = list
+            .sessions
+            .into_iter()
+            .filter(|s| s.machine == target.machine)
+            .map(|mut s| {
+                if let Some(durable) = s.raw.get("durableSessionId").and_then(Value::as_str) {
+                    if !durable.is_empty() && durable != s.session_id {
+                        s.session_id = durable.to_owned();
+                    }
+                }
+                s
+            })
+            .collect();
+
+        // 1. Exact id (canonical durable id or the host-local id the listing reported)
+        let exact_matches: Vec<Session> = sessions
+            .iter()
+            .filter(|s| {
+                s.session_id == target.session
+                    || s.raw.get("sessionId").and_then(Value::as_str)
+                        == Some(target.session.as_str())
+            })
+            .cloned()
+            .collect();
+        if exact_matches.len() == 1 {
+            let session = exact_matches.into_iter().next().unwrap();
+            let resolved_target = Target {
+                machine: target.machine.clone(),
+                session: session.session_id.clone(),
+            };
+            return Ok((resolved_target, session));
+        }
+
+        // 2. Exact durableSessionId
+        let durable_matches: Vec<Session> = sessions
+            .iter()
+            .filter(|s| {
+                s.raw
+                    .get("durableSessionId")
+                    .and_then(Value::as_str)
+                    .map(|d| d == target.session)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        if durable_matches.len() == 1 {
+            let session = durable_matches.into_iter().next().unwrap();
+            let resolved_target = Target {
+                machine: target.machine.clone(),
+                session: session.session_id.clone(),
+            };
+            return Ok((resolved_target, session));
+        }
+
+        // 3. Unique prefix of either session_id or durableSessionId
+        let prefix_matches: Vec<Session> = sessions
+            .iter()
+            .filter(|s| {
+                let id_match = s.session_id.starts_with(&target.session);
+                let durable_match = s
+                    .raw
+                    .get("durableSessionId")
+                    .and_then(Value::as_str)
+                    .map(|d| d.starts_with(&target.session))
+                    .unwrap_or(false);
+                id_match || durable_match
+            })
+            .cloned()
+            .collect();
+        if prefix_matches.len() == 1 {
+            let session = prefix_matches.into_iter().next().unwrap();
+            let resolved_target = Target {
+                machine: target.machine.clone(),
+                session: session.session_id.clone(),
+            };
+            return Ok((resolved_target, session));
+        }
+        if prefix_matches.len() > 1 {
+            let ids = prefix_matches
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ControlError::Ambiguous(ids));
+        }
+
+        // 4. Exact name
+        let name_matches: Vec<Session> = sessions
+            .iter()
+            .filter(|s| {
+                s.raw
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(|n| n == target.session)
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        if name_matches.len() == 1 {
+            let session = name_matches.into_iter().next().unwrap();
+            let resolved_target = Target {
+                machine: target.machine.clone(),
+                session: session.session_id.clone(),
+            };
+            return Ok((resolved_target, session));
+        }
+        if name_matches.len() > 1 {
+            let ids = name_matches
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ControlError::Ambiguous(ids));
+        }
+
+        match machine_error {
+            Some(error) => Err(ControlError::Command {
+                code: error.code,
+                message: format!(
+                    "session listing failed on {}: {}",
+                    error.machine, error.message
+                ),
+            }),
+            None => Err(ControlError::NotRunning),
+        }
+    }
+
     pub async fn session(
         &self,
         target: &Target,
@@ -178,7 +322,12 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         let session = list
             .sessions
             .into_iter()
-            .find(|s| s.machine == target.machine && s.session_id == target.session)
+            .find(|s| {
+                s.machine == target.machine
+                    && (s.session_id == target.session
+                        || s.raw.get("durableSessionId").and_then(Value::as_str)
+                            == Some(target.session.as_str()))
+            })
             .ok_or_else(|| match machine_error {
                 // A failed listing says nothing about the session; only a successful
                 // listing that lacks it proves it is not running.
@@ -239,19 +388,20 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<Value, ControlError> {
+        let (resolved_target, _session) = self.resolve(target).await?;
         let mut words = vec![
             "omo".into(),
             "thread".into(),
             "read".into(),
-            target.session.clone(),
+            resolved_target.session.clone(),
             "--limit".into(),
             limit.to_string(),
-            "--json".into(),
         ];
         if let Some(cursor) = cursor {
             words.extend(["--cursor".into(), cursor.into()]);
         }
-        self.command(target, &words).await
+        words.extend(["--all-scope".into(), "--json".into()]);
+        self.command(&resolved_target, &words).await
     }
 
     pub async fn send(
@@ -264,22 +414,23 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         if text.trim().is_empty() || text.contains('\0') {
             return Err(ControlError::InvalidText);
         }
-        if target.machine != "local" && text.contains(['\n', '\r']) {
-            return Err(ControlError::RemoteMultiline);
+        let (resolved_target, session) = self.resolve(target).await?;
+        if !session.controls.iter().any(|c| c == "send") {
+            return Err(ControlError::Unsupported("send"));
         }
-        self.session(target, "send").await?;
         self.command(
-            target,
+            &resolved_target,
             &[
                 "omo".into(),
                 "thread".into(),
                 "send".into(),
-                target.session.clone(),
+                resolved_target.session.clone(),
                 text.into(),
                 "--mode".into(),
                 mode.as_str().into(),
                 "--idempotency-key".into(),
                 key.to_string(),
+                "--all-scope".into(),
                 "--json".into(),
             ],
         )
@@ -287,18 +438,101 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
     }
 
     pub async fn interrupt(&self, target: &Target) -> Result<Value, ControlError> {
-        self.session(target, "interrupt").await?;
-        self.command(
-            target,
-            &[
-                "omo".into(),
-                "thread".into(),
-                "interrupt".into(),
-                target.session.clone(),
-                "--json".into(),
-            ],
-        )
-        .await
+        let (resolved_target, session) = self.resolve(target).await?;
+        if !session.controls.iter().any(|c| c == "interrupt") {
+            return Err(ControlError::Unsupported("interrupt"));
+        }
+        let probe = Probe::new(self.runner.clone());
+        probe
+            .interrupt(resolved_target.machine(), &session.session_id)
+            .await
+            .map_err(|e| match e {
+                ProbeError::NotFound => ControlError::NotRunning,
+                ProbeError::Timeout => ControlError::Timeout,
+                ProbeError::Refused(msg) => ControlError::Command {
+                    code: 4,
+                    message: msg,
+                },
+                other => ControlError::Probe(other.to_string()),
+            })?;
+        Ok(json!({"ok": true, "target": resolved_target.to_string()}))
+    }
+
+    pub async fn answer(
+        &self,
+        target: &Target,
+        text: &str,
+        request_id: Option<&str>,
+    ) -> Result<Value, ControlError> {
+        if text.trim().is_empty() || text.contains('\0') {
+            return Err(ControlError::InvalidText);
+        }
+        let (resolved_target, session) = self.resolve(target).await?;
+        let probe = Probe::new(self.runner.clone());
+        let snapshot = probe
+            .snapshot(resolved_target.machine(), 100)
+            .await
+            .map_err(|e| match e {
+                ProbeError::NotFound => ControlError::NotRunning,
+                ProbeError::Timeout => ControlError::Timeout,
+                ProbeError::Refused(msg) => ControlError::Command {
+                    code: 4,
+                    message: msg,
+                },
+                other => ControlError::Probe(other.to_string()),
+            })?;
+
+        let live_session = snapshot
+            .sessions
+            .into_iter()
+            .find(|s| s.session_id == session.session_id || s.routing_id == session.session_id)
+            .ok_or(ControlError::NotRunning)?;
+
+        let question: PendingQuestion = if let Some(req_id) = request_id {
+            live_session
+                .questions
+                .into_iter()
+                .find(|q| q.request_id == req_id)
+                .ok_or_else(|| {
+                    ControlError::Probe(format!("no pending question matching request_id {req_id}"))
+                })?
+        } else {
+            match live_session.questions.len() {
+                0 => return Err(ControlError::Probe("no pending question".into())),
+                1 => live_session.questions.into_iter().next().unwrap(),
+                n => {
+                    return Err(ControlError::Ambiguous(format!(
+                        "session has {n} pending questions, specify request_id"
+                    )))
+                }
+            }
+        };
+
+        let answers = answers_for(&question, text);
+        probe
+            .answer(
+                resolved_target.machine(),
+                &session.session_id,
+                &question.request_id,
+                &answers,
+                None,
+            )
+            .await
+            .map_err(|e| match e {
+                ProbeError::NotFound => ControlError::NotRunning,
+                ProbeError::Timeout => ControlError::Timeout,
+                ProbeError::Refused(msg) => ControlError::Command {
+                    code: 4,
+                    message: msg,
+                },
+                other => ControlError::Probe(other.to_string()),
+            })?;
+
+        Ok(json!({
+            "ok": true,
+            "target": resolved_target.to_string(),
+            "request_id": question.request_id,
+        }))
     }
 }
 

@@ -1,0 +1,4 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions send local:01a142d8-f428-74b8-aaf0-3e8e336bce6c --text Reply with exactly the two words QA-LOCAL-OK.
+Second line is part of the same message.
+{"deduplicated":false,"delivery":{"kind":"queued","queue_position":1},"delivery_id":"9a04cee3-467b-42e7-a47a-e0af1238672a","effective_mode":"auto","endpoint_kind":"rpc_host","kind":"ok","message_seq":1,"thread_id":"01a142d8-f428-74b8-aaf0-3e8e336bce6c"}
+rc=0

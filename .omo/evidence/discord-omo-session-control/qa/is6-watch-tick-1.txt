@@ -1,0 +1,4 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions watch-tick --once
+{"dedupe_key":"q:local:01a128b6-228f-71e1-9449-369f1deb5a21:toolu_01GSFJDAvjBmUakCNvHRagZb","kind":"question","target":"local:01a128b6-228f-71e1-9449-369f1deb5a21","text":"❓ local · CLIProxyAPI 업스트림 기능 캐시 프록시 비교: 계획 42개 중 F2 하나만 남았습니다. Mac의 54545를 잡고 있는 ssh 터널 서비스(launchd 자동 재시작, 18801 등 포워딩)를 잠깐 내렸다 올려도 될까요?\n선택지: 터널 잠깐 끄고 마무리 / 유지, 여기서 종료\n→ `/sessions answer target:local:01a128b6-228f text:…`"}
+{"dedupe_key":"b:local:01a128b6-228f-71e1-9449-369f1deb5a21:156","kind":"blocked","target":"local:01a128b6-228f-71e1-9449-369f1deb5a21","text":"⛔ local · CLIProxyAPI 업스트림 기능 캐시 프록시 비교: 터미널에서 답해야 하는 질문을 기다리고 있어요 (`local:01a128b6-228f`)"}
+rc=0

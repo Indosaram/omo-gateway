@@ -92,6 +92,7 @@ async fn local_send_has_exact_argv_and_idempotency_key() {
                 "follow_up".into(),
                 "--idempotency-key".into(),
                 key.to_string(),
+                "--all-scope".into(),
                 "--json".into()
             ]
         )
@@ -133,6 +134,7 @@ async fn remote_send_preserves_text_and_exact_ssh_words() {
             "'steer'",
             "'--idempotency-key'",
             &format!("'{key}'"),
+            "'--all-scope'",
             "'--json'"
         ]
     );
@@ -181,21 +183,135 @@ async fn missing_send_control_does_not_send() {
 }
 
 #[tokio::test]
-async fn remote_multiline_is_refused_without_any_command() {
+async fn remote_send_multiline_preserves_newline_inside_quoted_word() {
     let runner = Arc::new(FakeRunner::default());
-    let control = SessionControl::new(runner.clone(), vec![]);
-    assert!(matches!(
-        control
-            .send(
-                &"omarchy:session-1".parse().unwrap(),
-                "one\ntwo",
-                SendMode::Auto,
-                uuid::Uuid::new_v4()
-            )
-            .await,
-        Err(ControlError::RemoteMultiline)
-    ));
-    assert!(runner.calls.lock().unwrap().is_empty());
+    let control = SessionControl::new(runner.clone(), vec!["omarchy".into()]);
+    let target: Target = "omarchy:session-1".parse().unwrap();
+    let key = uuid::Uuid::new_v4();
+    control
+        .send(&target, "line 1\nline 2", SendMode::Auto, key)
+        .await
+        .unwrap();
+    let calls = runner.calls.lock().unwrap();
+    assert_eq!(
+        calls.last().unwrap().1,
+        vec![
+            "ssh",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=5",
+            "--",
+            "omarchy",
+            "'omo'",
+            "'thread'",
+            "'send'",
+            "'session-1'",
+            "'line 1\nline 2'",
+            "'--mode'",
+            "'auto'",
+            "'--idempotency-key'",
+            &format!("'{key}'"),
+            "'--all-scope'",
+            "'--json'"
+        ]
+    );
+}
+
+#[derive(Default)]
+struct ResolveRunner {
+    sessions: Vec<Value>,
+}
+
+#[async_trait]
+impl CommandRunner for ResolveRunner {
+    async fn run(&self, _machine: &str, argv: &[String]) -> Result<CommandOutput, String> {
+        let list = argv.iter().any(|word| word == "list");
+        if list {
+            Ok(CommandOutput {
+                code: 0,
+                stdout: serde_json::to_vec(&self.sessions).unwrap(),
+                stderr: vec![],
+            })
+        } else {
+            Ok(CommandOutput {
+                code: 0,
+                stdout: serde_json::to_vec(&json!({"ok":true})).unwrap(),
+                stderr: vec![],
+            })
+        }
+    }
+}
+
+#[tokio::test]
+async fn resolve_unique_prefix_ok() {
+    let runner = Arc::new(ResolveRunner {
+        sessions: vec![
+            json!({"session_id":"01a13a7d-abcd-1234","status":"running","controls":["send"]}),
+            json!({"session_id":"02b23a7d-efgh-5678","status":"running","controls":["send"]}),
+        ],
+    });
+    let control = SessionControl::new(runner, vec![]);
+    let target: Target = "local:01a1".parse().unwrap();
+    let (resolved, session) = control.resolve(&target).await.unwrap();
+    assert_eq!(resolved.session(), "01a13a7d-abcd-1234");
+    assert_eq!(session.session_id, "01a13a7d-abcd-1234");
+}
+
+#[tokio::test]
+async fn resolve_daemon_session_uses_durable_id_as_canonical_target() {
+    let runner = Arc::new(ResolveRunner {
+        sessions: vec![json!({
+            "sessionId":"rpc-2",
+            "durableSessionId":"01a142d1-6661-7cfc-b97b-10b3dffff06e",
+            "status":"live",
+            "controls":["send","interrupt"]
+        })],
+    });
+    let control = SessionControl::new(runner, vec![]);
+    for spelling in ["local:01a142d1-6661", "local:rpc-2"] {
+        let target: Target = spelling.parse().unwrap();
+        let (resolved, session) = control.resolve(&target).await.unwrap();
+        assert_eq!(
+            resolved.session(),
+            "01a142d1-6661-7cfc-b97b-10b3dffff06e",
+            "{spelling}"
+        );
+        assert_eq!(session.session_id, "01a142d1-6661-7cfc-b97b-10b3dffff06e");
+    }
+    let durable: Target = "local:01a142d1-6661-7cfc-b97b-10b3dffff06e"
+        .parse()
+        .unwrap();
+    assert!(control.session(&durable, "send").await.is_ok());
+}
+
+#[tokio::test]
+async fn resolve_ambiguous_prefix_errors() {
+    let runner = Arc::new(ResolveRunner {
+        sessions: vec![
+            json!({"session_id":"01a13a7d-abcd-1234","status":"running","controls":["send"]}),
+            json!({"session_id":"01a14b8e-efgh-5678","status":"running","controls":["send"]}),
+        ],
+    });
+    let control = SessionControl::new(runner, vec![]);
+    let target: Target = "local:01a1".parse().unwrap();
+    let err = control.resolve(&target).await.unwrap_err();
+    assert!(matches!(err, ControlError::Ambiguous(_)));
+    assert_eq!(err.exit_code(), 2);
+}
+
+#[tokio::test]
+async fn resolve_missing_session_returns_not_running() {
+    let runner = Arc::new(ResolveRunner {
+        sessions: vec![
+            json!({"session_id":"01a13a7d-abcd-1234","status":"running","controls":["send"]}),
+        ],
+    });
+    let control = SessionControl::new(runner, vec![]);
+    let target: Target = "local:nonexistent".parse().unwrap();
+    let err = control.resolve(&target).await.unwrap_err();
+    assert!(matches!(err, ControlError::NotRunning));
+    assert_eq!(err.exit_code(), 3);
 }
 
 struct PassingChecks;

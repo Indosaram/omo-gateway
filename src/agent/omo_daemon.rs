@@ -28,13 +28,26 @@ type ChildSlot = Arc<Mutex<Option<Child>>>;
 type OwnedDaemons = std::collections::HashMap<String, std::sync::Weak<Mutex<Option<Child>>>>;
 static OWNED_DAEMONS: LazyLock<std::sync::Mutex<OwnedDaemons>> = LazyLock::new(Default::default);
 /// When each URL was last force-restarted; a slow model must not turn into a restart loop.
-static LAST_FORCED_RESTART: LazyLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
-    LazyLock::new(Default::default);
+static LAST_FORCED_RESTART: LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+> = LazyLock::new(Default::default);
 /// Minimum spacing between two forced restarts of the same daemon.
 const FORCED_RESTART_MIN_INTERVAL: Duration = Duration::from_secs(120);
 
 const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const READY_WAIT_AFTER_SPAWN: Duration = Duration::from_secs(30);
+/// Longest readiness wait for a spawned daemon. Under heavy host load a healthy app-server
+/// can need well over READY_WAIT_AFTER_SPAWN; only a child that is still unready after this
+/// is treated as hung and replaced.
+const READY_WAIT_MAX: Duration = Duration::from_secs(180);
+
+/// Readiness deadline for the attempt after `failures` consecutive unready restarts: it
+/// grows so sustained load cannot turn every replacement into a kill-and-retry loop.
+fn ready_wait(failures: u32) -> Duration {
+    READY_WAIT_AFTER_SPAWN
+        .saturating_mul(failures.saturating_add(1))
+        .min(READY_WAIT_MAX)
+}
 /// First delay before a restart attempt; it doubles per consecutive failure.
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 /// Upper bound of the restart delay: the supervisor keeps retrying at this pace.
@@ -42,6 +55,13 @@ const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// A daemon that stayed ready this long before exiting counts as healthy, so its
 /// exit starts a fresh outage (backoff reset) instead of extending a crash loop.
 const RESTART_WINDOW: Duration = Duration::from_secs(60);
+/// How often the supervisor probes readyz of a running daemon that has been ready.
+const LIVENESS_INTERVAL: Duration = Duration::from_secs(20);
+/// Consecutive failed liveness probes after which a running daemon counts as wedged.
+/// Incident 2026-10-16: one session's blocking file read (an iCloud dataless file)
+/// froze the whole app-server process for 4h38m while it stayed alive, so an exit
+/// check alone never restarted it.
+const LIVENESS_FAILURES: u32 = 3;
 
 /// Delay before the restart attempt that follows `failures` consecutive failures.
 fn restart_backoff(failures: u32, base: Duration, cap: Duration) -> Duration {
@@ -417,6 +437,37 @@ fn daemon_command(bin: &str, listen_url: &str, token_file: Option<&std::path::Pa
     };
     cmd.stdin(Stdio::null()).kill_on_drop(true);
 
+    let mut prepend_dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        prepend_dirs.push(std::path::PathBuf::from(home).join(".omon").join("bin"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            prepend_dirs.push(dir.to_path_buf());
+        }
+    }
+
+    let inherited_path = std::env::var_os("PATH");
+    let mut path_entries: Vec<std::path::PathBuf> = Vec::new();
+
+    for dir in prepend_dirs {
+        if !path_entries.contains(&dir) {
+            path_entries.push(dir);
+        }
+    }
+
+    if let Some(ref path_os) = inherited_path {
+        for entry in std::env::split_paths(path_os) {
+            if !path_entries.contains(&entry) {
+                path_entries.push(entry);
+            }
+        }
+    }
+
+    if let Ok(new_path) = std::env::join_paths(path_entries) {
+        cmd.env("PATH", new_path);
+    }
+
     let log_file = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .ok()
@@ -524,6 +575,7 @@ impl OmoDaemonSupervisor {
         }
 
         let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
+        let mut exited_early = false;
         while Instant::now() < deadline {
             if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
                 tracing::info!(url = %cfg.appserver_url, "omo app-server daemon ready");
@@ -531,17 +583,65 @@ impl OmoDaemonSupervisor {
                 return Ok(Some(supervisor));
             }
             if supervisor.child_exited() {
+                exited_early = true;
                 break;
             }
             sleep(Duration::from_millis(400)).await;
         }
 
-        supervisor.kill();
-        Err(OmonError::Config(format!(
-            "spawned 'omo app-server' did not become ready at {} within {}s",
-            cfg.appserver_url,
-            READY_WAIT_AFTER_SPAWN.as_secs()
-        )))
+        // A slow start (heavy host load) must not take the whole gateway down: exiting here
+        // made launchd restart it into the same timeout forever. Keep running and let the
+        // watcher own the daemon: it respawns it once it exits, and kills a child that is
+        // still unready after READY_WAIT_MAX so a hung daemon is replaced too.
+        if exited_early {
+            tracing::error!(
+                url = %cfg.appserver_url,
+                "omo app-server exited before becoming ready; supervising and restarting it"
+            );
+        } else {
+            tracing::warn!(
+                url = %cfg.appserver_url,
+                wait_secs = READY_WAIT_AFTER_SPAWN.as_secs(),
+                "omo app-server daemon not ready yet; continuing startup and supervising it"
+            );
+            let slot = Arc::clone(&supervisor.child);
+            let shutdown = Arc::clone(&supervisor.shutdown);
+            let url = cfg.appserver_url.clone();
+            // Only this first child may be killed here; the watcher can swap in a replacement.
+            let first_pid = supervisor
+                .child
+                .try_lock()
+                .ok()
+                .and_then(|g| g.as_ref().and_then(Child::id));
+            tokio::spawn(async move {
+                let deadline = Instant::now() + READY_WAIT_MAX - READY_WAIT_AFTER_SPAWN;
+                while Instant::now() < deadline {
+                    if shutdown.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if probe_readyz(&url, READY_PROBE_TIMEOUT).await {
+                        tracing::info!(url = %url, "omo app-server daemon ready after slow start");
+                        return;
+                    }
+                    let exited = slot.lock().await.as_mut().is_none_or(|child| {
+                        child.id() != first_pid || matches!(child.try_wait(), Ok(Some(_)))
+                    });
+                    if exited {
+                        return;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
+                // Still alive and never ready: kill it so the watcher sees an exit and respawns.
+                if let Some(child) = slot.lock().await.as_mut() {
+                    if child.id() == first_pid {
+                        tracing::error!(url = %url, "omo app-server never became ready; replacing it");
+                        let _ = child.start_kill();
+                    }
+                }
+            });
+        }
+        supervisor.spawn_watcher(cfg.appserver_url.clone(), bin, token_file);
+        Ok(Some(supervisor))
     }
 
     fn child_exited(&self) -> bool {
@@ -558,7 +658,14 @@ impl OmoDaemonSupervisor {
     }
 
     fn spawn_watcher(&self, url: String, bin: String, token_file: Option<std::path::PathBuf>) {
-        self.spawn_watcher_with_backoff(url, bin, token_file, RESTART_BACKOFF, RESTART_BACKOFF_MAX);
+        self.spawn_watcher_with_backoff(
+            url,
+            bin,
+            token_file,
+            RESTART_BACKOFF,
+            RESTART_BACKOFF_MAX,
+            LIVENESS_INTERVAL,
+        );
     }
 
     fn spawn_watcher_with_backoff(
@@ -568,6 +675,7 @@ impl OmoDaemonSupervisor {
         token_file: Option<std::path::PathBuf>,
         backoff_base: Duration,
         backoff_cap: Duration,
+        liveness_interval: Duration,
     ) {
         let child_slot = Arc::clone(&self.child);
         let shutdown = Arc::clone(&self.shutdown);
@@ -582,6 +690,12 @@ impl OmoDaemonSupervisor {
                 if shutdown.load(Ordering::Acquire) {
                     return;
                 }
+                // A daemon that is alive but no longer answers readyz is wedged: kill it
+                // so the restart path below replaces it. Probing starts only once this
+                // daemon has answered at least once, so a slow start is never killed here.
+                let mut answered = false;
+                let mut missed: u32 = 0;
+                let mut next_probe = Instant::now();
                 loop {
                     if shutdown.load(Ordering::Acquire) {
                         return;
@@ -595,6 +709,32 @@ impl OmoDaemonSupervisor {
                     };
                     if exited {
                         break;
+                    }
+                    if Instant::now() >= next_probe {
+                        next_probe = Instant::now() + liveness_interval;
+                        if probe_readyz(&url, READY_PROBE_TIMEOUT).await {
+                            answered = true;
+                            missed = 0;
+                        } else if answered {
+                            missed += 1;
+                            if missed >= LIVENESS_FAILURES {
+                                if let Ok(mut last) = LAST_FORCED_RESTART.lock() {
+                                    last.insert(url.clone(), std::time::Instant::now());
+                                }
+                                let mut guard = child_slot.lock().await;
+                                if let Some(child) = guard.as_mut() {
+                                    tracing::warn!(
+                                        url = %url,
+                                        pid = ?child.id(),
+                                        missed,
+                                        "omo app-server alive but not answering readyz; killing it"
+                                    );
+                                    let _ = child.start_kill();
+                                    let _ = timeout(Duration::from_secs(5), child.wait()).await;
+                                }
+                                break;
+                            }
+                        }
                     }
                     sleep(Duration::from_millis(500)).await;
                 }
@@ -641,7 +781,7 @@ impl OmoDaemonSupervisor {
                     Ok(child) => {
                         record_daemon_pid(&url, child.id());
                         child_slot.lock().await.replace(child);
-                        let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
+                        let deadline = Instant::now() + ready_wait(failures.saturating_sub(1));
                         let mut ready = false;
                         let mut exited = false;
                         while Instant::now() < deadline {
@@ -715,7 +855,7 @@ pub async fn force_restart_owned_daemon(url: &str) -> bool {
             tracing::warn!(%url, "omo app-server was force-restarted recently; not restarting again");
             return false;
         }
-        last.insert(url.to_owned(), Instant::now());
+        last.insert(url.to_owned(), std::time::Instant::now());
     }
     let slot = OWNED_DAEMONS
         .lock()
@@ -749,6 +889,37 @@ pub async fn force_restart_owned_daemon(url: &str) -> bool {
         sleep(Duration::from_millis(500)).await;
     }
     tracing::error!(%url, "omo app-server did not come back after forced restart");
+    false
+}
+
+/// Returns true if the daemon at `url` was force-restarted at or after `since`.
+///
+/// Incident 2026-10-16: concurrent turns in other sessions that fail with a transport
+/// reset during a forced restart use this to determine that their connection died
+/// because the app-server process was killed by the gateway, making a single retry safe.
+pub fn forced_restart_since(url: &str, since: std::time::Instant) -> bool {
+    let Ok(last) = LAST_FORCED_RESTART.lock() else {
+        return false;
+    };
+    last.get(url).is_some_and(|&at| at >= since)
+}
+
+/// Polls `<url>/readyz` until the replacement daemon answers or `max` duration has elapsed.
+///
+/// Used after an owned daemon restart so concurrent turns lost to the restart can wait
+/// for readiness before retrying (incident 2026-10-16).
+pub async fn wait_owned_daemon_ready(url: &str, max: Duration) -> bool {
+    let deadline = Instant::now() + max;
+    while Instant::now() < deadline {
+        if probe_readyz(url, READY_PROBE_TIMEOUT).await {
+            return true;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        sleep(Duration::from_millis(500).min(remaining)).await;
+    }
     false
 }
 
@@ -854,6 +1025,7 @@ s.recv(1)
             None,
             Duration::from_millis(10),
             Duration::from_millis(40),
+            LIVENESS_INTERVAL,
         );
         for _ in 0..RESTARTS_PAST_OLD_LIMIT {
             let (mut event, _) = timeout(Duration::from_secs(10), events.accept())
@@ -969,6 +1141,39 @@ s.recv(1)
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[test]
+    fn readiness_wait_grows_per_unready_restart_and_is_capped() {
+        assert_eq!(ready_wait(0), READY_WAIT_AFTER_SPAWN);
+        assert_eq!(ready_wait(1), READY_WAIT_AFTER_SPAWN * 2);
+        assert_eq!(ready_wait(100), READY_WAIT_MAX);
+    }
+
+    #[test]
+    fn forced_restart_since_reports_restarts_at_or_after_deadline() {
+        let fake_url = "ws://127.0.0.1:59999/unit-test-forced-restart";
+        let before = std::time::Instant::now();
+        std::thread::sleep(Duration::from_millis(5));
+        let restart_time = std::time::Instant::now();
+        {
+            let mut last = LAST_FORCED_RESTART.lock().unwrap();
+            last.insert(fake_url.to_string(), restart_time);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        let after = std::time::Instant::now();
+
+        // `before` is strictly before the restart -> must be true
+        assert!(forced_restart_since(fake_url, before));
+        // `restart_time` is equal to the restart -> must be true (at >= since)
+        assert!(forced_restart_since(fake_url, restart_time));
+        // `after` is strictly after the restart -> must be false
+        assert!(!forced_restart_since(fake_url, after));
+        // Unrelated url -> must be false
+        assert!(!forced_restart_since(
+            "ws://127.0.0.1:59999/untracked-url",
+            before
+        ));
     }
 
     #[tokio::test]
@@ -1277,6 +1482,7 @@ while True:
             None,
             Duration::from_millis(10),
             Duration::from_millis(40),
+            LIVENESS_INTERVAL,
         );
         let (mut event, _) = timeout(Duration::from_secs(10), started)
             .await
@@ -1295,7 +1501,7 @@ while True:
         let retried = events.accept();
         // Time is the behavior under test: advance beyond the readiness bound.
         tokio::time::pause();
-        tokio::time::advance(READY_WAIT_AFTER_SPAWN + Duration::from_secs(3)).await;
+        tokio::time::advance(ready_wait(0) + Duration::from_secs(3)).await;
         tokio::time::resume();
         // The unready replacement is killed (its event socket closes)...
         let eof = timeout(Duration::from_secs(5), event.read_u8()).await;
@@ -1324,6 +1530,112 @@ while True:
             "an unready replacement must not permanently disable the supervisor"
         );
         assert_ne!(first_pid, second_pid, "retry must be a fresh process");
+    }
+
+    /// Incident 2026-10-16: the app-server stayed alive but stopped answering for 4h38m
+    /// (a blocking read of an iCloud dataless file froze its event loop). The supervisor
+    /// must notice the silence, kill the wedged process, and start a fresh one.
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn daemon_alive_but_unresponsive_is_replaced() {
+        if isolated_home("daemon_alive_but_unresponsive_is_replaced").await {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let events = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", port.local_addr().unwrap());
+        drop(port);
+        let bin = dir.path().join("wedging-daemon");
+        // Answers readyz twice, then keeps accepting connections without replying,
+        // like an app-server whose event loop is blocked.
+        std::fs::write(
+            &bin,
+            format!(
+                r#"#!/bin/sh
+''''test -x /opt/homebrew/bin/python3 && exec /opt/homebrew/bin/python3 "$0" "$@"; exec /usr/bin/python3 "$0" "$@" # '''
+import os, socket, sys
+ev = socket.create_connection(('127.0.0.1', {}))
+ev.sendall(str(os.getpid()).encode() + b'\n')
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', int(sys.argv[3].rsplit(':', 1)[1])))
+s.listen(64)
+held = []
+answered = 0
+while True:
+    c, _ = s.accept()
+    if answered < 2:
+        c.recv(4096)
+        c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n')
+        c.close()
+        answered += 1
+    else:
+        held.append(c)
+"#,
+                events.local_addr().unwrap().port()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let supervisor = OmoDaemonSupervisor {
+            child: Arc::new(Mutex::new(None)),
+            shutdown: Arc::new(AtomicBool::new(false)),
+        };
+        // Subscribe to the first daemon's start before starting the watcher.
+        let started = events.accept();
+        supervisor.spawn_watcher_with_backoff(
+            url.clone(),
+            bin.to_string_lossy().into_owned(),
+            None,
+            Duration::from_millis(10),
+            Duration::from_millis(40),
+            Duration::from_millis(100),
+        );
+        let (mut first, _) = timeout(Duration::from_secs(10), started)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut first_pid = String::new();
+        loop {
+            let byte = first.read_u8().await.unwrap();
+            if byte == b'\n' {
+                break;
+            }
+            first_pid.push(byte as char);
+        }
+        // Subscribe to the replacement before the wedge is detected.
+        let replaced = events.accept();
+        // Detection needs LIVENESS_FAILURES probes that each wait READY_PROBE_TIMEOUT.
+        let bound = READY_PROBE_TIMEOUT * (LIVENESS_FAILURES + 2) + Duration::from_secs(10);
+        let eof = timeout(bound, first.read_u8()).await;
+        let (mut second, _) = timeout(Duration::from_secs(15), replaced)
+            .await
+            .expect("supervisor must start a fresh daemon after the wedge")
+            .unwrap();
+        let mut second_pid = String::new();
+        loop {
+            let byte = second.read_u8().await.unwrap();
+            if byte == b'\n' {
+                break;
+            }
+            second_pid.push(byte as char);
+        }
+        supervisor.kill();
+        assert!(
+            eof.is_ok(),
+            "wedged daemon PID {first_pid} was never killed"
+        );
+        assert!(
+            !process_alive(first_pid.parse().unwrap()),
+            "wedged daemon must be gone"
+        );
+        assert_ne!(first_pid, second_pid, "replacement must be a fresh process");
+        assert!(
+            forced_restart_since(&url, std::time::Instant::now() - bound * 2),
+            "the liveness kill must be recorded like a forced restart"
+        );
     }
 
     #[test]
@@ -1449,5 +1761,42 @@ while True:
             ]
         );
         assert!(!args.iter().any(|a| a == "off"));
+    }
+
+    #[tokio::test]
+    async fn test_daemon_command_path_prepends_dirs() {
+        if isolated_home("test_daemon_command_path_prepends_dirs").await {
+            return;
+        }
+        let cmd = daemon_command("omo", "ws://127.0.0.1:19742", None);
+        let envs: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = cmd
+            .as_std()
+            .get_envs()
+            .map(|(k, v)| (k.to_os_string(), v.map(|v| v.to_os_string())))
+            .collect();
+        let path_val = envs
+            .iter()
+            .find(|(k, _)| k == "PATH")
+            .and_then(|(_, v)| v.as_ref())
+            .expect("PATH env var must be set on daemon command");
+
+        let entries: Vec<std::path::PathBuf> = std::env::split_paths(path_val).collect();
+        assert!(
+            entries.len() >= 2,
+            "PATH must have at least the two prepended dirs"
+        );
+
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .expect("HOME or USERPROFILE must be present in test");
+        let expected_omon_bin = std::path::PathBuf::from(home).join(".omon").join("bin");
+        let expected_exe_dir = std::env::current_exe()
+            .expect("current_exe must succeed in test")
+            .parent()
+            .expect("current_exe must have a parent dir")
+            .to_path_buf();
+
+        assert_eq!(entries[0], expected_omon_bin);
+        assert_eq!(entries[1], expected_exe_dir);
     }
 }

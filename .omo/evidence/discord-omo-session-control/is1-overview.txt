@@ -1,0 +1,22 @@
+🖥️ local — 작업 중 2 · 답변 대기 0 · 대기 12
+🟢 01a1428d-5e53-7f52-974a-0f2bcb7e · ~/code/project/omon-gateway · 활동 미상 (KST) · `local:01a1428d-5e53`
+  ↳ The release binary is ready. Before running the full QA script, I'll quickly check overvie
+🟢 main 브랜치 머지 상태 확인 · ~/code/project · 활동 미상 (KST) · `local:01a13ef3-c94a`
+  ↳ W1 has 37 of 57 nodes done and no failures. Waiting.
+⚪ Update aside RE run results · `local:01a13e55-c122`
+⚪ Find past motion graphics se · `local:01a13f08-0289`
+⚪ Review stalled build session · `local:01a1402b-6112`
+⚪ 브랜드 컨셉과 계정 생성 계획 · `local:01a0e6c8-ee3b`
+⚪ Oliver Heldens AI Music Prod · `local:01a11b4f-8aeb`
+⚪ aisde RE 결과 커밋 여부 확인 · `local:01a13e56-4211`
+⚪ Research cmux orca herdr use · `local:01a13a7d-1d76`
+⚪ 세션 유실 시 재연결 재시도 점검 · `local:01a134db-3a8c`
+… 외 4개 대기
+🖥️ omarchy — 작업 중 1 · 답변 대기 0 · 대기 3
+🟢 Fix CPU and memory waste issues · ~/mhc · 4분 전 (KST) · `omarchy:01a13dca-860b`
+  ↳ Reviewer wave 13 is done: 14 of 15 lanes reported zero actionable findings, and the 15th, 
+⚪ Verify mhc build runs · `omarchy:01a1401b-cecc`
+⚪ Fix CPU and memory leaks · `omarchy:01a13e32-4d99`
+⚪ Diagnose slow mhc startup ti · `omarchy:01a13e03-2981`
+⚠️ local: timed out after 20 seconds
+rc=0 secs=28

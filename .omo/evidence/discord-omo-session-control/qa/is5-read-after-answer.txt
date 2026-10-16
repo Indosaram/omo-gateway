@@ -1,0 +1,3 @@
+$ /Users/indo/code/project/omon-gateway/target/release-bins/qa-session-control/omo-gateway sessions read local:01a142d8-f428-74b8-aaf0-3e8e336bce6c --limit 6
+{"items":[],"kind":"ok","source":"live_host","thread_id":"01a142d8-f428-74b8-aaf0-3e8e336bce6c","truncated":false}
+rc=0

@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
-use super::registry::{CommandRunner, SessionList, SessionRegistry};
+use super::control::SessionControl;
+use super::overview::{collect, format_overview, DISCORD_LIMIT};
 use crate::{InboundEvent, SessionKey};
 
 pub const REPLY_TIMEOUT: Duration = Duration::from_secs(25);
@@ -46,8 +46,6 @@ pub fn owner_id() -> String {
         .unwrap_or_else(|| crate::inbox::proposals::OWNER_ID.to_owned())
 }
 
-/// The local dashboard is an owner-only transport. Discord guild conversations
-/// require the caller to establish thread privacy separately, not just bot ownership.
 pub fn owner_dm(key: &SessionKey, author: &str, owner: &str) -> bool {
     author == owner
         && key.guild_id.is_none()
@@ -81,131 +79,33 @@ fn compact(value: &str, max: usize) -> String {
         .collect()
 }
 
-fn home_relative(folder: &str) -> String {
-    for prefix in ["/Users/", "/home/"] {
-        if let Some(rest) = folder.strip_prefix(prefix) {
-            return match rest.split_once('/') {
-                Some((_, suffix)) => format!("~/{suffix}"),
-                None => "~".into(),
-            };
-        }
-    }
-    if folder == "/root" {
-        return "~".into();
-    }
-    folder
-        .strip_prefix("/root/")
-        .map_or_else(|| folder.to_owned(), |rest| format!("~/{rest}"))
+pub async fn control_reply<R: super::registry::CommandRunner + 'static>(
+    control: &SessionControl<R>,
+) -> String {
+    bounded_reply(async {
+        let overview = collect(control, 120).await;
+        format_overview(&overview, Utc::now(), DISCORD_LIMIT)
+    })
+    .await
 }
 
-fn activity(value: Option<&str>, now: DateTime<Utc>) -> String {
-    let Some(at) = value.and_then(|value| DateTime::parse_from_rfc3339(value).ok()) else {
-        return "활동 미상 (KST)".into();
-    };
-    let seconds = now.signed_duration_since(at).num_seconds().max(0);
-    let relative = if seconds < 60 {
-        format!("{seconds}초 전")
-    } else if seconds < 3600 {
-        format!("{}분 전", seconds / 60)
-    } else if seconds < 86400 {
-        format!("{}시간 전", seconds / 3600)
-    } else {
-        format!("{}일 전", seconds / 86400)
-    };
-    format!("{relative} (KST)")
-}
-
-pub fn format_reply(list: &SessionList, now: DateTime<Utc>) -> String {
-    let mut groups = BTreeMap::<&str, Vec<_>>::new();
-    for session in &list.sessions {
-        groups.entry(&session.machine).or_default().push(session);
-    }
-    for stale in &list.stale {
-        groups.entry(&stale.machine).or_default();
-    }
-    let mut lines = Vec::new();
-    for (machine, sessions) in groups {
-        let stale = list
-            .stale
-            .iter()
-            .find(|item| item.machine == machine && item.stale)
-            .map(|item| format!(" · stale {}초 전", item.age_seconds))
-            .unwrap_or_default();
-        lines.push(format!("{}{}", compact(machine, 32), stale));
-        let mut counts = BTreeMap::<String, usize>::new();
-        for session in sessions {
-            let status = session.status.as_deref().unwrap_or("unknown");
-            if status.eq_ignore_ascii_case("busy") || status.eq_ignore_ascii_case("working") {
-                lines.push(format!(
-                    "- {} · {} · {} · {}",
-                    compact(session.name.as_deref().unwrap_or(&session.session_id), 24),
-                    compact(&home_relative(session.cwd.as_deref().unwrap_or("?")), 40),
-                    compact(status, 16),
-                    activity(
-                        session
-                            .updated_at
-                            .as_deref()
-                            .or(session.last_activity.as_deref()),
-                        now
-                    )
-                ));
-            } else {
-                *counts.entry(compact(status, 16)).or_default() += 1;
-            }
-        }
-        if !counts.is_empty() {
-            lines.push(format!(
-                "- {}",
-                compact(
-                    &counts
-                        .into_iter()
-                        .map(|(status, count)| format!("{status} {count}"))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    110
-                )
-            ));
-        }
-    }
-    for error in &list.errors {
-        lines.push(format!(
-            "{}: 오류 {}",
-            compact(&error.machine, 32),
-            compact(&error.message, 70)
-        ));
-    }
-    if lines.is_empty() {
-        lines.push("실행 중인 세션 없음".into());
-    }
-    if lines.len() > 15 {
-        let omitted = lines.len() - 14;
-        lines.truncate(14);
-        lines.push(format!("... {omitted}줄 생략"));
-    }
-    lines.join("\n")
-}
-
-pub async fn registry_reply<R: CommandRunner + 'static>(registry: &SessionRegistry<R>) -> String {
-    bounded_reply(registry.list_all()).await
-}
-
-async fn bounded_reply(listing: impl std::future::Future<Output = SessionList>) -> String {
-    match tokio::time::timeout(REPLY_TIMEOUT, listing).await {
-        Ok(list) => format_reply(&list, Utc::now()),
+pub async fn bounded_reply(fetch: impl std::future::Future<Output = String>) -> String {
+    match tokio::time::timeout(REPLY_TIMEOUT, fetch).await {
+        Ok(reply) => reply,
         Err(_) => "세션 상태 조회 오류: 25초 제한 시간 초과".into(),
     }
 }
 
 pub async fn reply() -> String {
-    match SessionRegistry::from_environment() {
-        Ok(registry) => registry_reply(&registry).await,
+    match SessionControl::from_environment() {
+        Ok(control) => control_reply(&control).await,
         Err(error) => format!("세션 상태 조회 오류: {}", compact(&error.to_string(), 120)),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::registry::{parse_sessions, CommandOutput, HostError, StaleListing};
+    use super::super::registry::{CommandOutput, CommandRunner};
     use super::*;
     use crate::{
         multiplexer::{AgentRunner, MultiplexerConfig, OutboundDispatcher, SessionMultiplexer},
@@ -246,54 +146,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn formatter_groups_counts_stale_errors_and_activity() {
-        let now = DateTime::parse_from_rfc3339("2026-10-12T09:00:00+09:00")
-            .unwrap()
-            .with_timezone(&Utc);
-        let list = SessionList {
-            sessions: parse_sessions(br#"[{"id":"1","name":"build","cwd":"/home/indo/project","status":"busy","updatedAt":"2026-10-12T08:58:00+09:00"},{"id":"2","status":"idle"},{"id":"3","status":"idle"}]"#, "local").unwrap(),
-            errors: vec![HostError { machine: "remote".into(), message: "unreachable\nhost".into(), code: 3 }],
-            stale: vec![StaleListing { machine: "local".into(), stale: true, age_seconds: 36 }], exit_code: 0,
-        };
-        let reply = format_reply(&list, now);
-        assert!(reply.contains("~/project"));
-        assert!(reply.contains("busy"));
-        assert!(reply.contains("2분 전 (KST)"));
-        assert!(reply.contains("idle 2"));
-        assert!(reply.contains("stale 36"));
-        assert!(reply.contains("remote: 오류 unreachable host"));
-        assert_eq!(reply.lines().count(), 4);
-    }
-
-    #[test]
-    fn formatter_caps_lines_and_discord_size() {
-        let mut list = SessionList {
-            sessions: vec![],
-            errors: vec![],
-            stale: vec![],
-            exit_code: 0,
-        };
-        for i in 0..40 {
-            list.sessions.extend(
-                parse_sessions(
-                    format!(
-                        r#"[{{"id":"{i}","status":"working","name":"{}","cwd":"/Users/indo/{}"}}]"#,
-                        "n".repeat(300),
-                        "x".repeat(300)
-                    )
-                    .as_bytes(),
-                    "local",
-                )
-                .unwrap(),
-            );
-        }
-        let reply = format_reply(&list, Utc::now());
-        assert_eq!(reply.lines().count(), 15);
-        assert!(reply.chars().count() < 2000);
-        assert!(reply.contains("생략"));
-    }
-
     struct FakeRegistry;
     #[async_trait]
     impl CommandRunner for FakeRegistry {
@@ -324,6 +176,7 @@ mod tests {
         let event = InboundEvent::message(key, "1", "session status");
         assert!(!eligible(&event, false));
     }
+
     struct CountingBackend(AtomicUsize);
     #[async_trait]
     impl AgentRunner for CountingBackend {
@@ -332,6 +185,7 @@ mod tests {
             Ok(())
         }
     }
+
     struct Replies(AtomicUsize);
     #[async_trait]
     impl OutboundDispatcher for Replies {
@@ -356,13 +210,13 @@ mod tests {
         );
         let key = SessionKey::new("discord", None::<String>, "dm", None::<String>, "owner");
         let event = InboundEvent::message(key.clone(), "1", "세션 상태");
-        let registry = SessionRegistry::new(Arc::new(FakeRegistry), vec![]);
+        let control = SessionControl::new(Arc::new(FakeRegistry), vec![]);
         assert!(tokio::time::timeout(
             REPLY_TIMEOUT,
             mux.intercept_session_status_with(
                 &event,
                 owner_dm(&key, "owner", "owner"),
-                registry_reply(&registry)
+                control_reply(&control)
             )
         )
         .await

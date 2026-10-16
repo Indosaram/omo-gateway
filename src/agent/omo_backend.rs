@@ -1873,6 +1873,28 @@ fn is_backend_stall(error: &OmonError) -> bool {
         || message.contains("no activity from server")
 }
 
+/// Errors that mean no connection to the app-server could be established at all.
+fn is_connect_failure(error: &OmonError) -> bool {
+    let message = error.to_string();
+    message.contains("failed to connect to omo app-server")
+        || message.contains("timeout connecting to omo app-server")
+}
+
+/// Errors that mean the app-server connection was reset or dropped in flight
+/// (for example when the daemon process was force-restarted by another turn; incident 2026-10-16).
+fn is_transport_reset(error: &OmonError) -> bool {
+    let msg = error.to_string();
+    msg.contains("Connection reset")
+        || msg.contains("connection reset")
+        || msg.contains("os error 54")
+        || msg.contains("Broken pipe")
+        || msg.contains("connection closed")
+        || msg.contains("closed before")
+        || msg.contains("ws streaming error")
+        || msg.contains("os error 10054")
+        || msg.contains("os error 10053")
+}
+
 #[async_trait]
 impl AgentBackend for OmoBackend {
     async fn run(&self, session: &mut SessionContext, event: InboundEvent) -> Result<()> {
@@ -1995,8 +2017,31 @@ impl AgentBackend for OmoBackend {
                         )));
                     }
                     tokio::time::sleep(cooldown).await;
-                    self.setup_turn(session, deadline, effective_total_timeout)
-                        .await?
+                    match self
+                        .setup_turn(session, deadline, effective_total_timeout)
+                        .await
+                    {
+                        Ok(pair) => pair,
+                        // Still unreachable: the daemon is wedged, not restarting. Replace
+                        // the one this gateway owns now instead of failing the message
+                        // (incident 2026-10-16: 4h38m of reset/timeout with no restart).
+                        Err(err)
+                            if is_connect_failure(&err)
+                                && crate::agent::force_restart_owned_daemon(
+                                    &self.config.appserver_url,
+                                )
+                                .await =>
+                        {
+                            tracing::warn!(
+                                session = %session.key,
+                                error = %err,
+                                "omo app-server unreachable; restarted it, retrying setup once"
+                            );
+                            self.setup_turn(session, deadline, effective_total_timeout)
+                                .await?
+                        }
+                        Err(err) => return Err(err),
+                    }
                 } else {
                     return Err(err);
                 }
@@ -2014,6 +2059,7 @@ impl AgentBackend for OmoBackend {
             .or(self.config.default_model.as_deref())
             .map(str::to_owned);
         let mut fallback_eligible = false;
+        let turn_started = std::time::Instant::now();
         let mut result = self
             .execute_turn(
                 ws,
@@ -2027,12 +2073,14 @@ impl AgentBackend for OmoBackend {
                 briefings.as_ref(),
             )
             .await;
+        let mut retried = false;
         // A turn that got no frames back is how a wedged app-server looks from here (it
         // accepts the prompt, runs it, and never forwards the events). Restart the daemon
         // this gateway owns and run the turn once more instead of surfacing the error.
         if result.as_ref().is_err_and(is_backend_stall)
             && crate::agent::force_restart_owned_daemon(&self.config.appserver_url).await
         {
+            retried = true;
             tracing::warn!(
                 session = %session.key,
                 error = ?result,
@@ -2056,6 +2104,47 @@ impl AgentBackend for OmoBackend {
                     briefings.as_ref(),
                 )
                 .await;
+        }
+        if !retried
+            && result.as_ref().is_err_and(is_transport_reset)
+            && crate::agent::forced_restart_since(&self.config.appserver_url, turn_started)
+        {
+            // Incident 2026-10-16: when a stalled turn in another session triggers a forced
+            // restart of the owned omo app-server, concurrent turns in flight are terminated
+            // by SIGKILL and fail with a transport reset (e.g. "ws streaming error: Connection reset").
+            // Resubmitting here is safe because the daemon instance that held the turn was killed,
+            // so duplicate execution cannot occur. Wait until the replacement daemon answers
+            // readyz, then retry the turn once.
+            if crate::agent::wait_owned_daemon_ready(
+                &self.config.appserver_url,
+                Duration::from_secs(60),
+            )
+            .await
+            {
+                tracing::warn!(
+                    session = %session.key,
+                    error = ?result,
+                    "turn lost to a forced app-server restart; retrying once"
+                );
+                let deadline = tokio::time::Instant::now() + effective_total_timeout;
+                let (ws, thread_id) = self
+                    .setup_turn(session, deadline, effective_total_timeout)
+                    .await?;
+                fallback_eligible = false;
+                result = self
+                    .execute_turn(
+                        ws,
+                        thread_id,
+                        session,
+                        event.clone(),
+                        deadline,
+                        effective_total_timeout,
+                        None,
+                        &mut fallback_eligible,
+                        briefings.as_ref(),
+                    )
+                    .await;
+            }
         }
         if result.is_err()
             && fallback_eligible
@@ -2368,9 +2457,10 @@ mod fixr5_agent_tests {
     use std::time::Duration;
 
     use super::{
-        ensure_cron_ttsr_disabled, frame_is_turn_progress, is_backend_stall, should_relay_interim,
-        INTERIM_REPORT_INTERVAL,
+        ensure_cron_ttsr_disabled, frame_is_turn_progress, is_backend_stall, is_transport_reset,
+        should_relay_interim, INTERIM_REPORT_INTERVAL,
     };
+    use crate::OmonError;
 
     #[test]
     fn interim_reports_are_the_ack_then_spaced_updates() {
@@ -2497,5 +2587,27 @@ mod fixr5_agent_tests {
         std::fs::write(&path, hand_edited).unwrap();
         ensure_cron_ttsr_disabled(&path).await;
         assert_eq!(std::fs::read_to_string(&path).unwrap(), hand_edited);
+    }
+
+    #[test]
+    fn transport_reset_matching_identifies_ws_and_connection_errors() {
+        assert!(is_transport_reset(&OmonError::Llm(
+            "ws streaming error: WebSocket protocol error: Connection reset without closing handshake".into()
+        )));
+        assert!(is_transport_reset(&OmonError::Llm(
+            "connection closed before message completed".into()
+        )));
+        assert!(is_transport_reset(&OmonError::Llm(
+            "os error 54: Connection reset by peer".into()
+        )));
+        assert!(is_transport_reset(&OmonError::Llm(
+            "Broken pipe (os error 32)".into()
+        )));
+        assert!(!is_transport_reset(&OmonError::Llm(
+            "agent produced no output within 300s".into()
+        )));
+        assert!(!is_transport_reset(&OmonError::Llm(
+            "invalid prompt argument".into()
+        )));
     }
 }

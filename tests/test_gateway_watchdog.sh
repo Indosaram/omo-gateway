@@ -51,4 +51,10 @@ out=$(run env WATCHDOG_GATEWAY_PATTERN="http.server $port" \
     WATCHDOG_DASHBOARD_URL="http://127.0.0.1:$port/up" WATCHDOG_APPSERVER_URL="http://127.0.0.1:$port/up")
 [[ "$out" == *"DRY_ALERT senpi_patch"* ]] || fail "expected senpi patch alert: $out"
 
+# Default GATEWAY_PATTERN assertions: verify decoupled path and fallback behavior.
+default_pat="$(sed -n 's/^GATEWAY_PATTERN=.*\${WATCHDOG_GATEWAY_PATTERN:-\([^}]*\)}.*/\1/p' "$WD")"
+for path in "$HOME/.omon/bin/omo-gateway run" "/Users/x/code/project/omon-gateway/target/release/omo-gateway run"; do
+    grep -Eq "$default_pat" <<<"$path" || fail "default GATEWAY_PATTERN '$default_pat' must match '$path'"
+done
+
 echo "test_gateway_watchdog: ok"
