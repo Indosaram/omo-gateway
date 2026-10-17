@@ -14,8 +14,8 @@ use tokio::task::JoinHandle;
 use super::interactive::payload_channel;
 use super::{SlackApi, SlackConfig};
 use crate::discord::buttons::{
-    button_actions_path, load_button_action, parse_button_custom_id, reply_text,
-    run_button_action, ActionOutcome, BUTTON_PREFIX,
+    button_actions_path, load_button_action, parse_button_custom_id, reply_text, run_button_action,
+    ActionOutcome, BUTTON_PREFIX,
 };
 use crate::Result;
 
@@ -120,7 +120,8 @@ async fn start_button_actions(
         let Some(value) = button_value(action) else {
             continue;
         };
-        if let Some(handle) = start_click(payload, action, value, config, api, actions_path).await? {
+        if let Some(handle) = start_click(payload, action, value, config, api, actions_path).await?
+        {
             handles.push(handle);
         }
     }
@@ -223,14 +224,22 @@ async fn start_click(
             .unwrap_or(Value::Null),
     };
     message
-        .set_blocks(rebuild_blocks(&message.blocks, value, Some(PENDING_LABEL), true))
+        .set_blocks(rebuild_blocks(
+            &message.blocks,
+            value,
+            Some(PENDING_LABEL),
+            true,
+        ))
         .await;
 
     let extra_env = vec![
         ("OMON_BUTTON_USER_ID".to_owned(), user.to_owned()),
         ("OMON_BUTTON_CHANNEL_ID".to_owned(), message.channel.clone()),
         ("OMON_BUTTON_MESSAGE_ID".to_owned(), message.ts.clone()),
-        ("OMON_BUTTON_PLATFORM".to_owned(), super::PLATFORM.to_owned()),
+        (
+            "OMON_BUTTON_PLATFORM".to_owned(),
+            super::PLATFORM.to_owned(),
+        ),
     ];
     tracing::info!(user, namespace = %click.namespace, action = %click.action, arg = %click.arg, "running slack button action");
     let clicked = value.to_owned();
@@ -287,7 +296,12 @@ async fn start_click(
 /// `locked` removes every action button (link buttons stay) and shows `label` in a context
 /// block after the clicked button's row; otherwise the clicked button is relabelled in place.
 /// `None` when the message carried no blocks.
-fn rebuild_blocks(blocks: &Value, clicked: &str, label: Option<&str>, locked: bool) -> Option<Value> {
+fn rebuild_blocks(
+    blocks: &Value,
+    clicked: &str,
+    label: Option<&str>,
+    locked: bool,
+) -> Option<Value> {
     let blocks = blocks.as_array()?;
     let mut out = Vec::with_capacity(blocks.len() + 1);
     for block in blocks {
@@ -477,12 +491,16 @@ mod tests {
             button_value(&json!({ "value": "x", "action_id": PUBLISH })),
             Some(PUBLISH)
         );
-        assert_eq!(button_value(&json!({ "value": "omon:approval:1:once" })), None);
+        assert_eq!(
+            button_value(&json!({ "value": "omon:approval:1:once" })),
+            None
+        );
     }
 
     #[test]
     fn locked_rebuild_keeps_links_and_shows_label() {
-        let pending = rebuild_blocks(&message_blocks(), PUBLISH, Some(PENDING_LABEL), true).unwrap();
+        let pending =
+            rebuild_blocks(&message_blocks(), PUBLISH, Some(PENDING_LABEL), true).unwrap();
         assert_eq!(element_texts(&pending), ["대시보드", PENDING_LABEL]);
         assert_eq!(pending[1]["elements"][0]["url"], "http://127.0.0.1:4321");
         assert_eq!(pending[2]["type"], "context");
@@ -527,8 +545,14 @@ mod tests {
         assert_eq!(paths, ["chat.update", "chat.update", "chat.postMessage"]);
         assert_eq!(requests[0].1["channel"], "CBTN1");
         assert_eq!(requests[0].1["ts"], "100.0001");
-        assert_eq!(element_texts(&requests[0].1["blocks"]), ["대시보드", PENDING_LABEL]);
-        assert_eq!(element_texts(&requests[1].1["blocks"]), ["대시보드", "✓ 발행됨"]);
+        assert_eq!(
+            element_texts(&requests[0].1["blocks"]),
+            ["대시보드", PENDING_LABEL]
+        );
+        assert_eq!(
+            element_texts(&requests[1].1["blocks"]),
+            ["대시보드", "✓ 발행됨"]
+        );
         assert_eq!(requests[2].1["thread_ts"], "100.0001");
         assert_eq!(
             requests[2].1["text"],
@@ -552,7 +576,10 @@ mod tests {
         assert_eq!(requests[1].0, "chat.update");
         assert_eq!(requests[1].1["blocks"], message_blocks());
         let reply = requests[2].1["text"].as_str().unwrap();
-        assert!(reply.contains("exit 3") && reply.contains("token expired"), "{reply}");
+        assert!(
+            reply.contains("exit 3") && reply.contains("token expired"),
+            "{reply}"
+        );
     }
 
     #[tokio::test]
@@ -577,7 +604,12 @@ mod tests {
         let marker = dir.path().join("ran");
         let path = actions_file(dir.path(), &format!("touch {}", marker.display()));
 
-        run(&click("USTRANGER", "CBTN4", PUBLISH, "1700.401"), &fake, &path).await;
+        run(
+            &click("USTRANGER", "CBTN4", PUBLISH, "1700.401"),
+            &fake,
+            &path,
+        )
+        .await;
         run(
             &click(OWNER, "CBTN4", "omon:btn:other:publish:86", "1700.402"),
             &fake,

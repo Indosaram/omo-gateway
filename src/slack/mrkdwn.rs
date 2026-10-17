@@ -39,9 +39,8 @@ static HEADING_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s{0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$").unwrap());
 static QUOTE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*(?:>\s?)+)(.*)$").unwrap());
 static BULLET_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\s*)[-*+]\s+(.*)$").unwrap());
-static TABLE_SEPARATOR_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$").unwrap()
-});
+static TABLE_SEPARATOR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$").unwrap());
 
 /// Converts common Markdown to Slack mrkdwn. Code (fenced and inline) is left verbatim,
 /// fence language tags are dropped and Markdown tables become code blocks.
@@ -166,7 +165,11 @@ impl<'a> Splitter<'a> {
             (false, open) => open,
         };
         let separator = usize::from(self.lines > 0);
-        let reserve = if next_open.is_some() { FENCE_CLOSE.len() } else { 0 };
+        let reserve = if next_open.is_some() {
+            FENCE_CLOSE.len()
+        } else {
+            0
+        };
         if self.lines > 0 && self.current.len() + separator + piece.len() + reserve > self.limit {
             if fence_line && self.open.is_some() {
                 piece = FENCE;
@@ -389,7 +392,11 @@ mod tests {
     fn assert_split_invariants(chunks: &[String], limit: usize) {
         assert!(!chunks.is_empty());
         for chunk in chunks {
-            assert!(chunk.len() <= limit, "chunk of {} bytes over {limit}: {chunk:?}", chunk.len());
+            assert!(
+                chunk.len() <= limit,
+                "chunk of {} bytes over {limit}: {chunk:?}",
+                chunk.len()
+            );
             assert!(fences_balanced(chunk), "unbalanced fences: {chunk:?}");
         }
     }
@@ -448,7 +455,10 @@ mod tests {
             to_mrkdwn("```\n<!channel>\n```"),
             "```\n&lt;!channel&gt;\n```"
         );
-        assert_eq!(neutralize_broadcast_mentions("<!heresy> <@U2>"), "<!heresy> <@U2>");
+        assert_eq!(
+            neutralize_broadcast_mentions("<!heresy> <@U2>"),
+            "<!heresy> <@U2>"
+        );
     }
 
     #[test]
@@ -458,7 +468,10 @@ mod tests {
         assert_eq!(bounded.len(), MAX_MESSAGES);
         assert_eq!(bounded[..7], chunks[..7]);
         assert_eq!(bounded[7], format!("chunk 7{TRUNCATION_NOTICE}"));
-        assert_eq!(bound_chunks(chunks[..3].to_vec(), MAX_MESSAGES, 100), chunks[..3]);
+        assert_eq!(
+            bound_chunks(chunks[..3].to_vec(), MAX_MESSAGES, 100),
+            chunks[..3]
+        );
     }
 
     #[test]
@@ -492,7 +505,9 @@ mod tests {
     #[test]
     fn keeps_fenced_code_verbatim_and_drops_language() {
         assert_eq!(
-            to_mrkdwn("before **b**\n```rust\nlet x = **y** < 1 && `z`;\n# not heading\n```\nafter"),
+            to_mrkdwn(
+                "before **b**\n```rust\nlet x = **y** < 1 && `z`;\n# not heading\n```\nafter"
+            ),
             "before *b*\n```\nlet x = **y** < 1 && `z`;\n# not heading\n```\nafter"
         );
         assert_eq!(to_mrkdwn("```\nopen <x>"), "```\nopen <x>\n```");
@@ -547,7 +562,9 @@ mod tests {
         assert!(chunks.len() > 2);
         assert_split_invariants(&chunks, 60);
         assert_eq!(body(&chunks.join("\n")), body(&input));
-        assert!(chunks[1..].iter().any(|chunk| chunk.starts_with("```rust\n")));
+        assert!(chunks[1..]
+            .iter()
+            .any(|chunk| chunk.starts_with("```rust\n")));
         assert!(chunks.iter().all(|chunk| !chunk.contains("```rust\n```")));
     }
 
@@ -571,7 +588,9 @@ mod tests {
         let words = "word ".repeat(40);
         let chunks = split_message(&words, 32);
         assert_split_invariants(&chunks, 32);
-        assert!(chunks[..chunks.len() - 1].iter().all(|chunk| chunk.ends_with(' ')));
+        assert!(chunks[..chunks.len() - 1]
+            .iter()
+            .all(|chunk| chunk.ends_with(' ')));
         assert_eq!(chunks.concat(), words);
     }
 

@@ -1,0 +1,280 @@
+@import '@fontsource-variable/inter';
+
+.lin {
+  --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-mono: 'Berkeley Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur: 140ms;
+  --radius-chip: 4px;
+  --radius-ctl: 6px;
+  --radius-pop: 8px;
+  --radius-dialog: 12px;
+  --accent: #5e6ad2;
+  --accent-hi: #7170ff;
+  --accent-hover: #828fff;
+  --danger: #eb5757;
+  --warn: #f2c94c;
+  --ok: #4cb782;
+  --urgent: #fc7840;
+  --sidebar-w: 244px;
+  --header-h: 44px;
+  --row-h: 36px;
+
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  font-weight: 400;
+  font-feature-settings: 'cv01', 'ss03';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--sidebar);
+  color: var(--text-1);
+  color-scheme: dark;
+  text-rendering: optimizeLegibility;
+}
+
+.lin[data-theme='dark'] {
+  --sidebar: #090a0b;
+  --panel: #0f1011;
+  --card: #141516;
+  --input: #141516;
+  --bg-hover: rgba(255, 255, 255, 0.04);
+  --bg-active: rgba(255, 255, 255, 0.07);
+  --bg-selected: rgba(94, 106, 210, 0.16);
+  --bg-selected-hover: rgba(94, 106, 210, 0.22);
+  --bg-group: rgba(255, 255, 255, 0.02);
+  --bg-subtle: rgba(255, 255, 255, 0.03);
+  --border: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.1);
+  --text-1: #f7f8f8;
+  --text-2: #d0d6e0;
+  --text-3: #8a8f98;
+  --text-4: #62666d;
+  --popover: #1c1d1f;
+  --overlay: rgba(0, 0, 0, 0.65);
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-dialog: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 64px rgba(0, 0, 0, 0.6);
+  --scrollbar: rgba(255, 255, 255, 0.1);
+  color-scheme: dark;
+}
+
+.lin[data-theme='light'] {
+  --sidebar: #f4f5f8;
+  --panel: #ffffff;
+  --card: #ffffff;
+  --input: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.035);
+  --bg-active: rgba(0, 0, 0, 0.06);
+  --bg-selected: rgba(94, 106, 210, 0.12);
+  --bg-selected-hover: rgba(94, 106, 210, 0.18);
+  --bg-group: rgba(0, 0, 0, 0.02);
+  --bg-subtle: rgba(0, 0, 0, 0.025);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --text-1: #1b1c1f;
+  --text-2: #3c3f44;
+  --text-3: #6b6f76;
+  --text-4: #9a9da3;
+  --popover: #ffffff;
+  --overlay: rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.12);
+  --shadow-dialog: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 24px 64px rgba(0, 0, 0, 0.18);
+  --scrollbar: rgba(0, 0, 0, 0.15);
+  color-scheme: light;
+}
+
+.lin *,
+.lin *::before,
+.lin *::after {
+  box-sizing: border-box;
+  border-color: var(--border);
+}
+
+:where(.lin) button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0 solid var(--border);
+  padding: 0;
+  cursor: default;
+}
+
+.lin input,
+.lin textarea {
+  font: inherit;
+  color: inherit;
+}
+
+.lin a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.lin ::selection {
+  background: rgba(113, 112, 255, 0.35);
+}
+
+.lin :focus {
+  outline: none;
+}
+
+.lin :focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-hi);
+  border-radius: var(--radius-ctl);
+}
+
+.lin ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.lin ::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.lin ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.lin .t-1 { color: var(--text-1); }
+.lin .t-2 { color: var(--text-2); }
+.lin .t-3 { color: var(--text-3); }
+.lin .t-4 { color: var(--text-4); }
+.lin .w-510 { font-weight: 510; }
+.lin .w-590 { font-weight: 590; }
+.lin .mono { font-family: var(--font-mono); }
+.lin .tabular { font-variant-numeric: tabular-nums; }
+
+.lin .lin-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.lin .lin-hover:hover {
+  background: var(--bg-hover);
+}
+
+.lin .lin-pop {
+  background: var(--popover);
+  border-radius: var(--radius-pop);
+  box-shadow: var(--shadow-pop);
+}
+
+@keyframes lin-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lin-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lin-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lin-slide-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: none;
+  }
+}
+
+@keyframes lin-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lin .anim-pop {
+  animation: lin-pop-in var(--dur) var(--ease);
+  transform-origin: top;
+}
+
+.lin .anim-fade {
+  animation: lin-fade-in var(--dur) var(--ease);
+}
+
+.lin .anim-slide-right {
+  animation: lin-slide-in-right 180ms var(--ease);
+}
+
+.lin .anim-slide-left {
+  animation: lin-slide-in-left 200ms var(--ease);
+}
+
+.lin .anim-toast {
+  animation: lin-toast-in 180ms var(--ease);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lin *,
+  .lin *::before,
+  .lin *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.lin .lin-markdown {
+  color: var(--text-2);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.lin .lin-markdown p { margin: 0 0 0.75em; }
+.lin .lin-markdown h1 { font-size: 22px; font-weight: 590; color: var(--text-1); margin: 1.2em 0 0.5em; letter-spacing: -0.3px; }
+.lin .lin-markdown h2 { font-size: 18px; font-weight: 590; color: var(--text-1); margin: 1.1em 0 0.45em; }
+.lin .lin-markdown h3 { font-size: 15px; font-weight: 590; color: var(--text-1); margin: 1em 0 0.4em; }
+.lin .lin-markdown ul, .lin .lin-markdown ol { padding-left: 1.4em; margin: 0 0 0.75em; }
+.lin .lin-markdown li { margin: 0.2em 0; }
+.lin .lin-markdown a { color: var(--accent-hi); }
+.lin .lin-markdown a:hover { color: var(--accent-hover); text-decoration: underline; }
+.lin .lin-markdown code { font-family: var(--font-mono); font-size: 0.86em; background: var(--bg-active); padding: 1px 5px; border-radius: 4px; }
+.lin .lin-markdown pre { background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
+.lin .lin-markdown pre code { background: none; padding: 0; }
+.lin .lin-markdown blockquote { border-left: 2px solid var(--border-strong); margin: 0 0 0.75em; padding-left: 12px; color: var(--text-3); }
+.lin .lin-markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
+.lin .lin-markdown table { border-collapse: collapse; margin: 0 0 0.75em; font-size: 13px; }
+.lin .lin-markdown th, .lin .lin-markdown td { border: 1px solid var(--border); padding: 4px 8px; }
+.lin .lin-markdown input[type='checkbox'] { margin-right: 6px; }
+
+@media (max-width: 767px) {
+  .lin {
+    --row-h: 44px;
+    font-size: 14px;
+  }
+}

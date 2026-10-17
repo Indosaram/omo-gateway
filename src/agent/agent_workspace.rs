@@ -49,7 +49,8 @@ fn agent_workspace_slug_with_alias(
     bot_id: Option<&str>,
     persona_from: Option<&str>,
 ) -> String {
-    let aliased = bot_id.and_then(|bot| workspace_bot_alias_from(platform, bot, persona_from, None));
+    let aliased =
+        bot_id.and_then(|bot| workspace_bot_alias_from(platform, bot, persona_from, None));
     raw_workspace_slug(platform, user_id, aliased.as_deref().or(bot_id))
 }
 
@@ -138,9 +139,20 @@ mod tests {
             workspace_bot_alias_from("slack", "U0C9ST69M8B", Some("777"), None).as_deref(),
             Some("777")
         );
-        assert_eq!(workspace_bot_alias_from("slack", "UOTHER", None, Some("U0C9ST69M8B")), None);
-        assert_eq!(workspace_bot_alias_from("discord", "U0C9ST69M8B", None, None), None);
-        let slug = agent_workspace_slug_with_alias("slack", "U04M1JNJM8T", Some("U0C9ST69M8B"), Some("777"));
+        assert_eq!(
+            workspace_bot_alias_from("slack", "UOTHER", None, Some("U0C9ST69M8B")),
+            None
+        );
+        assert_eq!(
+            workspace_bot_alias_from("discord", "U0C9ST69M8B", None, None),
+            None
+        );
+        let slug = agent_workspace_slug_with_alias(
+            "slack",
+            "U04M1JNJM8T",
+            Some("U0C9ST69M8B"),
+            Some("777"),
+        );
         assert_eq!(slug, "bot-777");
     }
     use std::path::Path;

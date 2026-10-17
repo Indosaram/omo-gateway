@@ -346,7 +346,13 @@ impl SlackEgress {
         for (index, table) in tables.iter().enumerate() {
             let result = self
                 .api
-                .upload_bytes(channel, thread, &table.filename, table.png_bytes.clone(), None)
+                .upload_bytes(
+                    channel,
+                    thread,
+                    &table.filename,
+                    table.png_bytes.clone(),
+                    None,
+                )
                 .await;
             self.record(channel, &result).await;
             if let Err(error) = result {
@@ -413,11 +419,12 @@ impl SlackEgress {
         let Some(pool) = &self.pool else { return };
         self.dead_targets_loaded
             .get_or_init(|| async {
-                let rows = sqlx::query_as::<_, (String, String, DateTime<Utc>, Option<DateTime<Utc>>)>(
-                    "SELECT channel_id, reason, marked_at, probed_at FROM slack_dead_targets",
-                )
-                .fetch_all(pool)
-                .await;
+                let rows =
+                    sqlx::query_as::<_, (String, String, DateTime<Utc>, Option<DateTime<Utc>>)>(
+                        "SELECT channel_id, reason, marked_at, probed_at FROM slack_dead_targets",
+                    )
+                    .fetch_all(pool)
+                    .await;
                 match rows {
                     Ok(rows) => {
                         let mut targets = self.dead_targets.lock();
@@ -454,11 +461,12 @@ impl SlackEgress {
             target.probed_at = Some(now);
         }
         if let Some(pool) = &self.pool {
-            let result = sqlx::query("UPDATE slack_dead_targets SET probed_at = ? WHERE channel_id = ?")
-                .bind(now)
-                .bind(channel)
-                .execute(pool)
-                .await;
+            let result =
+                sqlx::query("UPDATE slack_dead_targets SET probed_at = ? WHERE channel_id = ?")
+                    .bind(now)
+                    .bind(channel)
+                    .execute(pool)
+                    .await;
             if let Err(error) = result {
                 tracing::warn!(%error, channel, "failed to record slack dead target probe");
             }
@@ -475,7 +483,11 @@ impl SlackEgress {
         self.record_outcome(channel, outcome).await;
     }
 
-    async fn record_outcome(&self, channel: &str, outcome: std::result::Result<(), Option<&'static str>>) {
+    async fn record_outcome(
+        &self,
+        channel: &str,
+        outcome: std::result::Result<(), Option<&'static str>>,
+    ) {
         match outcome {
             Ok(()) => {
                 if self.dead_targets.lock().remove(channel).is_none() {
@@ -563,7 +575,10 @@ impl SlackEgress {
         let mentions = approval_mentions(&self.approval_mentions, self.approval_mentions_enabled);
         let fallback = format!(
             "{}Approval needed: {}",
-            mentions.as_deref().map(|m| format!("{m} ")).unwrap_or_default(),
+            mentions
+                .as_deref()
+                .map(|m| format!("{m} "))
+                .unwrap_or_default(),
             truncate_chars(reason, APPROVAL_REASON_LIMIT)
         );
         let ts = self
@@ -571,7 +586,12 @@ impl SlackEgress {
                 channel,
                 &fallback,
                 session.thread_id.as_deref(),
-                Some(approval_blocks(request_id, command, reason, mentions.as_deref())),
+                Some(approval_blocks(
+                    request_id,
+                    command,
+                    reason,
+                    mentions.as_deref(),
+                )),
             )
             .await?;
         self.approvals
@@ -612,7 +632,9 @@ impl SlackEgress {
             return false;
         };
         members.iter().any(|member| member == owner)
-            && members.iter().all(|member| member == owner || member == bot)
+            && members
+                .iter()
+                .all(|member| member == owner || member == bot)
     }
 }
 
@@ -696,7 +718,14 @@ fn reply_thread<'a>(session: &'a SessionKey, reply_to: Option<&'a str>) -> Optio
             .is_some()
             .then_some(reply_to)
             .flatten()
-            .filter(|ts| !ts.is_empty())
+            .filter(|ts| {
+                ts.split_once('.').is_some_and(|(seconds, fraction)| {
+                    !seconds.is_empty()
+                        && !fraction.is_empty()
+                        && seconds.bytes().all(|byte| byte.is_ascii_digit())
+                        && fraction.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            })
     })
 }
 
@@ -705,7 +734,10 @@ fn dead_target_reason(error: &OmonError) -> Option<&'static str> {
         return None;
     };
     let code = message.strip_prefix("slack ")?.rsplit(": ").next()?.trim();
-    DEAD_TARGET_CODES.iter().copied().find(|known| *known == code)
+    DEAD_TARGET_CODES
+        .iter()
+        .copied()
+        .find(|known| *known == code)
 }
 
 fn append_slack_media_failure_note(text: &mut String, failed: &[String]) {
@@ -1251,6 +1283,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dashboard_message_id_does_not_become_slack_thread_timestamp() {
+        let server = fake().await;
+        server
+            .egress()
+            .dispatch(send(
+                channel_session(),
+                "hi",
+                Some("b872b0c2-6be7-4ea8-9e71-cdf38d8846bc"),
+            ))
+            .await
+            .unwrap();
+        assert!(server.requests()[0].1.get("thread_ts").is_none());
+    }
+
+    #[tokio::test]
     async fn top_level_channel_reply_threads_under_trigger_but_dm_stays_flat() {
         let server = fake().await;
         let egress = server.egress();
@@ -1259,7 +1306,10 @@ mod tests {
             .await
             .unwrap();
         let dm = SessionKey::new("slack", None::<String>, "D1", None::<String>, "U1");
-        egress.dispatch(send(dm, "hi", Some("1700.0010"))).await.unwrap();
+        egress
+            .dispatch(send(dm, "hi", Some("1700.0010")))
+            .await
+            .unwrap();
         let id = Uuid::new_v4();
         egress
             .dispatch(OutboundAction::Stream {
@@ -1324,7 +1374,10 @@ mod tests {
             .dispatch(send(session(), &missing_only, None))
             .await
             .unwrap();
-        assert_eq!(posted_texts(&server), ["text\n\n_⚠️ 파일 첨부 실패: gone.png_"]);
+        assert_eq!(
+            posted_texts(&server),
+            ["text\n\n_⚠️ 파일 첨부 실패: gone.png_"]
+        );
 
         server.clear();
         let denied = format!("text\nMEDIA:{}", secret.display());
@@ -1333,7 +1386,10 @@ mod tests {
             .dispatch(send(session(), &denied, None))
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("outside authorized roots"), "{error}");
+        assert!(
+            error.to_string().contains("outside authorized roots"),
+            "{error}"
+        );
         assert_eq!(server.paths(), ["chat.postMessage"]);
         assert_eq!(posted_texts(&server), ["text\n\n_⚠️ 파일 첨부 실패: .env_"]);
     }
@@ -1349,8 +1405,14 @@ mod tests {
         let content = format!("done\nMEDIA:{}", file.display());
 
         egress.dispatch(stream(id, 0, "do", false)).await.unwrap();
-        egress.dispatch(stream(id, 1, &content, true)).await.unwrap();
-        egress.dispatch(stream(id, 1, &content, true)).await.unwrap();
+        egress
+            .dispatch(stream(id, 1, &content, true))
+            .await
+            .unwrap();
+        egress
+            .dispatch(stream(id, 1, &content, true))
+            .await
+            .unwrap();
 
         assert_eq!(
             server.paths(),
@@ -1382,7 +1444,10 @@ mod tests {
             path: path.to_path_buf(),
         };
         let error = egress.dispatch(upload(&big)).await.unwrap_err();
-        assert!(error.to_string().contains("over the 4 byte limit"), "{error}");
+        assert!(
+            error.to_string().contains("over the 4 byte limit"),
+            "{error}"
+        );
         let error = egress.dispatch(upload(&key)).await.unwrap_err();
         assert!(error.to_string().contains("secret-bearing"), "{error}");
         assert!(server.requests().is_empty());
@@ -1523,13 +1588,29 @@ mod tests {
 
     #[test]
     fn dead_target_reason_matches_channel_level_codes_only() {
-        let error = |detail: &str| OmonError::Multiplexer(format!("slack chat.postMessage: {detail}"));
-        assert_eq!(dead_target_reason(&error("channel_not_found")), Some("channel_not_found"));
-        assert_eq!(dead_target_reason(&error("is_archived")), Some("is_archived"));
-        assert_eq!(dead_target_reason(&error("not_in_channel")), Some("not_in_channel"));
-        assert_eq!(dead_target_reason(&error("account_inactive")), Some("account_inactive"));
+        let error =
+            |detail: &str| OmonError::Multiplexer(format!("slack chat.postMessage: {detail}"));
+        assert_eq!(
+            dead_target_reason(&error("channel_not_found")),
+            Some("channel_not_found")
+        );
+        assert_eq!(
+            dead_target_reason(&error("is_archived")),
+            Some("is_archived")
+        );
+        assert_eq!(
+            dead_target_reason(&error("not_in_channel")),
+            Some("not_in_channel")
+        );
+        assert_eq!(
+            dead_target_reason(&error("account_inactive")),
+            Some("account_inactive")
+        );
         assert_eq!(dead_target_reason(&error("msg_too_long")), None);
-        assert_eq!(dead_target_reason(&OmonError::Config("channel_not_found".into())), None);
+        assert_eq!(
+            dead_target_reason(&OmonError::Config("channel_not_found".into())),
+            None
+        );
     }
 
     #[tokio::test]
@@ -1542,15 +1623,24 @@ mod tests {
         );
         let egress = server.egress().with_pool(pool.clone());
 
-        egress.dispatch(send(session(), "one", None)).await.unwrap_err();
+        egress
+            .dispatch(send(session(), "one", None))
+            .await
+            .unwrap_err();
         let reason: String =
             sqlx::query_scalar("SELECT reason FROM slack_dead_targets WHERE channel_id = 'C1'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(reason, "channel_not_found");
-        let error = egress.dispatch(send(session(), "two", None)).await.unwrap_err();
-        assert!(error.to_string().contains("dead target short-circuited"), "{error}");
+        let error = egress
+            .dispatch(send(session(), "two", None))
+            .await
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("dead target short-circuited"),
+            "{error}"
+        );
         assert_eq!(server.paths(), ["chat.postMessage"]);
 
         server.clear();
@@ -1559,14 +1649,22 @@ mod tests {
             json!({ "ok": false, "error": "msg_too_long" }),
         );
         let other = SessionKey::new("slack", Some("T1"), "C2", None::<String>, "");
-        server.egress().with_pool(pool.clone()).dispatch(send(other, "x", None)).await.unwrap_err();
+        server
+            .egress()
+            .with_pool(pool.clone())
+            .dispatch(send(other, "x", None))
+            .await
+            .unwrap_err();
 
         server.clear();
         let restarted = server
             .egress()
             .with_pool(pool.clone())
             .with_probe_interval(Duration::ZERO);
-        restarted.dispatch(send(session(), "three", None)).await.unwrap();
+        restarted
+            .dispatch(send(session(), "three", None))
+            .await
+            .unwrap();
         assert_eq!(posted_texts(&server), ["three"]);
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM slack_dead_targets")
             .fetch_one(&pool)
@@ -1581,24 +1679,53 @@ mod tests {
         let owner = crate::slack::owner_id();
         let server = fake().await;
         let egress = server.egress();
-        let private = SessionKey::new("slack", Some("T1"), "G1", Some("1.1"), "").with_bot_id("UBOT");
+        let private =
+            SessionKey::new("slack", Some("T1"), "G1", Some("1.1"), "").with_bot_id("UBOT");
 
-        server.respond("conversations.info", json!({ "ok": true, "channel": { "id": "G1", "is_private": true } }));
-        server.respond("conversations.members", json!({ "ok": true, "members": [&owner, "UBOT"] }));
+        server.respond(
+            "conversations.info",
+            json!({ "ok": true, "channel": { "id": "G1", "is_private": true } }),
+        );
+        server.respond(
+            "conversations.members",
+            json!({ "ok": true, "members": [&owner, "UBOT"] }),
+        );
         assert!(egress.owner_thread_is_private(&private).await);
 
-        server.respond("conversations.members", json!({ "ok": true, "members": [&owner, "UBOT", "UOTHER"] }));
+        server.respond(
+            "conversations.members",
+            json!({ "ok": true, "members": [&owner, "UBOT", "UOTHER"] }),
+        );
         assert!(!egress.owner_thread_is_private(&private).await);
 
-        server.respond("conversations.members", json!({ "ok": true, "members": ["UBOT"] }));
+        server.respond(
+            "conversations.members",
+            json!({ "ok": true, "members": ["UBOT"] }),
+        );
         assert!(!egress.owner_thread_is_private(&private).await);
 
-        server.respond("conversations.members", json!({ "ok": true, "members": [&owner, "UBOT"] }));
-        server.respond("conversations.info", json!({ "ok": true, "channel": { "id": "G1", "is_private": false } }));
+        server.respond(
+            "conversations.members",
+            json!({ "ok": true, "members": [&owner, "UBOT"] }),
+        );
+        server.respond(
+            "conversations.info",
+            json!({ "ok": true, "channel": { "id": "G1", "is_private": false } }),
+        );
         assert!(!egress.owner_thread_is_private(&private).await);
 
-        server.respond("conversations.info", json!({ "ok": true, "channel": { "id": "G1", "is_private": true } }));
-        let dm = SessionKey::new("slack", None::<String>, "D1", None::<String>, owner.as_str()).with_bot_id("UBOT");
+        server.respond(
+            "conversations.info",
+            json!({ "ok": true, "channel": { "id": "G1", "is_private": true } }),
+        );
+        let dm = SessionKey::new(
+            "slack",
+            None::<String>,
+            "D1",
+            None::<String>,
+            owner.as_str(),
+        )
+        .with_bot_id("UBOT");
         assert!(!egress.owner_thread_is_private(&dm).await);
         let no_bot = SessionKey::new("slack", Some("T1"), "G1", Some("1.1"), "");
         assert!(!egress.owner_thread_is_private(&no_bot).await);

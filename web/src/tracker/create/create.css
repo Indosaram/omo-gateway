@@ -1,0 +1,243 @@
+.lin .ci-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: var(--overlay);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12vh 16px 16px;
+}
+
+.lin .ci-dialog {
+  width: min(720px, 100%);
+  max-height: 76vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--popover);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
+  overflow: hidden;
+}
+
+.lin .ci-dialog.ci-expanded {
+  width: min(1040px, 100%);
+  max-height: 86vh;
+  min-height: 60vh;
+}
+
+.lin .ci-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 14px 4px 18px;
+}
+
+.lin .ci-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-subtle);
+  font-size: 12.5px;
+  font-weight: 510;
+  color: var(--text-1);
+}
+
+.lin .ci-team:hover {
+  background: var(--bg-active);
+}
+
+.lin .ci-team-badge {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 590;
+  color: #fff;
+  flex: none;
+}
+
+.lin .ci-sep {
+  color: var(--text-4);
+}
+
+.lin .ci-crumb {
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+
+.lin .ci-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 20px 4px;
+}
+
+.lin .ci-title,
+.lin .ci-desc {
+  width: 100%;
+  display: block;
+  border: 0;
+  background: transparent;
+  resize: none;
+  overflow: hidden;
+}
+
+.lin .ci-title {
+  font-size: 18px;
+  line-height: 1.35;
+  font-weight: 590;
+  letter-spacing: -0.2px;
+  color: var(--text-1);
+  padding: 4px 0;
+}
+
+.lin .ci-desc {
+  margin-top: 6px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--text-2);
+  padding: 2px 0;
+}
+
+.lin .ci-title::placeholder,
+.lin .ci-desc::placeholder {
+  color: var(--text-4);
+}
+
+.lin .ci-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 18px 14px;
+}
+
+.lin .ci-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  min-width: 32px;
+  justify-content: center;
+  padding: 0 9px;
+  border-radius: var(--radius-ctl);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-subtle);
+  color: var(--text-1);
+  font-size: 12.5px;
+  font-weight: 510;
+  max-width: 220px;
+}
+
+.lin .ci-chip:hover {
+  background: var(--bg-active);
+}
+
+.lin .ci-chip-muted {
+  color: var(--text-3);
+}
+
+.lin .ci-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lin .ci-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.lin .ci-foot {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.lin .ci-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.lin .ci-toggle:hover {
+  color: var(--text-2);
+}
+
+.lin .ci-switch {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--border-strong);
+  transition: background-color 140ms var(--ease);
+}
+
+.lin .ci-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 140ms var(--ease);
+}
+
+.lin .ci-switch[data-on='true'] {
+  background: var(--accent);
+}
+
+.lin .ci-switch[data-on='true']::after {
+  transform: translateX(12px);
+}
+
+.lin .ci-date-row {
+  padding: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.lin .ci-date {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--input);
+  color: var(--text-1);
+  padding: 0 8px;
+}
+
+@media (max-width: 767px) {
+  .lin .ci-overlay {
+    padding: 0;
+    align-items: stretch;
+  }
+
+  .lin .ci-dialog,
+  .lin .ci-dialog.ci-mobile {
+    width: 100%;
+    max-height: none;
+    height: 100%;
+    border-radius: 0;
+  }
+
+  .lin .ci-body {
+    flex: 1;
+  }
+
+  .lin .ci-chips {
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+}

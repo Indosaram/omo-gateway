@@ -76,6 +76,10 @@ name = "test_voice_transcription"
 path = "tests/test_voice_transcription.rs"
 
 [[test]]
+name = "test_tracker_api"
+path = "tests/test_tracker_api.rs"
+
+[[test]]
 name = "test_model_routing"
 path = "tests/test_model_routing.rs"
 

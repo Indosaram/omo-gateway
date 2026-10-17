@@ -95,6 +95,9 @@ import {
 } from './components/ui'
 
 import { BotsPage } from './pages/BotsPage'
+import { isTrackerHash } from './tracker/router'
+
+const TrackerApp = React.lazy(() => import('./tracker/TrackerApp'))
 
 type Page = 'overview' | 'bots' | 'chat' | 'cron' | 'sessions' | 'capabilities' | 'settings' | 'logs'
 
@@ -122,6 +125,23 @@ function pageFromHash(): Page {
 }
 
 export default function App() {
+  const [trackerActive, setTrackerActive] = useState(() => isTrackerHash())
+  useEffect(() => {
+    const onHash = () => setTrackerActive(isTrackerHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+  if (trackerActive) {
+    return (
+      <React.Suspense fallback={null}>
+        <TrackerApp />
+      </React.Suspense>
+    )
+  }
+  return <DashboardApp />
+}
+
+function DashboardApp() {
   const [page, setPage] = useState<Page>(pageFromHash)
   const [status, setStatus] = useState<StatusResponse | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
@@ -191,6 +211,13 @@ export default function App() {
           <div className="text-[11px] font-medium text-muted-foreground/70 px-2 pb-1 uppercase tracking-wider">
             Management
           </div>
+          <a
+            href="#/tracker"
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all text-muted-foreground hover:text-foreground hover:bg-accent/60"
+          >
+            <ListTodo className="w-4 h-4" />
+            <span>Issues</span>
+          </a>
           {NAV_ITEMS.map((item) => {
             const active = page === item.id
             return (

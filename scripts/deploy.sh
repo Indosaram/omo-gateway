@@ -1,16 +1,23 @@
 #!/usr/bin/env bash
 # One-shot production deploy: build -> sign -> restart -> verify -> rollback on failure.
 #
-#   scripts/deploy.sh            build, sign, restart, verify
-#   scripts/deploy.sh --no-build skip build, install/sign existing target/release binary
+#   scripts/deploy.sh            build gateway + dashboard web, sign, restart, verify
+#   scripts/deploy.sh --no-build skip both builds, install existing target/release binary and web/dist
 #   scripts/deploy.sh --verify   only run the post-deploy checks against the running gateway
+#
+# The gateway binary and the dashboard web bundle are always built from the same source tree
+# and installed together: the binary to $INSTALL_BIN, the web bundle to $INSTALL_WEB, which the
+# launchd plist pins via DASHBOARD_WEB_ROOT. Incident 2026-10-17: a binary built from a clean
+# commit worktree served a web/dist built from the dirty main tree, so the dashboard called API
+# routes the binary did not have ("API endpoint not found") while every check passed.
 #
 # Verification passes only when, within VERIFY_TIMEOUT seconds of the restart:
 #   - a new gateway process is running,
-#   - it logged "Discord client ready" after the restart,
+#   - the configured home transport connected after the restart,
 #   - the app-server answers readyz 200,
-#   - exactly one app-server listens, and its parent is the gateway.
-# On failure the previous binary is restored and the gateway restarted with it.
+#   - exactly one app-server listens, and its parent is the gateway,
+#   - the dashboard serves the installed index.html and answers every DASHBOARD_PROBES path with 200.
+# On failure the previous binary and web bundle are restored and the gateway restarted with them.
 #
 # Incident 2026-10-15: Plain `cargo build --release` rewrote target/release/omo-gateway
 # with an ad-hoc signature (no TeamIdentifier), breaking macOS TCC Full Disk Access and
@@ -23,6 +30,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TARGET_BIN="$REPO/target/release/omo-gateway"
 INSTALL_BIN="${INSTALL_BIN:-$HOME/.omon/bin/omo-gateway}"
 INSTALL_DIR="$(dirname "$INSTALL_BIN")"
+INSTALL_WEB="${INSTALL_WEB:-$INSTALL_DIR/../web}"
+WEB_SRC="$REPO/web"
+BUN="${BUN:-$(command -v bun || printf '%s' "$HOME/.bun/bin/bun")}"
+# Paths the dashboard web bundle depends on; each must answer 200 on the deployed gateway.
+DASHBOARD_PROBES="${DASHBOARD_PROBES:-/api/health /api/tracker/bootstrap}"
 LABEL="ai.omon.gateway"
 PLIST="${LAUNCHD_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Indo Yoon (5DUM8WPB4C)}"
@@ -34,6 +46,41 @@ BACKUP_DIR="$HOME/.omon/deploy-backups"
 
 say() { printf '[deploy] %s\n' "$*"; }
 die() { printf '[deploy] FAIL: %s\n' "$*" >&2; exit 1; }
+
+plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || true; }
+
+# The dashboard address the running gateway uses: DASHBOARD_URL, else the gateway's .env
+# (launchd WorkingDirectory), else the built-in default port.
+dashboard_url() {
+    if [[ -n "${DASHBOARD_URL:-}" ]]; then printf '%s\n' "$DASHBOARD_URL"; return; fi
+    local env_file port
+    env_file="$(plist_value WorkingDirectory)/.env"
+    port="$(grep -E '^DASHBOARD_PORT=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d "\"' " || true)"
+    printf 'http://127.0.0.1:%s\n' "${port:-9119}"
+}
+
+# The web root the running gateway serves: the plist pin, else web/dist of its working directory.
+served_web_root() {
+    local pinned
+    pinned="$(plist_value EnvironmentVariables:DASHBOARD_WEB_ROOT)"
+    if [[ -n "$pinned" ]]; then printf '%s\n' "$pinned"; else printf '%s/web/dist\n' "$(plist_value WorkingDirectory)"; fi
+}
+
+# 0 when the dashboard serves the installed index.html and every probe path answers 200.
+dashboard_ok() {
+    local base path code served
+    base="$(dashboard_url)"
+    served="$(curl -s -m 3 "$base/" || true)"
+    [[ -n "$served" && "$served" == "$(cat "$(served_web_root)/index.html" 2>/dev/null)" ]] || {
+        dashboard_state="index.html differs from $(served_web_root)"
+        return 1
+    }
+    for path in $DASHBOARD_PROBES; do
+        code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$base$path" || true)"
+        [[ "$code" == 200 ]] || { dashboard_state="$path=$code"; return 1; }
+    done
+    dashboard_state="ok"
+}
 
 # Gateway PID matching the installed binary path.
 gateway_pid() { pgrep -f "$INSTALL_BIN run" | head -1 || true; }
@@ -67,24 +114,30 @@ check_fda_warning() {
 verify() {
     local since="$1" old_pid="${2:-}" deadline=$((SECONDS + VERIFY_TIMEOUT))
     local pid="" ready="" code="" servers="" parent=""
+    local transport="Discord" ready_pattern="Discord client ready"
+    if [[ "$(plist_value EnvironmentVariables:OMON_HOME_PLATFORM)" == slack ]]; then
+        transport="Slack"
+        ready_pattern="slack socket: connected"
+    fi
+    dashboard_state="unchecked"
     while ((SECONDS < deadline)); do
         pid="$(gateway_pid)"
         ready="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null \
-            | grep -a 'Discord client ready' | awk -v s="$since" '$1 >= s' | tail -1 || true)"
+            | grep -a "$ready_pattern" | awk -v s="$since" '$1 >= s' | tail -1 || true)"
         code="$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$APPSERVER_HTTP/readyz" || true)"
         servers="$(pgrep -f "app-server --listen $APPSERVER_URL" || true)"
         if [[ -n "$pid" && "$pid" != "$old_pid" && -n "$ready" && "$code" == 200 \
             && "$(wc -l <<<"$servers" | tr -d ' ')" == 1 && -n "$servers" ]]; then
             parent="$(ps -o ppid= -p "$servers" | tr -d ' ')"
-            if [[ "$parent" == "$pid" ]]; then
-                say "verified: gateway=$pid discord=ready appserver=$servers(ppid=$parent) readyz=200"
+            if [[ "$parent" == "$pid" ]] && dashboard_ok; then
+                say "verified: gateway=$pid transport=$transport:ready appserver=$servers(ppid=$parent) readyz=200 dashboard=$(dashboard_url) probes=[$DASHBOARD_PROBES]"
                 check_fda_warning "$since"
                 return 0
             fi
         fi
         sleep 2
     done
-    say "verify timed out: gateway=${pid:-none} discord=${ready:+ready} readyz=${code:-none} appservers=[$(tr '\n' ' ' <<<"$servers")] parent=${parent:-?}"
+    say "verify timed out: gateway=${pid:-none} transport=$transport:${ready:+ready} readyz=${code:-none} appservers=[$(tr '\n' ' ' <<<"$servers")] parent=${parent:-?} dashboard=$dashboard_state"
     check_fda_warning "$since"
     return 1
 }
@@ -148,17 +201,34 @@ fi
 mkdir -p "$BACKUP_DIR"
 mkdir -p "$INSTALL_DIR"
 
+stamp="$(date +%Y%m%d-%H%M%S)"
 backup=""
 if [[ -x "$INSTALL_BIN" ]]; then
-    backup="$BACKUP_DIR/omo-gateway.$(date +%Y%m%d-%H%M%S)"
+    backup="$BACKUP_DIR/omo-gateway.$stamp"
     cp -p "$INSTALL_BIN" "$backup"
     say "backed up current binary to $backup"
 fi
+# Back up whatever the gateway serves now, so a rollback restores a matching binary + web pair.
+web_backup=""
+if [[ -f "$(served_web_root)/index.html" ]]; then
+    web_backup="$BACKUP_DIR/web.$stamp"
+    cp -Rp "$(served_web_root)" "$web_backup"
+    say "backed up served web bundle $(served_web_root) to $web_backup"
+fi
+
+source_rev="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+source_dirty="$(git -C "$REPO" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
+say "source tree $REPO at $source_rev with $source_dirty uncommitted paths (binary and web both built from it)"
 
 if [[ "$NO_BUILD" == 1 ]]; then
-    say "skipping cargo build (--no-build specified)"
+    say "skipping cargo and web builds (--no-build specified)"
     [[ -x "$TARGET_BIN" ]] || die "target binary not found or not executable at $TARGET_BIN"
+    [[ -f "$WEB_SRC/dist/index.html" ]] || die "web bundle not found at $WEB_SRC/dist"
 else
+    say "building dashboard web bundle in $WEB_SRC"
+    [[ -x "$BUN" ]] || die "bun not found (set BUN=/path/to/bun); running gateway untouched"
+    (cd "$WEB_SRC" && "$BUN" install --frozen-lockfile && "$BUN" run build) \
+        || die "web build failed; running gateway untouched"
     say "building release (sccache bypassed: a corrupt cache entry once broke every build; strip=none for macOS ld bug)"
     cargo build --release --bin omo-gateway \
         --config 'build.rustc-wrapper=""' \
@@ -182,8 +252,21 @@ if ! grep -q 'TeamIdentifier=5DUM8WPB4C' <<<"$codesign_dv"; then
     die "codesign check failed: TeamIdentifier is not 5DUM8WPB4C (got: $(grep 'TeamIdentifier=' <<<"$codesign_dv" || echo 'not found'))"
 fi
 
+say "staging web bundle to $INSTALL_WEB.new"
+rm -rf "$INSTALL_WEB.new"
+cp -Rp "$WEB_SRC/dist" "$INSTALL_WEB.new"
+
 say "atomically installing binary to $INSTALL_BIN"
 mv -f "$INSTALL_BIN.new" "$INSTALL_BIN"
+
+say "installing web bundle to $INSTALL_WEB"
+rm -rf "$INSTALL_WEB.old"
+[[ -e "$INSTALL_WEB" ]] && mv "$INSTALL_WEB" "$INSTALL_WEB.old"
+mv "$INSTALL_WEB.new" "$INSTALL_WEB"
+rm -rf "$INSTALL_WEB.old"
+INSTALL_WEB="$(cd "$INSTALL_WEB" && pwd)"
+printf 'rev=%s dirty_paths=%s source=%s deployed_at=%s\n' "$source_rev" "$source_dirty" "$REPO" "$stamp" \
+    > "$INSTALL_DIR/DEPLOYED"
 
 # Ensure launchd plist ProgramArguments[0] equals INSTALL_BIN
 if [[ -f "$PLIST" ]]; then
@@ -195,6 +278,15 @@ if [[ -f "$PLIST" ]]; then
         say "backed up plist to $plist_backup"
         /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $INSTALL_BIN" "$PLIST" \
             || die "failed to update ProgramArguments[0] in $PLIST"
+        plist_modified=1
+    fi
+    # Pin the dashboard to the web bundle installed with this binary.
+    if [[ "$(plist_value EnvironmentVariables:DASHBOARD_WEB_ROOT)" != "$INSTALL_WEB" ]]; then
+        say "pinning DASHBOARD_WEB_ROOT=$INSTALL_WEB in $PLIST"
+        [[ "$plist_modified" == 1 ]] || cp -p "$PLIST" "$BACKUP_DIR/$(basename "$PLIST").$stamp"
+        /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:DASHBOARD_WEB_ROOT $INSTALL_WEB" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DASHBOARD_WEB_ROOT string $INSTALL_WEB" "$PLIST" \
+            || die "failed to set DASHBOARD_WEB_ROOT in $PLIST"
         plist_modified=1
     fi
 fi
@@ -214,9 +306,17 @@ if [[ -n "$backup" ]]; then
     # Atomic rollback via temporary file and rename to avoid killing running binary
     { cp -p "$backup" "$INSTALL_BIN.rollback" && mv -f "$INSTALL_BIN.rollback" "$INSTALL_BIN"; } \
         || die "rollback copy failed; $INSTALL_BIN still holds the failed build"
+    if [[ -n "$web_backup" ]]; then
+        say "restoring web bundle from $web_backup"
+        { rm -rf "$INSTALL_WEB.rollback" && cp -Rp "$web_backup" "$INSTALL_WEB.rollback" \
+            && rm -rf "$INSTALL_WEB" && mv "$INSTALL_WEB.rollback" "$INSTALL_WEB"; } \
+            || die "web rollback failed; $INSTALL_WEB may not match the restored binary"
+    fi
     since="$(date -u +%Y-%m-%dT%H:%M:%S)"
     old_pid="$(detect_old_pid)"
     restart
+    # The previous binary may predate newer probe routes; only require the dashboard to serve.
+    DASHBOARD_PROBES="/api/health"
     verify "$since" "$old_pid" && die "new build failed verification; rolled back to the previous binary" \
         || die "new build failed verification AND rollback did not come up healthy"
 fi
