@@ -4,6 +4,7 @@ mod file;
 mod mcp;
 mod message_context;
 mod message_context_lazy;
+pub mod message_context_slack;
 mod skills;
 mod terminal;
 mod web;

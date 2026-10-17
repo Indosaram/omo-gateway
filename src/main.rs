@@ -145,12 +145,6 @@ impl Config {
                 }
             }
         }
-        if tokens.is_empty() {
-            return Err(OmonError::Config(
-                "missing required environment variable DISCORD_BOT_TOKEN".into(),
-            ));
-        }
-
         let workspace_root = env::var_os("OMON_WORKSPACE_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -160,6 +154,10 @@ impl Config {
                 home.join(".omon").join("workspace")
             });
         let _ = std::fs::create_dir_all(&workspace_root);
+        require_a_transport(
+            &tokens,
+            omon_gateway::slack::SlackConfig::from_env(&workspace_root).is_some(),
+        )?;
 
         let extra_tool_roots = optional_env("OMON_TOOL_ROOTS")
             .map(|val| {
@@ -290,6 +288,16 @@ impl Config {
     }
 }
 
+/// Discord is optional once Slack is configured; with neither there is nothing to listen on.
+fn require_a_transport(discord_tokens: &[String], slack_configured: bool) -> Result<()> {
+    if discord_tokens.is_empty() && !slack_configured {
+        return Err(OmonError::Config(
+            "missing required environment variable DISCORD_BOT_TOKEN (or Slack tokens)".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct SharedDispatcher {
     inner: RwLock<Option<Arc<dyn OutboundDispatcher>>>,
@@ -359,6 +367,37 @@ pub struct StartupAuthorization {
     pub allowed_channels: Vec<u64>,
     pub ignored_channels: Vec<u64>,
     pub paired_users: Vec<u64>,
+    /// Slack ingress rules; `None` keeps Slack sessions unrecoverable (Slack is off).
+    pub slack: Option<SlackStartupAuthorization>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SlackStartupAuthorization {
+    pub allowed_users: Vec<String>,
+    pub allow_all_users: bool,
+    pub allowed_channels: Vec<String>,
+    pub ignored_channels: Vec<String>,
+    pub paired_users: Vec<String>,
+}
+
+impl SlackStartupAuthorization {
+    fn is_authorized_actor(&self, session_key: &SessionKey, actor: Option<&str>) -> bool {
+        let channel = session_key.channel_id.as_str();
+        if self.ignored_channels.iter().any(|id| id == channel) {
+            return false;
+        }
+        if session_key.guild_id.is_some()
+            && !self.allowed_channels.is_empty()
+            && !self.allowed_channels.iter().any(|id| id == channel)
+        {
+            return false;
+        }
+        self.allow_all_users
+            || actor.is_some_and(|id| {
+                self.allowed_users.iter().any(|user| user == id)
+                    || self.paired_users.iter().any(|user| user == id)
+            })
+    }
 }
 
 impl StartupAuthorization {
@@ -367,6 +406,12 @@ impl StartupAuthorization {
     }
 
     fn is_authorized_actor(&self, session_key: &SessionKey, actor: Option<&str>) -> bool {
+        if session_key.platform == omon_gateway::slack::PLATFORM {
+            return self
+                .slack
+                .as_ref()
+                .is_some_and(|slack| slack.is_authorized_actor(session_key, actor));
+        }
         if let Ok(channel_id) = session_key.channel_id.parse::<u64>() {
             if !self.ignored_channels.is_empty() && self.ignored_channels.contains(&channel_id) {
                 return false;
@@ -419,6 +464,25 @@ async fn pending_recovery_actor(
             .fetch_optional(pool)
             .await?;
             // Even an empty/invalid REST author prevents a stale legacy fallback.
+            if author.is_some() {
+                return Ok(author);
+            }
+        }
+    }
+    // Slack ingress indexes the Events API `user`, which Slack itself authenticated.
+    if key.platform == omon_gateway::slack::PLATFORM {
+        if let Some(message_id) = unfinished.platform_message_id.as_deref() {
+            let author: Option<String> = sqlx::query_scalar(
+                "SELECT author_id FROM message_search_documents
+                 WHERE platform = 'slack' AND guild_id IS ? AND channel_id = ?
+                   AND message_id = ? AND CASE WHEN json_valid(metadata_json)
+                       THEN json_extract(metadata_json, '$.source') END = 'ingress'",
+            )
+            .bind(&key.guild_id)
+            .bind(key.thread_id.as_deref().unwrap_or(&key.channel_id))
+            .bind(message_id)
+            .fetch_optional(pool)
+            .await?;
             if author.is_some() {
                 return Ok(author);
             }
@@ -695,10 +759,105 @@ fn hermes_skill_dirs(hermes_root: &Path, home: &Path) -> Vec<PathBuf> {
 }
 
 /// Owner home DM that leads lanes, proposals and inbox triage. Zero-config:
-/// OMON_LANE_DEFAULT_LEAD overrides the built-in OmOMeow owner DM.
+/// OMON_LANE_DEFAULT_LEAD overrides the built-in OmOMeow owner DM. When Slack is home
+/// (`OMON_HOME_PLATFORM=slack` or no Discord), boot publishes the Slack owner DM there
+/// before any lead consumer starts (see `boot_slack`).
 fn default_lead() -> String {
     std::env::var("OMON_LANE_DEFAULT_LEAD")
         .unwrap_or_else(|_| omon_gateway::lanes::kibitzer::DEFAULT_LEAD.to_owned())
+}
+
+/// Slack identity resolved once at boot, before any owner-lead consumer starts.
+struct SlackBoot {
+    api: omon_gateway::slack::SlackApi,
+    bot_user_id: String,
+    owner_id: String,
+    /// Set when Slack is the owner home; it is then also the default lead.
+    owner_dm: Option<SessionKey>,
+}
+
+impl SlackBoot {
+    fn inbox_identity(&self) -> (String, String) {
+        (self.owner_id.clone(), self.bot_user_id.clone())
+    }
+}
+
+/// `auth.test`, persona copy and (when Slack is home) the owner DM lead. `None` when Slack is
+/// off or its token is rejected; the caller then runs Discord only.
+async fn boot_slack(
+    pool: &SqlitePool,
+    config: Option<&omon_gateway::slack::SlackConfig>,
+    discord_configured: bool,
+) -> Result<Option<SlackBoot>> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let api = omon_gateway::slack::SlackApi::new(config.bot_token.clone());
+    let auth = match api.auth_test().await {
+        Ok(auth) => auth,
+        Err(error) => {
+            warn!(%error, "Slack auth.test failed; Slack stays off for this run");
+            return Ok(None);
+        }
+    };
+    let persona_source = omon_gateway::slack::home::persona_source(
+        optional_env("OMON_SLACK_PERSONA_FROM").as_deref(),
+    );
+    match omon_gateway::slack::home::copy_persona(pool, &persona_source, &auth.user_id).await {
+        Ok(true) => info!(from = %persona_source, to = %auth.user_id, "copied bot persona to the Slack bot"),
+        Ok(false) => {}
+        Err(error) => warn!(%error, "could not copy bot persona to the Slack bot"),
+    }
+    let slack_home = omon_gateway::slack::home::is_home(
+        optional_env("OMON_HOME_PLATFORM").as_deref(),
+        discord_configured,
+    );
+    let owner_dm = if slack_home {
+        match omon_gateway::slack::home::owner_dm_key(&api, config, &auth.user_id, pool).await {
+            Ok(key) => {
+                if optional_env("OMON_LANE_DEFAULT_LEAD").is_none() {
+                    // Lanes, kibitzer, cron health, proposals and the actor read the lead here.
+                    env::set_var("OMON_LANE_DEFAULT_LEAD", key.storage_key());
+                }
+                info!(lead = %default_lead(), "Slack owner DM is the owner home");
+                Some(key)
+            }
+            Err(error) => {
+                warn!(%error, "could not open the Slack owner DM; the default lead is unchanged");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    Ok(Some(SlackBoot {
+        api,
+        bot_user_id: auth.user_id,
+        owner_id: config.owner_id().to_owned(),
+        owner_dm,
+    }))
+}
+
+/// Owner identity the digest DM must belong to: the Slack owner for a Slack lead.
+fn digest_owner(
+    lead: &str,
+    slack: Option<&omon_gateway::slack::SlackConfig>,
+    owner_override: Option<&str>,
+) -> String {
+    let slack_lead = SessionKey::from_storage_key(lead)
+        .is_ok_and(|key| key.platform == omon_gateway::slack::PLATFORM);
+    if slack_lead {
+        return slack.map_or_else(omon_gateway::slack::owner_id, |config| {
+            config.owner_id().to_owned()
+        });
+    }
+    owner_id_from(owner_override)
+}
+
+async fn flush_slack(runtime: Option<&omon_gateway::slack::SlackRuntime>) {
+    if let Some(runtime) = runtime {
+        runtime.flush().await;
+    }
 }
 
 #[tokio::main]
@@ -788,15 +947,54 @@ fn ensure_full_disk_access(workspace_root: &Path) -> bool {
 /// do not, and markers never accumulate (incident 2026-10-16).
 const FDA_DM_MARKER: &str = ".fda_dm_prompted";
 
-/// Sends a Discord DM alert to the owner if Full Disk Access is missing.
+/// Where the Full Disk Access alert goes: the Discord owner DM, or the Slack owner home DM.
+enum FdaAlertChannel<'a> {
+    Discord {
+        http: &'a serenity::http::Http,
+        owner_id: &'a str,
+    },
+    Slack {
+        api: &'a omon_gateway::slack::SlackApi,
+        channel: &'a str,
+    },
+}
+
+impl FdaAlertChannel<'_> {
+    async fn send(&self, message: &str) -> std::result::Result<(), String> {
+        match self {
+            Self::Discord { http, owner_id } => {
+                let recipient = serde_json::json!({ "recipient_id": owner_id });
+                let channel = http
+                    .create_private_channel(&recipient)
+                    .await
+                    .map_err(|error| format!("could not open the owner DM: {error}"))?;
+                channel
+                    .say(*http, message)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+            Self::Slack { api, channel } => api
+                .post_message(channel, message, None, None)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+        }
+    }
+
+    fn platform(&self) -> &'static str {
+        match self {
+            Self::Discord { .. } => "discord",
+            Self::Slack { .. } => "slack",
+        }
+    }
+}
+
+/// Sends a DM alert to the owner if Full Disk Access is missing.
 /// Dispatched at most once per binary identity (sized and timestamped marker)
 /// to notify the owner upon new deployment without spamming on crash loops
 /// (incident 2026-10-16).
-async fn notify_owner_fda_denied_if_needed(
-    workspace_root: &Path,
-    http: &serenity::http::Http,
-    owner_id: &str,
-) {
+async fn notify_owner_fda_denied_if_needed(workspace_root: &Path, channel: FdaAlertChannel<'_>) {
     let current_exe = match std::env::current_exe() {
         Ok(path) => path,
         Err(error) => {
@@ -834,23 +1032,16 @@ async fn notify_owner_fda_denied_if_needed(
         current_exe.display()
     );
 
-    let recipient = serde_json::json!({
-        "recipient_id": owner_id,
-    });
-
-    match http.create_private_channel(&recipient).await {
-        Ok(channel) => {
-            if let Err(error) = channel.say(http, &message).await {
-                warn!(%error, "failed to send Full Disk Access denial alert to owner via Discord DM");
-            } else {
-                info!(marker = %marker_path.display(), "notified owner of missing Full Disk Access via Discord DM");
-                if let Err(error) = tokio::fs::write(&marker_path, &identity).await {
-                    warn!(%error, path = %marker_path.display(), "could not record FDA DM marker");
-                }
+    let platform = channel.platform();
+    match channel.send(&message).await {
+        Ok(()) => {
+            info!(platform, marker = %marker_path.display(), "notified owner of missing Full Disk Access");
+            if let Err(error) = tokio::fs::write(&marker_path, &identity).await {
+                warn!(%error, path = %marker_path.display(), "could not record FDA DM marker");
             }
         }
         Err(error) => {
-            warn!(%error, "failed to create private DM channel with owner for FDA alert");
+            warn!(platform, %error, "failed to send Full Disk Access denial alert to owner");
         }
     }
 }
@@ -1004,7 +1195,7 @@ async fn run_gateway_with_dashboard(
             Ok(())
         });
         let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
-        let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx)?;
+        let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx, None)?;
         info!(
             "headless gateway lead runtime ready; output delivery is local transcript acceptance"
         );
@@ -1027,6 +1218,10 @@ async fn run_gateway_with_dashboard(
     let config = Config::from_env()?;
     let fda_granted = ensure_full_disk_access(&config.workspace_root);
     let pool = init_pool(&config.database_url).await?;
+    let discord_configured = !config.discord_bot_tokens.is_empty();
+    let slack_config =
+        omon_gateway::slack::SlackConfig::from_env(&config.workspace_root).map(Arc::new);
+    let slack_boot = boot_slack(&pool, slack_config.as_deref(), discord_configured).await?;
     let kibitzer = initialize_kibitzer(&pool).await?;
 
     let approval_guard = SmartApprovalGuard::new().with_pool(pool.clone());
@@ -1042,7 +1237,11 @@ async fn run_gateway_with_dashboard(
         std::time::Duration::from_secs(config.approval_timeout_secs),
     ));
     let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
-    let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx)?;
+    let mut inbox = spawn_inbox_collector(
+        &pool,
+        inbox_shutdown_rx,
+        slack_boot.as_ref().map(SlackBoot::inbox_identity),
+    )?;
     let mut tools = ToolRegistry::new().with_approval_requester(
         approval_requester.clone(),
         std::time::Duration::from_secs(config.approval_timeout_secs + 5),
@@ -1093,6 +1292,18 @@ async fn run_gateway_with_dashboard(
         omon_gateway::SkillsTool::new(hermes_skill_dirs(&hermes_root, &home))
             .with_pool(pool.clone()),
     );
+    if let (Some(slack), Some(boot)) = (&slack_config, &slack_boot) {
+        let mut message_context = omon_gateway::MessageContextTool::from_environment(pool.clone())
+            .unwrap_or_default();
+        message_context.register_provider(
+            omon_gateway::tools::message_context_slack::SlackMessageContextProvider::new(
+                boot.api.clone(),
+                pool.clone(),
+            )
+            .with_channels(slack.allowed_channels.clone(), slack.ignored_channels.clone()),
+        );
+        tools.register(message_context);
+    }
     let tool_names = tools.names();
 
     validate_agent_backend_env()?;
@@ -1151,43 +1362,69 @@ async fn run_gateway_with_dashboard(
             )));
         }
     }
-    let default_bot_id = default_bot_id
-        .ok_or_else(|| OmonError::Config("no Discord bot identities were configured".into()))?;
-
     if !fda_granted {
-        if let Some(default_http) = bot_http_clients.get(&default_bot_id) {
-            let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
-            notify_owner_fda_denied_if_needed(&config.workspace_root, default_http, &owner_id)
-                .await;
+        let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
+        let slack_home_dm = slack_boot.as_ref().and_then(|boot| {
+            boot.owner_dm
+                .as_ref()
+                .map(|key| (&boot.api, key.channel_id.as_str()))
+        });
+        let discord_http = default_bot_id
+            .as_ref()
+            .and_then(|bot_id| bot_http_clients.get(bot_id));
+        let alert = match (slack_home_dm, discord_http) {
+            (Some((api, channel)), _) => Some(FdaAlertChannel::Slack { api, channel }),
+            (None, Some(http)) => Some(FdaAlertChannel::Discord {
+                http: http.as_ref(),
+                owner_id: &owner_id,
+            }),
+            (None, None) => None,
+        };
+        if let Some(alert) = alert {
+            notify_owner_fda_denied_if_needed(&config.workspace_root, alert).await;
         }
     }
-    let dead_targets = Arc::new(
-        DeadTargetRegistry::new()
-            .with_pool(pool.clone())
-            .with_probe_interval(std::time::Duration::from_secs(60)),
-    );
-    dead_targets.load_from_db(&pool).await?;
-    let discord_egress = Arc::new(
-        DiscordEgress::with_bot_clients(default_bot_id.clone(), bot_http_clients)?
-            .with_dead_targets(dead_targets.clone())
-            .with_approval_mentions(config.allowed_users.clone(), config.approval_mentions)
-            .with_runtime_footer(config.runtime_footer)
-            .with_default_model(config.default_model.clone())
-            .with_workspace_root(config.workspace_root.clone()),
-    );
-    let slack_config =
-        omon_gateway::slack::SlackConfig::from_env(&config.workspace_root).map(Arc::new);
-    let slack_egress = slack_config.as_ref().map(|slack| {
-        Arc::new(omon_gateway::slack::SlackEgress::new(
-            omon_gateway::slack::SlackApi::new(slack.bot_token.clone()),
-        ))
-    });
-    let mut platform_router =
-        omon_gateway::multiplexer::PlatformRouter::new(discord_egress.clone());
-    if let Some(slack_egress) = &slack_egress {
-        platform_router =
-            platform_router.with_platform(omon_gateway::slack::PLATFORM, slack_egress.clone());
-    }
+    let discord_egress = match &default_bot_id {
+        Some(bot_id) => {
+            let dead_targets = Arc::new(
+                DeadTargetRegistry::new()
+                    .with_pool(pool.clone())
+                    .with_probe_interval(std::time::Duration::from_secs(60)),
+            );
+            dead_targets.load_from_db(&pool).await?;
+            Some(Arc::new(
+                DiscordEgress::with_bot_clients(bot_id.clone(), bot_http_clients)?
+                    .with_dead_targets(dead_targets)
+                    .with_approval_mentions(config.allowed_users.clone(), config.approval_mentions)
+                    .with_runtime_footer(config.runtime_footer)
+                    .with_default_model(config.default_model.clone())
+                    .with_workspace_root(config.workspace_root.clone()),
+            ))
+        }
+        None => None,
+    };
+    let slack_egress = match (&slack_config, &slack_boot) {
+        (Some(slack), Some(boot)) => Some(Arc::new(
+            omon_gateway::slack::SlackEgress::new(boot.api.clone())
+                .with_workspace_root(config.workspace_root.clone())
+                .with_runtime_footer(slack.runtime_footer)
+                .with_default_model(Some(config.default_model.clone()))
+                .with_approval_mentions(slack.allowed_users.clone(), slack.approval_mentions)
+                .with_pool(pool.clone()),
+        )),
+        _ => None,
+    };
+    let discord_dispatcher = discord_egress
+        .clone()
+        .map(|egress| egress as Arc<dyn OutboundDispatcher>);
+    let slack_dispatcher = slack_egress
+        .clone()
+        .map(|egress| egress as Arc<dyn OutboundDispatcher>);
+    let platform_router =
+        omon_gateway::multiplexer::PlatformRouter::for_transports(discord_dispatcher, slack_dispatcher)
+            .ok_or_else(|| {
+                OmonError::Config("no Discord or Slack transport could be started".into())
+            })?;
     let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = Arc::new(platform_router);
     shared_dispatcher.set(discord_egress_dispatcher.clone()).await;
     approval_requester
@@ -1212,6 +1449,10 @@ async fn run_gateway_with_dashboard(
         "recovered pending outbound delivery obligations on boot"
     );
 
+    let slack_pairing = omon_gateway::discord::pairing::SlackPairingStore::new(pool.clone());
+    if slack_boot.is_some() {
+        slack_pairing.init_cache().await?;
+    }
     let restart_guard_path = config.workspace_root.join("restart_loop.json");
     let restart_guard = RestartLoopGuard::new(restart_guard_path);
     let auth = StartupAuthorization {
@@ -1223,6 +1464,16 @@ async fn run_gateway_with_dashboard(
             let pairing = omon_gateway::discord::PairingStore::new(pool.clone());
             pairing.init_cache().await?;
             pairing.get_paired_user_ids().await
+        },
+        slack: match &slack_config {
+            Some(slack) if slack_boot.is_some() => Some(SlackStartupAuthorization {
+                allowed_users: slack.allowed_users.clone(),
+                allow_all_users: slack.allow_all_users,
+                allowed_channels: slack.allowed_channels.clone(),
+                ignored_channels: slack.ignored_channels.clone(),
+                paired_users: slack_pairing.get_paired_user_ids().await,
+            }),
+            _ => None,
         },
     };
     let pending_sessions_count = count_authorized_pending_recoveries(&pool, &auth).await?;
@@ -1277,14 +1528,19 @@ async fn run_gateway_with_dashboard(
     )
     .with_hermes_sync(cron_sync);
     // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
-    let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
+    let lead = default_lead();
+    let owner_id = digest_owner(
+        &lead,
+        slack_config.as_deref(),
+        optional_env("OMON_OWNER_ID").as_deref(),
+    );
     let owner = owner_id.as_str();
-    // The lead DM belongs to the OmOMeow bot; other bots' DMs with the owner do not count.
+    // The lead DM belongs to the lead bot; other bots' DMs with the owner do not count.
     let home_dm: Option<String> = sqlx::query_scalar(
-        "SELECT session_key FROM sessions WHERE session_key=? AND platform='discord' \
+        "SELECT session_key FROM sessions WHERE session_key=? AND platform IN ('discord','slack') \
          AND guild_id IS NULL AND thread_id IS NULL AND user_id=?",
     )
-    .bind(default_lead())
+    .bind(&lead)
     .bind(owner)
     .fetch_optional(&pool)
     .await?;
@@ -1353,11 +1609,13 @@ async fn run_gateway_with_dashboard(
         downloader = downloader.with_stt(Arc::new(OpenAiSpeechToText::new(api_key, base_url)));
     }
     poise_data.attachment_downloader = Some(downloader);
-    poise_data.primary_bot_id = Some(default_bot_id.parse().map_err(|_| {
-        OmonError::Config(format!(
-            "invalid primary Discord bot identity {default_bot_id}"
-        ))
-    })?);
+    if let Some(default_bot_id) = &default_bot_id {
+        poise_data.primary_bot_id = Some(default_bot_id.parse().map_err(|_| {
+            OmonError::Config(format!(
+                "invalid primary Discord bot identity {default_bot_id}"
+            ))
+        })?);
+    }
     let approval_guard_for_slack = approval_guard.clone();
     let adapter = DiscordAdapter::new(poise_data.clone()).with_approval_guard(approval_guard);
 
@@ -1369,11 +1627,62 @@ async fn run_gateway_with_dashboard(
         clients.push(client);
     }
 
-    let readiness = omon_gateway::collect_runtime_readiness(
+    let mut slack_readiness = omon_gateway::SlackReadiness::Disabled;
+    let slack_runtime = match (slack_config.clone(), slack_egress.clone(), &slack_boot) {
+        (Some(slack_config), Some(slack_egress), Some(_)) => {
+            let destructive_slash_confirm = slack_config.destructive_slash_confirm;
+            match omon_gateway::slack::runtime::build(omon_gateway::slack::runtime::SlackDeps {
+                config: slack_config,
+                egress: slack_egress,
+                commands: omon_gateway::slack::commands::SlackCommandDeps {
+                    multiplexer: multiplexer.clone(),
+                    pool: pool.clone(),
+                    approvals: approval_guard_for_slack.clone(),
+                    tools: poise_data.tools.clone(),
+                    mcp_endpoints: poise_data.mcp_endpoints.clone(),
+                    tool_registry: poise_data.tool_registry.clone(),
+                    llm: poise_data.llm.clone(),
+                    started_at: poise_data.started_at,
+                    destructive_slash_confirm,
+                    pairing: slack_pairing.clone(),
+                },
+                inbox_actions: poise_data.inbox_actions.clone(),
+            })
+            .await
+            {
+                Ok(runtime) => {
+                    slack_readiness = omon_gateway::SlackReadiness::Connected {
+                        bot_user_id: runtime.bot_user_id.clone(),
+                        team_id: runtime.team_id.clone(),
+                    };
+                    Some(Arc::new(runtime))
+                }
+                Err(error) => {
+                    slack_readiness = omon_gateway::SlackReadiness::Failed(error.to_string());
+                    warn!(%error, "Slack is configured but could not start");
+                    None
+                }
+            }
+        }
+        (Some(_), _, None) => {
+            slack_readiness =
+                omon_gateway::SlackReadiness::Failed("Slack auth.test failed at boot".into());
+            None
+        }
+        _ => None,
+    };
+    if slack_runtime.is_none() && clients.is_empty() {
+        return Err(OmonError::Config(
+            "no Discord client and the Slack runtime could not start".into(),
+        ));
+    }
+
+    let readiness = omon_gateway::collect_runtime_readiness_with_slack(
         &pool,
         &config.workspace_root,
         &config.default_model,
         clients.len(),
+        &slack_readiness,
     )
     .await;
     if readiness.is_ok() {
@@ -1473,42 +1782,24 @@ async fn run_gateway_with_dashboard(
             multiplexer.clone(),
             scheduler.clone(),
             tools.clone(),
-            dashboard::config_view_from_gateway(&config, &settings),
+            dashboard::config_view_from_gateway(&config, &settings, slack_config.as_deref()),
             config.workspace_root.clone(),
             hermes_skill_dirs(&hermes_root, &home),
-            config.discord_bot_tokens.len(),
+            config.discord_bot_tokens.len() + usize::from(slack_runtime.is_some()),
         )
         .await;
         dashboard_server =
             Some(dashboard::spawn_server(settings, state, dashboard_shutdown.clone()).await?);
     }
 
-    if let (Some(slack_config), Some(slack_egress)) = (slack_config.clone(), slack_egress.clone()) {
-        match omon_gateway::slack::runtime::build(omon_gateway::slack::runtime::SlackDeps {
-            config: slack_config,
-            egress: slack_egress,
-            commands: omon_gateway::slack::commands::SlackCommandDeps {
-                multiplexer: multiplexer.clone(),
-                pool: pool.clone(),
-                approvals: approval_guard_for_slack.clone(),
-                tools: poise_data.tools.clone(),
-                mcp_endpoints: poise_data.mcp_endpoints.clone(),
-                tool_registry: poise_data.tool_registry.clone(),
-                llm: poise_data.llm.clone(),
-                started_at: poise_data.started_at,
-            },
-        })
-        .await
-        {
-            Ok(runtime) => {
-                info!(bot = %runtime.bot_user_id, team = %runtime.team_id, "omo-gateway listening on Slack");
-                lane_tasks.spawn(omon_gateway::slack::runtime::supervise(
-                    Arc::new(runtime),
-                    lane_shutdown.clone(),
-                ));
-            }
-            Err(error) => warn!(%error, "Slack is configured but could not start; Discord continues"),
-        }
+    if let Some(runtime) = &slack_runtime {
+        info!(bot = %runtime.bot_user_id, team = %runtime.team_id, "omo-gateway listening on Slack");
+        let backfill = runtime.clone();
+        tokio::spawn(async move { backfill.backfill().await });
+        lane_tasks.spawn(omon_gateway::slack::runtime::supervise(
+            runtime.clone(),
+            lane_shutdown.clone(),
+        ));
     }
 
     let mut join_set = tokio::task::JoinSet::new();
@@ -1526,6 +1817,7 @@ async fn run_gateway_with_dashboard(
         result = lane_tasks.join_next(), if !lane_tasks.is_empty() => {
             lane_failure = lane_service_exit(result).err();
             omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            flush_slack(slack_runtime.as_deref()).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
@@ -1536,12 +1828,14 @@ async fn run_gateway_with_dashboard(
                 discord_task_failed = true;
             }
             omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            flush_slack(slack_runtime.as_deref()).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
         }
         signal = tokio::signal::ctrl_c() => {
             signal.map_err(|error| OmonError::Config(format!("failed to listen for Ctrl+C: {error}")))?;
             info!("shutdown signal received");
             omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            flush_slack(slack_runtime.as_deref()).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
@@ -1550,6 +1844,7 @@ async fn run_gateway_with_dashboard(
         _ = wait_for_drain(&mut drain_rx) => {
             warn!("drain request detected via .drain_request.json marker; shutting down gracefully");
             omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            flush_slack(slack_runtime.as_deref()).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
@@ -1571,6 +1866,7 @@ async fn run_gateway_with_dashboard(
         } => {
             info!("SIGTERM received; shutting down gracefully");
             omon_gateway::global_debouncer().flush_all(&poise_data).await;
+            flush_slack(slack_runtime.as_deref()).await;
             let _ = multiplexer.mark_in_flight_resume_pending().await;
             for sm in shard_managers {
                 sm.shutdown_all().await;
@@ -1624,6 +1920,76 @@ mod headless_tests {
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{json, Value};
     use tokio_tungstenite::tungstenite::Message;
+
+    #[test]
+    fn slack_alone_satisfies_the_transport_requirement() {
+        assert!(require_a_transport(&[], true).is_ok());
+        assert!(require_a_transport(&["token".into()], false).is_ok());
+        let error = require_a_transport(&[], false).unwrap_err().to_string();
+        assert!(error.contains("DISCORD_BOT_TOKEN"));
+    }
+
+    #[test]
+    fn digest_owner_follows_the_lead_platform() {
+        let slack = omon_gateway::slack::SlackConfig {
+            allowed_users: vec!["UOWNER".into()],
+            ..omon_gateway::slack::SlackConfig::test_default()
+        };
+        let slack_lead =
+            SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER")
+                .with_bot_id("UBOT")
+                .storage_key();
+        assert_eq!(digest_owner(&slack_lead, Some(&slack), Some("999")), "UOWNER");
+        assert_eq!(
+            digest_owner(omon_gateway::lanes::kibitzer::DEFAULT_LEAD, Some(&slack), None),
+            omon_gateway::inbox::proposals::OWNER_ID
+        );
+        assert_eq!(
+            digest_owner(omon_gateway::lanes::kibitzer::DEFAULT_LEAD, None, Some("42")),
+            "42"
+        );
+    }
+
+    #[test]
+    fn slack_recovery_uses_slack_rules_only() {
+        let auth = StartupAuthorization {
+            allowed_users: vec![42],
+            slack: Some(SlackStartupAuthorization {
+                allowed_users: vec!["UOWNER".into()],
+                paired_users: vec!["UPAIRED".into()],
+                allowed_channels: vec!["CALLOWED".into()],
+                ignored_channels: vec!["DIGNORED".into()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let dm = SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER");
+        assert!(auth.is_authorized(&dm));
+        let paired = SessionKey::new("slack", Some("T1"), "CALLOWED", None::<String>, "");
+        assert!(auth.is_authorized_actor(&paired, Some("UPAIRED")));
+        assert!(!auth.is_authorized(&paired), "a channel session key carries no actor");
+        let outside = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
+        assert!(!auth.is_authorized(&outside));
+        let ignored = SessionKey::new("slack", None::<String>, "DIGNORED", None::<String>, "UOWNER");
+        assert!(!auth.is_authorized(&ignored));
+        let stranger = SessionKey::new("slack", None::<String>, "DX", None::<String>, "42");
+        assert!(!auth.is_authorized(&stranger));
+        let slack_off = StartupAuthorization {
+            allow_all_users: true,
+            ..Default::default()
+        };
+        assert!(!slack_off.is_authorized(&dm));
+    }
+
+    #[tokio::test]
+    async fn slack_inbox_source_is_added_only_with_slack_identity() {
+        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        assert_eq!(inbox_sources(&pool, None).len(), 4);
+        assert_eq!(
+            inbox_sources(&pool, Some(("UOWNER".into(), "UBOT".into()))).len(),
+            5
+        );
+    }
 
     #[tokio::test]
     async fn qa_gaps_headless_inbox_starts_when_enabled_and_joins() {
@@ -2307,18 +2673,21 @@ fn start_inbox_when_enabled<T>(
     }
 }
 
+/// `slack` is the (owner, bot) Slack user id pair when Slack is running.
 fn spawn_inbox_collector(
     pool: &SqlitePool,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    slack: Option<(String, String)>,
 ) -> Result<Option<InboxRuntime>> {
     start_inbox_when_enabled(omon_gateway::inbox::triage::enabled(), || {
-        spawn_enabled_inbox_collector(pool, shutdown)
+        spawn_enabled_inbox_collector(pool, shutdown, slack)
     })
 }
 
 fn spawn_enabled_inbox_collector(
     pool: &SqlitePool,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    slack: Option<(String, String)>,
 ) -> Result<InboxRuntime> {
     let rules = omon_gateway::inbox::default_filters()?;
     let (event_tx, event_rx) = omon_gateway::inbox::watchers::event_channel(
@@ -2348,7 +2717,7 @@ fn spawn_enabled_inbox_collector(
         tasks.spawn(
             omon_gateway::inbox::watchers::run_event_watch_with_shutdown(
                 pool.clone(),
-                inbox_sources(&pool),
+                inbox_sources(&pool, slack),
                 rules,
                 event_rx,
                 Some(progress_tx),
@@ -2386,15 +2755,26 @@ fn spawn_enabled_inbox_collector(
     Ok((task, event_tx))
 }
 
-fn inbox_sources(pool: &SqlitePool) -> Vec<Box<dyn omon_gateway::inbox::InboxSource>> {
-    vec![
+fn inbox_sources(
+    pool: &SqlitePool,
+    slack: Option<(String, String)>,
+) -> Vec<Box<dyn omon_gateway::inbox::InboxSource>> {
+    let mut sources: Vec<Box<dyn omon_gateway::inbox::InboxSource>> = vec![
         Box::new(omon_gateway::inbox::sources::mail::MailSource),
         Box::new(omon_gateway::inbox::sources::kakao::KakaoSource::default()),
         Box::new(omon_gateway::inbox::sources::imessage::IMessageSource),
         Box::new(omon_gateway::inbox::sources::discord::DiscordSource::new(
             pool.clone(),
         )),
-    ]
+    ];
+    if let Some((owner, bot)) = slack {
+        sources.push(Box::new(omon_gateway::inbox::sources::slack::SlackSource::new(
+            pool.clone(),
+            owner,
+            bot,
+        )));
+    }
+    sources
 }
 
 fn log_inbox_results(results: Vec<omon_gateway::inbox::SourceCollectResult>) {
@@ -4166,6 +4546,7 @@ mod runner_tests {
             allowed_channels: vec![],
             ignored_channels: vec![],
             paired_users: vec![],
+            slack: None,
         };
 
         let recovered =
@@ -4856,7 +5237,7 @@ mod runner_tests {
                             super::super::StartupAuthorization { allow_all_users: true, ..Default::default() }
                         } else {
                             super::super::StartupAuthorization { allowed_users: vec![42], allow_all_users: false,
-                                allowed_channels: vec![202,203], ignored_channels: vec![], paired_users: vec![] }
+                                allowed_channels: vec![202,203], ignored_channels: vec![], paired_users: vec![], slack: None }
                         };
                         if authorization == Authorization::Deferral {
                             for allowed_users in [vec![99], vec![]] {

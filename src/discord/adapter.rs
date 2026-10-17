@@ -45,7 +45,7 @@ const MEDIA_DENIED_EXTENSIONS: &[&str] =
     &["db", "sqlite", "sqlite3", "db-wal", "db-shm", "pem", "key"];
 
 /// Secret-bearing files that must never be uploaded even from an authorized root.
-fn media_path_is_denied(canonical: &Path) -> bool {
+pub fn media_path_is_denied(canonical: &Path) -> bool {
     if canonical
         .components()
         .any(|component| matches!(component.as_os_str().to_str(), Some(".ssh" | ".gnupg")))
@@ -117,7 +117,7 @@ pub fn validate_media_path_in(raw_path: &str, extra_roots: &[PathBuf]) -> Result
 
 /// Appends a short visible note for media directives that could not be uploaded, so a failed
 /// attachment never silently disappears nor aborts delivery of the reply text.
-fn append_media_failure_note(text: &mut String, failed: &[String]) {
+pub fn append_media_failure_note(text: &mut String, failed: &[String]) {
     if failed.is_empty() {
         return;
     }

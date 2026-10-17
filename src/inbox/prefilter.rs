@@ -18,6 +18,8 @@ pub struct PrefilterRules {
     pub excluded_kakao_rooms: HashSet<String>,
     pub owner_discord_id: String,
     pub bot_discord_id: Option<String>,
+    pub owner_slack_id: String,
+    pub bot_slack_id: Option<String>,
 }
 
 impl Default for PrefilterRules {
@@ -29,6 +31,8 @@ impl Default for PrefilterRules {
             excluded_kakao_rooms: ["18491246151592761".to_owned()].into_iter().collect(),
             owner_discord_id: "414011632306618368".to_owned(),
             bot_discord_id: None,
+            owner_slack_id: crate::slack::owner_id(),
+            bot_slack_id: None,
         }
     }
 }
@@ -161,6 +165,25 @@ impl PrefilterRules {
                 }
                 None
             }
+            InboxSourceKind::Slack => {
+                let author = item.author.as_deref().unwrap_or_default();
+                if author == self.owner_slack_id
+                    || self
+                        .bot_slack_id
+                        .as_deref()
+                        .is_some_and(|bot_id| author == bot_id)
+                {
+                    return Some("slack_author_excluded");
+                }
+                let owner_mention = item
+                    .snippet
+                    .contains(&format!("<@{}>", self.owner_slack_id));
+                let room_type = item.room_type.as_deref().unwrap_or_default();
+                if !owner_mention && !matches!(room_type, "dm" | "owner_reply") {
+                    return Some("slack_not_owner_mention_or_dm");
+                }
+                None
+            }
         }
     }
 
@@ -212,4 +235,61 @@ pub async fn record_drop(
     .await
     .map_err(OmonError::from)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    fn slack_item(author: &str, room_type: &str, snippet: &str) -> InboxItem {
+        let mut item = InboxItem::new(
+            InboxSourceKind::Slack,
+            "1700000001.000100",
+            snippet,
+            Utc::now(),
+        );
+        item.author = Some(author.into());
+        item.room_type = Some(room_type.into());
+        item
+    }
+
+    #[test]
+    fn slack_keeps_dm_mention_and_owner_reply_and_drops_the_rest() {
+        let rules = PrefilterRules {
+            owner_slack_id: "U0OWNER".into(),
+            bot_slack_id: Some("U0BOT".into()),
+            ..Default::default()
+        };
+        assert_eq!(rules.drop_reason(&slack_item("U0A", "dm", "hello")), None);
+        assert_eq!(
+            rules.drop_reason(&slack_item("U0A", "owner_reply", "ok")),
+            None
+        );
+        assert_eq!(
+            rules.drop_reason(&slack_item("U0A", "channel", "hey <@U0OWNER>")),
+            None
+        );
+        assert_eq!(
+            rules.drop_reason(&slack_item("U0A", "channel", "hey <@U0OTHER>")),
+            Some("slack_not_owner_mention_or_dm")
+        );
+        assert_eq!(
+            rules.drop_reason(&slack_item("U0OWNER", "dm", "self")),
+            Some("slack_author_excluded")
+        );
+        assert_eq!(
+            rules.drop_reason(&slack_item("U0BOT", "dm", "bot")),
+            Some("slack_author_excluded")
+        );
+    }
+
+    #[test]
+    fn rules_files_without_slack_fields_load_with_defaults() {
+        let rules: PrefilterRules = serde_json::from_str(r#"{"owner_discord_id":"1"}"#).unwrap();
+        assert_eq!(rules.owner_slack_id, crate::slack::owner_id());
+        assert_eq!(rules.bot_slack_id, None);
+        assert_eq!(rules.owner_discord_id, "1");
+    }
 }

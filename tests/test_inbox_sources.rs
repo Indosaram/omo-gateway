@@ -311,7 +311,7 @@ async fn kakao_bad_endpoint_collects_other_three_sources_and_preserves_cursor() 
                     &[("4653".into(), fixture("imessage-history"))],
                     cursor,
                 ),
-                InboxSourceKind::Kakao | InboxSourceKind::Discord => {
+                InboxSourceKind::Kakao | InboxSourceKind::Discord | InboxSourceKind::Slack => {
                     Err(OmonError::Config("unsupported fixture source".into()))
                 }
             }

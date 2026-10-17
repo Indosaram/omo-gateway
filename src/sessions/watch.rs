@@ -113,6 +113,7 @@ pub struct Watcher<R> {
     streaming: Option<HashMap<String, bool>>,
     policy: NotifyPolicy,
     first_seen: HashMap<String, DateTime<Utc>>,
+    slack_hints: bool,
 }
 
 fn display_name(session: &LiveSession) -> &str {
@@ -128,6 +129,7 @@ fn session_notices(
     target: &str,
     watched: bool,
     was_streaming: Option<bool>,
+    slack_hints: bool,
 ) -> Vec<Notice> {
     let machine = &session.machine;
     let name = compact(display_name(session), 40);
@@ -158,6 +160,8 @@ fn session_notices(
         // (new request id) must not re-notify.
         let hint = if session.blocking_question {
             "\n→ 터미널에서 답해 주세요".to_owned()
+        } else if slack_hints {
+            format!("\n→ `/omo-sessions answer {shown} …`")
         } else {
             format!("\n→ `/sessions answer target:{shown} text:…`")
         };
@@ -206,6 +210,7 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             streaming: None,
             policy,
             first_seen: HashMap::new(),
+            slack_hints: false,
         }
     }
 
@@ -243,7 +248,13 @@ impl<R: CommandRunner + 'static> Watcher<R> {
                 let is_watched = watched.iter().any(|w| *w == target || *w == routed);
                 let was = previous.as_ref().and_then(|map| map.get(&target).copied());
                 current.insert(target.clone(), session.streaming);
-                notices.extend(session_notices(session, &target, is_watched, was));
+                notices.extend(session_notices(
+                    session,
+                    &target,
+                    is_watched,
+                    was,
+                    self.slack_hints,
+                ));
             }
         }
         self.streaming = Some(current);
@@ -299,6 +310,7 @@ impl<R: CommandRunner + 'static> Watcher<R> {
         owner_dm: SessionKey,
         shutdown: CancellationToken,
     ) -> Result<()> {
+        self.slack_hints = owner_dm.platform == crate::slack::PLATFORM;
         tracing::info!(
             interval_secs = self.interval.as_secs(),
             "session watcher started"
@@ -589,7 +601,7 @@ mod tests {
             }],
             ..LiveSession::default()
         };
-        let notices = session_notices(&session, "omarchy:01a13dca-860b-799b", false, None);
+        let notices = session_notices(&session, "omarchy:01a13dca-860b-799b", false, None, false);
         assert_eq!(
             notices.iter().map(|n| n.kind.as_str()).collect::<Vec<_>>(),
             ["question"],
@@ -597,5 +609,33 @@ mod tests {
         );
         assert!(notices[0].text.contains("터미널"));
         assert!(!notices[0].text.contains("/sessions answer"));
+    }
+
+    #[test]
+    fn question_hint_uses_slack_command_syntax_for_slack_owner_dm() {
+        let session = LiveSession {
+            machine: "local".into(),
+            session_id: "01a13dca-860b-799b".into(),
+            questions: vec![PendingQuestion {
+                request_id: "r".into(),
+                questions: vec![QuestionItem::default()],
+            }],
+            ..LiveSession::default()
+        };
+        let target = "local:01a13dca-860b-799b";
+        let slack = session_notices(&session, target, false, None, true);
+        assert!(
+            slack[0].text.contains("/omo-sessions answer local:"),
+            "{}",
+            slack[0].text
+        );
+        assert!(!slack[0].text.contains("target:"));
+        let discord = session_notices(&session, target, false, None, false);
+        assert!(
+            discord[0].text.contains("/sessions answer target:local:"),
+            "{}",
+            discord[0].text
+        );
+        assert_eq!(slack[0].dedupe_key, discord[0].dedupe_key);
     }
 }

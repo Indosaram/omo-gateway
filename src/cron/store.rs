@@ -568,6 +568,40 @@ impl HermesJob {
         None
     }
 
+    pub fn configured_slack_home(&self) -> Option<(String, Option<String>)> {
+        self.slack_home_or(std::env::var("SLACK_HOME_CHANNEL").ok())
+    }
+
+    fn slack_home_or(&self, env_home: Option<String>) -> Option<(String, Option<String>)> {
+        let text = |v: &Value| {
+            v.as_str()
+                .map(|s| s.trim().trim_start_matches('#').to_owned())
+                .filter(|s| !s.is_empty())
+        };
+        if let Some(channel) = self.extra.get("slack_home_channel").and_then(text) {
+            let thread = self.extra.get("slack_home_thread").and_then(text);
+            return Some((channel, thread));
+        }
+        if let Some(slack) = self.extra.get("slack").and_then(Value::as_object) {
+            let channel = slack
+                .get("channel")
+                .or_else(|| slack.get("home_channel"))
+                .or_else(|| slack.get("channel_id"))
+                .and_then(text);
+            if let Some(channel) = channel {
+                let thread = slack
+                    .get("thread_ts")
+                    .or_else(|| slack.get("thread_id"))
+                    .and_then(text);
+                return Some((channel, thread));
+            }
+        }
+        env_home
+            .as_deref()
+            .and_then(|value| value.split(',').map(str::trim).find(|id| !id.is_empty()))
+            .map(|channel| (channel.to_owned(), None))
+    }
+
     pub fn failure_destinations(&self) -> Result<Vec<HermesOrigin>> {
         if let Some(ref failure_deliver) = self.failure_deliver {
             let mut clone = self.clone();
@@ -619,7 +653,23 @@ impl HermesJob {
         check_targets(&self.deliver) || check_targets(&self.failure_deliver)
     }
 
+    pub fn has_explicit_slack_destination(&self) -> bool {
+        let check = |list: &Option<Vec<String>>| {
+            list.iter()
+                .flatten()
+                .any(|target| slack_destination(target.trim(), None).is_some())
+        };
+        check(&self.deliver) || check(&self.failure_deliver)
+    }
+
     pub fn discord_destinations(&self) -> Result<Vec<HermesOrigin>> {
+        self.destinations_with_slack_home(self.configured_slack_home())
+    }
+
+    fn destinations_with_slack_home(
+        &self,
+        slack_home: Option<(String, Option<String>)>,
+    ) -> Result<Vec<HermesOrigin>> {
         let targets = match &self.deliver {
             Some(list) if !list.is_empty() => list.clone(),
             _ => vec!["origin".to_string()],
@@ -646,7 +696,11 @@ impl HermesJob {
             }
 
             if let Some(slack) = slack_destination(trimmed, bot_id.as_ref()) {
-                let key = ("slack".to_string(), slack.chat_id.clone(), slack.thread_id.clone());
+                let key = (
+                    "slack".to_string(),
+                    slack.chat_id.clone(),
+                    slack.thread_id.clone(),
+                );
                 if seen.insert(key) {
                     destinations.push(slack);
                 }
@@ -656,6 +710,34 @@ impl HermesJob {
             let is_discord_prefixed = trimmed
                 .get(..8)
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("discord:"));
+
+            if trimmed.eq_ignore_ascii_case("slack") {
+                let origin = self.origin.as_ref().filter(|origin| {
+                    origin.platform.eq_ignore_ascii_case("slack") && !origin.chat_id.is_empty()
+                });
+                let target = origin.cloned().or_else(|| {
+                    slack_home.as_ref().map(|(channel, thread)| HermesOrigin {
+                        platform: "slack".into(),
+                        chat_id: channel.clone(),
+                        thread_id: thread.clone(),
+                        user_id: None,
+                        chat_name: None,
+                        bot_id: bot_id.clone(),
+                        extra: HashMap::new(),
+                    })
+                });
+                if let Some(target) = target {
+                    let key = (
+                        "slack".to_string(),
+                        target.chat_id.clone(),
+                        target.thread_id.clone(),
+                    );
+                    if seen.insert(key) {
+                        destinations.push(target);
+                    }
+                }
+                continue;
+            }
 
             if is_discord_prefixed {
                 let rest = trimmed[8..].trim();
@@ -760,6 +842,25 @@ impl HermesJob {
                                 extra: HashMap::new(),
                             });
                         }
+                    } else if let Some((ref home_channel, ref home_thread)) = slack_home {
+                        if !trimmed.eq_ignore_ascii_case("discord") {
+                            let key = (
+                                "slack".to_string(),
+                                home_channel.clone(),
+                                home_thread.clone(),
+                            );
+                            if seen.insert(key) {
+                                destinations.push(HermesOrigin {
+                                    platform: "slack".into(),
+                                    chat_id: home_channel.clone(),
+                                    thread_id: home_thread.clone(),
+                                    user_id: None,
+                                    chat_name: None,
+                                    bot_id: bot_id.clone(),
+                                    extra: HashMap::new(),
+                                });
+                            }
+                        }
                     }
                 }
             } else if trimmed.contains(':') {
@@ -825,7 +926,10 @@ pub(crate) fn slack_destination(target: &str, bot_id: Option<&String>) -> Option
         .filter(|prefix| prefix.eq_ignore_ascii_case("slack:"))
         .map(|_| target[6..].trim())?;
     let (chat_id, thread_id) = match rest.split_once(':') {
-        Some((channel, thread)) => (channel.trim(), Some(thread.trim()).filter(|t| !t.is_empty())),
+        Some((channel, thread)) => (
+            channel.trim(),
+            Some(thread.trim()).filter(|t| !t.is_empty()),
+        ),
         None => (rest, None),
     };
     let chat_id = chat_id.trim_start_matches('#');
@@ -1801,6 +1905,103 @@ mod tests {
         .unwrap();
         assert_eq!(occurrence.as_deref(), Some("2026-08-15T00:00:00+00:00"));
         tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    #[test]
+    fn slack_home_from_payload_keys_object_or_env() {
+        let keyed = job(json!({
+            "id": "a", "schedule": {"kind": "cron", "expr": "0 * * * *"},
+            "slack_home_channel": "#C0HOME", "slack_home_thread": "1700.0001"
+        }));
+        assert_eq!(
+            keyed.slack_home_or(Some("C0ENV".into())),
+            Some(("C0HOME".into(), Some("1700.0001".into())))
+        );
+        let nested = job(json!({
+            "id": "b", "schedule": {"kind": "cron", "expr": "0 * * * *"},
+            "slack": {"channel": "C0NEST"}
+        }));
+        assert_eq!(nested.slack_home_or(None), Some(("C0NEST".into(), None)));
+        let bare = job(json!({"id": "c", "schedule": {"kind": "cron", "expr": "0 * * * *"}}));
+        assert_eq!(
+            bare.slack_home_or(Some(" , C0ENV,C0X".into())),
+            Some(("C0ENV".into(), None))
+        );
+        assert_eq!(bare.slack_home_or(None), None);
+    }
+
+    #[test]
+    fn origin_without_discord_home_falls_back_to_slack_home_and_bare_slack_token_resolves() {
+        let home = Some(("C0HOME".to_owned(), None));
+        let origin_job = job(json!({
+            "id": "o", "schedule": {"kind": "cron", "expr": "0 * * * *"},
+            "deliver": "origin", "bot_id": "U0BOT"
+        }));
+        let targets = origin_job
+            .destinations_with_slack_home(home.clone())
+            .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].platform, "slack");
+        assert_eq!(targets[0].chat_id, "C0HOME");
+        assert_eq!(targets[0].bot_id.as_deref(), Some("U0BOT"));
+
+        let bare_slack = job(json!({
+            "id": "s", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "slack"
+        }));
+        let targets = bare_slack
+            .destinations_with_slack_home(home.clone())
+            .unwrap();
+        assert_eq!(
+            (targets[0].platform.as_str(), targets[0].chat_id.as_str()),
+            ("slack", "C0HOME")
+        );
+        assert!(bare_slack
+            .destinations_with_slack_home(None)
+            .unwrap()
+            .is_empty());
+
+        let slack_origin = job(json!({
+            "id": "so", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "slack",
+            "origin": {"platform": "slack", "chat_id": "D0OWNER"}
+        }));
+        let targets = slack_origin
+            .destinations_with_slack_home(home.clone())
+            .unwrap();
+        assert_eq!(targets[0].chat_id, "D0OWNER");
+
+        let discord_home = job(json!({
+            "id": "d", "schedule": {"kind": "cron", "expr": "0 * * * *"},
+            "deliver": "origin", "home_channel": "42"
+        }));
+        let targets = discord_home
+            .destinations_with_slack_home(home.clone())
+            .unwrap();
+        assert_eq!(
+            (targets[0].platform.as_str(), targets[0].chat_id.as_str()),
+            ("discord", "42")
+        );
+
+        let bare_discord = job(json!({
+            "id": "bd", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "discord"
+        }));
+        assert!(bare_discord
+            .destinations_with_slack_home(home)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn explicit_slack_destination_detection() {
+        let explicit = job(json!({
+            "id": "e", "schedule": {"kind": "cron", "expr": "0 * * * *"},
+            "deliver": "local", "failure_deliver": "slack:C0ALERT"
+        }));
+        assert!(explicit.has_explicit_slack_destination());
+        assert!(!explicit.has_explicit_discord_destination());
+        let none = job(json!({
+            "id": "n", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "slack:"
+        }));
+        assert!(!none.has_explicit_slack_destination());
     }
 
     #[test]

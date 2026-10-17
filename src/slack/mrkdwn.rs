@@ -9,6 +9,14 @@ const PLACEHOLDER_CLOSE: char = '\u{E001}';
 const BOLD_MARK: char = '\u{E002}';
 const FENCE: &str = "```";
 const FENCE_CLOSE: &str = "\n```";
+/// Most messages one reply may post; the rest is cut with [`TRUNCATION_NOTICE`].
+pub const MAX_MESSAGES: usize = 8;
+pub const TRUNCATION_NOTICE: &str =
+    "\n\n_… [Response truncated: output exceeded the Slack 8-message limit]_";
+
+static BROADCAST_MENTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"<!(?:here|channel|everyone|subteam\^[^<>|]*)(?:\|[^<>]*)?>").unwrap()
+});
 
 static SLACK_TOKEN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"<(?:[@#!][^<>\s|]+(?:\|[^<>]*)?|(?:https?|mailto):[^<>\s|]+(?:\|[^<>]*)?)>")
@@ -69,7 +77,41 @@ pub fn to_mrkdwn(markdown: &str) -> String {
     if in_fence {
         out.push(FENCE.to_owned());
     }
-    out.join("\n")
+    neutralize_broadcast_mentions(&out.join("\n"))
+}
+
+/// Escapes `<!here>`, `<!channel>`, `<!everyone>` and `<!subteam^…>` so a reply can never ping
+/// a whole channel or user group; user mentions (`<@U…>`) are left intact.
+pub fn neutralize_broadcast_mentions(text: &str) -> String {
+    BROADCAST_MENTION_RE
+        .replace_all(text, |c: &Captures| {
+            c[0].replace('<', "&lt;").replace('>', "&gt;")
+        })
+        .into_owned()
+}
+
+/// Keeps at most `max_messages` chunks; when some are dropped the last kept chunk is trimmed to
+/// fit `limit`, its open code block closed, and [`TRUNCATION_NOTICE`] appended.
+pub fn bound_chunks(mut chunks: Vec<String>, max_messages: usize, limit: usize) -> Vec<String> {
+    if max_messages == 0 || chunks.len() <= max_messages {
+        return chunks;
+    }
+    chunks.truncate(max_messages);
+    if let Some(last) = chunks.last_mut() {
+        let budget = limit.saturating_sub(TRUNCATION_NOTICE.len() + FENCE_CLOSE.len());
+        if last.len() > budget {
+            let mut end = budget;
+            while end > 0 && !last.is_char_boundary(end) {
+                end -= 1;
+            }
+            last.truncate(end);
+        }
+        if last.split('\n').filter(|line| is_fence(line)).count() % 2 == 1 {
+            last.push_str(FENCE_CLOSE);
+        }
+        last.push_str(TRUNCATION_NOTICE);
+    }
+    chunks
 }
 
 /// Splits `text` into chunks of at most `limit` bytes on line boundaries. A chunk that ends
@@ -391,8 +433,49 @@ mod tests {
     fn escapes_control_characters_but_keeps_slack_tokens() {
         assert_eq!(to_mrkdwn("a < b & c > d"), "a &lt; b &amp; c &gt; d");
         assert_eq!(to_mrkdwn("<div>"), "&lt;div&gt;");
-        let tokens = "hi <@U123> in <#C1|general> <!here> <https://x.com|site> <mailto:a@b.c>";
+        let tokens = "hi <@U123> in <#C1|general> <!date^1|x> <https://x.com|site> <mailto:a@b.c>";
         assert_eq!(to_mrkdwn(tokens), tokens);
+    }
+
+    #[test]
+    fn neutralizes_broadcast_mentions_everywhere_but_keeps_user_mentions() {
+        assert_eq!(
+            to_mrkdwn("hey <!here> <!channel|@channel> <!everyone> <!subteam^S12|@devs> <@U1>"),
+            "hey &lt;!here&gt; &lt;!channel|@channel&gt; &lt;!everyone&gt; &lt;!subteam^S12|@devs&gt; <@U1>"
+        );
+        assert_eq!(to_mrkdwn("`<!here>`"), "`&lt;!here&gt;`");
+        assert_eq!(
+            to_mrkdwn("```\n<!channel>\n```"),
+            "```\n&lt;!channel&gt;\n```"
+        );
+        assert_eq!(neutralize_broadcast_mentions("<!heresy> <@U2>"), "<!heresy> <@U2>");
+    }
+
+    #[test]
+    fn bound_chunks_caps_count_and_appends_notice() {
+        let chunks: Vec<String> = (0..12).map(|n| format!("chunk {n}")).collect();
+        let bounded = bound_chunks(chunks.clone(), MAX_MESSAGES, 100);
+        assert_eq!(bounded.len(), MAX_MESSAGES);
+        assert_eq!(bounded[..7], chunks[..7]);
+        assert_eq!(bounded[7], format!("chunk 7{TRUNCATION_NOTICE}"));
+        assert_eq!(bound_chunks(chunks[..3].to_vec(), MAX_MESSAGES, 100), chunks[..3]);
+    }
+
+    #[test]
+    fn bound_chunks_trims_last_chunk_and_closes_open_fence() {
+        let full = format!("```\n{}\n```", "z".repeat(200));
+        let chunks = vec!["a".to_owned(), full];
+        let bounded = bound_chunks(chunks, 1, 200);
+        assert_eq!(bounded.len(), 1);
+        assert_eq!(bounded[0], format!("a{TRUNCATION_NOTICE}"));
+
+        let chunks = vec![format!("```\n{}\n```", "z".repeat(200)), "b".to_owned()];
+        let limit = 150;
+        let bounded = bound_chunks(chunks, 1, limit);
+        assert!(bounded[0].len() <= limit, "{}", bounded[0].len());
+        assert!(bounded[0].ends_with(TRUNCATION_NOTICE));
+        let body = bounded[0].trim_end_matches(TRUNCATION_NOTICE);
+        assert!(fences_balanced(body), "{body:?}");
     }
 
     #[test]

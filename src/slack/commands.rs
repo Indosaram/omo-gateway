@@ -12,6 +12,7 @@ use crate::discord::commands::{
     replace_history_with_summary, retry_last_user_message, skill_read_preview, stop_session,
     undo_last_exchange, yolo_toggle, CommandError, ResetCommandResult,
 };
+use crate::discord::pairing::{SlackPairingOutcome, SlackPairingStore};
 use crate::sessions::control::{ControlError, SendMode, SessionControl, Target};
 use crate::sessions::overview::{self, format_detail, format_overview};
 use crate::sessions::watch;
@@ -26,10 +27,13 @@ const MAX_RESPONSE_URL_POSTS: usize = 5;
 /// Mirrors the Discord `/compress` prompt budget (private there).
 const MAX_COMPRESSION_PROMPT_CHARS: usize = 120_000;
 const UNAUTHORIZED: &str = "You are not authorized to use this command.";
+const UNAUTHORIZED_CHANNEL: &str = "This command cannot be used in this channel.";
 const OWNER_ONLY: &str = "이 명령은 소유자만 사용할 수 있어요.";
+const THREAD_ROOT_PREFIX: &str = "🧵 *";
+const PENDING_WRITES_FILE: &str = "pending-writes.json";
 
 /// Every `/omo-*` command registered in `docs/slack-app-manifest.json`, with its usage.
-pub const COMMANDS: [(&str, &str); 18] = [
+pub const COMMANDS: [(&str, &str); 19] = [
     ("model", "/omo-model <name>"),
     ("reset", "/omo-reset [confirm]"),
     ("stop", "/omo-stop"),
@@ -47,6 +51,7 @@ pub const COMMANDS: [(&str, &str); 18] = [
     ("thread", "/omo-thread <name> [| first message]"),
     ("deny", "/omo-deny [reason]"),
     ("yolo", "/omo-yolo [on|off]"),
+    ("pair", "/omo-pair <code>"),
     (
         "sessions",
         "/omo-sessions overview | read <target> [limit] | send <target> [--mode auto|steer|follow_up] <text> | stop <target> | answer <target> [--request <id>] <text> | watch <target> | unwatch <target>",
@@ -64,12 +69,15 @@ pub struct SlackCommandDeps {
     pub tool_registry: ToolRegistry,
     pub llm: Option<LlmClient>,
     pub started_at: Instant,
+    pub destructive_slash_confirm: bool,
+    pub pairing: SlackPairingStore,
 }
 
 impl SlackCommandDeps {
     pub fn new(multiplexer: SessionMultiplexer, pool: SqlitePool) -> Self {
         Self {
             multiplexer,
+            pairing: SlackPairingStore::new(pool.clone()),
             pool,
             approvals: SmartApprovalGuard::new(),
             tools: Vec::new(),
@@ -77,6 +85,7 @@ impl SlackCommandDeps {
             tool_registry: ToolRegistry::new(),
             llm: None,
             started_at: Instant::now(),
+            destructive_slash_confirm: true,
         }
     }
 }
@@ -163,6 +172,7 @@ pub enum SlackCommand {
     Thread { name: String, message: Option<String> },
     Deny(Option<String>),
     Yolo(Option<String>),
+    Pair(String),
     Sessions(SessionsCommand),
     Help,
 }
@@ -187,10 +197,27 @@ impl Reply {
     }
 }
 
+fn command_name(command: &str) -> &str {
+    let name = command.trim().trim_start_matches('/');
+    name.strip_prefix("omo-").unwrap_or(name)
+}
+
+/// Ignored channels always reject; a non-empty allowlist restricts channels but not DMs.
+pub fn is_channel_admitted(
+    channel_id: &str,
+    is_dm: bool,
+    allowed_channels: &[String],
+    ignored_channels: &[String],
+) -> bool {
+    if ignored_channels.iter().any(|id| id == channel_id) {
+        return false;
+    }
+    is_dm || allowed_channels.is_empty() || allowed_channels.iter().any(|id| id == channel_id)
+}
+
 /// Parses `/omo-<name>` plus its text. `Err` carries the usage line to show.
 pub fn parse_command(command: &str, text: &str) -> std::result::Result<SlackCommand, String> {
-    let name = command.trim().trim_start_matches('/');
-    let name = name.strip_prefix("omo-").unwrap_or(name);
+    let name = command_name(command);
     let text = text.trim();
     let usage = || {
         COMMANDS
@@ -255,6 +282,7 @@ pub fn parse_command(command: &str, text: &str) -> std::result::Result<SlackComm
         }
         "deny" => Ok(SlackCommand::Deny((!text.is_empty()).then(|| text.to_owned()))),
         "yolo" => Ok(SlackCommand::Yolo((!text.is_empty()).then(|| text.to_owned()))),
+        "pair" => required(text).map(SlackCommand::Pair),
         "sessions" => parse_sessions(text).map(SlackCommand::Sessions).ok_or_else(usage),
         _ => Ok(SlackCommand::Help),
     }
@@ -376,6 +404,34 @@ fn command_error(error: CommandError) -> OmonError {
     OmonError::Multiplexer(error.to_string())
 }
 
+fn thread_root_text(name: &str) -> String {
+    format!("{THREAD_ROOT_PREFIX}{name}*")
+}
+
+fn escape_mrkdwn(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Same row as `discord::commands::ensure_session`: ingress treats a stored thread session as
+/// bot-owned and accepts unmentioned replies in it.
+async fn ensure_session(pool: &SqlitePool, key: &SessionKey) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO sessions (session_key, platform, guild_id, channel_id, thread_id, user_id, state_json)
+         VALUES (?, ?, ?, ?, ?, ?, '{}') ON CONFLICT(session_key) DO NOTHING",
+    )
+    .bind(key.storage_key())
+    .bind(&key.platform)
+    .bind(&key.guild_id)
+    .bind(&key.channel_id)
+    .bind(&key.thread_id)
+    .bind(&key.user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 fn synthetic_command_event(session: SessionKey, content: impl Into<String>) -> InboundEvent {
     InboundEvent::message(session, String::new(), content)
 }
@@ -409,6 +465,7 @@ impl SlackCommands {
         poise.approvals = data.approvals.clone();
         poise.tool_registry = data.tool_registry.clone();
         poise.llm = data.llm.clone();
+        poise.destructive_slash_confirm = data.destructive_slash_confirm;
         Self {
             config,
             api,
@@ -422,11 +479,37 @@ impl SlackCommands {
         &self.bot_user_id
     }
 
+    /// Mirrors Discord `command_check`: the owner may always `/omo-pair`; otherwise the user must
+    /// be allowed, paired or admitted by `allow_all_users`, then the channel lists apply.
+    fn admission_error(&self, invocation: &SlashInvocation) -> Option<&'static str> {
+        let user = invocation.user_id.as_str();
+        if command_name(&invocation.command) == "pair" && user == self.config.owner_id() {
+            return None;
+        }
+        if !self.is_operator(user) && !self.data.pairing.is_user_paired_sync(user) {
+            return Some(UNAUTHORIZED);
+        }
+        if !is_channel_admitted(
+            &invocation.channel_id,
+            invocation.is_dm(),
+            &self.config.allowed_channels,
+            &self.config.ignored_channels,
+        ) {
+            return Some(UNAUTHORIZED_CHANNEL);
+        }
+        None
+    }
+
+    /// Operators approve pairing codes and global skill writes; paired users may not.
+    fn is_operator(&self, user: &str) -> bool {
+        self.config.allow_all_users || self.config.is_allowed(user)
+    }
+
     /// Handles one `slash_commands` payload. The envelope is already acked by the socket.
     pub async fn handle(&self, payload: &Value) -> Result<()> {
         let invocation = SlashInvocation::from_payload(payload);
-        if !self.config.is_allowed(&invocation.user_id) {
-            return self.send(&invocation, Reply::private(UNAUTHORIZED)).await;
+        if let Some(rejection) = self.admission_error(&invocation) {
+            return self.send(&invocation, Reply::private(rejection)).await;
         }
         let command = match parse_command(&invocation.command, &invocation.text) {
             Ok(command) => command,
@@ -505,8 +588,10 @@ impl SlackCommands {
                 };
                 Ok(Reply::public(format!("Tools: {tools}\nMCP endpoints:\n{endpoints}")))
             }
-            SlackCommand::Skill { action, arg } => self.skill(key, &action, arg).await,
-            SlackCommand::Memory { action, arg } => self.memory(&key, &action, arg).await,
+            SlackCommand::Skill { action, arg } => self.skill(invocation, key, &action, arg).await,
+            SlackCommand::Memory { action, arg } => {
+                self.memory(invocation, &key, &action, arg).await
+            }
             SlackCommand::Cron { action } => self.cron(&action).await,
             SlackCommand::Steer(text) => {
                 let prompt = format_steer_prompt(&text);
@@ -560,9 +645,7 @@ impl SlackCommands {
                 }))
             }
             SlackCommand::Compress => self.compress(&key).await,
-            SlackCommand::Title(_) => Ok(Reply::private(
-                "❌ Slack threads have no title to rename; `/omo-title` is Discord-only.",
-            )),
+            SlackCommand::Title(text) => self.title(invocation, &text).await,
             SlackCommand::Thread { name, message } => {
                 self.thread(invocation, &key, &name, message).await
             }
@@ -595,6 +678,7 @@ impl SlackCommands {
                 .map_err(command_error)?;
                 Ok(Reply::private(mrkdwn_bold(&outcome.message)))
             }
+            SlackCommand::Pair(code) => self.pair(invocation, &code).await,
             SlackCommand::Sessions(command) => {
                 if invocation.user_id != self.config.owner_id() {
                     return Ok(Reply::private(OWNER_ONLY));
@@ -604,10 +688,36 @@ impl SlackCommands {
         }
     }
 
-    async fn skill(&self, key: SessionKey, action: &str, arg: Option<String>) -> Result<Reply> {
+    async fn pair(&self, invocation: &SlashInvocation, code: &str) -> Result<Reply> {
+        let user = invocation.user_id.as_str();
+        if user != self.config.owner_id() && !self.is_operator(user) {
+            return Ok(Reply::private("❌ You are not authorized to approve pairing codes."));
+        }
+        Ok(match self.data.pairing.approve_code(code, user).await? {
+            SlackPairingOutcome::Success { user_id } => Reply::public(format!(
+                "✅ Successfully paired and authorized user <@{user_id}>!"
+            )),
+            SlackPairingOutcome::InvalidCode => Reply::private("❌ Invalid pairing code."),
+            SlackPairingOutcome::Expired => Reply::private("❌ That pairing code has expired."),
+            SlackPairingOutcome::LockedOut => {
+                Reply::private("❌ Pairing locked out due to too many failed attempts (5+).")
+            }
+        })
+    }
+
+    async fn skill(
+        &self,
+        invocation: &SlashInvocation,
+        key: SessionKey,
+        action: &str,
+        arg: Option<String>,
+    ) -> Result<Reply> {
         let query = arg.unwrap_or_default();
         if let Some(pending) = pending_action(action, query.trim()) {
-            return pending_reply(&self.data.pool, PendingScope::Skills, pending).await;
+            if !self.is_operator(&invocation.user_id) {
+                return Ok(Reply::private("❌ Only operators can manage pending skill writes."));
+            }
+            return self.pending(invocation, PendingScope::Skills, pending).await;
         }
         let registry = &self.data.tool_registry;
         let reply = match action {
@@ -680,11 +790,18 @@ impl SlackCommands {
         Ok(Reply::public(reply))
     }
 
-    async fn memory(&self, key: &SessionKey, action: &str, arg: Option<String>) -> Result<Reply> {
+    async fn memory(
+        &self,
+        invocation: &SlashInvocation,
+        key: &SessionKey,
+        action: &str,
+        arg: Option<String>,
+    ) -> Result<Reply> {
         let id = arg.unwrap_or_default();
         let storage_key = key.storage_key();
         if let Some(pending) = pending_action(action, id.trim()) {
-            return pending_reply(&self.data.pool, PendingScope::Memory(&storage_key), pending)
+            return self
+                .pending(invocation, PendingScope::Memory(&storage_key), pending)
                 .await;
         }
         let memories: Vec<(String, String)> = sqlx::query_as(
@@ -794,18 +911,29 @@ impl SlackCommands {
         name: &str,
         message: Option<String>,
     ) -> Result<Reply> {
+        if invocation.is_dm() {
+            return Ok(Reply::private("❌ Threads can only be created in channels, not in DMs."));
+        }
         if invocation.thread_ts.is_some() {
             return Ok(Reply::private("❌ Cannot create a thread inside an existing thread."));
         }
         let root_ts = self
             .api
-            .post_message(&invocation.channel_id, &format!("🧵 *{name}*"), None, None)
+            .post_message(&invocation.channel_id, &thread_root_text(name), None, None)
             .await?;
+        let thread_key = SessionKey {
+            thread_id: Some(root_ts.clone()),
+            ..key.clone()
+        };
+        ensure_session(&self.data.pool, &thread_key).await?;
+        let link = match self.api.permalink(&invocation.channel_id, &root_ts).await {
+            Ok(url) => format!("<{url}|{}>", escape_mrkdwn(name)),
+            Err(error) => {
+                tracing::warn!(%error, channel = %invocation.channel_id, "slack thread permalink lookup failed");
+                format!("*{name}*")
+            }
+        };
         if let Some(starter) = message {
-            let thread_key = SessionKey {
-                thread_id: Some(root_ts.clone()),
-                ..key.clone()
-            };
             if let Err(error) = self
                 .data
                 .multiplexer
@@ -813,11 +941,41 @@ impl SlackCommands {
                 .await
             {
                 return Ok(Reply::public(format!(
-                    "❌ Created thread *{name}* but could not start a session: {error}"
+                    "❌ Created thread {link} but could not start a session: {error}"
                 )));
             }
         }
-        Ok(Reply::public(format!("🧵 Created thread *{name}*.")))
+        Ok(Reply::public(format!("🧵 Created thread {link}.")))
+    }
+
+    /// Renames a thread created by `/omo-thread` by editing its bot-authored root message.
+    async fn title(&self, invocation: &SlashInvocation, text: &str) -> Result<Reply> {
+        let Some(thread_ts) = invocation.thread_ts.as_deref() else {
+            return Ok(Reply::private(
+                "❌ `/omo-title` can only be used inside a thread created by `/omo-thread`.",
+            ));
+        };
+        let root = self
+            .api
+            .conversations_replies(&invocation.channel_id, thread_ts, None, 1)
+            .await?;
+        let created_by_thread = root.first().is_some_and(|message| {
+            message["ts"].as_str() == Some(thread_ts)
+                && message["user"].as_str() == Some(self.bot_user_id.as_str())
+                && message["text"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with(THREAD_ROOT_PREFIX))
+        });
+        if !created_by_thread {
+            return Ok(Reply::private(
+                "❌ Only threads created by `/omo-thread` can be renamed.",
+            ));
+        }
+        let title = text.trim();
+        self.api
+            .update_message(&invocation.channel_id, thread_ts, &thread_root_text(title), None)
+            .await?;
+        Ok(Reply::public(format!("🏷️ Thread renamed to `{title}`.")))
     }
 
     async fn sessions(&self, command: SessionsCommand, ephemeral: bool) -> Reply {
@@ -1010,43 +1168,52 @@ fn pending_action<'a>(action: &str, id: &'a str) -> Option<PendingAction<'a>> {
     })
 }
 
-/// Re-implements the private Discord `pending_command`; always ephemeral, payload inline.
-async fn pending_reply(
-    pool: &SqlitePool,
-    scope: PendingScope<'_>,
-    action: PendingAction<'_>,
-) -> Result<Reply> {
-    let records = match action {
-        PendingAction::List => crate::storage::list_pending_writes_scoped(pool, scope).await?,
-        PendingAction::Review(id) => {
-            vec![crate::storage::get_pending_write_scoped(pool, id, scope).await?]
+impl SlackCommands {
+    /// Mirrors the private Discord `pending_command`. Ephemeral Slack messages cannot carry
+    /// files, so the full payload goes to the invoking user's DM as `pending-writes.json`.
+    async fn pending(
+        &self,
+        invocation: &SlashInvocation,
+        scope: PendingScope<'_>,
+        action: PendingAction<'_>,
+    ) -> Result<Reply> {
+        let pool = &self.data.pool;
+        let records = match action {
+            PendingAction::List => crate::storage::list_pending_writes_scoped(pool, scope).await?,
+            PendingAction::Review(id) => {
+                vec![crate::storage::get_pending_write_scoped(pool, id, scope).await?]
+            }
+            PendingAction::Approve(id) => {
+                let result = crate::storage::approve_pending_write_scoped(pool, id, scope).await?;
+                return Ok(Reply::private(if result.is_some() {
+                    "Pending write approved."
+                } else {
+                    "Pending write was already consumed."
+                }));
+            }
+            PendingAction::Reject(id) => {
+                let rejected = crate::storage::reject_pending_write_scoped(pool, id, scope).await?;
+                return Ok(Reply::private(if rejected {
+                    "Pending write rejected."
+                } else {
+                    "Pending write was already consumed."
+                }));
+            }
+        };
+        if records.is_empty() {
+            return Ok(Reply::private("No pending writes in this scope."));
         }
-        PendingAction::Approve(id) => {
-            let result = crate::storage::approve_pending_write_scoped(pool, id, scope).await?;
-            return Ok(Reply::private(if result.is_some() {
-                "Pending write approved."
-            } else {
-                "Pending write was already consumed."
-            }));
-        }
-        PendingAction::Reject(id) => {
-            let rejected = crate::storage::reject_pending_write_scoped(pool, id, scope).await?;
-            return Ok(Reply::private(if rejected {
-                "Pending write rejected."
-            } else {
-                "Pending write was already consumed."
-            }));
-        }
-    };
-    if records.is_empty() {
-        return Ok(Reply::private("No pending writes in this scope."));
+        let content = serde_json::to_vec_pretty(&records)
+            .map_err(|error| OmonError::Database(error.to_string()))?;
+        let dm = self.api.open_im(&invocation.user_id).await?;
+        self.api
+            .upload_bytes(&dm, None, PENDING_WRITES_FILE, content, Some(PENDING_WRITES_FILE))
+            .await?;
+        Ok(Reply::private(format!(
+            "{} pending write(s). The complete payloads were sent to your DM as `{PENDING_WRITES_FILE}`; review them before approving an ID.",
+            records.len()
+        )))
     }
-    let content = serde_json::to_string_pretty(&records)
-        .map_err(|error| OmonError::Database(error.to_string()))?;
-    Ok(Reply::private(format!(
-        "{} pending write(s). Review the complete payloads before approving an ID.\n```\n{content}\n```",
-        records.len()
-    )))
 }
 
 #[cfg(test)]
@@ -1095,6 +1262,8 @@ mod tests {
         assert_eq!(parse("/omo-deny", "too risky"), SlackCommand::Deny(Some("too risky".into())));
         assert_eq!(parse("/omo-yolo", ""), SlackCommand::Yolo(None));
         assert_eq!(parse("/omo-yolo", "on"), SlackCommand::Yolo(Some("on".into())));
+        assert_eq!(parse("/omo-pair", " ABCD-EFGH "), SlackCommand::Pair("ABCD-EFGH".into()));
+        assert!(parse_command("/omo-pair", "").unwrap_err().contains("/omo-pair <code>"));
         assert_eq!(parse("/omo-nope", ""), SlackCommand::Help);
     }
 
@@ -1220,7 +1389,7 @@ mod tests {
         let manifest: Value =
             serde_json::from_str(include_str!("../../docs/slack-app-manifest.json")).unwrap();
         let commands = manifest["features"]["slash_commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 18);
+        assert_eq!(commands.len(), 19);
         let help = help_text();
         for command in commands {
             let name = command["command"].as_str().unwrap();
@@ -1249,40 +1418,69 @@ mod tests {
     struct Fake {
         base: String,
         requests: Arc<Mutex<Vec<(String, Value)>>>,
+        replies: Arc<Mutex<Vec<Value>>>,
     }
 
     async fn fake_slack() -> Fake {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let replies = Arc::new(Mutex::new(Vec::new()));
         let recorded = requests.clone();
+        let thread_messages = replies.clone();
+        let upload_url = format!("{base}/upload");
         let app = axum::Router::new().fallback(move |req: Request| {
             let recorded = recorded.clone();
+            let thread_messages = thread_messages.clone();
+            let upload_url = upload_url.clone();
             async move {
                 let path = req.uri().path().to_owned();
-                let body = axum::body::to_bytes(req.into_body(), usize::MAX).await.unwrap();
-                let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-                recorded.lock().push((path, body));
-                axum::Json(json!({ "ok": true, "ts": "1700.0001" }))
+                let bytes = axum::body::to_bytes(req.into_body(), usize::MAX).await.unwrap();
+                let body: Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+                    Value::String(String::from_utf8_lossy(&bytes).into_owned())
+                });
+                recorded.lock().push((path.clone(), body));
+                axum::Json(match path.as_str() {
+                    "/api/conversations.open" => json!({ "ok": true, "channel": { "id": "DOWNER" } }),
+                    "/api/files.getUploadURLExternal" => {
+                        json!({ "ok": true, "upload_url": upload_url, "file_id": "F1" })
+                    }
+                    "/api/chat.getPermalink" => json!({
+                        "ok": true,
+                        "permalink": "https://example.slack.com/archives/C1/p17000001"
+                    }),
+                    "/api/conversations.replies" => {
+                        json!({ "ok": true, "messages": thread_messages.lock().clone() })
+                    }
+                    _ => json!({ "ok": true, "ts": "1700.0001" }),
+                })
             }
         });
         tokio::spawn(async move { axum::serve(listener, app).await });
-        Fake { base, requests }
+        Fake { base, requests, replies }
     }
 
-    async fn commands(fake: &Fake) -> SlackCommands {
-        let db = Database::connect("sqlite::memory:").await.unwrap();
-        let pool = db.pool().clone();
-        let multiplexer =
-            SessionMultiplexer::new(pool.clone(), Arc::new(NoopRunner), MultiplexerConfig::default());
-        let config = SlackConfig {
+    fn test_config() -> SlackConfig {
+        SlackConfig {
             bot_token: "xoxb-test".into(),
             app_token: "xapp-test".into(),
             allowed_users: vec!["UOWNER".into(), "UFRIEND".into()],
             free_response_channels: Vec::new(),
             auto_thread: true,
             attachment_dir: PathBuf::from("/tmp"),
-        };
+            ..SlackConfig::test_default()
+        }
+    }
+
+    async fn commands(fake: &Fake) -> SlackCommands {
+        commands_with(fake, test_config()).await
+    }
+
+    async fn commands_with(fake: &Fake, config: SlackConfig) -> SlackCommands {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let multiplexer =
+            SessionMultiplexer::new(pool.clone(), Arc::new(NoopRunner), MultiplexerConfig::default());
         SlackCommands::new(
             Arc::new(config),
             SlackApi::with_base_url("xoxb-test".into(), format!("{}/api", fake.base)),
@@ -1423,7 +1621,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn thread_posts_root_message_and_rejects_nested() {
+    async fn thread_posts_root_persists_session_and_rejects_nested_and_dm() {
         let fake = fake_slack().await;
         let commands = commands(&fake).await;
 
@@ -1434,13 +1632,248 @@ mod tests {
         let mut nested = with_response_url(invocation("/omo-thread", "Plan", "UOWNER", "C1"), &fake);
         nested["thread_ts"] = json!("1.1");
         commands.handle(&nested).await.unwrap();
+        commands
+            .handle(&with_response_url(invocation("/omo-thread", "Plan", "UOWNER", "D1"), &fake))
+            .await
+            .unwrap();
 
         let requests = fake.requests.lock().clone();
         assert_eq!(requests[0].0, "/api/chat.postMessage");
         assert_eq!(requests[0].1["channel"], "C1");
         assert_eq!(requests[0].1["text"], "🧵 *Plan*");
-        assert_eq!(requests[1].1["text"], "🧵 Created thread *Plan*.");
-        assert_eq!(requests[2].1["response_type"], "ephemeral");
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1].0, "/api/chat.getPermalink");
+        assert_eq!(requests[1].1["message_ts"], "1700.0001");
+        assert_eq!(
+            requests[2].1["text"],
+            "🧵 Created thread <https://example.slack.com/archives/C1/p17000001|Plan>."
+        );
+        assert_eq!(requests[2].1["response_type"], "in_channel");
+        assert_eq!(requests[3].1["response_type"], "ephemeral");
+        assert!(requests[3].1["text"].as_str().unwrap().contains("existing thread"));
+        assert_eq!(requests[4].1["response_type"], "ephemeral");
+        assert!(requests[4].1["text"].as_str().unwrap().contains("not in DMs"));
+        assert_eq!(requests.len(), 5);
+
+        let thread_key = SessionKey::new("slack", Some("T1"), "C1", Some("1700.0001"), "")
+            .with_bot_id("UBOT");
+        let stored: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sessions WHERE session_key = ? AND platform = 'slack' AND thread_id = '1700.0001'",
+        )
+        .bind(thread_key.storage_key())
+        .fetch_one(&commands.data.pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, 1);
+    }
+
+    #[tokio::test]
+    async fn title_renames_bot_thread_root_and_explains_otherwise() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        fake.replies.lock().push(json!({ "ts": "1700.5", "user": "UBOT", "text": "🧵 *Old*" }));
+
+        commands
+            .handle(&with_response_url(invocation("/omo-title", "New", "UOWNER", "C1"), &fake))
+            .await
+            .unwrap();
+        let mut threaded = with_response_url(invocation("/omo-title", "New", "UOWNER", "C1"), &fake);
+        threaded["thread_ts"] = json!("1700.5");
+        commands.handle(&threaded).await.unwrap();
+        *fake.replies.lock() = vec![json!({ "ts": "1700.5", "user": "UOTHER", "text": "hello" })];
+        commands.handle(&threaded).await.unwrap();
+
+        let requests = fake.requests.lock().clone();
+        assert_eq!(requests[0].1["response_type"], "ephemeral");
+        assert!(requests[0].1["text"].as_str().unwrap().contains("inside a thread"));
+        assert_eq!(requests[1].0, "/api/conversations.replies");
+        assert_eq!(requests[1].1["ts"], "1700.5");
+        assert_eq!(requests[2].0, "/api/chat.update");
+        assert_eq!(requests[2].1["ts"], "1700.5");
+        assert_eq!(requests[2].1["text"], "🧵 *New*");
+        assert_eq!(requests[3].1["response_type"], "in_channel");
+        assert_eq!(requests[4].0, "/api/conversations.replies");
+        assert_eq!(requests[5].1["response_type"], "ephemeral");
+        assert_eq!(requests.iter().filter(|(path, _)| path == "/api/chat.update").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn admission_honours_pairing_allow_all_and_channel_lists() {
+        let fake = fake_slack().await;
+        let config = SlackConfig {
+            allowed_channels: vec!["CALLOWED".into()],
+            ignored_channels: vec!["CIGNORED".into()],
+            ..test_config()
+        };
+        let commands = commands_with(&fake, config).await;
+        let status = |user: &str, channel: &str| {
+            with_response_url(invocation("/omo-status", "", user, channel), &fake)
+        };
+
+        commands.handle(&status("UOWNER", "COTHER")).await.unwrap();
+        commands.handle(&status("UOWNER", "CIGNORED")).await.unwrap();
+        commands.handle(&status("UOWNER", "DANY")).await.unwrap();
+        commands.handle(&status("UOWNER", "CALLOWED")).await.unwrap();
+        commands.handle(&status("UPAIRED", "CALLOWED")).await.unwrap();
+
+        let code = commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
+        commands
+            .handle(&with_response_url(invocation("/omo-pair", &code, "UOWNER", "DANY"), &fake))
+            .await
+            .unwrap();
+        commands.handle(&status("UPAIRED", "CALLOWED")).await.unwrap();
+
+        let texts: Vec<(String, String)> = fake
+            .requests
+            .lock()
+            .iter()
+            .map(|(_, body)| {
+                (
+                    body["response_type"].as_str().unwrap_or_default().to_owned(),
+                    body["text"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect();
+        assert_eq!(texts[0], ("ephemeral".into(), UNAUTHORIZED_CHANNEL.into()));
+        assert_eq!(texts[1], ("ephemeral".into(), UNAUTHORIZED_CHANNEL.into()));
+        assert!(texts[2].1.starts_with("Active sessions"));
+        assert!(texts[3].1.starts_with("Active sessions"));
+        assert_eq!(texts[4], ("ephemeral".into(), UNAUTHORIZED.into()));
+        assert_eq!(
+            texts[5],
+            ("in_channel".into(), "✅ Successfully paired and authorized user <@UPAIRED>!".into())
+        );
+        assert!(texts[6].1.starts_with("Active sessions"));
+
+        let fake = fake_slack().await;
+        let open = commands_with(&fake, SlackConfig { allow_all_users: true, ..test_config() }).await;
+        open.handle(&with_response_url(invocation("/omo-status", "", "UANYONE", "C1"), &fake))
+            .await
+            .unwrap();
+        assert!(fake.requests.lock()[0].1["text"].as_str().unwrap().starts_with("Active sessions"));
+    }
+
+    #[tokio::test]
+    async fn pair_rejects_non_operators_and_reports_bad_codes_privately() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        let code = commands.data.pairing.request_pairing_code("UNEW").await.unwrap();
+        commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
+        let paired_code = commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
+        commands.data.pairing.approve_code(&paired_code, "UOWNER").await.unwrap();
+
+        commands
+            .handle(&with_response_url(invocation("/omo-pair", &code, "UPAIRED", "C1"), &fake))
+            .await
+            .unwrap();
+        commands
+            .handle(&with_response_url(invocation("/omo-pair", "ZZZZ-ZZZZ", "UFRIEND", "C1"), &fake))
+            .await
+            .unwrap();
+        commands
+            .handle(&with_response_url(invocation("/omo-pair", "", "UOWNER", "C1"), &fake))
+            .await
+            .unwrap();
+
+        let requests = fake.requests.lock().clone();
+        assert_eq!(requests[0].1["response_type"], "ephemeral");
+        assert!(requests[0].1["text"].as_str().unwrap().contains("not authorized to approve"));
+        assert_eq!(requests[1].1["response_type"], "ephemeral");
+        assert_eq!(requests[1].1["text"], "❌ Invalid pairing code.");
+        assert!(requests[2].1["text"].as_str().unwrap().contains("/omo-pair <code>"));
+        assert!(!commands.data.pairing.is_user_paired("UNEW").await);
+    }
+
+    #[tokio::test]
+    async fn destructive_slash_confirm_comes_from_deps() {
+        let fake = fake_slack().await;
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let multiplexer =
+            SessionMultiplexer::new(pool.clone(), Arc::new(NoopRunner), MultiplexerConfig::default());
+        let mut deps = SlackCommandDeps::new(multiplexer, pool);
+        assert!(deps.destructive_slash_confirm);
+        deps.destructive_slash_confirm = false;
+        let commands = SlackCommands::new(
+            Arc::new(test_config()),
+            SlackApi::with_base_url("xoxb-test".into(), format!("{}/api", fake.base)),
+            "UBOT",
+            deps,
+        );
+
+        commands
+            .handle(&with_response_url(invocation("/omo-reset", "", "UOWNER", "C1"), &fake))
+            .await
+            .unwrap();
+
+        let requests = fake.requests.lock().clone();
+        assert_eq!(requests[0].1["text"], "Session context and memory cleared.");
+    }
+
+    #[tokio::test]
+    async fn pending_writes_payload_is_uploaded_to_invoker_dm() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        let id = crate::storage::stage_pending_write(
+            &commands.data.pool,
+            "skill",
+            r#"{"name":"demo","content":"body"}"#,
+        )
+        .await
+        .unwrap();
+
+        commands
+            .handle(&with_response_url(invocation("/omo-skills", "pending", "UFRIEND", "C1"), &fake))
+            .await
+            .unwrap();
+
+        let requests = fake.requests.lock().clone();
+        let paths: Vec<&str> = requests.iter().map(|(path, _)| path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "/api/conversations.open",
+                "/api/files.getUploadURLExternal",
+                "/upload",
+                "/api/files.completeUploadExternal",
+                "/hook"
+            ]
+        );
+        assert_eq!(requests[0].1["users"], "UFRIEND");
+        assert!(requests[1].1.as_str().unwrap().contains("filename=pending-writes.json"));
+        assert!(requests[2].1.to_string().contains(&id));
+        assert_eq!(requests[3].1["channel_id"], "DOWNER");
+        assert_eq!(requests[4].1["response_type"], "ephemeral");
+        let notice = requests[4].1["text"].as_str().unwrap();
+        assert!(notice.starts_with("1 pending write(s)."), "{notice}");
+        assert!(!notice.contains("body"));
+    }
+
+    #[tokio::test]
+    async fn paired_users_cannot_manage_skill_writes() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        let code = commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
+        commands.data.pairing.approve_code(&code, "UOWNER").await.unwrap();
+
+        commands
+            .handle(&with_response_url(invocation("/omo-skills", "pending", "UPAIRED", "C1"), &fake))
+            .await
+            .unwrap();
+
+        let requests = fake.requests.lock().clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].1["text"], "❌ Only operators can manage pending skill writes.");
+    }
+
+    #[test]
+    fn channel_admission_exempts_dms_and_blocks_ignored() {
+        let allowed = vec!["CA".to_owned()];
+        let ignored = vec!["CI".to_owned(), "DI".to_owned()];
+        assert!(is_channel_admitted("CA", false, &allowed, &ignored));
+        assert!(!is_channel_admitted("CB", false, &allowed, &ignored));
+        assert!(is_channel_admitted("DB", true, &allowed, &ignored));
+        assert!(!is_channel_admitted("DI", true, &allowed, &ignored));
+        assert!(!is_channel_admitted("CI", false, &[], &ignored));
+        assert!(is_channel_admitted("CZ", false, &[], &[]));
     }
 }

@@ -70,7 +70,7 @@ pub trait PostSink: Send + Sync {
     async fn send(&self, post: &Post) -> Result<String>;
 
     /// False means the message was deleted, not an ambiguous transport error.
-    async fn edit_status(&self, _thread: u64, _message: u64, _body: &str) -> Result<bool> {
+    async fn edit_status(&self, _thread: &str, _message: &str, _body: &str) -> Result<bool> {
         Err(OmonError::Config(
             "status edits are unsupported by this sink".into(),
         ))
@@ -78,7 +78,7 @@ pub trait PostSink: Send + Sync {
 
     async fn rename_status(
         &self,
-        _thread: u64,
+        _thread: &str,
         _status: super::discord_threads::ThreadStatus,
         _title: &str,
     ) -> Result<()> {
@@ -116,7 +116,9 @@ impl PostSink for DiscordThreads {
         Ok(message.id.to_string())
     }
 
-    async fn edit_status(&self, thread: u64, message: u64, body: &str) -> Result<bool> {
+    async fn edit_status(&self, thread: &str, message: &str, body: &str) -> Result<bool> {
+        let thread = discord_id(thread)?;
+        let message = discord_id(message)?;
         match ChannelId::new(thread)
             .edit_message(
                 self.http(),
@@ -148,15 +150,22 @@ impl PostSink for DiscordThreads {
 
     async fn rename_status(
         &self,
-        thread: u64,
+        thread: &str,
         status: super::discord_threads::ThreadStatus,
         title: &str,
     ) -> Result<()> {
-        self.set_status_with_title(ChannelId::new(thread), status, &scrub(title))
+        self.set_status_with_title(ChannelId::new(discord_id(thread)?), status, &scrub(title))
             .await
             .map_err(|error| OmonError::Config(format!("lane status rename: {error}")))?;
         Ok(())
     }
+}
+
+fn discord_id(id: &str) -> Result<u64> {
+    id.parse::<u64>()
+        .ok()
+        .filter(|id| *id != 0)
+        .ok_or_else(|| OmonError::Config(format!("invalid Discord lane id: {id}")))
 }
 
 /// Call once at service startup, before starting its sole delivery worker.
@@ -192,12 +201,10 @@ async fn drain_inner(
     let mut sent = 0;
     for (id, original) in rows {
         let mut post: Post = serde_json::from_str(&original).map_err(json_error)?;
-        if post
+        if !post
             .thread
             .as_deref()
-            .and_then(|id| id.parse::<u64>().ok())
-            .filter(|id| *id != 0)
-            .is_none()
+            .is_some_and(super::slack_threads::valid_thread_ref)
         {
             post.state = PostState::Failed;
             post.error = Some("missing or invalid thread destination; no send attempted".into());
@@ -315,9 +322,8 @@ async fn refresh_lane_status_bounded(
     };
     let Some(thread) = lane
         .thread_channel_id
-        .as_deref()
-        .and_then(|id| id.parse::<u64>().ok())
-        .filter(|id| *id != 0)
+        .clone()
+        .filter(|id| super::slack_threads::valid_thread_ref(id))
     else {
         return Ok(());
     };
@@ -371,7 +377,7 @@ async fn refresh_lane_status_bounded(
         // and the receipt below still records the status as handled.
         match tokio::time::timeout(
             call_timeout,
-            sink.rename_status(thread, status, &lane.title),
+            sink.rename_status(&thread, status, &lane.title),
         )
         .await
         {
@@ -400,17 +406,19 @@ async fn refresh_lane_status_bounded(
         at: now,
         status: lane.status.clone(),
     };
-    let existing = lane
-        .status_message_id
-        .as_deref()
-        .map(|id| id.parse::<u64>())
-        .transpose()
-        .map_err(|error| OmonError::Config(format!("invalid lane status message id: {error}")))?;
+    let existing = lane.status_message_id.clone();
+    if let Some(message) = &existing {
+        if !super::slack_threads::is_slack_ref(&thread) {
+            discord_id(message).map_err(|_| {
+                OmonError::Config(format!("invalid lane status message id: {message}"))
+            })?;
+        }
+    }
     let mut edit_timed_out = false;
     let edited = if let Some(message) = existing {
         match tokio::time::timeout(
             call_timeout,
-            sink.edit_status(thread, message, &receipt.post.body),
+            sink.edit_status(&thread, &message, &receipt.post.body),
         )
         .await
         {
@@ -494,13 +502,13 @@ mod tests {
             Ok("777".into())
         }
 
-        async fn edit_status(&self, _: u64, _: u64, _: &str) -> Result<bool> {
+        async fn edit_status(&self, _: &str, _: &str, _: &str) -> Result<bool> {
             std::future::pending::<Result<bool>>().await
         }
 
         async fn rename_status(
             &self,
-            _: u64,
+            _: &str,
             _: super::super::discord_threads::ThreadStatus,
             _: &str,
         ) -> Result<()> {

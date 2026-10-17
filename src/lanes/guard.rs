@@ -603,11 +603,28 @@ async fn active_lane_count<'e>(
     u64::try_from(count).map_err(|error| crate::OmonError::Config(error.to_string()))
 }
 
-/// Creates the lane thread with no DB connection held; returns (bot id, thread id).
-async fn create_launch_thread(
+/// Creates the lane thread with no DB connection held; returns (bot id, thread ref).
+/// A Slack parent (`slack:C…` or `C…`) roots a Slack thread; a numeric parent a Discord one.
+pub async fn create_lane_thread(
     lane: &crate::storage::Lane,
     parent: &str,
 ) -> Result<(String, String), String> {
+    if super::slack_threads::parse_parent(parent).is_some() {
+        let threads = super::slack_threads::SlackLaneThreads::from_env()
+            .ok_or_else(|| "Slack is not configured".to_string())?;
+        let bot = tokio::time::timeout(LAUNCH_DISCORD_TIMEOUT, threads.bot_user_id())
+            .await
+            .map_err(|_| "slack bot lookup timed out".to_string())?
+            .map_err(|error| error.to_string())?;
+        let thread = tokio::time::timeout(
+            LAUNCH_DISCORD_TIMEOUT,
+            threads.create_thread(parent, &lane.key, &lane.title),
+        )
+        .await
+        .map_err(|_| "slack thread creation timed out".to_string())?
+        .map_err(|error| error.to_string())?;
+        return Ok((bot, thread));
+    }
     let parent = parent.parse::<u64>().map_err(|error| error.to_string())?;
     let threads =
         super::discord_threads::DiscordThreads::from_env().map_err(|error| error.to_string())?;
@@ -631,14 +648,29 @@ async fn create_launch_thread(
     Ok((bot, created.thread_channel_id.to_string()))
 }
 
-/// Best effort: the lane service must not stall on a Discord failure here.
-async fn archive_orphan_thread(thread: u64) {
+/// Best effort: the lane service must not stall on a transport failure here.
+/// Discord archives the orphan thread; Slack deletes its starter message.
+pub async fn discard_orphan_thread(thread: &str) {
+    if super::slack_threads::is_slack_ref(thread) {
+        let Some(threads) = super::slack_threads::SlackLaneThreads::from_env() else {
+            return;
+        };
+        match tokio::time::timeout(LAUNCH_DISCORD_TIMEOUT, threads.delete_thread(thread)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(thread, %error, "orphan lane thread delete failed"),
+            Err(_) => tracing::warn!(thread, "orphan lane thread delete timed out"),
+        }
+        return;
+    }
+    let Ok(id) = thread.parse::<u64>() else {
+        return;
+    };
     let Ok(threads) = super::discord_threads::DiscordThreads::from_env() else {
         return;
     };
     match tokio::time::timeout(
         LAUNCH_DISCORD_TIMEOUT,
-        threads.archive(serenity::all::ChannelId::new(thread)),
+        threads.archive(serenity::all::ChannelId::new(id)),
     )
     .await
     {
@@ -698,7 +730,7 @@ pub async fn retry_queued(
         }
         let mut bot = None;
         let thread = match (&lane.parent_channel_id, &lane.thread_channel_id) {
-            (Some(parent), None) => match create_launch_thread(&lane, parent).await {
+            (Some(parent), None) => match create_lane_thread(&lane, parent).await {
                 Ok((bot_id, thread)) => {
                     bot = Some(bot_id);
                     Some(thread)
@@ -728,8 +760,8 @@ pub async fn retry_queued(
                 record_launch_problem(pool, &lane, "launch_orphan_thread", &detail).await?;
                 // The thread id is not persisted, so the next tick creates another
                 // one: archive this orphan instead of leaving one per tick behind.
-                if let Some(thread) = thread.as_deref().and_then(|id| id.parse::<u64>().ok()) {
-                    archive_orphan_thread(thread).await;
+                if let Some(thread) = thread.as_deref() {
+                    discard_orphan_thread(thread).await;
                 }
             }
             if changed.rows_affected() == 0 {

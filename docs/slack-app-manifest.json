@@ -122,6 +122,12 @@
         "description": "omo-gateway sessions",
         "usage_hint": "[args]",
         "should_escape": false
+      },
+      {
+        "command": "/omo-pair",
+        "description": "omo-gateway pair",
+        "usage_hint": "<code>",
+        "should_escape": false
       }
     ]
   },

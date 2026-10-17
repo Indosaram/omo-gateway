@@ -55,9 +55,8 @@ pub async fn reopen(pool: &SqlitePool, key: &str, text: Option<&str>) -> Result<
         )));
     }
     restore_cwd(pool, &lane).await?;
-    if lane.thread_channel_id.is_some() {
-        let transport = super::discord_threads::DiscordThreads::from_env()
-            .map_err(|error| OmonError::Config(error.to_string()))?;
+    if let Some(thread) = &lane.thread_channel_id {
+        let transport = transport_for(thread)?;
         thread_effect(pool, &lane, Some(&transport), false, LIFECYCLE_TIMEOUT).await?;
     }
     apply_reopen(pool, key, text, None).await
@@ -115,21 +114,56 @@ async fn apply_reopen(
     Ok(())
 }
 
+/// One transport for the platform of `thread` (a Slack ref or a Discord channel id).
+fn transport_for(thread: &str) -> Result<super::slack_threads::LaneTransports> {
+    let mut transports = super::slack_threads::LaneTransports::default();
+    if super::slack_threads::is_slack_ref(thread) {
+        transports.slack = Some(Arc::new(
+            super::slack_threads::SlackLaneThreads::from_env()
+                .ok_or_else(|| OmonError::Config("Slack is not configured".into()))?,
+        ));
+    } else {
+        transports.discord = Some(Arc::new(
+            super::discord_threads::DiscordThreads::from_env()
+                .map_err(|error| OmonError::Config(error.to_string()))?,
+        ));
+    }
+    Ok(transports)
+}
+
 #[async_trait]
 pub trait LaneLifecycle: Send + Sync {
     async fn bot_id(
         &self,
     ) -> std::result::Result<String, super::discord_threads::DiscordThreadError>;
+    /// Bot identity on the platform that owns `thread`.
+    async fn bot_id_for(
+        &self,
+        _thread: &str,
+    ) -> std::result::Result<String, super::discord_threads::DiscordThreadError> {
+        self.bot_id().await
+    }
     async fn status(
         &self,
-        thread: u64,
+        thread: &str,
         status: super::discord_threads::ThreadStatus,
     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError>;
     async fn archived(
         &self,
-        thread: u64,
+        thread: &str,
         archived: bool,
     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError>;
+}
+
+fn discord_thread(
+    thread: &str,
+) -> std::result::Result<serenity::all::ChannelId, super::discord_threads::DiscordThreadError> {
+    thread
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id != 0)
+        .map(serenity::all::ChannelId::new)
+        .ok_or_else(|| OmonError::Config("invalid lane thread".into()).into())
 }
 
 #[async_trait]
@@ -141,19 +175,19 @@ impl LaneLifecycle for super::discord_threads::DiscordThreads {
     }
     async fn status(
         &self,
-        thread: u64,
+        thread: &str,
         status: super::discord_threads::ThreadStatus,
     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError> {
-        self.set_status(serenity::all::ChannelId::new(thread), status)
+        self.set_status(discord_thread(thread)?, status)
             .await
             .map(|_| ())
     }
     async fn archived(
         &self,
-        thread: u64,
+        thread: &str,
         archived: bool,
     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError> {
-        let thread = serenity::all::ChannelId::new(thread);
+        let thread = discord_thread(thread)?;
         if archived {
             self.archive(thread).await
         } else {
@@ -185,14 +219,12 @@ async fn thread_effect(
             .await?;
     let bound =
         bound.ok_or_else(|| OmonError::Config("lane has no evidenced bot binding".into()))?;
-    let thread = thread
-        .parse::<u64>()
-        .ok()
-        .filter(|id| *id != 0)
-        .ok_or_else(|| OmonError::Config("invalid lane thread".into()))?;
+    if !super::slack_threads::valid_thread_ref(thread) {
+        return Err(OmonError::Config("invalid lane thread".into()));
+    }
     let transport = transport
         .ok_or_else(|| OmonError::Config("lane lifecycle transport unavailable".into()))?;
-    if tokio::time::timeout(timeout, transport.bot_id())
+    if tokio::time::timeout(timeout, transport.bot_id_for(thread))
         .await
         .map_err(|_| OmonError::Config("lane lifecycle bot lookup timed out".into()))?
         .map_err(|error| OmonError::Config(error.to_string()))?
@@ -990,17 +1022,28 @@ impl LaneRunner {
                 )
             })
             .unwrap_or(true);
+        let mut transports = super::slack_threads::LaneTransports {
+            discord: None,
+            slack: super::slack_threads::SlackLaneThreads::from_env().map(Arc::new),
+        };
         if let Some(transport) = super::discord_threads::DiscordThreads::loopback_from_env()? {
-            let transport = Arc::new(transport);
-            runner.post_sink = Some(transport.clone());
-            runner.lifecycle = Some(transport);
+            transports.discord = Some(Arc::new(transport));
         } else if discord_enabled {
-            let transport = Arc::new(
-                super::discord_threads::DiscordThreads::from_env()
-                    .map_err(|error| OmonError::Config(error.to_string()))?,
-            );
-            runner.post_sink = Some(transport.clone());
-            runner.lifecycle = Some(transport);
+            match super::discord_threads::DiscordThreads::from_env() {
+                Ok(transport) => transports.discord = Some(Arc::new(transport)),
+                // A Slack-only gateway has no Discord token; lanes then live on Slack.
+                Err(super::discord_threads::DiscordThreadError::MissingToken)
+                    if transports.slack.is_some() =>
+                {
+                    tracing::info!("no Discord token; lane threads use Slack only");
+                }
+                Err(error) => return Err(OmonError::Config(error.to_string())),
+            }
+        }
+        if transports.discord.is_some() || transports.slack.is_some() {
+            let transports = Arc::new(transports);
+            runner.post_sink = Some(transports.clone());
+            runner.lifecycle = Some(transports);
         }
         if let Ok(value) = std::env::var("OMON_LANE_MAX_TURNS") {
             runner.max_turns = value

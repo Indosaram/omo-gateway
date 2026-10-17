@@ -26,6 +26,7 @@ pub struct SlackDeps {
     pub config: Arc<SlackConfig>,
     pub egress: Arc<SlackEgress>,
     pub commands: super::commands::SlackCommandDeps,
+    pub inbox_actions: Option<Arc<dyn crate::inbox::proposals::Actions>>,
 }
 
 /// Resolves the bot identity with `auth.test` before anything listens, so a bad token fails
@@ -34,14 +35,20 @@ pub async fn build(deps: SlackDeps) -> Result<SlackRuntime> {
     let api = SlackApi::new(deps.config.bot_token.clone());
     let auth = api.auth_test().await?;
     let approvals = deps.commands.approvals.clone();
-    let ingress = Arc::new(SlackIngress::new(
+    let mut ingress = SlackIngress::new(
         deps.config.clone(),
         api.clone(),
         deps.commands.multiplexer.clone(),
         deps.commands.pool.clone(),
         auth.user_id.clone(),
         auth.team_id.clone(),
-    ));
+    )
+    .with_approvals(approvals.clone())
+    .with_pairing(deps.commands.pairing.clone());
+    if let Some(actions) = deps.inbox_actions {
+        ingress = ingress.with_inbox_actions(actions);
+    }
+    let ingress = Arc::new(ingress);
     let commands = Arc::new(SlackCommands::new(
         deps.config.clone(),
         api.clone(),
@@ -61,6 +68,23 @@ pub async fn build(deps: SlackDeps) -> Result<SlackRuntime> {
 }
 
 impl SlackRuntime {
+    /// Routes messages missed while the gateway was down. Runs once, before `serve`.
+    pub async fn backfill(&self) {
+        if !self.config.missed_backfill {
+            return;
+        }
+        match super::backfill::run(&self.ingress).await {
+            Ok(0) => {}
+            Ok(routed) => tracing::info!(routed, "slack missed-message backfill routed messages"),
+            Err(error) => tracing::warn!(%error, "slack missed-message backfill failed"),
+        }
+    }
+
+    /// Hands debounced split messages to the multiplexer; called on every shutdown path.
+    pub async fn flush(&self) {
+        self.ingress.flush().await;
+    }
+
     /// Runs Socket Mode until `shutdown`, reconnecting on its own. Each envelope is handled on
     /// its own task so a slow turn admission never delays the next ack.
     pub async fn serve(self: Arc<Self>, shutdown: CancellationToken) -> Result<()> {

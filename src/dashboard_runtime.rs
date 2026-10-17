@@ -200,12 +200,22 @@ pub async fn run_standalone(
         scheduler.start().await;
     }
 
-    let bot_connections = configured_bot_count();
+    let slack_config = omon_gateway::slack::SlackConfig::from_env(&workspace_root);
+    let bot_connections = configured_bot_count() + usize::from(slack_config.is_some());
     let policy_defaults = MessageContextPolicyMatrix::from_environment();
     let policy_store = MessengerPolicyStore::new(pool.clone());
     let policy_override = policy_store.get_override("discord").await?;
     let effective_policy = policy_store.effective("discord", &policy_defaults).await?;
-    let config_view = dashboard_config_view(
+    let slack_policy = match &slack_config {
+        Some(_) => Some(SlackPolicyView {
+            policy_override: policy_store.get_override(omon_gateway::slack::PLATFORM).await?,
+            effective: policy_store
+                .effective(omon_gateway::slack::PLATFORM, &policy_defaults)
+                .await?,
+        }),
+        None => None,
+    };
+    let mut config_view = dashboard_config_view(
         &settings,
         &workspace_root,
         &extra_tool_roots,
@@ -213,6 +223,12 @@ pub async fn run_standalone(
         &policy_defaults,
         policy_override.as_ref(),
         &effective_policy,
+    );
+    attach_slack_view(
+        &mut config_view,
+        slack_config.as_ref(),
+        &policy_defaults,
+        slack_policy.as_ref(),
     );
     let state = DashboardState::new(
         pool.clone(),
@@ -273,6 +289,33 @@ fn dashboard_tool_roots() -> Vec<PathBuf> {
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."))]
         })
+}
+
+struct SlackPolicyView {
+    policy_override: Option<MessageContextPolicyMatrix>,
+    effective: MessageContextPolicyMatrix,
+}
+
+/// Adds the `slack` config block and, when Slack is on, its message-context policy.
+fn attach_slack_view(
+    view: &mut Value,
+    slack: Option<&omon_gateway::slack::SlackConfig>,
+    policy_defaults: &MessageContextPolicyMatrix,
+    policy: Option<&SlackPolicyView>,
+) {
+    view["slack"] = super::dashboard::slack_config_view(slack);
+    if let (Some(slack), Some(policy)) = (slack, policy) {
+        view["slack_message_context_policy"] = json!({
+            "platform": omon_gateway::slack::PLATFORM,
+            "environment_defaults": policy_defaults,
+            "persisted_override": policy.policy_override,
+            "effective": policy.effective,
+            "allowed_cross_channels": slack.allowed_channels,
+            "ignored_channels": slack.ignored_channels,
+            "override_store": "messenger_policy_overrides",
+            "search_backend": "sqlite_fts5+slack_rest_backfill",
+        });
+    }
 }
 
 fn configured_bot_count() -> usize {
@@ -396,6 +439,36 @@ mod tests {
         assert_eq!(
             split_csv("one, two, ,three"),
             vec!["one".to_owned(), "two".to_owned(), "three".to_owned()]
+        );
+    }
+
+    #[test]
+    fn slack_view_adds_config_and_policy_only_when_configured() {
+        let defaults = MessageContextPolicyMatrix::default();
+        let mut off = json!({});
+        attach_slack_view(&mut off, None, &defaults, None);
+        assert_eq!(off["slack"]["configured"], false);
+        assert!(off.get("slack_message_context_policy").is_none());
+
+        let slack = omon_gateway::slack::SlackConfig {
+            allowed_channels: vec!["CALLOWED".into()],
+            ..omon_gateway::slack::SlackConfig::test_default()
+        };
+        let policy = SlackPolicyView {
+            policy_override: None,
+            effective: MessageContextPolicyMatrix {
+                allow_dm_reads: false,
+                ..defaults.clone()
+            },
+        };
+        let mut on = json!({});
+        attach_slack_view(&mut on, Some(&slack), &defaults, Some(&policy));
+        assert_eq!(on["slack"]["configured"], true);
+        assert_eq!(on["slack_message_context_policy"]["platform"], "slack");
+        assert_eq!(on["slack_message_context_policy"]["effective"]["allow_dm_reads"], false);
+        assert_eq!(
+            on["slack_message_context_policy"]["allowed_cross_channels"],
+            json!(["CALLOWED"])
         );
     }
 

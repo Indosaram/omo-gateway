@@ -141,6 +141,78 @@ impl SlackApi {
             .ok_or_else(|| slack_error("conversations.open", "missing channel.id"))
     }
 
+    pub async fn conversations_history(
+        &self,
+        channel: &str,
+        oldest: Option<&str>,
+        latest: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Value>> {
+        let mut body = json!({ "channel": channel, "limit": limit.clamp(1, 200), "inclusive": false });
+        if let Some(oldest) = oldest {
+            body["oldest"] = json!(oldest);
+        }
+        if let Some(latest) = latest {
+            body["latest"] = json!(latest);
+        }
+        let mut value = self.call("conversations.history", body).await?;
+        Ok(messages(&mut value))
+    }
+
+    pub async fn conversations_replies(
+        &self,
+        channel: &str,
+        thread_ts: &str,
+        oldest: Option<&str>,
+        limit: u32,
+    ) -> Result<Vec<Value>> {
+        let mut body = json!({ "channel": channel, "ts": thread_ts, "limit": limit.clamp(1, 200) });
+        if let Some(oldest) = oldest {
+            body["oldest"] = json!(oldest);
+            body["inclusive"] = json!(false);
+        }
+        let mut value = self.call("conversations.replies", body).await?;
+        Ok(messages(&mut value))
+    }
+
+    pub async fn conversations_members(&self, channel: &str) -> Result<Vec<String>> {
+        let value = self
+            .call("conversations.members", json!({ "channel": channel, "limit": 200 }))
+            .await?;
+        Ok(value["members"]
+            .as_array()
+            .map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .unwrap_or_default())
+    }
+
+    pub async fn permalink(&self, channel: &str, ts: &str) -> Result<String> {
+        let value = self
+            .call("chat.getPermalink", json!({ "channel": channel, "message_ts": ts }))
+            .await?;
+        string_field("chat.getPermalink", &value, "permalink")
+    }
+
+    pub async fn upload_bytes(
+        &self,
+        channel: &str,
+        thread_ts: Option<&str>,
+        filename: &str,
+        bytes: Vec<u8>,
+        title: Option<&str>,
+    ) -> Result<()> {
+        let dir = std::env::temp_dir().join(format!("omon-slack-upload-{}", uuid::Uuid::new_v4()));
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|error| slack_error("files.upload", error))?;
+        let path = dir.join(sanitize_filename(filename));
+        let result = match tokio::fs::write(&path, bytes).await {
+            Ok(()) => self.upload_file(channel, thread_ts, &path, title).await.map(drop),
+            Err(error) => Err(slack_error("files.upload", error)),
+        };
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        result
+    }
+
     pub async fn upload_file(
         &self,
         channel: &str,
@@ -379,6 +451,24 @@ fn string_field(method: &str, value: &Value, field: &str) -> Result<String> {
 
 fn slack_error(method: &str, detail: impl std::fmt::Display) -> OmonError {
     OmonError::Multiplexer(format!("slack {method}: {detail}"))
+}
+
+fn messages(value: &mut Value) -> Vec<Value> {
+    match value["messages"].take() {
+        Value::Array(items) => items,
+        _ => Vec::new(),
+    }
+}
+
+fn sanitize_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | '\0') { '_' } else { c })
+        .collect();
+    match cleaned.trim() {
+        "" | "." | ".." => "upload.bin".to_owned(),
+        trimmed => trimmed.to_owned(),
+    }
 }
 
 #[cfg(test)]

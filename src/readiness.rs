@@ -258,6 +258,29 @@ pub fn probe_gateway(bot_count: usize) -> CheckResult {
     }
 }
 
+/// Slack transport state at readiness time. Tokens never appear here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SlackReadiness {
+    Disabled,
+    Connected { bot_user_id: String, team_id: String },
+    Failed(String),
+}
+
+/// `None` when Slack is disabled, so a Discord-only gateway keeps its old report shape.
+pub fn probe_slack(slack: &SlackReadiness) -> Option<CheckResult> {
+    match slack {
+        SlackReadiness::Disabled => None,
+        SlackReadiness::Connected { bot_user_id, team_id } => Some(
+            CheckResult::ok()
+                .with_metric("bot_user_id", bot_user_id.as_str())
+                .with_metric("team_id", team_id.as_str()),
+        ),
+        SlackReadiness::Failed(detail) => Some(CheckResult::degraded(format!(
+            "slack runtime did not start: {detail}"
+        ))),
+    }
+}
+
 fn backend_http_url(appserver_url: Option<&str>) -> String {
     let url = appserver_url.unwrap_or("ws://127.0.0.1:19742");
     if let Some(stripped) = url.strip_prefix("ws://") {
@@ -312,12 +335,37 @@ pub async fn collect_runtime_readiness(
     default_model: &str,
     bot_count: usize,
 ) -> ReadinessReport {
+    collect_runtime_readiness_with_slack(
+        pool,
+        workspace_root,
+        default_model,
+        bot_count,
+        &SlackReadiness::Disabled,
+    )
+    .await
+}
+
+/// `discord_bot_count` plus a connected Slack bot make up the gateway's configured bots.
+pub async fn collect_runtime_readiness_with_slack(
+    pool: &SqlitePool,
+    workspace_root: &Path,
+    default_model: &str,
+    discord_bot_count: usize,
+    slack: &SlackReadiness,
+) -> ReadinessReport {
     let mut checks = HashMap::new();
+    let slack_bots = usize::from(matches!(slack, SlackReadiness::Connected { .. }));
 
     checks.insert("state_db".to_string(), probe_database(pool).await);
     checks.insert("disk".to_string(), probe_disk(workspace_root));
     checks.insert("credentials".to_string(), probe_credentials(default_model));
-    checks.insert("gateway".to_string(), probe_gateway(bot_count));
+    checks.insert(
+        "gateway".to_string(),
+        probe_gateway(discord_bot_count + slack_bots),
+    );
+    if let Some(check) = probe_slack(slack) {
+        checks.insert("slack".to_string(), check);
+    }
     let appserver_url = std::env::var("OMON_OMO_APPSERVER_URL")
         .ok()
         .map(|s| s.trim().to_string())
@@ -485,6 +533,43 @@ mod tests {
         let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
         let check = probe_database(&pool).await;
         assert_eq!(check.status, "ok");
+    }
+
+    #[test]
+    fn slack_probe_reports_state_without_tokens() {
+        assert_eq!(probe_slack(&SlackReadiness::Disabled), None);
+        let connected = probe_slack(&SlackReadiness::Connected {
+            bot_user_id: "UBOT".into(),
+            team_id: "T1".into(),
+        })
+        .unwrap();
+        assert_eq!(connected.status, "ok");
+        assert_eq!(connected.metrics.get("bot_user_id"), Some(&serde_json::json!("UBOT")));
+        let failed = probe_slack(&SlackReadiness::Failed("invalid_auth".into())).unwrap();
+        assert_eq!(failed.status, "degraded");
+        assert!(failed.detail.unwrap().contains("invalid_auth"));
+    }
+
+    #[tokio::test]
+    async fn slack_only_gateway_counts_its_bot_and_adds_a_slack_check() {
+        let temp = tempfile::tempdir().unwrap();
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let report = collect_runtime_readiness_with_slack(
+            &pool,
+            temp.path(),
+            "custom-model",
+            0,
+            &SlackReadiness::Connected {
+                bot_user_id: "UBOT".into(),
+                team_id: "T1".into(),
+            },
+        )
+        .await;
+        assert_eq!(report.checks["gateway"].status, "ok");
+        assert_eq!(report.checks["slack"].status, "ok");
+        let discord_only =
+            collect_runtime_readiness(&pool, temp.path(), "custom-model", 1).await;
+        assert!(!discord_only.checks.contains_key("slack"));
     }
 
     #[test]

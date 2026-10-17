@@ -23,6 +23,22 @@ impl PlatformRouter {
         }
     }
 
+    /// Router for whichever transports started. Discord stays the fallback when present;
+    /// a Slack-only gateway falls back to Slack so cron and lane traffic still deliver.
+    pub fn for_transports(
+        discord: Option<Arc<dyn OutboundDispatcher>>,
+        slack: Option<Arc<dyn OutboundDispatcher>>,
+    ) -> Option<Self> {
+        let mut router = Self::new(discord.clone().or_else(|| slack.clone())?);
+        if let Some(discord) = discord {
+            router = router.with_platform("discord", discord);
+        }
+        if let Some(slack) = slack {
+            router = router.with_platform(crate::slack::PLATFORM, slack);
+        }
+        Some(router)
+    }
+
     pub fn with_platform(mut self, platform: &str, dispatcher: Arc<dyn OutboundDispatcher>) -> Self {
         self.routes.insert(platform.to_ascii_lowercase(), dispatcher);
         self
@@ -138,6 +154,34 @@ mod tests {
         router.dispatch(send("cron")).await.unwrap();
         assert_eq!(*slack.0.lock(), ["slack"]);
         assert_eq!(*discord.0.lock(), ["discord", "cron"]);
+    }
+
+    #[tokio::test]
+    async fn slack_only_router_falls_back_to_slack() {
+        let slack = Arc::new(Recorder::default());
+        let router = PlatformRouter::for_transports(None, Some(slack.clone())).unwrap();
+        router.dispatch(send("discord")).await.unwrap();
+        router.dispatch(send("slack")).await.unwrap();
+        assert_eq!(*slack.0.lock(), ["discord", "slack"]);
+        assert!(PlatformRouter::for_transports(None, None).is_none());
+    }
+
+    #[tokio::test]
+    async fn both_transports_keep_discord_as_fallback() {
+        let discord = Arc::new(Recorder::default());
+        let slack = Arc::new(Recorder::default());
+        let router =
+            PlatformRouter::for_transports(Some(discord.clone()), Some(slack.clone())).unwrap();
+        router.dispatch(send("slack")).await.unwrap();
+        router.dispatch(send("cron")).await.unwrap();
+        router
+            .dispatch(OutboundAction::ExpireApproval {
+                request_id: uuid::Uuid::new_v4(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(*slack.0.lock(), ["slack", "expire"]);
+        assert_eq!(*discord.0.lock(), ["cron", "expire"]);
     }
 
     #[tokio::test]

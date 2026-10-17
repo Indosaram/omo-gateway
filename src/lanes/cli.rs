@@ -90,8 +90,9 @@ pub struct StartArgs {
     pub brief: PathBuf,
     #[arg(long)]
     pub done: String,
+    /// Parent channel: a numeric Discord channel id, or a Slack channel (`slack:C…` or `C…`).
     #[arg(long)]
-    pub thread: Option<u64>,
+    pub thread: Option<String>,
     #[arg(long)]
     pub cwd: Option<PathBuf>,
     #[arg(long)]
@@ -311,8 +312,14 @@ async fn validate_start(args: &StartArgs) -> Result<()> {
     if let Some(lead) = &args.lead {
         SessionKey::from_storage_key(lead)?;
     }
-    if args.thread == Some(0) {
-        return Err(invalid("thread must be a nonzero channel id"));
+    if let Some(thread) = &args.thread {
+        if super::slack_threads::parse_parent(thread).is_none()
+            && !thread.parse::<u64>().is_ok_and(|id| id != 0)
+        {
+            return Err(invalid(
+                "thread must be a nonzero Discord channel id or a Slack channel id",
+            ));
+        }
     }
     Ok(())
 }
@@ -343,9 +350,10 @@ pub async fn start(
     let lead = if let Some(lead) = args.lead {
         lead
     } else {
-        let newest: Option<(String,)> = if let Some(thread) = args.thread {
+        let newest: Option<(String,)> = if let Some(thread) = &args.thread {
+            let channel = super::slack_threads::parse_parent(thread).unwrap_or(thread);
             sqlx::query_as("SELECT session_key FROM sessions WHERE thread_id = ? OR channel_id = ? ORDER BY updated_at DESC LIMIT 1")
-                .bind(thread.to_string()).bind(thread.to_string()).fetch_optional(pool).await?
+                .bind(channel).bind(channel).fetch_optional(pool).await?
         } else {
             None
         };
@@ -384,30 +392,20 @@ pub async fn start(
     // across network I/O would block every other user of the 1-connection pool.
     let mut created_bot = None;
     if !decision.is_hold() {
-        if let Some(parent) = args.thread {
-            let threads = super::discord_threads::DiscordThreads::from_env()
-                .map_err(|error| invalid(error.to_string()))?;
-            let http = threads.http();
-            created_bot = Some(
-                http.get_current_user()
-                    .await
-                    .map_err(|error| invalid(error.to_string()))?
-                    .id
-                    .to_string(),
-            );
-            let thread = super::discord_threads::create_thread(
-                http,
-                serenity::all::ChannelId::new(parent),
-                &lane.key,
-                &lane.title,
-            )
-            .await
-            .map_err(|error| invalid(error.to_string()))?;
-            lane.thread_channel_id = Some(thread.thread_channel_id.to_string());
+        if let Some(parent) = &args.thread {
+            let (bot, thread) = super::guard::create_lane_thread(&lane, parent)
+                .await
+                .map_err(invalid)?;
+            created_bot = Some(bot);
+            lane.thread_channel_id = Some(thread);
         }
         lane.status = "working".into();
     }
-    lane.parent_channel_id = args.thread.map(|id| id.to_string());
+    lane.parent_channel_id = args.thread.as_deref().map(|thread| {
+        super::slack_threads::parse_parent(thread)
+            .map(|channel| format!("{}{channel}", super::slack_threads::REF_PREFIX))
+            .unwrap_or_else(|| thread.to_owned())
+    });
     // Cap re-check and insert share one write transaction so concurrent starts
     // cannot both pass a stale launch decision.
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -447,14 +445,7 @@ pub async fn start(
     };
     if let Some(thread) = orphan_thread {
         tracing::warn!(key = %lane.key, %thread, "lane thread not kept (cap re-check or insert failed); archiving");
-        if let Ok(threads) = super::discord_threads::DiscordThreads::from_env() {
-            if let Ok(id) = thread.parse::<u64>() {
-                if let Err(archive_error) = threads.archive(serenity::all::ChannelId::new(id)).await
-                {
-                    tracing::warn!(%thread, %archive_error, "orphan lane thread archive failed");
-                }
-            }
-        }
+        super::guard::discard_orphan_thread(&thread).await;
     }
     inserted?;
     // The lane row is committed: a failure below must not report the start as

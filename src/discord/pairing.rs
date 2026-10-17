@@ -129,12 +129,13 @@ impl PairingStore {
     /// Checks whether the platform is currently locked out at the given timestamp within a transaction.
     async fn is_platform_locked_tx(
         tx: &mut Transaction<'_, Sqlite>,
+        platform_key: &str,
         now: DateTime<Utc>,
     ) -> Result<bool> {
         let row: Option<(DateTime<Utc>, i64)> = sqlx::query_as(
             "SELECT locked_until, failed_attempts FROM pairing_platform_lockout WHERE platform_key = ?",
         )
-        .bind(DEFAULT_PLATFORM_KEY)
+        .bind(platform_key)
         .fetch_optional(&mut **tx)
         .await?;
 
@@ -172,6 +173,7 @@ impl PairingStore {
     /// Uses an atomic conditional UPSERT to eliminate lost increments and unique constraint races.
     async fn record_failed_attempt_tx(
         tx: &mut Transaction<'_, Sqlite>,
+        platform_key: &str,
         now: DateTime<Utc>,
     ) -> Result<()> {
         let deadline = now + chrono::Duration::seconds(LOCKOUT_DURATION_SECONDS);
@@ -190,7 +192,7 @@ impl PairingStore {
                  END
              WHERE platform_key = ?",
         )
-        .bind(DEFAULT_PLATFORM_KEY)
+        .bind(platform_key)
         .bind(now)
         .bind(now)
         .bind(MAX_FAILED_ATTEMPTS)
@@ -199,7 +201,62 @@ impl PairingStore {
         .bind(now)
         .bind(MAX_FAILED_ATTEMPTS)
         .bind(deadline)
-        .bind(DEFAULT_PLATFORM_KEY)
+        .bind(platform_key)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    async fn reset_failed_attempts_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        platform_key: &str,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO pairing_platform_lockout (platform_key, locked_until, failed_attempts) VALUES (?, ?, 0)
+             ON CONFLICT(platform_key) DO UPDATE SET failed_attempts = 0, locked_until = excluded.locked_until",
+        )
+        .bind(platform_key)
+        .bind(now)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    /// Claims the notification slot unless `user_key` was notified within the rate-limit window.
+    async fn claim_notification_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        user_key: &str,
+        now: DateTime<Utc>,
+    ) -> Result<bool> {
+        let claim_res = sqlx::query(
+            "INSERT INTO pairing_notifications (user_id, last_notified_at)
+             VALUES (?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET last_notified_at = excluded.last_notified_at
+             WHERE (strftime('%s', ?) - strftime('%s', pairing_notifications.last_notified_at)) >= ?",
+        )
+        .bind(user_key)
+        .bind(now)
+        .bind(now)
+        .bind(RATE_LIMIT_SECONDS)
+        .execute(&mut **tx)
+        .await?;
+        Ok(claim_res.rows_affected() > 0)
+    }
+
+    /// The notification table exists only to rate-limit; a row older than
+    /// the window can never throttle again, so drop it instead of letting
+    /// an unauthenticated population grow the table without bound.
+    async fn prune_notifications_tx(
+        tx: &mut Transaction<'_, Sqlite>,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "DELETE FROM pairing_notifications
+             WHERE (strftime('%s', ?) - strftime('%s', last_notified_at)) > ?",
+        )
+        .bind(now)
+        .bind(RATE_LIMIT_SECONDS)
         .execute(&mut **tx)
         .await?;
         Ok(())
@@ -208,7 +265,7 @@ impl PairingStore {
     /// Records a failed approval attempt and triggers platform lockout if MAX_FAILED_ATTEMPTS reached.
     pub async fn record_failed_attempt_at(&self, now: DateTime<Utc>) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        Self::record_failed_attempt_tx(&mut tx, now).await?;
+        Self::record_failed_attempt_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -242,16 +299,15 @@ impl PairingStore {
     /// Runs all operations within the provided transaction to prevent pool re-entrancy and races.
     async fn request_pairing_code_tx(
         tx: &mut Transaction<'_, Sqlite>,
-        user_id: u64,
+        platform_key: &str,
+        user_id_str: &str,
         now: DateTime<Utc>,
     ) -> Result<String> {
-        if Self::is_platform_locked_tx(tx, now).await? {
+        if Self::is_platform_locked_tx(tx, platform_key, now).await? {
             return Err(OmonError::Approval(
                 "Pairing is locked out due to too many failed attempts".into(),
             ));
         }
-
-        let user_id_str = user_id.to_string();
 
         // 1. Cleanup expired codes globally, propagating DB errors
         Self::cleanup_expired_codes_tx(tx, now).await?;
@@ -260,7 +316,7 @@ impl PairingStore {
         let existing: Option<(String, DateTime<Utc>, DateTime<Utc>, i64)> = sqlx::query_as(
             "SELECT code, created_at, expires_at, attempts FROM pairing_codes WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
         )
-        .bind(&user_id_str)
+        .bind(user_id_str)
         .fetch_optional(&mut **tx)
         .await?;
 
@@ -268,7 +324,7 @@ impl PairingStore {
             if attempts >= MAX_FAILED_ATTEMPTS {
                 // If platform lockout has passed, this code row is expired/locked; delete it and allow new code issuance.
                 sqlx::query("DELETE FROM pairing_codes WHERE user_id = ?")
-                    .bind(&user_id_str)
+                    .bind(user_id_str)
                     .execute(&mut **tx)
                     .await?;
             } else if expires_at > now {
@@ -278,7 +334,7 @@ impl PairingStore {
 
         // Delete any previous code for this user before enforcing capacity and inserting a new code
         sqlx::query("DELETE FROM pairing_codes WHERE user_id = ?")
-            .bind(&user_id_str)
+            .bind(user_id_str)
             .execute(&mut **tx)
             .await?;
 
@@ -309,7 +365,7 @@ impl PairingStore {
             "INSERT INTO pairing_codes (code, user_id, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, 0)",
         )
         .bind(&raw_code)
-        .bind(&user_id_str)
+        .bind(user_id_str)
         .bind(now)
         .bind(expires_at)
         .execute(&mut **tx)
@@ -327,7 +383,13 @@ impl PairingStore {
         now: DateTime<Utc>,
     ) -> Result<String> {
         let mut tx = self.pool.begin().await?;
-        let code = Self::request_pairing_code_tx(&mut tx, user_id, now).await?;
+        let code = Self::request_pairing_code_tx(
+            &mut tx,
+            DEFAULT_PLATFORM_KEY,
+            &user_id.to_string(),
+            now,
+        )
+        .await?;
         tx.commit().await?;
         Ok(code)
     }
@@ -352,7 +414,7 @@ impl PairingStore {
     ) -> Result<Option<String>> {
         let mut tx = self.pool.begin().await?;
 
-        if Self::is_platform_locked_tx(&mut tx, now).await? {
+        if Self::is_platform_locked_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await? {
             tx.commit().await?;
             return Ok(None);
         }
@@ -371,40 +433,17 @@ impl PairingStore {
         }
 
         // Atomically check rate limit and claim notification attempt slot.
-        // If user was notified within RATE_LIMIT_SECONDS, rows_affected will be 0 (throttled).
-        let claim_res = sqlx::query(
-            "INSERT INTO pairing_notifications (user_id, last_notified_at)
-             VALUES (?, ?)
-             ON CONFLICT(user_id) DO UPDATE SET last_notified_at = excluded.last_notified_at
-             WHERE (strftime('%s', ?) - strftime('%s', pairing_notifications.last_notified_at)) >= ?",
-        )
-        .bind(&user_id_str)
-        .bind(now)
-        .bind(now)
-        .bind(RATE_LIMIT_SECONDS)
-        .execute(&mut *tx)
-        .await?;
-
-        if claim_res.rows_affected() == 0 {
+        if !Self::claim_notification_tx(&mut tx, &user_id_str, now).await? {
             tx.commit().await?;
             return Ok(None);
         }
 
         // Notification slot claimed; obtain active/new pairing code within the same transaction.
         // Propagate any database error instead of swallowing it as throttled success.
-        let code = Self::request_pairing_code_tx(&mut tx, user_id, now).await?;
+        let code =
+            Self::request_pairing_code_tx(&mut tx, DEFAULT_PLATFORM_KEY, &user_id_str, now).await?;
 
-        // The notification table exists only to rate-limit; a row older than
-        // the window can never throttle again, so drop it instead of letting
-        // an unauthenticated population grow the table without bound.
-        sqlx::query(
-            "DELETE FROM pairing_notifications
-             WHERE (strftime('%s', ?) - strftime('%s', last_notified_at)) > ?",
-        )
-        .bind(now)
-        .bind(RATE_LIMIT_SECONDS)
-        .execute(&mut *tx)
-        .await?;
+        Self::prune_notifications_tx(&mut tx, now).await?;
 
         tx.commit().await?;
 
@@ -450,7 +489,7 @@ impl PairingStore {
 
         let mut tx = self.pool.begin().await?;
 
-        if Self::is_platform_locked_tx(&mut tx, now).await? {
+        if Self::is_platform_locked_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await? {
             tx.commit().await?;
             return Ok(PairingOutcome::LockedOut);
         }
@@ -465,7 +504,7 @@ impl PairingStore {
         let Some(row) = record else {
             // An unknown code only feeds the platform-wide lockout; it must not
             // burn attempts on unrelated pending codes.
-            Self::record_failed_attempt_tx(&mut tx, now).await?;
+            Self::record_failed_attempt_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await?;
             tx.commit().await?;
             return Ok(PairingOutcome::InvalidCode);
         };
@@ -513,14 +552,7 @@ impl PairingStore {
         .map_err(|e| OmonError::Database(format!("failed to record paired user: {e}")))?;
 
         // Reset platform failed attempts on successful pairing
-        sqlx::query(
-            "INSERT INTO pairing_platform_lockout (platform_key, locked_until, failed_attempts) VALUES (?, ?, 0)
-             ON CONFLICT(platform_key) DO UPDATE SET failed_attempts = 0, locked_until = excluded.locked_until",
-        )
-        .bind(DEFAULT_PLATFORM_KEY)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
+        Self::reset_failed_attempts_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await?;
 
         // Commit transaction before modifying in-memory cache
         tx.commit().await?;
@@ -546,6 +578,243 @@ impl PairingStore {
 
     /// Approves a pairing code entered by an operator.
     pub async fn approve_code(&self, input_code: &str, operator_id: u64) -> Result<PairingOutcome> {
+        self.approve_code_at(input_code, operator_id, Utc::now())
+            .await
+    }
+}
+
+pub const SLACK_PLATFORM_KEY: &str = "slack";
+/// Prefix for Slack user ids in the shared `pairing_codes`/`pairing_notifications` tables, so
+/// they never collide with Discord snowflakes and Discord `/pair` never accepts them.
+const SLACK_USER_PREFIX: &str = "slack:";
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SlackPairingOutcome {
+    Success { user_id: String },
+    InvalidCode,
+    Expired,
+    LockedOut,
+}
+
+/// `PairingStore` for Slack string user ids: shares code generation, rate limiting and
+/// lockout rules (under platform key `slack`) and records approvals in `slack_paired_users`.
+#[derive(Clone)]
+pub struct SlackPairingStore {
+    pool: SqlitePool,
+    paired_cache: Arc<RwLock<HashSet<String>>>,
+}
+
+impl SlackPairingStore {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self {
+            pool,
+            paired_cache: Arc::new(RwLock::new(HashSet::new())),
+        }
+    }
+
+    fn code_user_key(user_id: &str) -> String {
+        format!("{SLACK_USER_PREFIX}{user_id}")
+    }
+
+    pub async fn init_cache(&self) -> Result<()> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT user_id FROM slack_paired_users")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut set = self
+            .paired_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        set.clear();
+        set.extend(rows.into_iter().map(|(user_id,)| user_id));
+        Ok(())
+    }
+
+    pub async fn is_user_paired(&self, user_id: &str) -> bool {
+        self.is_user_paired_sync(user_id)
+    }
+
+    pub fn is_user_paired_sync(&self, user_id: &str) -> bool {
+        self.paired_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(user_id)
+    }
+
+    pub async fn get_paired_user_ids(&self) -> Vec<String> {
+        self.get_paired_user_ids_sync()
+    }
+
+    pub fn get_paired_user_ids_sync(&self) -> Vec<String> {
+        self.paired_cache
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub async fn is_platform_locked_at(&self, now: DateTime<Utc>) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let locked = PairingStore::is_platform_locked_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
+        tx.commit().await?;
+        Ok(locked)
+    }
+
+    pub async fn is_platform_locked(&self) -> Result<bool> {
+        self.is_platform_locked_at(Utc::now()).await
+    }
+
+    pub async fn record_failed_attempt_at(&self, now: DateTime<Utc>) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        PairingStore::record_failed_attempt_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn request_pairing_code_at(&self, user_id: &str, now: DateTime<Utc>) -> Result<String> {
+        let mut tx = self.pool.begin().await?;
+        let code = PairingStore::request_pairing_code_tx(
+            &mut tx,
+            SLACK_PLATFORM_KEY,
+            &Self::code_user_key(user_id),
+            now,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(code)
+    }
+
+    pub async fn request_pairing_code(&self, user_id: &str) -> Result<String> {
+        self.request_pairing_code_at(user_id, Utc::now()).await
+    }
+
+    /// `Ok(Some(code))` when a pairing prompt should be sent; `None` when paired, throttled or locked out.
+    pub async fn check_and_record_notification_at(
+        &self,
+        user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Option<String>> {
+        let mut tx = self.pool.begin().await?;
+        if PairingStore::is_platform_locked_tx(&mut tx, SLACK_PLATFORM_KEY, now).await? {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let paired: Option<(String,)> =
+            sqlx::query_as("SELECT user_id FROM slack_paired_users WHERE user_id = ?")
+                .bind(user_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let user_key = Self::code_user_key(user_id);
+        if paired.is_some() || !PairingStore::claim_notification_tx(&mut tx, &user_key, now).await? {
+            tx.commit().await?;
+            return Ok(None);
+        }
+        let code =
+            PairingStore::request_pairing_code_tx(&mut tx, SLACK_PLATFORM_KEY, &user_key, now)
+                .await?;
+        PairingStore::prune_notifications_tx(&mut tx, now).await?;
+        tx.commit().await?;
+        Ok(Some(code))
+    }
+
+    pub async fn check_and_record_notification(&self, user_id: &str) -> Result<Option<String>> {
+        self.check_and_record_notification_at(user_id, Utc::now())
+            .await
+    }
+
+    pub async fn record_confirmed_delivery_at(
+        &self,
+        user_id: &str,
+        delivered_at: DateTime<Utc>,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO pairing_notifications (user_id, last_notified_at) VALUES (?, ?)
+             ON CONFLICT(user_id) DO UPDATE SET last_notified_at = excluded.last_notified_at",
+        )
+        .bind(Self::code_user_key(user_id))
+        .bind(delivered_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn approve_code_at(
+        &self,
+        input_code: &str,
+        operator_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<SlackPairingOutcome> {
+        let normalized = PairingStore::normalize_code(input_code);
+        if normalized.is_empty() {
+            return Ok(SlackPairingOutcome::InvalidCode);
+        }
+        let mut tx = self.pool.begin().await?;
+        if PairingStore::is_platform_locked_tx(&mut tx, SLACK_PLATFORM_KEY, now).await? {
+            tx.commit().await?;
+            return Ok(SlackPairingOutcome::LockedOut);
+        }
+        let record: Option<PairingCodeRow> = sqlx::query_as(
+            "SELECT code, user_id, created_at, expires_at, attempts FROM pairing_codes WHERE code = ?",
+        )
+        .bind(&normalized)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((row, user_id)) = record.and_then(|row| {
+            let user_id = row.user_id.strip_prefix(SLACK_USER_PREFIX)?.to_owned();
+            Some((row, user_id))
+        }) else {
+            PairingStore::record_failed_attempt_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
+            tx.commit().await?;
+            return Ok(SlackPairingOutcome::InvalidCode);
+        };
+        if row.attempts >= MAX_FAILED_ATTEMPTS {
+            tx.commit().await?;
+            return Ok(SlackPairingOutcome::LockedOut);
+        }
+        if now > row.expires_at {
+            sqlx::query("DELETE FROM pairing_codes WHERE code = ?")
+                .bind(&row.code)
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            return Ok(SlackPairingOutcome::Expired);
+        }
+        let claimed = sqlx::query("DELETE FROM pairing_codes WHERE code = ?")
+            .bind(&row.code)
+            .execute(&mut *tx)
+            .await?;
+        if claimed.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(SlackPairingOutcome::InvalidCode);
+        }
+        sqlx::query(
+            "INSERT INTO slack_paired_users (user_id, paired_at, operator_id) VALUES (?, ?, ?)
+             ON CONFLICT(user_id) DO NOTHING",
+        )
+        .bind(&user_id)
+        .bind(now)
+        .bind(operator_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| OmonError::Database(format!("failed to record paired slack user: {e}")))?;
+        PairingStore::reset_failed_attempts_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
+        tx.commit().await?;
+
+        self.paired_cache
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(user_id.clone());
+        if let Err(error) = sqlx::query("DELETE FROM pairing_notifications WHERE user_id = ?")
+            .bind(&row.user_id)
+            .execute(&self.pool)
+            .await
+        {
+            tracing::warn!(%error, %user_id, "failed to prune slack pairing notification row after pairing");
+        }
+        Ok(SlackPairingOutcome::Success { user_id })
+    }
+
+    pub async fn approve_code(&self, input_code: &str, operator_id: &str) -> Result<SlackPairingOutcome> {
         self.approve_code_at(input_code, operator_id, Utc::now())
             .await
     }
@@ -1186,6 +1455,86 @@ mod tests {
         assert_eq!(
             rows_after_pairing, 0,
             "paired user's notification row must be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn slack_store_pairs_string_ids_into_its_own_table() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let slack = SlackPairingStore::new(pool.clone());
+        let discord = PairingStore::new(pool.clone());
+        slack.init_cache().await.unwrap();
+
+        let code = slack
+            .check_and_record_notification("U0STRANGER")
+            .await
+            .unwrap()
+            .expect("first prompt is sent");
+        assert_eq!(slack.check_and_record_notification("U0STRANGER").await.unwrap(), None);
+        assert_eq!(slack.request_pairing_code("U0STRANGER").await.unwrap(), code);
+
+        assert_eq!(
+            discord.approve_code(&code, 1).await.unwrap(),
+            PairingOutcome::InvalidCode,
+            "Discord /pair must not consume Slack codes"
+        );
+        assert_eq!(
+            slack.approve_code(&code, "UOWNER").await.unwrap(),
+            SlackPairingOutcome::Success { user_id: "U0STRANGER".into() }
+        );
+        assert!(slack.is_user_paired("U0STRANGER").await);
+        let (operator,): (String,) =
+            sqlx::query_as("SELECT operator_id FROM slack_paired_users WHERE user_id = ?")
+                .bind("U0STRANGER")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(operator, "UOWNER");
+        let discord_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM paired_users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(discord_rows, 0);
+        assert_eq!(slack.check_and_record_notification("U0STRANGER").await.unwrap(), None);
+
+        let reloaded = SlackPairingStore::new(pool);
+        reloaded.init_cache().await.unwrap();
+        assert_eq!(reloaded.get_paired_user_ids_sync(), vec!["U0STRANGER".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn slack_lockout_is_separate_from_discord() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let slack = SlackPairingStore::new(pool.clone());
+        let discord = PairingStore::new(pool);
+        let now = Utc::now();
+        let code = slack.request_pairing_code_at("U1", now).await.unwrap();
+
+        for _ in 0..MAX_FAILED_ATTEMPTS {
+            assert_eq!(
+                slack.approve_code_at("ZZZZ-ZZZZ", "UOWNER", now).await.unwrap(),
+                SlackPairingOutcome::InvalidCode
+            );
+        }
+        assert!(slack.is_platform_locked_at(now).await.unwrap());
+        assert!(!discord.is_platform_locked_at(now).await.unwrap());
+        assert_eq!(
+            slack.approve_code_at(&code, "UOWNER", now).await.unwrap(),
+            SlackPairingOutcome::LockedOut
+        );
+        assert!(slack.request_pairing_code_at("U2", now).await.is_err());
+
+        let later = now + chrono::Duration::seconds(LOCKOUT_DURATION_SECONDS + 1);
+        assert!(!slack.is_platform_locked_at(later).await.unwrap());
+        assert_eq!(
+            slack.approve_code_at(&code, "UOWNER", later).await.unwrap(),
+            SlackPairingOutcome::Success { user_id: "U1".into() }
+        );
+        let expired = slack.request_pairing_code_at("U3", later).await.unwrap();
+        let after_ttl = later + chrono::Duration::seconds(CODE_TTL_SECONDS + 1);
+        assert_eq!(
+            slack.approve_code_at(&expired, "UOWNER", after_ttl).await.unwrap(),
+            SlackPairingOutcome::Expired
         );
     }
 }

@@ -101,6 +101,26 @@ impl OutboundDispatcher for Capture {
     }
 }
 
+/// The owner's home DM: the verified Discord DM, or a Slack DM with the Slack owner.
+fn is_owner_home_dm(lead: &SessionKey, slack_owner: &str) -> bool {
+    if lead.guild_id.is_some() || lead.thread_id.is_some() {
+        return false;
+    }
+    match lead.platform.as_str() {
+        "discord" => {
+            lead.user_id == "414011632306618368"
+                && lead.bot_id.as_deref() == Some("1465631383862120451")
+                && lead.channel_id == "1474231559895646240"
+        }
+        crate::slack::PLATFORM => {
+            lead.user_id == slack_owner
+                && lead.bot_id.as_deref().is_some_and(|bot| !bot.is_empty())
+                && !lead.channel_id.is_empty()
+        }
+        _ => false,
+    }
+}
+
 pub struct Kibitzer {
     pool: SqlitePool,
     lead: SessionKey,
@@ -121,13 +141,7 @@ impl Kibitzer {
         clock: Arc<dyn Clock>,
         enabled: bool,
     ) -> Result<Self> {
-        if lead.platform != "discord"
-            || lead.guild_id.is_some()
-            || lead.thread_id.is_some()
-            || lead.user_id != "414011632306618368"
-            || lead.bot_id.as_deref() != Some("1465631383862120451")
-            || lead.channel_id != "1474231559895646240"
-        {
+        if !is_owner_home_dm(&lead, &crate::slack::owner_id()) {
             return Err(OmonError::Config(
                 "kibitzer lead must be the verified owner home DM".into(),
             ));
@@ -569,6 +583,46 @@ mod tests {
         .await
         .unwrap();
         tx.commit().await.unwrap();
+    }
+
+    #[test]
+    fn lead_must_be_an_owner_home_dm_on_discord_or_slack() {
+        let slack =
+            |user: &str, bot: Option<&str>, guild: Option<&str>, thread: Option<&str>| SessionKey {
+                platform: "slack".into(),
+                guild_id: guild.map(str::to_owned),
+                channel_id: "D0C9HNVUK5M".into(),
+                thread_id: thread.map(str::to_owned),
+                user_id: user.into(),
+                bot_id: bot.map(str::to_owned),
+            };
+        assert!(is_owner_home_dm(
+            &SessionKey::from_storage_key(DEFAULT_LEAD).unwrap(),
+            "UOWNER"
+        ));
+        assert!(is_owner_home_dm(
+            &slack("UOWNER", Some("UBOT"), None, None),
+            "UOWNER"
+        ));
+        assert!(!is_owner_home_dm(
+            &slack("UOTHER", Some("UBOT"), None, None),
+            "UOWNER"
+        ));
+        assert!(!is_owner_home_dm(
+            &slack("UOWNER", None, None, None),
+            "UOWNER"
+        ));
+        assert!(!is_owner_home_dm(
+            &slack("UOWNER", Some("UBOT"), Some("T1"), None),
+            "UOWNER"
+        ));
+        assert!(!is_owner_home_dm(
+            &slack("UOWNER", Some("UBOT"), None, Some("1.2")),
+            "UOWNER"
+        ));
+        let mut discord = SessionKey::from_storage_key(DEFAULT_LEAD).unwrap();
+        discord.user_id = "UOWNER".into();
+        assert!(!is_owner_home_dm(&discord, "UOWNER"));
     }
 
     #[test]

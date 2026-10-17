@@ -31,7 +31,7 @@ impl LaneLifecycle for RenameRefused {
 
     async fn status(
         &self,
-        _: u64,
+        _: &str,
         status: ThreadStatus,
     ) -> std::result::Result<(), DiscordThreadError> {
         self.calls.lock().unwrap().push(format!("{status:?}"));
@@ -40,7 +40,7 @@ impl LaneLifecycle for RenameRefused {
 
     async fn archived(
         &self,
-        _: u64,
+        _: &str,
         archived: bool,
     ) -> std::result::Result<(), DiscordThreadError> {
         self.calls

@@ -71,7 +71,7 @@ pub fn filter_sources_for_event<'a>(
         InboxWatcherEvent::GatewayMessage => sources
             .iter()
             .copied()
-            .filter(|s| s.name() == InboxSourceKind::Discord)
+            .filter(|s| matches!(s.name(), InboxSourceKind::Discord | InboxSourceKind::Slack))
             .collect(),
         InboxWatcherEvent::IMessage { .. } => sources
             .iter()
@@ -260,6 +260,38 @@ pub async fn run_imessage_watch<F, Fut>(
 #[cfg(test)]
 mod nonblocking_tests {
     use super::*;
+
+    struct Named(InboxSourceKind);
+
+    #[async_trait::async_trait]
+    impl InboxSource for Named {
+        fn name(&self) -> InboxSourceKind {
+            self.0
+        }
+        async fn fetch_since(
+            &self,
+            _: Option<&str>,
+        ) -> crate::Result<(Vec<super::super::InboxItem>, String)> {
+            Ok((Vec::new(), String::new()))
+        }
+    }
+
+    #[test]
+    fn gateway_message_collects_discord_and_slack_sources() {
+        let sources = [
+            Named(InboxSourceKind::Mail),
+            Named(InboxSourceKind::Discord),
+            Named(InboxSourceKind::Slack),
+        ];
+        let borrowed: Vec<&dyn InboxSource> =
+            sources.iter().map(|s| s as &dyn InboxSource).collect();
+        let picked: Vec<_> =
+            filter_sources_for_event(&borrowed, &InboxWatcherEvent::GatewayMessage)
+                .iter()
+                .map(|s| s.name())
+                .collect();
+        assert_eq!(picked, [InboxSourceKind::Discord, InboxSourceKind::Slack]);
+    }
 
     #[tokio::test]
     async fn on_gateway_message_returns_promptly_when_channel_full() {

@@ -2,6 +2,7 @@ pub mod discord;
 pub mod imessage;
 pub mod kakao;
 pub mod mail;
+pub mod slack;
 
 use std::ffi::OsStr;
 use std::process::Stdio;

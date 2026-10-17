@@ -65,6 +65,14 @@ pub fn eligible(event: &InboundEvent, private_owner_conversation: bool) -> bool 
 }
 
 pub fn owner_thread(key: &SessionKey, author: &str, owner: &str) -> bool {
+    if key.platform == crate::slack::PLATFORM {
+        return slack_home_conversation(
+            key,
+            author,
+            &crate::slack::owner_id(),
+            std::env::var("SLACK_HOME_CHANNEL").ok().as_deref(),
+        );
+    }
     author == owner
         && key.platform == "discord"
         && key.guild_id.is_some()
@@ -73,6 +81,24 @@ pub fn owner_thread(key: &SessionKey, author: &str, owner: &str) -> bool {
                 .is_ok_and(|configured| configured.split(',').map(str::trim).any(|id| id == thread))
         })
         && crate::multiplexer::SessionActor::is_owner_lead_session(key, None)
+}
+
+/// Whether the dispatcher may treat this as private is still decided by
+/// `owner_thread_is_private` (channel membership limited to owner and bot).
+fn slack_home_conversation(
+    key: &SessionKey,
+    author: &str,
+    owner: &str,
+    home_channels: Option<&str>,
+) -> bool {
+    author == owner
+        && key.guild_id.is_some()
+        && home_channels.is_some_and(|configured| {
+            configured
+                .split(',')
+                .map(str::trim)
+                .any(|id| !id.is_empty() && id == key.channel_id)
+        })
 }
 
 fn compact(value: &str, max: usize) -> String {
@@ -179,6 +205,27 @@ mod tests {
         assert!(!owner_dm(&shared, "owner", "owner"));
         let event = InboundEvent::message(key, "1", "session status");
         assert!(!eligible(&event, false));
+    }
+
+    #[test]
+    fn slack_home_channel_from_owner_is_a_candidate_owner_thread() {
+        let home = Some("C0HOME, C0OTHER");
+        let thread = SessionKey::new("slack", Some("T1"), "C0HOME", Some("1700.0001"), "");
+        let top = SessionKey::new("slack", Some("T1"), "C0OTHER", None::<String>, "");
+        assert!(slack_home_conversation(&thread, "U0OWNER", "U0OWNER", home));
+        assert!(slack_home_conversation(&top, "U0OWNER", "U0OWNER", home));
+        assert!(!slack_home_conversation(
+            &thread, "U0ALICE", "U0OWNER", home
+        ));
+        assert!(!slack_home_conversation(
+            &thread, "U0OWNER", "U0OWNER", None
+        ));
+        let elsewhere = SessionKey::new("slack", Some("T1"), "C0WORK", Some("1700.0001"), "");
+        assert!(!slack_home_conversation(
+            &elsewhere, "U0OWNER", "U0OWNER", home
+        ));
+        let dm = SessionKey::new("slack", None::<String>, "C0HOME", None::<String>, "U0OWNER");
+        assert!(!slack_home_conversation(&dm, "U0OWNER", "U0OWNER", home));
     }
 
     struct CountingBackend(AtomicUsize);

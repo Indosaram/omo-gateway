@@ -17,7 +17,7 @@ pub const JOB_ID: &str = "omon:inbox-digest";
 /// The caller supplies the configured owner identity and the persisted home DM.
 /// A shared channel or a thread cannot become a digest destination.
 pub fn spec(home: &SessionKey, owner: &str) -> Result<CronJobSpec> {
-    if home.platform != "discord"
+    if !matches!(home.platform.as_str(), "discord" | "slack")
         || home.guild_id.is_some()
         || home.thread_id.is_some()
         || home.user_id != owner
@@ -35,9 +35,9 @@ pub fn spec(home: &SessionKey, owner: &str) -> Result<CronJobSpec> {
             "schedule": {"kind": "cron", "expr": "0 9 * * *", "timezone": "Asia/Seoul"},
             "deliver": "origin",
             // The digest can carry a one-time owner approval token: it must reach the
-            // owner's Discord DM but never the session transcript the agent reads.
+            // owner's DM but never the session transcript the agent reads.
             "attach_to_session": false,
-            "origin": {"platform": "discord", "chat_id": home.channel_id,
+            "origin": {"platform": home.platform, "chat_id": home.channel_id,
                 "user_id": owner, "bot_id": home.bot_id}
         }),
     );
@@ -174,5 +174,95 @@ mod tests {
                 .and_then(serde_json::Value::as_bool),
             Some(false)
         );
+    }
+
+    #[test]
+    fn slack_owner_dm_is_a_valid_home_and_sets_origin_platform() {
+        let home = SessionKey::new(
+            "slack",
+            None::<String>,
+            "D0OWNER",
+            None::<String>,
+            "U0OWNER",
+        )
+        .with_bot_id("U0BOT");
+        let spec = spec(&home, "U0OWNER").unwrap();
+        assert_eq!(spec.payload["origin"]["platform"], "slack");
+        assert_eq!(spec.payload["origin"]["chat_id"], "D0OWNER");
+        assert_eq!(spec.payload["origin"]["user_id"], "U0OWNER");
+        assert_eq!(spec.payload["origin"]["bot_id"], "U0BOT");
+        assert_eq!(spec.session_key, Some(home.storage_key()));
+
+        let discord = SessionKey::new("discord", None::<String>, "dm", None::<String>, "owner");
+        assert_eq!(spec_platform(&discord, "owner"), "discord");
+    }
+
+    #[test]
+    fn slack_channel_thread_or_foreign_user_is_rejected() {
+        for home in [
+            SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U0OWNER"),
+            SessionKey::new("slack", None::<String>, "D1", Some("1.2"), "U0OWNER"),
+            SessionKey::new("slack", None::<String>, "D1", None::<String>, "U0OTHER"),
+            SessionKey::new("web", None::<String>, "D1", None::<String>, "U0OWNER"),
+        ] {
+            assert!(spec(&home, "U0OWNER").is_err(), "{home:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn executor_guard_accepts_registered_slack_digest() {
+        struct Never;
+        #[async_trait]
+        impl CronTaskExecutor for Never {
+            async fn execute(&self, _: &CronJob) -> Result<Option<String>> {
+                panic!("digest must not reach the inner executor")
+            }
+        }
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let home = SessionKey::new(
+            "slack",
+            None::<String>,
+            "D0OWNER",
+            None::<String>,
+            "U0OWNER",
+        )
+        .with_bot_id("U0BOT");
+        let spec = spec(&home, "U0OWNER").unwrap();
+        let job = CronJob {
+            id: JOB_ID.into(),
+            session_key: spec.session_key.clone(),
+            expression: spec.expression.clone(),
+            payload_json: spec.payload.to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: String::new(),
+        };
+        let executor = DigestExecutor {
+            pool,
+            inner: Arc::new(Never),
+        };
+        assert!(executor.execute(&job).await.is_ok());
+
+        let mut tampered = spec.payload.clone();
+        tampered["origin"]["chat_id"] = serde_json::json!("C0SHARED");
+        let job = CronJob {
+            payload_json: tampered.to_string(),
+            ..job
+        };
+        assert!(executor.execute(&job).await.is_err());
+    }
+
+    fn spec_platform(home: &SessionKey, owner: &str) -> String {
+        spec(home, owner).unwrap().payload["origin"]["platform"]
+            .as_str()
+            .unwrap()
+            .to_owned()
     }
 }

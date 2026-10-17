@@ -663,10 +663,38 @@ impl DashboardState {
     }
 }
 
+/// Slack settings without tokens; `configured:false` when Slack is off.
+pub(crate) fn slack_config_view(slack: Option<&omon_gateway::slack::SlackConfig>) -> Value {
+    let Some(slack) = slack else {
+        return json!({ "configured": false });
+    };
+    json!({
+        "configured": true,
+        "allowed_users": slack.allowed_users,
+        "free_response_channels": slack.free_response_channels,
+        "home_channel": slack.home_channel,
+        "allowed_channels": slack.allowed_channels,
+        "ignored_channels": slack.ignored_channels,
+        "allow_all_users": slack.allow_all_users,
+        "allow_bots": format!("{:?}", slack.allow_bots),
+        "auto_thread": slack.auto_thread,
+        "thread_require_mention": slack.thread_require_mention,
+        "channel_context": slack.channel_context,
+        "channel_context_limit": slack.channel_context_limit,
+        "channel_topic_context": slack.channel_topic_context,
+        "processing_reactions": slack.processing_reactions,
+        "runtime_footer": slack.runtime_footer,
+        "missed_backfill": slack.missed_backfill,
+        "approval_mentions": slack.approval_mentions,
+        "destructive_slash_confirm": slack.destructive_slash_confirm,
+    })
+}
+
 #[allow(dead_code)]
 pub(crate) fn config_view_from_gateway(
     config: &super::Config,
     settings: &DashboardSettings,
+    slack: Option<&omon_gateway::slack::SlackConfig>,
 ) -> Value {
     json!({
         "model": config.default_model,
@@ -696,6 +724,7 @@ pub(crate) fn config_view_from_gateway(
             "thread_sessions_per_user": config.thread_sessions_per_user,
             "thread_require_mention": config.thread_require_mention,
         },
+        "slack": slack_config_view(slack),
         "runtime": {
             "processing_reactions": config.processing_reactions,
             "runtime_footer": config.runtime_footer,
@@ -2607,6 +2636,21 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[test]
+    fn slack_config_view_lists_settings_without_tokens() {
+        assert_eq!(slack_config_view(None), json!({ "configured": false }));
+        let slack = omon_gateway::slack::SlackConfig {
+            home_channel: Some("CHOME".into()),
+            ..omon_gateway::slack::SlackConfig::test_default()
+        };
+        let view = slack_config_view(Some(&slack));
+        assert_eq!(view["configured"], true);
+        assert_eq!(view["home_channel"], "CHOME");
+        assert_eq!(view["missed_backfill"], true);
+        let rendered = view.to_string();
+        assert!(!rendered.contains("xoxb-") && !rendered.contains("xapp-"));
+    }
 
     async fn test_state() -> DashboardState {
         let pool = SqlitePoolOptions::new()

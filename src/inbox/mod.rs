@@ -45,6 +45,7 @@ pub enum InboxSourceKind {
     Kakao,
     Discord,
     Imessage,
+    Slack,
 }
 
 impl InboxSourceKind {
@@ -54,6 +55,7 @@ impl InboxSourceKind {
             Self::Kakao => "kakao",
             Self::Discord => "discord",
             Self::Imessage => "imessage",
+            Self::Slack => "slack",
         }
     }
 }

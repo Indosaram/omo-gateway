@@ -13,6 +13,24 @@ use crate::Result;
 
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
+const DEFAULT_RECEIVE_WATCHDOG: Duration = Duration::from_secs(1200);
+
+/// Longest silence tolerated on an open socket before reconnecting
+/// (`OMON_SLACK_RECEIVE_WATCHDOG_SECS`, default 1200). Slack pings every few seconds, so a
+/// half-open connection that stops delivering frames is replaced instead of hanging forever.
+pub fn receive_watchdog() -> Duration {
+    parse_watchdog(
+        std::env::var("OMON_SLACK_RECEIVE_WATCHDOG_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn parse_watchdog(raw: Option<&str>) -> Duration {
+    raw.and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .map_or(DEFAULT_RECEIVE_WATCHDOG, Duration::from_secs)
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SocketEvent {
@@ -54,7 +72,7 @@ impl SocketClient {
                 url = self.api.connections_open(&self.app_token) => url,
             };
             let end = match url {
-                Ok(url) => session(&url, &tx, &shutdown, &mut backoff).await,
+                Ok(url) => session(&url, &tx, &shutdown, &mut backoff, receive_watchdog()).await,
                 Err(e) => SessionEnd::Dropped(format!("apps.connections.open failed: {e}")),
             };
             if !should_reconnect(end, &mut backoff, &shutdown).await {
@@ -71,12 +89,22 @@ pub(crate) async fn run_on_url(
     tx: mpsc::Sender<SocketEvent>,
     shutdown: CancellationToken,
 ) -> Result<()> {
+    run_on_url_with_watchdog(url, tx, shutdown, DEFAULT_RECEIVE_WATCHDOG).await
+}
+
+#[cfg(test)]
+pub(crate) async fn run_on_url_with_watchdog(
+    url: &str,
+    tx: mpsc::Sender<SocketEvent>,
+    shutdown: CancellationToken,
+    watchdog: Duration,
+) -> Result<()> {
     let mut backoff = BACKOFF_MIN;
     loop {
         if shutdown.is_cancelled() {
             return Ok(());
         }
-        let end = session(url, &tx, &shutdown, &mut backoff).await;
+        let end = session(url, &tx, &shutdown, &mut backoff, watchdog).await;
         if !should_reconnect(end, &mut backoff, &shutdown).await {
             return Ok(());
         }
@@ -118,6 +146,7 @@ async fn session(
     tx: &mpsc::Sender<SocketEvent>,
     shutdown: &CancellationToken,
     backoff: &mut Duration,
+    watchdog: Duration,
 ) -> SessionEnd {
     let ws = tokio::select! {
         () = shutdown.cancelled() => return SessionEnd::Shutdown,
@@ -135,7 +164,16 @@ async fn session(
                 let _ = ws.close(None).await;
                 return SessionEnd::Shutdown;
             }
-            frame = ws.next() => frame,
+            frame = tokio::time::timeout(watchdog, ws.next()) => match frame {
+                Ok(frame) => frame,
+                Err(_) => {
+                    let _ = ws.close(None).await;
+                    return SessionEnd::Dropped(format!(
+                        "receive watchdog: no frame for {}s",
+                        watchdog.as_secs()
+                    ));
+                }
+            },
         };
         let text = match frame {
             None => return SessionEnd::Dropped("stream ended".into()),
@@ -188,7 +226,10 @@ pub fn classify(frame: &Value) -> Option<(Option<String>, Option<SocketEvent>, b
         .get("envelope_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let kind = frame.get("type").and_then(Value::as_str).unwrap_or_default();
+    let kind = frame
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let payload = frame.get("payload");
     let (event, disconnect) = match kind {
         "hello" => {
@@ -200,7 +241,10 @@ pub fn classify(frame: &Value) -> Option<(Option<String>, Option<SocketEvent>, b
             (None, false)
         }
         "disconnect" => {
-            let reason = frame.get("reason").and_then(Value::as_str).unwrap_or("unknown");
+            let reason = frame
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
             tracing::info!("slack socket: disconnect requested ({reason})");
             (None, true)
         }
@@ -284,7 +328,9 @@ mod tests {
         assert!(!disconnect);
         assert_eq!(
             event,
-            Some(SocketEvent::SlashCommand(json!({ "command": "/omo-status", "user_id": "U1" })))
+            Some(SocketEvent::SlashCommand(
+                json!({ "command": "/omo-status", "user_id": "U1" })
+            ))
         );
 
         let interactive = json!({
@@ -296,7 +342,9 @@ mod tests {
         assert_eq!(ack.as_deref(), Some("env-i"));
         assert_eq!(
             event,
-            Some(SocketEvent::Interactive(json!({ "type": "block_actions", "actions": [] })))
+            Some(SocketEvent::Interactive(
+                json!({ "type": "block_actions", "actions": [] })
+            ))
         );
     }
 
@@ -311,7 +359,10 @@ mod tests {
         assert_eq!((ack, event, disconnect), (None, None, true));
         let (ack, event, disconnect) =
             classify(&json!({ "type": "something_new", "envelope_id": "env-u" })).unwrap();
-        assert_eq!((ack.as_deref(), event, disconnect), (Some("env-u"), None, false));
+        assert_eq!(
+            (ack.as_deref(), event, disconnect),
+            (Some("env-u"), None, false)
+        );
     }
 
     #[tokio::test]
@@ -398,6 +449,56 @@ mod tests {
         let (tx, _rx) = mpsc::channel(1);
         let shutdown = CancellationToken::new();
         let client = tokio::spawn(run_on_url_owned(url, tx, shutdown.clone()));
+        shutdown.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(5), client)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn watchdog_env_parsing_defaults_to_1200s() {
+        assert_eq!(parse_watchdog(None), Duration::from_secs(1200));
+        assert_eq!(parse_watchdog(Some(" 30 ")), Duration::from_secs(30));
+        assert_eq!(parse_watchdog(Some("0")), Duration::from_secs(1200));
+        assert_eq!(parse_watchdog(Some("soon")), Duration::from_secs(1200));
+    }
+
+    #[tokio::test]
+    async fn silent_socket_is_dropped_by_watchdog_and_reconnected() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+        let (reconnected_tx, mut reconnected_rx) = mpsc::unbounded_channel::<()>();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut silent = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let (socket, _) = listener.accept().await.unwrap();
+            let _second = tokio_tungstenite::accept_async(socket).await.unwrap();
+            reconnected_tx.send(()).unwrap();
+            while let Some(Ok(msg)) = silent.next().await {
+                if msg.is_close() {
+                    return true;
+                }
+            }
+            true
+        });
+
+        let (tx, _rx) = mpsc::channel(8);
+        let shutdown = CancellationToken::new();
+        let client_shutdown = shutdown.clone();
+        let client = tokio::spawn(async move {
+            run_on_url_with_watchdog(&url, tx, client_shutdown, Duration::from_millis(200)).await
+        });
+
+        tokio::time::timeout(Duration::from_secs(10), reconnected_rx.recv())
+            .await
+            .expect("watchdog should drop the silent socket and reconnect")
+            .unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap());
         shutdown.cancel();
         let result = tokio::time::timeout(Duration::from_secs(5), client)
             .await

@@ -9,6 +9,7 @@ pub mod runner;
 pub mod scrub;
 pub mod settle;
 pub mod signals;
+pub mod slack_threads;
 pub mod state;
 
 pub use scrub::scrub;

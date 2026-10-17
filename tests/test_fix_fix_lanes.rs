@@ -73,7 +73,7 @@ impl PostSink for FlakyStatus {
 
     async fn rename_status(
         &self,
-        _thread: u64,
+        _thread: &str,
         _status: omon_gateway::lanes::discord_threads::ThreadStatus,
         _title: &str,
     ) -> Result<()> {

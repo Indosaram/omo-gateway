@@ -125,7 +125,7 @@ impl MessageContextRequest {
         })
     }
 
-    fn apply_policy_limits(&mut self, policy: &MessageContextPolicyMatrix) {
+    pub(crate) fn apply_policy_limits(&mut self, policy: &MessageContextPolicyMatrix) {
         match self.operation {
             MessageContextOperation::Recent => self.limit = self.limit.min(policy.limits.recent),
             MessageContextOperation::Search => {
@@ -1152,7 +1152,9 @@ fn search_document_from_message(
     }
 }
 
-fn message_from_search_document(document: MessageSearchDocument) -> MessageContextMessage {
+pub(super) fn message_from_search_document(
+    document: MessageSearchDocument,
+) -> MessageContextMessage {
     let attachments = document
         .metadata
         .get("attachments")

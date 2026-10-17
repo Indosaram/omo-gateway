@@ -235,7 +235,7 @@ impl Actions for GatewayActions {
                 title: proposal.title.clone(),
                 brief,
                 done: done.to_owned(),
-                thread: self.parent_channel_id,
+                thread: self.parent_channel_id.map(|id| id.to_string()),
                 cwd: Some(cwd.into()),
                 lead: Some(self.lead_session_key.clone()),
                 model: LaneModel::Auto,

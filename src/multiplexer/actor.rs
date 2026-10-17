@@ -28,6 +28,10 @@ const MAX_REMEMBERED_COMPLETED_INBOUND: usize = 256;
 /// would ever see it again. Moving the cursor back to just before it lets the next
 /// startup backfill fetch and route it.
 async fn rewind_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
+    if event.session.platform == crate::slack::PLATFORM {
+        rewind_slack_backfill_cursor(pool, event).await;
+        return;
+    }
     if event.session.platform != "discord" {
         return;
     }
@@ -75,6 +79,70 @@ async fn rewind_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
     .await;
     if let Err(error) = result {
         tracing::warn!(%error, channel_id, "failed to rewind backfill cursor for a dropped queued message");
+    }
+}
+
+/// Slack counterpart of `rewind_backfill_cursor` over `slack_cursors`, keyed by
+/// (bot, channel, thread_ts or ''). Slack ts values are fixed-width `secs.micros`, so they
+/// compare as strings once the earliest dropped message is known.
+async fn rewind_slack_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
+    let Some(bot_id) = event.session.bot_id.as_deref() else {
+        return;
+    };
+    let own_ts = event.platform_message_id.trim();
+    if parse_slack_ts(own_ts).is_none() {
+        return;
+    }
+    let constituents: Vec<String> = match event.delivery_id.as_deref() {
+        Some(delivery_id) => sqlx::query_scalar(
+            "SELECT constituent_id FROM delivery_ledger_constituents
+             WHERE parent_delivery_id = ? AND constituent_id LIKE 'slack:%'",
+        )
+        .bind(delivery_id)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let earliest = constituents
+        .iter()
+        .filter_map(|id| id.rsplit(':').next())
+        .chain(std::iter::once(own_ts))
+        .filter_map(|ts| parse_slack_ts(ts).map(|parsed| (parsed, ts)))
+        .min()
+        .map(|(parsed, _)| parsed);
+    let Some(before) = earliest.and_then(slack_ts_before) else {
+        return;
+    };
+    let thread_ts = event.session.thread_id.as_deref().unwrap_or("");
+    let result = sqlx::query(
+        "UPDATE slack_cursors SET last_ts = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE bot_id = ? AND channel_id = ? AND thread_ts = ? AND last_ts >= ?",
+    )
+    .bind(&before)
+    .bind(bot_id)
+    .bind(&event.session.channel_id)
+    .bind(thread_ts)
+    .bind(&before)
+    .execute(pool)
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(%error, channel_id = %event.session.channel_id, "failed to rewind Slack backfill cursor for a dropped queued message");
+    }
+}
+
+fn parse_slack_ts(ts: &str) -> Option<(u64, u32)> {
+    let (secs, micros) = ts.split_once('.')?;
+    if micros.len() != 6 {
+        return None;
+    }
+    Some((secs.parse().ok()?, micros.parse().ok()?))
+}
+
+fn slack_ts_before((secs, micros): (u64, u32)) -> Option<String> {
+    match micros {
+        0 => secs.checked_sub(1).map(|secs| format!("{secs}.999999")),
+        micros => Some(format!("{secs}.{:06}", micros - 1)),
     }
 }
 
@@ -1249,7 +1317,11 @@ async fn discard_unfinished_inbound(
 
 fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
     if key.platform == crate::slack::PLATFORM {
-        return key.guild_id.is_none() && key.user_id == crate::slack::owner_id();
+        return is_slack_owner_lead_session(
+            key,
+            &crate::slack::owner_id(),
+            &crate::slack::home_channels(),
+        );
     }
     if key.platform != "discord" {
         return false;
@@ -1324,6 +1396,14 @@ fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
     }
 
     false
+}
+
+/// The Slack owner DM, or any conversation in a `SLACK_HOME_CHANNEL` (threads included).
+fn is_slack_owner_lead_session(key: &SessionKey, owner: &str, home_channels: &[String]) -> bool {
+    if key.guild_id.is_none() && key.user_id == owner {
+        return true;
+    }
+    home_channels.iter().any(|home| home == &key.channel_id)
 }
 
 async fn load_context(
@@ -1530,6 +1610,62 @@ mod tests {
     use super::*;
     use crate::Database;
     use tokio::sync::Barrier;
+
+    #[test]
+    fn slack_owner_lead_covers_owner_dm_and_home_channel() {
+        let home = vec!["CHOME".to_owned()];
+        let dm = SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER");
+        assert!(is_slack_owner_lead_session(&dm, "UOWNER", &home));
+        let other_dm = SessionKey::new("slack", None::<String>, "DX", None::<String>, "UX");
+        assert!(!is_slack_owner_lead_session(&other_dm, "UOWNER", &home));
+        let home_thread = SessionKey::new("slack", Some("T1"), "CHOME", Some("1.000001"), "UOWNER");
+        assert!(is_slack_owner_lead_session(&home_thread, "UOWNER", &home));
+        let elsewhere = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
+        assert!(!is_slack_owner_lead_session(&elsewhere, "UOWNER", &home));
+        assert!(!is_slack_owner_lead_session(&home_thread, "UOWNER", &[]));
+    }
+
+    #[test]
+    fn slack_ts_predecessor_is_fixed_width() {
+        assert_eq!(parse_slack_ts("1700000000.000100"), Some((1_700_000_000, 100)));
+        assert_eq!(parse_slack_ts("1700000000.1"), None);
+        assert_eq!(parse_slack_ts("abc"), None);
+        assert_eq!(slack_ts_before((1_700_000_000, 100)).as_deref(), Some("1700000000.000099"));
+        assert_eq!(slack_ts_before((1_700_000_000, 0)).as_deref(), Some("1699999999.999999"));
+        assert_eq!(slack_ts_before((0, 0)), None);
+    }
+
+    #[tokio::test]
+    async fn dropped_slack_message_rewinds_its_cursor_to_the_earliest_constituent() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        sqlx::query(
+            "INSERT INTO slack_cursors (bot_id, channel_id, thread_ts, last_ts, updated_at) VALUES ('UBOT', 'C1', '', '1700000000.000300', CURRENT_TIMESTAMP), ('UBOT', 'C2', '', '1700000000.000300', CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO delivery_ledger_constituents (parent_delivery_id, constituent_id) VALUES ('slack:C1:1700000000.000300', 'slack:C1:1700000000.000200')")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let session = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "UOWNER").with_bot_id("UBOT");
+        let event = InboundEvent::message(session, "1700000000.000300", "hi")
+            .with_delivery_id("slack:C1:1700000000.000300");
+        rewind_backfill_cursor(&pool, &event).await;
+        let cursors: Vec<(String, String)> =
+            sqlx::query_as("SELECT channel_id, last_ts FROM slack_cursors ORDER BY channel_id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            cursors,
+            [
+                ("C1".to_owned(), "1700000000.000199".to_owned()),
+                ("C2".to_owned(), "1700000000.000300".to_owned()),
+            ]
+        );
+    }
 
     fn test_session(user: &str) -> SessionKey {
         SessionKey::new("discord", Some("guild"), "channel", None::<String>, user)

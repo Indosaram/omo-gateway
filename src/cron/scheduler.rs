@@ -410,7 +410,7 @@ impl CronJob {
         }
         if let Some(key) = &self.session_key {
             let parts: Vec<&str> = key.split(':').collect();
-            if parts.len() >= 2 && !parts[1].is_empty() && parts[0] == "discord" {
+            if parts.len() >= 2 && !parts[1].is_empty() && matches!(parts[0], "discord" | "slack") {
                 return parts[1].to_string();
             }
         }
@@ -2199,16 +2199,24 @@ impl CronScheduler {
         let destinations = delivery_destination(&payload)?;
 
         if self.dispatcher.is_none() {
-            let has_explicit_discord =
-                if let Ok(hermes) = serde_json::from_value::<crate::HermesJob>(payload.clone()) {
-                    hermes.has_explicit_discord_destination()
-                } else {
-                    false
+            let explicit_transport =
+                match serde_json::from_value::<crate::HermesJob>(payload.clone()) {
+                    Ok(hermes) if hermes.has_explicit_discord_destination() => Some("discord"),
+                    Ok(hermes) if hermes.has_explicit_slack_destination() => Some("slack"),
+                    _ => payload
+                        .get("deliver")
+                        .and_then(Value::as_str)
+                        .is_some_and(|deliver| {
+                            deliver.split(',').any(|part| {
+                                super::store::slack_destination(part.trim(), None).is_some()
+                            })
+                        })
+                        .then_some("slack"),
                 };
 
-            if has_explicit_discord {
+            if let Some(transport) = explicit_transport {
                 return Err(OmonError::Config(format!(
-                    "unconfigured delivery transport: discord for job {}",
+                    "unconfigured delivery transport: {transport} for job {}",
                     job.id
                 )));
             }
@@ -2584,9 +2592,49 @@ pub fn delivery_destinations(payload: &Value) -> Result<Vec<crate::HermesOrigin>
                 continue;
             }
             if let Some(slack) = super::store::slack_destination(part, None) {
-                let key = ("slack".to_string(), slack.chat_id.clone(), slack.thread_id.clone());
+                let key = (
+                    "slack".to_string(),
+                    slack.chat_id.clone(),
+                    slack.thread_id.clone(),
+                );
                 if seen.insert(key) {
                     destinations.push(slack);
+                }
+                continue;
+            }
+            if part == "slack" {
+                let origin = payload
+                    .get("origin")
+                    .and_then(|value| {
+                        serde_json::from_value::<crate::HermesOrigin>(value.clone()).ok()
+                    })
+                    .filter(|origin| {
+                        origin.platform.eq_ignore_ascii_case("slack") && !origin.chat_id.is_empty()
+                    });
+                let target = origin.or_else(|| {
+                    std::env::var("SLACK_HOME_CHANNEL")
+                        .ok()
+                        .and_then(|home| {
+                            home.split(',')
+                                .map(str::trim)
+                                .find(|id| !id.is_empty())
+                                .map(str::to_owned)
+                        })
+                        .map(|chat_id| crate::HermesOrigin {
+                            platform: "slack".into(),
+                            chat_id,
+                            ..crate::HermesOrigin::default()
+                        })
+                });
+                if let Some(target) = target {
+                    let key = (
+                        "slack".to_string(),
+                        target.chat_id.clone(),
+                        target.thread_id.clone(),
+                    );
+                    if seen.insert(key) {
+                        destinations.push(target);
+                    }
                 }
                 continue;
             }
@@ -4668,6 +4716,79 @@ mod tests {
             obligations, 2,
             "each destination needs its own obligation row"
         );
+    }
+
+    #[tokio::test]
+    async fn explicit_slack_destination_without_dispatcher_fails_instead_of_succeeding() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let scheduler = CronScheduler::new(
+            database.pool().clone(),
+            Arc::new(SilentExecutor(Some("report".into()))),
+        );
+        for payload in [
+            serde_json::json!({"deliver": "slack:C0WORK"}),
+            serde_json::json!({
+                "id": "h", "prompt": "p", "deliver": "slack:C0WORK:1700.0001",
+                "schedule": {"kind": "cron", "expr": "0 * * * *"}
+            }),
+        ] {
+            let job = scheduler
+                .register(CronJobSpec::new("interval:1h", payload))
+                .await
+                .unwrap();
+            let error = scheduler.execute_job(&job).await.unwrap_err().to_string();
+            assert!(
+                error.contains("unconfigured delivery transport: slack"),
+                "{error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn slack_destination_dispatches_slack_session_with_thread() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let dispatched = Arc::new(Mutex::new(Vec::new()));
+        let scheduler = CronScheduler::with_dispatcher(
+            database.pool().clone(),
+            Arc::new(SilentExecutor(Some("report".into()))),
+            Arc::new(RecordingDispatcher {
+                sessions: dispatched.clone(),
+            }),
+        );
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "interval:1h",
+                serde_json::json!({
+                    "deliver": "slack",
+                    "origin": {"platform": "slack", "chat_id": "D0OWNER", "thread_id": "1700.0001"}
+                }),
+            ))
+            .await
+            .unwrap();
+
+        scheduler.execute_job(&job).await.unwrap();
+
+        let sessions = dispatched.lock().await;
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].platform, "slack");
+        assert_eq!(sessions[0].channel_id, "D0OWNER");
+        assert_eq!(sessions[0].thread_id.as_deref(), Some("1700.0001"));
+    }
+
+    #[test]
+    fn slack_session_key_yields_profile() {
+        let job = CronJob {
+            id: "j".into(),
+            session_key: Some("slack:U0BOT:cron:j".into()),
+            expression: "interval:1h".into(),
+            payload_json: "{}".into(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: String::new(),
+        };
+        assert_eq!(job.profile(), "U0BOT");
     }
 
     #[test]

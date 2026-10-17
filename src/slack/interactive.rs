@@ -15,9 +15,9 @@ pub async fn handle_block_actions(
     api: &SlackApi,
 ) -> Result<()> {
     for (request_id, label) in resolve_approvals(payload, config, approvals, api).await? {
-        egress.mark_approval_decided(request_id, label).await?;
+        egress.mark_approval_decided(request_id, &label).await?;
     }
-    Ok(())
+    super::buttons::handle_button_actions(payload, config, api).await
 }
 
 async fn resolve_approvals(
@@ -25,7 +25,7 @@ async fn resolve_approvals(
     config: &SlackConfig,
     approvals: &SmartApprovalGuard,
     api: &SlackApi,
-) -> Result<Vec<(Uuid, &'static str)>> {
+) -> Result<Vec<(Uuid, String)>> {
     if payload.get("type").and_then(Value::as_str) != Some("block_actions") {
         return Ok(Vec::new());
     }
@@ -51,7 +51,7 @@ async fn resolve_approvals(
             continue;
         };
         if approvals.resolve_custom_id(value).await {
-            decided.push((request_id, decision_label(&decision)));
+            decided.push((request_id, decision_label(&decision, user)));
         } else {
             tracing::info!(%request_id, "Slack approval click for an unknown or expired request");
         }
@@ -73,25 +73,25 @@ fn approval_values(payload: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-fn payload_channel(payload: &Value) -> Option<&str> {
+pub(super) fn payload_channel(payload: &Value) -> Option<&str> {
     payload
         .pointer("/channel/id")
         .or_else(|| payload.pointer("/container/channel_id"))
         .and_then(Value::as_str)
 }
 
-fn decision_label(decision: &ApprovalDecision) -> &'static str {
-    match decision {
+fn decision_label(decision: &ApprovalDecision, user: &str) -> String {
+    let label = match decision {
         ApprovalDecision::Once => "✅ Approved once",
         ApprovalDecision::Session => "✅ Approved for this session",
         ApprovalDecision::Always => "✅ Always approved",
         ApprovalDecision::Deny { .. } => "❌ Denied",
-    }
+    };
+    format!("{label} by <@{user}>")
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
     use std::sync::Arc;
 
     use axum::body::Body;
@@ -106,12 +106,8 @@ mod tests {
 
     fn config() -> SlackConfig {
         SlackConfig {
-            bot_token: "xoxb-test".into(),
-            app_token: "xapp-test".into(),
             allowed_users: vec![OWNER.into()],
-            free_response_channels: Vec::new(),
-            auto_thread: true,
-            attachment_dir: PathBuf::from("/tmp/omon-slack-test"),
+            ..SlackConfig::test_default()
         }
     }
 
@@ -173,10 +169,13 @@ mod tests {
 
     #[test]
     fn decision_labels_cover_every_choice() {
-        assert_eq!(decision_label(&ApprovalDecision::Once), "✅ Approved once");
-        assert_eq!(decision_label(&ApprovalDecision::Session), "✅ Approved for this session");
-        assert_eq!(decision_label(&ApprovalDecision::Always), "✅ Always approved");
-        assert_eq!(decision_label(&ApprovalDecision::deny(None)), "❌ Denied");
+        assert_eq!(decision_label(&ApprovalDecision::Once, "U1"), "✅ Approved once by <@U1>");
+        assert_eq!(
+            decision_label(&ApprovalDecision::Session, "U1"),
+            "✅ Approved for this session by <@U1>"
+        );
+        assert_eq!(decision_label(&ApprovalDecision::Always, "U1"), "✅ Always approved by <@U1>");
+        assert_eq!(decision_label(&ApprovalDecision::deny(None), "U2"), "❌ Denied by <@U2>");
     }
 
     #[test]
@@ -201,7 +200,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(decided, vec![(request_id, "✅ Approved for this session")]);
+        assert_eq!(
+            decided,
+            vec![(request_id, format!("✅ Approved for this session by <@{OWNER}>"))]
+        );
         assert_eq!(guard.pending_count().await, 0);
         assert!(calls.lock().is_empty());
 

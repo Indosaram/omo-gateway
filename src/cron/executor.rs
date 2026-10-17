@@ -288,7 +288,7 @@ impl CronTaskExecutor for AgentCronExecutor {
             .as_ref()
             .map(|target| {
                 SessionKey::new(
-                    "discord",
+                    target.platform.to_ascii_lowercase(),
                     None::<String>,
                     target.chat_id.clone(),
                     target.thread_id.clone(),
@@ -582,21 +582,7 @@ pub async fn execute_native_cron(
             threats.join("; ")
         )));
     }
-    let channel = payload
-        .get("deliver")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| value.strip_prefix("discord:"));
-    let session_key = SessionKey::new(
-        if channel.is_some() {
-            "discord"
-        } else {
-            "local"
-        },
-        None::<String>,
-        channel.unwrap_or(&job.id),
-        None::<String>,
-        format!("cron:{}", job.id),
-    );
+    let session_key = payload_session_key(payload, &job.id);
     let mut session = SessionContext::new(session_key.clone());
     session
         .state
@@ -647,6 +633,28 @@ pub async fn execute_native_cron(
 /// When it will not deliver (no destination, or the content is empty or a
 /// silence token), no delivery can fail, so the ack is run here once the agent
 /// run produced a result.
+fn payload_session_key(payload: &serde_json::Value, job_id: &str) -> SessionKey {
+    let deliver = payload
+        .get("deliver")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    let (platform, channel, thread) =
+        if let Some(slack) = super::store::slack_destination(deliver, None) {
+            ("slack", slack.chat_id, slack.thread_id)
+        } else if let Some(channel) = deliver.strip_prefix("discord:") {
+            ("discord", channel.to_owned(), None)
+        } else {
+            ("local", job_id.to_owned(), None)
+        };
+    SessionKey::new(
+        platform,
+        None::<String>,
+        channel,
+        thread,
+        format!("cron:{job_id}"),
+    )
+}
+
 async fn ack_unless_scheduler_delivers(
     ack_command: Option<&str>,
     has_destination: bool,
@@ -1260,6 +1268,90 @@ pub fn kill_process_tree(root_pid: u32) {
 #[cfg(not(unix))]
 pub fn kill_process_tree(_root_pid: u32) {
     // Windows process cleanup is handled via Job Objects or kill_on_drop.
+}
+
+#[cfg(test)]
+mod slack_session_tests {
+    use super::payload_session_key;
+
+    #[test]
+    fn payload_session_platform_follows_the_deliver_prefix() {
+        let slack = payload_session_key(
+            &serde_json::json!({"deliver": "slack:C0WORK:1700.0001"}),
+            "j",
+        );
+        assert_eq!(slack.platform, "slack");
+        assert_eq!(slack.channel_id, "C0WORK");
+        assert_eq!(slack.thread_id.as_deref(), Some("1700.0001"));
+        assert_eq!(slack.user_id, "cron:j");
+
+        let discord = payload_session_key(&serde_json::json!({"deliver": "discord:42"}), "j");
+        assert_eq!(
+            (discord.platform.as_str(), discord.channel_id.as_str()),
+            ("discord", "42")
+        );
+        assert_eq!(discord.thread_id, None);
+
+        let local = payload_session_key(&serde_json::json!({"deliver": "local"}), "j");
+        assert_eq!(
+            (local.platform.as_str(), local.channel_id.as_str()),
+            ("local", "j")
+        );
+    }
+    struct RecordingBackend(std::sync::Mutex<Vec<crate::SessionKey>>);
+
+    #[async_trait::async_trait]
+    impl crate::agent::AgentBackend for RecordingBackend {
+        async fn run(
+            &self,
+            session: &mut crate::SessionContext,
+            _event: crate::InboundEvent,
+        ) -> crate::Result<()> {
+            self.0.lock().unwrap().push(session.key.clone());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn hermes_agent_session_uses_the_destination_platform() {
+        use crate::CronTaskExecutor;
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let backend = std::sync::Arc::new(RecordingBackend(Default::default()));
+        let executor = super::AgentCronExecutor {
+            backend: backend.clone(),
+            workspace_root: temp.path().to_path_buf(),
+            pool: database.pool().clone(),
+            cron_script_timeout_secs: 30,
+        };
+        for (deliver, platform, channel) in [
+            ("slack:C0WORK", "slack", "C0WORK"),
+            ("discord:42", "discord", "42"),
+        ] {
+            let job = crate::CronJob {
+                id: "hermes_job".into(),
+                session_key: None,
+                expression: "0 9 * * *".into(),
+                payload_json: serde_json::json!({
+                    "id": "hermes_job", "prompt": "report",
+                    "schedule": {"kind": "cron", "expr": "0 9 * * *"},
+                    "deliver": deliver
+                })
+                .to_string(),
+                enabled: true,
+                next_run_at: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                authority: "omon_owned".into(),
+            };
+            executor.execute(&job).await.unwrap();
+            let key = backend.0.lock().unwrap().pop().unwrap();
+            assert_eq!(
+                (key.platform.as_str(), key.channel_id.as_str()),
+                (platform, channel)
+            );
+        }
+    }
 }
 
 #[cfg(test)]
