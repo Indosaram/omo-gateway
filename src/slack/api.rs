@@ -339,11 +339,18 @@ impl SlackApi {
 
     async fn call_tolerating(&self, method: &str, body: Value, tolerated: &[&str]) -> Result<Value> {
         let url = format!("{}/{method}", self.base);
-        let response = self
-            .send(method, || {
+        let response = if form_only(method) {
+            let form = form_fields(&body);
+            self.send(method, || {
+                self.http.post(url.as_str()).bearer_auth(&self.token).form(&form)
+            })
+            .await?
+        } else {
+            self.send(method, || {
                 self.http.post(url.as_str()).bearer_auth(&self.token).json(&body)
             })
-            .await?;
+            .await?
+        };
         parse_response(method, response, tolerated).await
     }
 
@@ -453,6 +460,51 @@ fn slack_error(method: &str, detail: impl std::fmt::Display) -> OmonError {
     OmonError::Multiplexer(format!("slack {method}: {detail}"))
 }
 
+// Slack's read methods (conversations.*, users.info, chat.getPermalink) ignore JSON bodies and
+// report "missing required field"; form encoding is accepted by every method.
+/// Test helper: decodes a recorded request body sent either as JSON or as form fields.
+#[cfg(test)]
+pub(crate) fn decode_test_body(bytes: &[u8]) -> Value {
+    if let Ok(value) = serde_json::from_slice::<Value>(bytes) {
+        return value;
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let fields: serde_json::Map<String, Value> = text
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(key, value)| {
+            let decode = |raw: &str| urlencoding::decode(&raw.replace('+', " ")).map(|s| s.into_owned()).unwrap_or_default();
+            (decode(key), Value::String(decode(value)))
+        })
+        .collect();
+    if fields.is_empty() {
+        Value::String(text.into_owned())
+    } else {
+        Value::Object(fields)
+    }
+}
+
+fn form_only(method: &str) -> bool {
+    method.starts_with("conversations.") || method == "users.info" || method == "chat.getPermalink"
+}
+
+fn form_fields(body: &Value) -> Vec<(String, String)> {
+    body.as_object()
+        .map(|map| {
+            map.iter()
+                .filter(|(_, value)| !value.is_null())
+                .map(|(key, value)| {
+                    let text = match value {
+                        Value::String(text) => text.clone(),
+                        other => other.to_string(),
+                    };
+                    (key.clone(), text)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn messages(value: &mut Value) -> Vec<Value> {
     match value["messages"].take() {
         Value::Array(items) => items,
@@ -493,7 +545,7 @@ mod tests {
 
     impl Recorded {
         fn json(&self) -> Value {
-            serde_json::from_slice(&self.body).unwrap()
+            super::decode_test_body(&self.body)
         }
 
         fn text(&self) -> String {
@@ -579,6 +631,28 @@ mod tests {
             OmonError::Multiplexer(message) => message,
             other => panic!("unexpected error variant: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn read_methods_send_form_fields_because_slack_ignores_json_there() {
+        let server = fake(|_, _, _| ok(json!({ "messages": [{ "ts": "1.0" }] }))).await;
+        let api = server.api("xoxb-test");
+
+        let messages = api.conversations_replies("C1", "1.0", Some("0.5"), 5).await.unwrap();
+
+        assert_eq!(messages.len(), 1);
+        let request = &server.requests()[0];
+        assert_eq!(request.path, "/api/conversations.replies");
+        assert!(request
+            .content_type
+            .as_deref()
+            .unwrap()
+            .starts_with("application/x-www-form-urlencoded"));
+        let body = request.json();
+        assert_eq!(body["channel"], "C1");
+        assert_eq!(body["ts"], "1.0");
+        assert_eq!(body["oldest"], "0.5");
+        assert_eq!(body["limit"], "5");
     }
 
     #[tokio::test]

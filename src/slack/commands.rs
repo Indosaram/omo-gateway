@@ -1436,9 +1436,7 @@ mod tests {
             async move {
                 let path = req.uri().path().to_owned();
                 let bytes = axum::body::to_bytes(req.into_body(), usize::MAX).await.unwrap();
-                let body: Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-                    Value::String(String::from_utf8_lossy(&bytes).into_owned())
-                });
+                let body: Value = crate::slack::api::decode_test_body(&bytes);
                 recorded.lock().push((path.clone(), body));
                 axum::Json(match path.as_str() {
                     "/api/conversations.open" => json!({ "ok": true, "channel": { "id": "DOWNER" } }),
@@ -1839,7 +1837,7 @@ mod tests {
             ]
         );
         assert_eq!(requests[0].1["users"], "UFRIEND");
-        assert!(requests[1].1.as_str().unwrap().contains("filename=pending-writes.json"));
+        assert_eq!(requests[1].1["filename"], "pending-writes.json");
         assert!(requests[2].1.to_string().contains(&id));
         assert_eq!(requests[3].1["channel_id"], "DOWNER");
         assert_eq!(requests[4].1["response_type"], "ephemeral");

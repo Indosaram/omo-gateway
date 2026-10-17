@@ -652,7 +652,7 @@ mod tests {
                 let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
                     .await
                     .unwrap();
-                let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let body: Value = crate::slack::api::decode_test_body(&bytes);
                 let mut reply = responder(&method, &body);
                 recorded.lock().push((method, body));
                 reply["ok"] = json!(true);
@@ -755,7 +755,7 @@ mod tests {
             .cloned()
             .unwrap();
         assert_eq!(history.1["channel"], "C0WORK");
-        assert_eq!(history.1["limit"], 2);
+        assert_eq!(history.1["limit"], "2");
         let stored: i64 = MessageSearchIndex::new(pool)
             .count("slack", "C0WORK")
             .await

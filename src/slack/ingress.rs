@@ -1392,7 +1392,7 @@ mod tests {
                 let body = axum::body::to_bytes(req.into_body(), usize::MAX)
                     .await
                     .unwrap();
-                let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let body: Value = crate::slack::api::decode_test_body(&body);
                 let method = path.trim_start_matches("/api/").to_owned();
                 let reply = responder(&method, &body);
                 recorded.lock().push((method, body));

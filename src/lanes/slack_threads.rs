@@ -451,7 +451,7 @@ mod tests {
                 let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
                     .await
                     .unwrap();
-                let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                let body: Value = crate::slack::api::decode_test_body(&bytes);
                 requests.lock().push((method.clone(), body.clone()));
                 let mut reply = responder(&method, &body);
                 if reply.get("ok").is_none() {

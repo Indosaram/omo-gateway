@@ -210,7 +210,7 @@ mod tests {
             let body = axum::body::to_bytes(req.into_body(), usize::MAX)
                 .await
                 .unwrap();
-            let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let body: Value = crate::slack::api::decode_test_body(&body);
             let reply = match (method.as_str(), body["channel"].as_str()) {
                 ("conversations.open", _) => json!({ "ok": true, "channel": { "id": "D1" } }),
                 ("conversations.history", Some("CFREE")) => json!({ "ok": true, "messages": [

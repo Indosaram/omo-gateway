@@ -879,8 +879,7 @@ mod tests {
                 let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
                     .await
                     .unwrap();
-                let body = serde_json::from_slice::<Value>(&bytes)
-                    .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).into_owned()));
+                let body = crate::slack::api::decode_test_body(&bytes);
                 let posts = {
                     let mut requests = recorded.lock();
                     requests.push((path.clone(), body));
@@ -1412,8 +1411,7 @@ mod tests {
             return;
         }
         assert_eq!(requests.len(), 4);
-        let form = requests[1].1.as_str().unwrap();
-        assert!(form.contains("filename=table_1.png"), "{form}");
+        assert_eq!(requests[1].1["filename"], "table_1.png");
         assert_eq!(requests[3].0, "files.completeUploadExternal");
         assert_eq!(requests[3].1["thread_ts"], "1699.0001");
     }

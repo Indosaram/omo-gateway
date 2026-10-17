@@ -107,7 +107,7 @@ mod tests {
             let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
                 .await
                 .unwrap();
-            let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            let body: Value = crate::slack::api::decode_test_body(&bytes);
             axum::Json(match path.as_str() {
                 "/api/conversations.open" if body["users"] == "UOWNER" => {
                     json!({ "ok": true, "channel": { "id": "DOWNER" } })
