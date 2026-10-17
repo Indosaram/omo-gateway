@@ -38,6 +38,22 @@ fn sha256_hex_8(input: &str) -> String {
 }
 
 pub fn agent_workspace_slug(platform: &str, user_id: &str, bot_id: Option<&str>) -> String {
+    let aliased = bot_id.and_then(|bot| workspace_bot_alias(platform, bot));
+    raw_workspace_slug(platform, user_id, aliased.as_deref().or(bot_id))
+}
+
+#[cfg(test)]
+fn agent_workspace_slug_with_alias(
+    platform: &str,
+    user_id: &str,
+    bot_id: Option<&str>,
+    persona_from: Option<&str>,
+) -> String {
+    let aliased = bot_id.and_then(|bot| workspace_bot_alias_from(platform, bot, persona_from, None));
+    raw_workspace_slug(platform, user_id, aliased.as_deref().or(bot_id))
+}
+
+fn raw_workspace_slug(platform: &str, user_id: &str, bot_id: Option<&str>) -> String {
     let (category, raw_value) = if let Some(bot) = bot_id.filter(|s| !s.is_empty()) {
         ("bot", bot)
     } else if let Some(job_id) = user_id.strip_prefix("cron:") {
@@ -73,6 +89,35 @@ pub fn agent_workspace_slug(platform: &str, user_id: &str, bot_id: Option<&str>)
     }
 }
 
+/// The Slack bot is the same assistant as the Discord persona bot, so it shares that bot's
+/// workspace (AGENTS.md persona, omo memory, files) instead of starting from an empty one.
+/// `OMON_SLACK_PERSONA_FROM` names the source bot; `SLACK_BOT_USER_ID` limits the alias to one
+/// Slack bot when set.
+fn workspace_bot_alias(platform: &str, bot_id: &str) -> Option<String> {
+    workspace_bot_alias_from(
+        platform,
+        bot_id,
+        std::env::var("OMON_SLACK_PERSONA_FROM").ok().as_deref(),
+        std::env::var("SLACK_BOT_USER_ID").ok().as_deref(),
+    )
+}
+
+fn workspace_bot_alias_from(
+    platform: &str,
+    bot_id: &str,
+    persona_from: Option<&str>,
+    slack_bot: Option<&str>,
+) -> Option<String> {
+    if platform != crate::slack::PLATFORM {
+        return None;
+    }
+    if slack_bot.is_some_and(|only| !only.trim().is_empty() && only.trim() != bot_id) {
+        return None;
+    }
+    let source = crate::slack::home::persona_source(persona_from);
+    (source != bot_id).then_some(source)
+}
+
 pub fn resolve_workspace(base: &Path, slug: &str) -> AgentWorkspace {
     let cwd = base.join("agents").join(slug);
     let roots = vec![cwd.clone(), base.join("shared")];
@@ -82,6 +127,22 @@ pub fn resolve_workspace(base: &Path, slug: &str) -> AgentWorkspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slack_bot_shares_the_persona_bot_workspace() {
+        assert_eq!(
+            workspace_bot_alias_from("slack", "U0C9ST69M8B", None, None).as_deref(),
+            Some(crate::slack::home::persona_source(None).as_str())
+        );
+        assert_eq!(
+            workspace_bot_alias_from("slack", "U0C9ST69M8B", Some("777"), None).as_deref(),
+            Some("777")
+        );
+        assert_eq!(workspace_bot_alias_from("slack", "UOTHER", None, Some("U0C9ST69M8B")), None);
+        assert_eq!(workspace_bot_alias_from("discord", "U0C9ST69M8B", None, None), None);
+        let slug = agent_workspace_slug_with_alias("slack", "U04M1JNJM8T", Some("U0C9ST69M8B"), Some("777"));
+        assert_eq!(slug, "bot-777");
+    }
     use std::path::Path;
 
     #[test]
