@@ -67,6 +67,8 @@ pub enum LaneCommand {
         path: PathBuf,
     },
     CanLaunch,
+    /// Print the session that lanes started from here would report to.
+    Lead,
     Heavy {
         label: String,
         #[arg(last = true, required = true)]
@@ -256,6 +258,20 @@ pub async fn execute(
                 json!({"can_launch": decision.is_ok(), "reasons": decision.reasons()}),
             ))
         }
+        LaneCommand::Lead => {
+            let caller = match std::env::var("PI_SESSION_ID") {
+                Ok(id) => caller_session(pool, &id).await?,
+                Err(_) => None,
+            };
+            let (source, lead) = match caller {
+                Some(lead) => ("caller", Some(lead)),
+                None => ("default", std::env::var("OMON_LANE_DEFAULT_LEAD").ok()),
+            };
+            Ok((
+                if lead.is_some() { 0 } else { 2 },
+                json!({"lead": lead, "source": source}),
+            ))
+        }
         LaneCommand::Heavy { label, argv } => {
             let (program, args) = argv
                 .split_first()
@@ -277,6 +293,24 @@ pub async fn execute(
             ))
         }
     }
+}
+
+/// The messenger conversation whose agent turn is running this command. The agent shell
+/// carries its omo session id (`PI_SESSION_ID`), which the gateway binds to the session as
+/// `omo_thread_id`, so lane reports return to the thread the work was requested in rather
+/// than to the owner home. Lane sessions are skipped: they never lead other lanes.
+pub async fn caller_session(pool: &SqlitePool, omo_session_id: &str) -> Result<Option<String>> {
+    if omo_session_id.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(sqlx::query_scalar(
+        "SELECT session_key FROM sessions
+         WHERE json_extract(state_json, '$.metadata.omo_thread_id') = ? AND platform <> 'lane'
+         ORDER BY thread_id IS NOT NULL DESC, updated_at DESC LIMIT 1",
+    )
+    .bind(omo_session_id.trim())
+    .fetch_optional(pool)
+    .await?)
 }
 
 async fn validate_start(args: &StartArgs) -> Result<()> {
@@ -347,7 +381,11 @@ pub async fn start(
     let brief = tokio::fs::read_to_string(&brief_path)
         .await
         .map_err(super::runner::io_error)?;
-    let lead = if let Some(lead) = args.lead {
+    let caller = match std::env::var("PI_SESSION_ID") {
+        Ok(id) => caller_session(pool, &id).await?,
+        Err(_) => None,
+    };
+    let lead = if let Some(lead) = args.lead.or(caller) {
         lead
     } else {
         let newest: Option<(String,)> = if let Some(thread) = &args.thread {
@@ -624,6 +662,30 @@ mod tests {
         lane.status = "working".into();
         crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
         db
+    }
+
+    #[tokio::test]
+    async fn caller_session_resolves_the_conversation_bound_to_the_agent_session() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        for (key, platform, thread) in [
+            ("thread-key", "slack", "omo-1"),
+            ("lane-key", "lane", "omo-2"),
+        ] {
+            sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, ?, 'C1', '', ?)")
+                .bind(key)
+                .bind(platform)
+                .bind(json!({"metadata": {"omo_thread_id": thread}}).to_string())
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            caller_session(db.pool(), "omo-1").await.unwrap().as_deref(),
+            Some("thread-key")
+        );
+        assert_eq!(caller_session(db.pool(), "omo-2").await.unwrap(), None);
+        assert_eq!(caller_session(db.pool(), "unknown").await.unwrap(), None);
+        assert_eq!(caller_session(db.pool(), " ").await.unwrap(), None);
     }
 
     #[tokio::test]

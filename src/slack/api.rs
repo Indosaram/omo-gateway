@@ -148,7 +148,8 @@ impl SlackApi {
         latest: Option<&str>,
         limit: u32,
     ) -> Result<Vec<Value>> {
-        let mut body = json!({ "channel": channel, "limit": limit.clamp(1, 200), "inclusive": false });
+        let mut body =
+            json!({ "channel": channel, "limit": limit.clamp(1, 200), "inclusive": false });
         if let Some(oldest) = oldest {
             body["oldest"] = json!(oldest);
         }
@@ -177,17 +178,29 @@ impl SlackApi {
 
     pub async fn conversations_members(&self, channel: &str) -> Result<Vec<String>> {
         let value = self
-            .call("conversations.members", json!({ "channel": channel, "limit": 200 }))
+            .call(
+                "conversations.members",
+                json!({ "channel": channel, "limit": 200 }),
+            )
             .await?;
         Ok(value["members"]
             .as_array()
-            .map(|items| items.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
     pub async fn permalink(&self, channel: &str, ts: &str) -> Result<String> {
         let value = self
-            .call("chat.getPermalink", json!({ "channel": channel, "message_ts": ts }))
+            .call(
+                "chat.getPermalink",
+                json!({ "channel": channel, "message_ts": ts }),
+            )
             .await?;
         string_field("chat.getPermalink", &value, "permalink")
     }
@@ -206,7 +219,10 @@ impl SlackApi {
             .map_err(|error| slack_error("files.upload", error))?;
         let path = dir.join(sanitize_filename(filename));
         let result = match tokio::fs::write(&path, bytes).await {
-            Ok(()) => self.upload_file(channel, thread_ts, &path, title).await.map(drop),
+            Ok(()) => self
+                .upload_file(channel, thread_ts, &path, title)
+                .await
+                .map(drop),
             Err(error) => Err(slack_error("files.upload", error)),
         };
         let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -316,7 +332,10 @@ impl SlackApi {
             ));
         }
         if response.content_length().is_some_and(|length| length > cap) {
-            return Err(slack_error(LABEL, format!("file exceeds the {cap} byte limit")));
+            return Err(slack_error(
+                LABEL,
+                format!("file exceeds the {cap} byte limit"),
+            ));
         }
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
@@ -337,17 +356,28 @@ impl SlackApi {
         self.call_tolerating(method, body, &[]).await
     }
 
-    async fn call_tolerating(&self, method: &str, body: Value, tolerated: &[&str]) -> Result<Value> {
+    async fn call_tolerating(
+        &self,
+        method: &str,
+        body: Value,
+        tolerated: &[&str],
+    ) -> Result<Value> {
         let url = format!("{}/{method}", self.base);
         let response = if form_only(method) {
             let form = form_fields(&body);
             self.send(method, || {
-                self.http.post(url.as_str()).bearer_auth(&self.token).form(&form)
+                self.http
+                    .post(url.as_str())
+                    .bearer_auth(&self.token)
+                    .form(&form)
             })
             .await?
         } else {
             self.send(method, || {
-                self.http.post(url.as_str()).bearer_auth(&self.token).json(&body)
+                self.http
+                    .post(url.as_str())
+                    .bearer_auth(&self.token)
+                    .json(&body)
             })
             .await?
         };
@@ -375,7 +405,9 @@ impl SlackApi {
             let response = build().send().await.map_err(|error| {
                 slack_error(method, format!("request failed: {}", error.without_url()))
             })?;
-            if response.status() != StatusCode::TOO_MANY_REQUESTS || retries >= MAX_RATE_LIMIT_RETRIES {
+            if response.status() != StatusCode::TOO_MANY_REQUESTS
+                || retries >= MAX_RATE_LIMIT_RETRIES
+            {
                 return Ok(response);
             }
             retries += 1;
@@ -391,12 +423,18 @@ impl SlackApi {
     }
 }
 
-async fn parse_response(method: &str, response: reqwest::Response, tolerated: &[&str]) -> Result<Value> {
+async fn parse_response(
+    method: &str,
+    response: reqwest::Response,
+    tolerated: &[&str],
+) -> Result<Value> {
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|error| slack_error(method, format!("failed to read response: {}", error.without_url())))?;
+    let bytes = response.bytes().await.map_err(|error| {
+        slack_error(
+            method,
+            format!("failed to read response: {}", error.without_url()),
+        )
+    })?;
     let value = serde_json::from_slice::<Value>(&bytes).ok();
     let Some(value) = value else {
         return Err(if status.is_success() {
@@ -419,24 +457,36 @@ async fn parse_response(method: &str, response: reqwest::Response, tolerated: &[
 async fn write_capped(response: reqwest::Response, dest: &Path, cap: u64) -> Result<()> {
     const LABEL: &str = "files.download";
     let mut file = tokio::fs::File::create(dest).await.map_err(|error| {
-        slack_error(LABEL, format!("failed to create {}: {error}", dest.display()))
+        slack_error(
+            LABEL,
+            format!("failed to create {}: {error}", dest.display()),
+        )
     })?;
     let mut total = 0_u64;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| {
-            slack_error(LABEL, format!("download stream failed: {}", error.without_url()))
+            slack_error(
+                LABEL,
+                format!("download stream failed: {}", error.without_url()),
+            )
         })?;
         total = total.saturating_add(chunk.len() as u64);
         if total > cap {
-            return Err(slack_error(LABEL, format!("file exceeds the {cap} byte limit")));
+            return Err(slack_error(
+                LABEL,
+                format!("file exceeds the {cap} byte limit"),
+            ));
         }
         file.write_all(&chunk).await.map_err(|error| {
             slack_error(LABEL, format!("failed writing {}: {error}", dest.display()))
         })?;
     }
     file.flush().await.map_err(|error| {
-        slack_error(LABEL, format!("failed flushing {}: {error}", dest.display()))
+        slack_error(
+            LABEL,
+            format!("failed flushing {}: {error}", dest.display()),
+        )
     })
 }
 
@@ -473,7 +523,11 @@ pub(crate) fn decode_test_body(bytes: &[u8]) -> Value {
         .split('&')
         .filter_map(|pair| pair.split_once('='))
         .map(|(key, value)| {
-            let decode = |raw: &str| urlencoding::decode(&raw.replace('+', " ")).map(|s| s.into_owned()).unwrap_or_default();
+            let decode = |raw: &str| {
+                urlencoding::decode(&raw.replace('+', " "))
+                    .map(|s| s.into_owned())
+                    .unwrap_or_default()
+            };
             (decode(key), Value::String(decode(value)))
         })
         .collect();
@@ -515,7 +569,13 @@ fn messages(value: &mut Value) -> Vec<Value> {
 fn sanitize_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | '\0') { '_' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | '\0') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     match cleaned.trim() {
         "" | "." | ".." => "upload.bin".to_owned(),
@@ -599,7 +659,12 @@ mod tests {
                     .await
                     .unwrap()
                     .to_vec();
-                let recorded = Recorded { path, auth, content_type, body };
+                let recorded = Recorded {
+                    path,
+                    auth,
+                    content_type,
+                    body,
+                };
                 let seen = {
                     let mut requests = requests.lock();
                     let seen = requests.iter().filter(|r| r.path == recorded.path).count();
@@ -638,7 +703,10 @@ mod tests {
         let server = fake(|_, _, _| ok(json!({ "messages": [{ "ts": "1.0" }] }))).await;
         let api = server.api("xoxb-test");
 
-        let messages = api.conversations_replies("C1", "1.0", Some("0.5"), 5).await.unwrap();
+        let messages = api
+            .conversations_replies("C1", "1.0", Some("0.5"), 5)
+            .await
+            .unwrap();
 
         assert_eq!(messages.len(), 1);
         let request = &server.requests()[0];
@@ -661,7 +729,12 @@ mod tests {
         let api = server.api("xoxb-test");
 
         let ts = api
-            .post_message("C1", "hello", Some("1699.0001"), Some(json!([{ "type": "divider" }])))
+            .post_message(
+                "C1",
+                "hello",
+                Some("1699.0001"),
+                Some(json!([{ "type": "divider" }])),
+            )
             .await
             .unwrap();
 
@@ -671,7 +744,11 @@ mod tests {
         let request = &requests[0];
         assert_eq!(request.path, "/api/chat.postMessage");
         assert_eq!(request.auth.as_deref(), Some("Bearer xoxb-test"));
-        assert!(request.content_type.as_deref().unwrap().starts_with("application/json"));
+        assert!(request
+            .content_type
+            .as_deref()
+            .unwrap()
+            .starts_with("application/json"));
         let body = request.json();
         assert_eq!(body["channel"], "C1");
         assert_eq!(body["text"], "hello");
@@ -682,7 +759,11 @@ mod tests {
     #[tokio::test]
     async fn post_message_omits_absent_thread_and_blocks() {
         let server = fake(|_, _, _| ok(json!({ "ts": "1.2" }))).await;
-        server.api("xoxb-test").post_message("D1", "hi", None, None).await.unwrap();
+        server
+            .api("xoxb-test")
+            .post_message("D1", "hi", None, None)
+            .await
+            .unwrap();
 
         let body = server.requests()[0].json();
         assert!(body.get("thread_ts").is_none());
@@ -691,9 +772,10 @@ mod tests {
 
     #[tokio::test]
     async fn ok_false_maps_to_multiplexer_error_with_method_and_code() {
-        let server =
-            fake(|_, _, _| json_response(200, json!({ "ok": false, "error": "message_not_found" })))
-                .await;
+        let server = fake(|_, _, _| {
+            json_response(200, json!({ "ok": false, "error": "message_not_found" }))
+        })
+        .await;
 
         let error = server
             .api("xoxb-test")
@@ -701,7 +783,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(multiplexer_message(error), "slack chat.update: message_not_found");
+        assert_eq!(
+            multiplexer_message(error),
+            "slack chat.update: message_not_found"
+        );
         let body = server.requests()[0].json();
         assert_eq!(body["ts"], "1.2");
         assert_eq!(body["text"], "edited");
@@ -710,9 +795,14 @@ mod tests {
     #[tokio::test]
     async fn error_message_never_contains_token() {
         let server =
-            fake(|_, _, _| json_response(200, json!({ "ok": false, "error": "invalid_auth" }))).await;
+            fake(|_, _, _| json_response(200, json!({ "ok": false, "error": "invalid_auth" })))
+                .await;
         let message = multiplexer_message(
-            server.api("xoxb-secret-value").delete_message("C1", "1.2").await.unwrap_err(),
+            server
+                .api("xoxb-secret-value")
+                .delete_message("C1", "1.2")
+                .await
+                .unwrap_err(),
         );
         assert!(!message.contains("xoxb-secret-value"));
         assert_eq!(message, "slack chat.delete: invalid_auth");
@@ -735,7 +825,10 @@ mod tests {
         api.add_reaction("C1", "1.2", "eyes").await.unwrap();
         let error = api.add_reaction("C1", "1.2", "bogus").await.unwrap_err();
 
-        assert_eq!(multiplexer_message(error), "slack reactions.add: invalid_name");
+        assert_eq!(
+            multiplexer_message(error),
+            "slack reactions.add: invalid_name"
+        );
         let body = server.requests()[0].json();
         assert_eq!(body["channel"], "C1");
         assert_eq!(body["timestamp"], "1.2");
@@ -840,7 +933,11 @@ mod tests {
     #[tokio::test]
     async fn post_ephemeral_sends_user() {
         let server = fake(|_, _, _| ok(json!({ "message_ts": "1.2" }))).await;
-        server.api("xoxb-test").post_ephemeral("C1", "U1", "only you").await.unwrap();
+        server
+            .api("xoxb-test")
+            .post_ephemeral("C1", "U1", "only you")
+            .await
+            .unwrap();
 
         let request = &server.requests()[0];
         assert_eq!(request.path, "/api/chat.postEphemeral");
@@ -909,10 +1006,14 @@ mod tests {
                 "upload_url": format!("{base}/upload/F9"),
                 "file_id": "F9",
             })),
-            "/upload/F9" if request.body.is_empty() => {
-                axum::http::Response::builder().status(500).body(Body::empty()).unwrap()
-            }
-            "/upload/F9" => axum::http::Response::builder().status(200).body(Body::empty()).unwrap(),
+            "/upload/F9" if request.body.is_empty() => axum::http::Response::builder()
+                .status(500)
+                .body(Body::empty())
+                .unwrap(),
+            "/upload/F9" => axum::http::Response::builder()
+                .status(200)
+                .body(Body::empty())
+                .unwrap(),
             _ => ok(json!({})),
         })
         .await;
@@ -951,7 +1052,10 @@ mod tests {
                     .body(Body::from(vec![1_u8, 2, 3, 4]))
                     .unwrap()
             }
-            _ => axum::http::Response::builder().status(403).body(Body::empty()).unwrap(),
+            _ => axum::http::Response::builder()
+                .status(403)
+                .body(Body::empty())
+                .unwrap(),
         })
         .await;
         let dir = tempfile::tempdir().unwrap();
@@ -1008,8 +1112,15 @@ mod tests {
     #[tokio::test]
     async fn post_response_url_sends_json_without_auth() {
         let server = fake(|request, _, _| {
-            let status = if request.path == "/hooks/ok" { 200 } else { 404 };
-            axum::http::Response::builder().status(status).body(Body::from("ok")).unwrap()
+            let status = if request.path == "/hooks/ok" {
+                200
+            } else {
+                404
+            };
+            axum::http::Response::builder()
+                .status(status)
+                .body(Body::from("ok"))
+                .unwrap()
         })
         .await;
         let api = server.api("xoxb-test");
@@ -1036,7 +1147,9 @@ mod tests {
 
     #[tokio::test]
     async fn connections_open_uses_app_token() {
-        let server = fake(|_, _, _| ok(json!({ "url": "wss://wss-primary.slack.com/link/?ticket=t" }))).await;
+        let server =
+            fake(|_, _, _| ok(json!({ "url": "wss://wss-primary.slack.com/link/?ticket=t" })))
+                .await;
 
         let url = server
             .api("xoxb-bot")

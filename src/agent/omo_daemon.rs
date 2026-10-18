@@ -892,6 +892,16 @@ pub async fn force_restart_owned_daemon(url: &str) -> bool {
     false
 }
 
+/// True when the app-server at `url` answers readyz right now. A turn that produced no
+/// events while the server stays responsive is a model-side stall, not a wedged daemon.
+pub async fn owned_daemon_responsive(url: &str) -> bool {
+    let owned = OWNED_DAEMONS
+        .lock()
+        .ok()
+        .is_some_and(|owned| owned.get(url).and_then(std::sync::Weak::upgrade).is_some());
+    owned && probe_readyz(url, READY_PROBE_TIMEOUT).await
+}
+
 /// Returns true if the daemon at `url` was force-restarted at or after `since`.
 ///
 /// Incident 2026-10-16: concurrent turns in other sessions that fail with a transport

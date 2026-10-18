@@ -1526,7 +1526,8 @@ async fn run_gateway_with_dashboard(
         }),
         discord_egress_dispatcher.clone(),
     )
-    .with_hermes_sync(cron_sync);
+    .with_hermes_sync(cron_sync)
+    .with_output_review();
     // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
     let lead = default_lead();
     let owner_id = digest_owner(

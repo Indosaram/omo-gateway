@@ -62,6 +62,9 @@ pub struct ButtonClick {
     pub namespace: String,
     pub action: String,
     pub arg: String,
+    /// Optional fifth segment, passed to the command as one more argv element. content-intel
+    /// binds the publish button to the reviewed snapshot this way (`<id>.<sha256>.<revision>`).
+    pub token: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -100,17 +103,33 @@ fn is_arg(segment: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// The arg becomes an argv element of the configured command, so it may never start with `-`.
+fn is_token(segment: &str) -> bool {
+    (1..=128).contains(&segment.len())
+        && segment.starts_with(|c: char| c.is_ascii_alphanumeric())
+        && segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+}
+
+/// The arg and token become argv elements of the configured command, so they may never start
+/// with `-`.
 pub fn parse_button_custom_id(custom_id: &str) -> Option<ButtonClick> {
     let mut parts = custom_id.strip_prefix(BUTTON_PREFIX)?.split(':');
     let (namespace, action, arg) = (parts.next()?, parts.next()?, parts.next()?);
-    if parts.next().is_some() || !is_name(namespace) || !is_name(action) || !is_arg(arg) {
+    let token = parts.next();
+    if parts.next().is_some()
+        || !is_name(namespace)
+        || !is_name(action)
+        || !is_arg(arg)
+        || token.is_some_and(|token| !is_token(token))
+    {
         return None;
     }
     Some(ButtonClick {
         namespace: namespace.to_string(),
         action: action.to_string(),
         arg: arg.to_string(),
+        token: token.map(str::to_string),
     })
 }
 
@@ -163,6 +182,7 @@ pub async fn run_button_action(
         .args(base_args)
         .arg(&click.action)
         .arg(&click.arg)
+        .args(&click.token)
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -460,6 +480,7 @@ mod tests {
 
     fn click(action: &str, arg: &str) -> ButtonClick {
         ButtonClick {
+            token: None,
             namespace: "content-intel".into(),
             action: action.into(),
             arg: arg.into(),
@@ -488,6 +509,16 @@ mod tests {
             parse_button_custom_id("omon:btn:content-intel:skip:86"),
             Some(click("skip", "86"))
         );
+        let token = format!("4.{}.2", "a".repeat(64));
+        assert_eq!(
+            parse_button_custom_id(&format!(
+                "omon:btn:content-intel:publish:96-417-435:{token}"
+            )),
+            Some(ButtonClick {
+                token: Some(token),
+                ..click("publish", "96-417-435")
+            })
+        );
     }
 
     #[test]
@@ -495,7 +526,10 @@ mod tests {
         for custom_id in [
             "omon:approval:6d1f:once",
             "omon:btn:content-intel:publish",
-            "omon:btn:content-intel:publish:86:extra",
+            "omon:btn:content-intel:publish:86:extra:more",
+            "omon:btn:content-intel:publish:86:-x",
+            "omon:btn:content-intel:publish:86:a;b",
+            "omon:btn:content-intel:publish:86:",
             "omon:btn:Content:publish:86",
             "omon:btn:content-intel:publish:--all-channels",
             "omon:btn:content-intel:publish:86;rm",

@@ -1229,7 +1229,8 @@ impl SessionActor {
             }
         }
         if event.origin == crate::EventOrigin::User
-            && (event.session.platform == "discord" || event.session.platform == crate::slack::PLATFORM)
+            && (event.session.platform == "discord"
+                || event.session.platform == crate::slack::PLATFORM)
             && !event.platform_message_id.is_empty()
         {
             let index = crate::MessageSearchIndex::new(self.pool.clone());
@@ -1627,11 +1628,20 @@ mod tests {
 
     #[test]
     fn slack_ts_predecessor_is_fixed_width() {
-        assert_eq!(parse_slack_ts("1700000000.000100"), Some((1_700_000_000, 100)));
+        assert_eq!(
+            parse_slack_ts("1700000000.000100"),
+            Some((1_700_000_000, 100))
+        );
         assert_eq!(parse_slack_ts("1700000000.1"), None);
         assert_eq!(parse_slack_ts("abc"), None);
-        assert_eq!(slack_ts_before((1_700_000_000, 100)).as_deref(), Some("1700000000.000099"));
-        assert_eq!(slack_ts_before((1_700_000_000, 0)).as_deref(), Some("1699999999.999999"));
+        assert_eq!(
+            slack_ts_before((1_700_000_000, 100)).as_deref(),
+            Some("1700000000.000099")
+        );
+        assert_eq!(
+            slack_ts_before((1_700_000_000, 0)).as_deref(),
+            Some("1699999999.999999")
+        );
         assert_eq!(slack_ts_before((0, 0)), None);
     }
 
@@ -1649,7 +1659,8 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let session = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "UOWNER").with_bot_id("UBOT");
+        let session = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "UOWNER")
+            .with_bot_id("UBOT");
         let event = InboundEvent::message(session, "1700000000.000300", "hi")
             .with_delivery_id("slack:C1:1700000000.000300");
         rewind_backfill_cursor(&pool, &event).await;

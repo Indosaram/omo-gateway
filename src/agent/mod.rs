@@ -20,6 +20,7 @@ pub use omo_config::{
     OMON_MODEL_LEAD_DEFAULT, OMON_MODEL_SMALL, OMON_MODEL_SMALL_DEFAULT,
 };
 pub use omo_daemon::{
-    force_restart_owned_daemon, forced_restart_since, wait_owned_daemon_ready, OmoDaemonSupervisor,
+    force_restart_owned_daemon, forced_restart_since, owned_daemon_responsive,
+    wait_owned_daemon_ready, OmoDaemonSupervisor,
 };
 pub use workspace_migration::wipe_omo_thread_bindings;

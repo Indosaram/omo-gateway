@@ -157,6 +157,7 @@ async fn session(
         Err(e) => return SessionEnd::Dropped(format!("connect failed: {e}")),
     };
     *backoff = BACKOFF_MIN;
+    tracing::info!("slack socket: connected");
 
     loop {
         let frame = tokio::select! {

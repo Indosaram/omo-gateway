@@ -146,30 +146,60 @@ impl SlashInvocation {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionsCommand {
     Overview,
-    Read { target: String, limit: Option<usize> },
-    Send { target: String, text: String, mode: String },
-    Stop { target: String },
-    Answer { target: String, text: String, request_id: Option<String> },
-    Watch { target: String },
-    Unwatch { target: String },
+    Read {
+        target: String,
+        limit: Option<usize>,
+    },
+    Send {
+        target: String,
+        text: String,
+        mode: String,
+    },
+    Stop {
+        target: String,
+    },
+    Answer {
+        target: String,
+        text: String,
+        request_id: Option<String>,
+    },
+    Watch {
+        target: String,
+    },
+    Unwatch {
+        target: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlackCommand {
     Model(String),
-    Reset { confirm: Option<bool> },
+    Reset {
+        confirm: Option<bool>,
+    },
     Stop,
     Status,
     Tools,
-    Skill { action: String, arg: Option<String> },
-    Memory { action: String, arg: Option<String> },
-    Cron { action: String },
+    Skill {
+        action: String,
+        arg: Option<String>,
+    },
+    Memory {
+        action: String,
+        arg: Option<String>,
+    },
+    Cron {
+        action: String,
+    },
     Steer(String),
     Undo,
     Retry,
     Compress,
     Title(String),
-    Thread { name: String, message: Option<String> },
+    Thread {
+        name: String,
+        message: Option<String>,
+    },
     Deny(Option<String>),
     Yolo(Option<String>),
     Pair(String),
@@ -185,15 +215,24 @@ pub struct Reply {
 
 impl Reply {
     fn public(text: impl Into<String>) -> Self {
-        Self { ephemeral: false, text: text.into() }
+        Self {
+            ephemeral: false,
+            text: text.into(),
+        }
     }
 
     fn private(text: impl Into<String>) -> Self {
-        Self { ephemeral: true, text: text.into() }
+        Self {
+            ephemeral: true,
+            text: text.into(),
+        }
     }
 
     fn visible(ephemeral: bool, text: impl Into<String>) -> Self {
-        Self { ephemeral, text: text.into() }
+        Self {
+            ephemeral,
+            text: text.into(),
+        }
     }
 }
 
@@ -239,12 +278,12 @@ pub fn parse_command(command: &str, text: &str) -> std::result::Result<SlackComm
         "model" => required(text).map(SlackCommand::Model),
         "reset" => match text.to_ascii_lowercase().as_str() {
             "" => Ok(SlackCommand::Reset { confirm: None }),
-            "confirm" | "confirm:true" | "true" | "yes" | "y" | "1" => {
-                Ok(SlackCommand::Reset { confirm: Some(true) })
-            }
-            "confirm:false" | "false" | "no" | "n" | "0" => {
-                Ok(SlackCommand::Reset { confirm: Some(false) })
-            }
+            "confirm" | "confirm:true" | "true" | "yes" | "y" | "1" => Ok(SlackCommand::Reset {
+                confirm: Some(true),
+            }),
+            "confirm:false" | "false" | "no" | "n" | "0" => Ok(SlackCommand::Reset {
+                confirm: Some(false),
+            }),
             _ => Err(usage()),
         },
         "stop" => Ok(SlackCommand::Stop),
@@ -252,18 +291,33 @@ pub fn parse_command(command: &str, text: &str) -> std::result::Result<SlackComm
         "tools" => Ok(SlackCommand::Tools),
         "skill" => {
             let action = required(first)?.to_ascii_lowercase();
-            Ok(SlackCommand::Skill { action, arg: rest_opt })
+            Ok(SlackCommand::Skill {
+                action,
+                arg: rest_opt,
+            })
         }
         "skills" => Ok(SlackCommand::Skill {
-            action: if first.is_empty() { "list".into() } else { first.to_ascii_lowercase() },
+            action: if first.is_empty() {
+                "list".into()
+            } else {
+                first.to_ascii_lowercase()
+            },
             arg: rest_opt,
         }),
         "memory" => Ok(SlackCommand::Memory {
-            action: if first.is_empty() { "list".into() } else { first.to_ascii_lowercase() },
+            action: if first.is_empty() {
+                "list".into()
+            } else {
+                first.to_ascii_lowercase()
+            },
             arg: rest_opt,
         }),
         "cron" => Ok(SlackCommand::Cron {
-            action: if first.is_empty() { "list".into() } else { first.to_ascii_lowercase() },
+            action: if first.is_empty() {
+                "list".into()
+            } else {
+                first.to_ascii_lowercase()
+            },
         }),
         "steer" => required(text).map(SlackCommand::Steer),
         "undo" => Ok(SlackCommand::Undo),
@@ -280,10 +334,16 @@ pub fn parse_command(command: &str, text: &str) -> std::result::Result<SlackComm
                 message: message.filter(|m| !m.is_empty()).map(str::to_owned),
             })
         }
-        "deny" => Ok(SlackCommand::Deny((!text.is_empty()).then(|| text.to_owned()))),
-        "yolo" => Ok(SlackCommand::Yolo((!text.is_empty()).then(|| text.to_owned()))),
+        "deny" => Ok(SlackCommand::Deny(
+            (!text.is_empty()).then(|| text.to_owned()),
+        )),
+        "yolo" => Ok(SlackCommand::Yolo(
+            (!text.is_empty()).then(|| text.to_owned()),
+        )),
         "pair" => required(text).map(SlackCommand::Pair),
-        "sessions" => parse_sessions(text).map(SlackCommand::Sessions).ok_or_else(usage),
+        "sessions" => parse_sessions(text)
+            .map(SlackCommand::Sessions)
+            .ok_or_else(usage),
         _ => Ok(SlackCommand::Help),
     }
 }
@@ -300,26 +360,45 @@ fn parse_sessions(text: &str) -> Option<SessionsCommand> {
                 "" => None,
                 value => Some(value.parse().ok()?),
             };
-            needs_target(SessionsCommand::Read { target: target.clone(), limit })
+            needs_target(SessionsCommand::Read {
+                target: target.clone(),
+                limit,
+            })
         }
         "send" => {
             let (mode, text) = take_option(rest, "--mode");
-            let mode = mode.unwrap_or_else(|| "auto".to_owned()).to_ascii_lowercase();
+            let mode = mode
+                .unwrap_or_else(|| "auto".to_owned())
+                .to_ascii_lowercase();
             if !matches!(mode.as_str(), "auto" | "steer" | "follow_up") || text.is_empty() {
                 return None;
             }
-            needs_target(SessionsCommand::Send { target: target.clone(), text, mode })
+            needs_target(SessionsCommand::Send {
+                target: target.clone(),
+                text,
+                mode,
+            })
         }
-        "stop" => needs_target(SessionsCommand::Stop { target: target.clone() }),
+        "stop" => needs_target(SessionsCommand::Stop {
+            target: target.clone(),
+        }),
         "answer" => {
             let (request_id, text) = take_option(rest, "--request");
             if text.is_empty() {
                 return None;
             }
-            needs_target(SessionsCommand::Answer { target: target.clone(), text, request_id })
+            needs_target(SessionsCommand::Answer {
+                target: target.clone(),
+                text,
+                request_id,
+            })
         }
-        "watch" => needs_target(SessionsCommand::Watch { target: target.clone() }),
-        "unwatch" => needs_target(SessionsCommand::Unwatch { target: target.clone() }),
+        "watch" => needs_target(SessionsCommand::Watch {
+            target: target.clone(),
+        }),
+        "unwatch" => needs_target(SessionsCommand::Unwatch {
+            target: target.clone(),
+        }),
         _ => None,
     }
 }
@@ -586,7 +665,9 @@ impl SlackCommands {
                 } else {
                     self.data.mcp_endpoints.join("\n")
                 };
-                Ok(Reply::public(format!("Tools: {tools}\nMCP endpoints:\n{endpoints}")))
+                Ok(Reply::public(format!(
+                    "Tools: {tools}\nMCP endpoints:\n{endpoints}"
+                )))
             }
             SlackCommand::Skill { action, arg } => self.skill(invocation, key, &action, arg).await,
             SlackCommand::Memory { action, arg } => {
@@ -639,7 +720,10 @@ impl SlackCommands {
                 .map_err(command_error)?;
                 Ok(Reply::private(match retried {
                     Some(content) => {
-                        format!("🔄 Retrying last message: `{}`", preview_text(&content, 100))
+                        format!(
+                            "🔄 Retrying last message: `{}`",
+                            preview_text(&content, 100)
+                        )
                     }
                     None => "No previous user message found to retry.".to_owned(),
                 }))
@@ -691,7 +775,9 @@ impl SlackCommands {
     async fn pair(&self, invocation: &SlashInvocation, code: &str) -> Result<Reply> {
         let user = invocation.user_id.as_str();
         if user != self.config.owner_id() && !self.is_operator(user) {
-            return Ok(Reply::private("❌ You are not authorized to approve pairing codes."));
+            return Ok(Reply::private(
+                "❌ You are not authorized to approve pairing codes.",
+            ));
         }
         Ok(match self.data.pairing.approve_code(code, user).await? {
             SlackPairingOutcome::Success { user_id } => Reply::public(format!(
@@ -715,9 +801,13 @@ impl SlackCommands {
         let query = arg.unwrap_or_default();
         if let Some(pending) = pending_action(action, query.trim()) {
             if !self.is_operator(&invocation.user_id) {
-                return Ok(Reply::private("❌ Only operators can manage pending skill writes."));
+                return Ok(Reply::private(
+                    "❌ Only operators can manage pending skill writes.",
+                ));
             }
-            return self.pending(invocation, PendingScope::Skills, pending).await;
+            return self
+                .pending(invocation, PendingScope::Skills, pending)
+                .await;
         }
         let registry = &self.data.tool_registry;
         let reply = match action {
@@ -853,7 +943,10 @@ impl SlackCommands {
                             .collect()
                     })
                     .unwrap_or_default();
-                format!("⏰ *Active OMO Cron Jobs* ({count} total):\n{}", lines.join("\n"))
+                format!(
+                    "⏰ *Active OMO Cron Jobs* ({count} total):\n{}",
+                    lines.join("\n")
+                )
             }
             Err(error) => format!("❌ Failed to list cron jobs: {error}"),
         };
@@ -874,16 +967,22 @@ impl SlackCommands {
         .fetch_all(&self.data.pool)
         .await?;
         if rows.len() < 2 {
-            return Ok(Reply::public("Conversation history is too short to compress."));
+            return Ok(Reply::public(
+                "Conversation history is too short to compress.",
+            ));
         }
         let window = select_compression_window(&rows, MAX_COMPRESSION_PROMPT_CHARS);
         rows.truncate(window);
         if rows.len() < 2 {
-            return Ok(Reply::public("The oldest message is too large to compress."));
+            return Ok(Reply::public(
+                "The oldest message is too large to compress.",
+            ));
         }
         let cutoff_sequence = rows.last().map(|(sequence, _, _)| *sequence).unwrap_or(0);
-        let history: Vec<(String, String)> =
-            rows.into_iter().map(|(_, role, content)| (role, content)).collect();
+        let history: Vec<(String, String)> = rows
+            .into_iter()
+            .map(|(_, role, content)| (role, content))
+            .collect();
         let chars_before: usize = history.iter().map(|(_, content)| content.len()).sum();
         let prompt = build_compression_prompt(&history);
         let stream = llm.stream(&[ChatMessage::new("user", prompt)], &[]).await;
@@ -895,8 +994,13 @@ impl SlackCommands {
             }
         };
         let summary_content = format!("[Conversation Summary]\n{summary}");
-        replace_history_with_summary(&self.data.pool, &storage_key, cutoff_sequence, &summary_content)
-            .await?;
+        replace_history_with_summary(
+            &self.data.pool,
+            &storage_key,
+            cutoff_sequence,
+            &summary_content,
+        )
+        .await?;
         let (before, after, pct) = calculate_compression_stats(chars_before, summary_content.len());
         Ok(Reply::public(format!(
             "🗜️ *Conversation Compressed*\n• *Before:* {before} chars\n• *After:* {after} chars\n• *Reduction:* {pct:.1}%"
@@ -912,10 +1016,14 @@ impl SlackCommands {
         message: Option<String>,
     ) -> Result<Reply> {
         if invocation.is_dm() {
-            return Ok(Reply::private("❌ Threads can only be created in channels, not in DMs."));
+            return Ok(Reply::private(
+                "❌ Threads can only be created in channels, not in DMs.",
+            ));
         }
         if invocation.thread_ts.is_some() {
-            return Ok(Reply::private("❌ Cannot create a thread inside an existing thread."));
+            return Ok(Reply::private(
+                "❌ Cannot create a thread inside an existing thread.",
+            ));
         }
         let root_ts = self
             .api
@@ -973,7 +1081,12 @@ impl SlackCommands {
         }
         let title = text.trim();
         self.api
-            .update_message(&invocation.channel_id, thread_ts, &thread_root_text(title), None)
+            .update_message(
+                &invocation.channel_id,
+                thread_ts,
+                &thread_root_text(title),
+                None,
+            )
             .await?;
         Ok(Reply::public(format!("🏷️ Thread renamed to `{title}`.")))
     }
@@ -1021,8 +1134,12 @@ impl SlackCommands {
                         items
                             .iter()
                             .map(|item| {
-                                let role = item.get("role").and_then(Value::as_str).unwrap_or("unknown");
-                                let content = item.get("content").and_then(Value::as_str).unwrap_or("");
+                                let role = item
+                                    .get("role")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("unknown");
+                                let content =
+                                    item.get("content").and_then(Value::as_str).unwrap_or("");
                                 format!("{role}: {content}")
                             })
                             .collect()
@@ -1081,10 +1198,17 @@ impl SlackCommands {
             }
             SessionsCommand::Stop { target } => {
                 let (resolved, _) = resolve(target).await?;
-                control.interrupt(&resolved).await.map_err(|e| e.to_string())?;
+                control
+                    .interrupt(&resolved)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 format!("🛑 `{resolved}` 실행을 중단(인터럽트)했어요.")
             }
-            SessionsCommand::Answer { target, text, request_id } => {
+            SessionsCommand::Answer {
+                target,
+                text,
+                request_id,
+            } => {
                 let (resolved, _) = resolve(target).await?;
                 control
                     .answer(&resolved, &text, request_id.as_deref())
@@ -1122,7 +1246,11 @@ impl SlackCommands {
         if chunks.is_empty() {
             chunks.push("(내용 없음)".to_owned());
         }
-        let response_type = if reply.ephemeral { "ephemeral" } else { "in_channel" };
+        let response_type = if reply.ephemeral {
+            "ephemeral"
+        } else {
+            "in_channel"
+        };
         let via_url = if invocation.response_url.is_some() {
             MAX_RESPONSE_URL_POSTS
         } else {
@@ -1132,7 +1260,10 @@ impl SlackCommands {
             match invocation.response_url.as_deref() {
                 Some(url) if index < via_url => {
                     self.api
-                        .post_response_url(url, json!({ "response_type": response_type, "text": chunk }))
+                        .post_response_url(
+                            url,
+                            json!({ "response_type": response_type, "text": chunk }),
+                        )
                         .await?;
                 }
                 _ if reply.ephemeral => {
@@ -1142,7 +1273,12 @@ impl SlackCommands {
                 }
                 _ => {
                     self.api
-                        .post_message(&invocation.channel_id, chunk, invocation.thread_ts.as_deref(), None)
+                        .post_message(
+                            &invocation.channel_id,
+                            chunk,
+                            invocation.thread_ts.as_deref(),
+                            None,
+                        )
                         .await?;
                 }
             }
@@ -1207,7 +1343,13 @@ impl SlackCommands {
             .map_err(|error| OmonError::Database(error.to_string()))?;
         let dm = self.api.open_im(&invocation.user_id).await?;
         self.api
-            .upload_bytes(&dm, None, PENDING_WRITES_FILE, content, Some(PENDING_WRITES_FILE))
+            .upload_bytes(
+                &dm,
+                None,
+                PENDING_WRITES_FILE,
+                content,
+                Some(PENDING_WRITES_FILE),
+            )
             .await?;
         Ok(Reply::private(format!(
             "{} pending write(s). The complete payloads were sent to your DM as `{PENDING_WRITES_FILE}`; review them before approving an ID.",
@@ -1243,27 +1385,62 @@ mod tests {
 
     #[test]
     fn parses_every_simple_command() {
-        assert_eq!(parse("/omo-model", " opus "), SlackCommand::Model("opus".into()));
-        assert!(parse_command("/omo-model", "").unwrap_err().contains("/omo-model <name>"));
-        assert_eq!(parse("/omo-reset", ""), SlackCommand::Reset { confirm: None });
-        assert_eq!(parse("/omo-reset", "confirm"), SlackCommand::Reset { confirm: Some(true) });
-        assert_eq!(parse("/omo-reset", "no"), SlackCommand::Reset { confirm: Some(false) });
+        assert_eq!(
+            parse("/omo-model", " opus "),
+            SlackCommand::Model("opus".into())
+        );
+        assert!(parse_command("/omo-model", "")
+            .unwrap_err()
+            .contains("/omo-model <name>"));
+        assert_eq!(
+            parse("/omo-reset", ""),
+            SlackCommand::Reset { confirm: None }
+        );
+        assert_eq!(
+            parse("/omo-reset", "confirm"),
+            SlackCommand::Reset {
+                confirm: Some(true)
+            }
+        );
+        assert_eq!(
+            parse("/omo-reset", "no"),
+            SlackCommand::Reset {
+                confirm: Some(false)
+            }
+        );
         assert!(parse_command("/omo-reset", "maybe").is_err());
         assert_eq!(parse("/omo-stop", ""), SlackCommand::Stop);
         assert_eq!(parse("/omo-status", ""), SlackCommand::Status);
         assert_eq!(parse("/omo-tools", ""), SlackCommand::Tools);
-        assert_eq!(parse("/omo-steer", "focus on tests"), SlackCommand::Steer("focus on tests".into()));
+        assert_eq!(
+            parse("/omo-steer", "focus on tests"),
+            SlackCommand::Steer("focus on tests".into())
+        );
         assert!(parse_command("/omo-steer", " ").is_err());
         assert_eq!(parse("/omo-undo", ""), SlackCommand::Undo);
         assert_eq!(parse("/omo-retry", ""), SlackCommand::Retry);
         assert_eq!(parse("/omo-compress", ""), SlackCommand::Compress);
-        assert_eq!(parse("/omo-title", "New name"), SlackCommand::Title("New name".into()));
+        assert_eq!(
+            parse("/omo-title", "New name"),
+            SlackCommand::Title("New name".into())
+        );
         assert_eq!(parse("/omo-deny", ""), SlackCommand::Deny(None));
-        assert_eq!(parse("/omo-deny", "too risky"), SlackCommand::Deny(Some("too risky".into())));
+        assert_eq!(
+            parse("/omo-deny", "too risky"),
+            SlackCommand::Deny(Some("too risky".into()))
+        );
         assert_eq!(parse("/omo-yolo", ""), SlackCommand::Yolo(None));
-        assert_eq!(parse("/omo-yolo", "on"), SlackCommand::Yolo(Some("on".into())));
-        assert_eq!(parse("/omo-pair", " ABCD-EFGH "), SlackCommand::Pair("ABCD-EFGH".into()));
-        assert!(parse_command("/omo-pair", "").unwrap_err().contains("/omo-pair <code>"));
+        assert_eq!(
+            parse("/omo-yolo", "on"),
+            SlackCommand::Yolo(Some("on".into()))
+        );
+        assert_eq!(
+            parse("/omo-pair", " ABCD-EFGH "),
+            SlackCommand::Pair("ABCD-EFGH".into())
+        );
+        assert!(parse_command("/omo-pair", "")
+            .unwrap_err()
+            .contains("/omo-pair <code>"));
         assert_eq!(parse("/omo-nope", ""), SlackCommand::Help);
     }
 
@@ -1271,33 +1448,59 @@ mod tests {
     fn parses_skill_memory_cron_and_thread_arguments() {
         assert_eq!(
             parse("/omo-skill", "Read git-master"),
-            SlackCommand::Skill { action: "read".into(), arg: Some("git-master".into()) }
+            SlackCommand::Skill {
+                action: "read".into(),
+                arg: Some("git-master".into())
+            }
         );
         assert!(parse_command("/omo-skill", "").is_err());
         assert_eq!(
             parse("/omo-skills", ""),
-            SlackCommand::Skill { action: "list".into(), arg: None }
+            SlackCommand::Skill {
+                action: "list".into(),
+                arg: None
+            }
         );
         assert_eq!(
             parse("/omo-skills", "search code review"),
-            SlackCommand::Skill { action: "search".into(), arg: Some("code review".into()) }
+            SlackCommand::Skill {
+                action: "search".into(),
+                arg: Some("code review".into())
+            }
         );
         assert_eq!(
             parse("/omo-memory", ""),
-            SlackCommand::Memory { action: "list".into(), arg: None }
+            SlackCommand::Memory {
+                action: "list".into(),
+                arg: None
+            }
         );
         assert_eq!(
             parse("/omo-memory", "approve abc-1"),
-            SlackCommand::Memory { action: "approve".into(), arg: Some("abc-1".into()) }
+            SlackCommand::Memory {
+                action: "approve".into(),
+                arg: Some("abc-1".into())
+            }
         );
-        assert_eq!(parse("/omo-cron", ""), SlackCommand::Cron { action: "list".into() });
+        assert_eq!(
+            parse("/omo-cron", ""),
+            SlackCommand::Cron {
+                action: "list".into()
+            }
+        );
         assert_eq!(
             parse("/omo-thread", "Plan | start planning"),
-            SlackCommand::Thread { name: "Plan".into(), message: Some("start planning".into()) }
+            SlackCommand::Thread {
+                name: "Plan".into(),
+                message: Some("start planning".into())
+            }
         );
         assert_eq!(
             parse("/omo-thread", "Just a name"),
-            SlackCommand::Thread { name: "Just a name".into(), message: None }
+            SlackCommand::Thread {
+                name: "Just a name".into(),
+                message: None
+            }
         );
         assert!(parse_command("/omo-thread", "| only message").is_err());
     }
@@ -1312,11 +1515,17 @@ mod tests {
         assert_eq!(sessions("overview"), SessionsCommand::Overview);
         assert_eq!(
             sessions("read local:01a1 20"),
-            SessionsCommand::Read { target: "local:01a1".into(), limit: Some(20) }
+            SessionsCommand::Read {
+                target: "local:01a1".into(),
+                limit: Some(20)
+            }
         );
         assert_eq!(
             sessions("read local:01a1"),
-            SessionsCommand::Read { target: "local:01a1".into(), limit: None }
+            SessionsCommand::Read {
+                target: "local:01a1".into(),
+                limit: None
+            }
         );
         assert!(parse_command("/omo-sessions", "read local:01a1 many").is_err());
         assert_eq!(
@@ -1336,7 +1545,12 @@ mod tests {
             }
         );
         assert!(parse_command("/omo-sessions", "send local:01a1 --mode loud hi").is_err());
-        assert_eq!(sessions("stop mac:ab"), SessionsCommand::Stop { target: "mac:ab".into() });
+        assert_eq!(
+            sessions("stop mac:ab"),
+            SessionsCommand::Stop {
+                target: "mac:ab".into()
+            }
+        );
         assert_eq!(
             sessions("answer local:01a1 yes please"),
             SessionsCommand::Answer {
@@ -1354,8 +1568,18 @@ mod tests {
             }
         );
         assert!(parse_command("/omo-sessions", "answer local:01a1").is_err());
-        assert_eq!(sessions("watch local:x"), SessionsCommand::Watch { target: "local:x".into() });
-        assert_eq!(sessions("unwatch local:x"), SessionsCommand::Unwatch { target: "local:x".into() });
+        assert_eq!(
+            sessions("watch local:x"),
+            SessionsCommand::Watch {
+                target: "local:x".into()
+            }
+        );
+        assert_eq!(
+            sessions("unwatch local:x"),
+            SessionsCommand::Unwatch {
+                target: "local:x".into()
+            }
+        );
         assert!(parse_command("/omo-sessions", "watch").is_err());
         assert!(parse_command("/omo-sessions", "explode local:x").is_err());
     }
@@ -1381,7 +1605,10 @@ mod tests {
         let mut payload = invocation("/omo-status", "", "U1", "C9");
         payload["thread_ts"] = json!("1700.01");
         let threaded = SlashInvocation::from_payload(&payload);
-        assert_eq!(session_key(&threaded, "UBOT").thread_id.as_deref(), Some("1700.01"));
+        assert_eq!(
+            session_key(&threaded, "UBOT").thread_id.as_deref(),
+            Some("1700.01")
+        );
     }
 
     #[test]
@@ -1394,14 +1621,21 @@ mod tests {
         for command in commands {
             let name = command["command"].as_str().unwrap();
             assert!(help.contains(&format!("`{name}")), "help misses {name}");
-            assert_ne!(parse_command(name, ""), Ok(SlackCommand::Help), "{name} not dispatched");
+            assert_ne!(
+                parse_command(name, ""),
+                Ok(SlackCommand::Help),
+                "{name} not dispatched"
+            );
         }
         assert_eq!(COMMANDS.len(), commands.len());
     }
 
     #[test]
     fn mrkdwn_bold_converts_pairs_only() {
-        assert_eq!(mrkdwn_bold("⚡ YOLO mode **enabled** now"), "⚡ YOLO mode *enabled* now");
+        assert_eq!(
+            mrkdwn_bold("⚡ YOLO mode **enabled** now"),
+            "⚡ YOLO mode *enabled* now"
+        );
         assert_eq!(mrkdwn_bold("a ** b"), "a ** b");
         assert_eq!(mrkdwn_bold("plain"), "plain");
     }
@@ -1435,11 +1669,15 @@ mod tests {
             let upload_url = upload_url.clone();
             async move {
                 let path = req.uri().path().to_owned();
-                let bytes = axum::body::to_bytes(req.into_body(), usize::MAX).await.unwrap();
+                let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
                 let body: Value = crate::slack::api::decode_test_body(&bytes);
                 recorded.lock().push((path.clone(), body));
                 axum::Json(match path.as_str() {
-                    "/api/conversations.open" => json!({ "ok": true, "channel": { "id": "DOWNER" } }),
+                    "/api/conversations.open" => {
+                        json!({ "ok": true, "channel": { "id": "DOWNER" } })
+                    }
                     "/api/files.getUploadURLExternal" => {
                         json!({ "ok": true, "upload_url": upload_url, "file_id": "F1" })
                     }
@@ -1455,7 +1693,11 @@ mod tests {
             }
         });
         tokio::spawn(async move { axum::serve(listener, app).await });
-        Fake { base, requests, replies }
+        Fake {
+            base,
+            requests,
+            replies,
+        }
     }
 
     fn test_config() -> SlackConfig {
@@ -1477,8 +1719,11 @@ mod tests {
     async fn commands_with(fake: &Fake, config: SlackConfig) -> SlackCommands {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let pool = db.pool().clone();
-        let multiplexer =
-            SessionMultiplexer::new(pool.clone(), Arc::new(NoopRunner), MultiplexerConfig::default());
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(NoopRunner),
+            MultiplexerConfig::default(),
+        );
         SlackCommands::new(
             Arc::new(config),
             SlackApi::with_base_url("xoxb-test".into(), format!("{}/api", fake.base)),
@@ -1518,11 +1763,17 @@ mod tests {
         let commands = commands(&fake).await;
 
         commands
-            .handle(&with_response_url(invocation("/omo-sessions", "overview", "UFRIEND", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-sessions", "overview", "UFRIEND", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
         commands
-            .handle(&with_response_url(invocation("/omo-bogus", "", "UOWNER", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-bogus", "", "UOWNER", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
@@ -1539,7 +1790,10 @@ mod tests {
         let commands = commands(&fake).await;
 
         commands
-            .handle(&with_response_url(invocation("/omo-status", "", "UOWNER", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-status", "", "UOWNER", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
@@ -1547,7 +1801,10 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].1["response_type"], "in_channel");
         let text = requests[0].1["text"].as_str().unwrap();
-        assert!(text.starts_with("Active sessions: 0\nMemory entries: 0"), "{text}");
+        assert!(
+            text.starts_with("Active sessions: 0\nMemory entries: 0"),
+            "{text}"
+        );
     }
 
     #[tokio::test]
@@ -1556,22 +1813,29 @@ mod tests {
         let commands = commands(&fake).await;
 
         commands
-            .handle(&with_response_url(invocation("/omo-yolo", "on", "UOWNER", "D7"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-yolo", "on", "UOWNER", "D7"),
+                &fake,
+            ))
             .await
             .unwrap();
 
         let key = SessionKey::new("slack", None::<String>, "D7", None::<String>, "UOWNER")
             .with_bot_id("UBOT");
         assert!(commands.data.approvals.is_yolo(&key).await);
-        let state: String = sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
-            .bind(key.storage_key())
-            .fetch_one(&commands.data.pool)
-            .await
-            .unwrap();
+        let state: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(key.storage_key())
+                .fetch_one(&commands.data.pool)
+                .await
+                .unwrap();
         assert_eq!(serde_json::from_str::<Value>(&state).unwrap()["yolo"], true);
         let requests = fake.requests.lock().clone();
         assert_eq!(requests[0].1["response_type"], "ephemeral");
-        assert!(requests[0].1["text"].as_str().unwrap().contains("*enabled*"));
+        assert!(requests[0].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("*enabled*"));
     }
 
     #[tokio::test]
@@ -1584,7 +1848,10 @@ mod tests {
         let line = "x".repeat(100);
         let text = vec![line; 300].join("\n");
 
-        commands.send(&invocation, Reply::public(text)).await.unwrap();
+        commands
+            .send(&invocation, Reply::public(text))
+            .await
+            .unwrap();
 
         let requests = fake.requests.lock().clone();
         let hooks = requests.iter().filter(|(path, _)| path == "/hook").count();
@@ -1595,7 +1862,9 @@ mod tests {
             .collect();
         assert_eq!(hooks, MAX_RESPONSE_URL_POSTS);
         assert!(!posts.is_empty());
-        assert!(posts.iter().all(|body| body["channel"] == "C1" && body["thread_ts"] == "1699.5"));
+        assert!(posts
+            .iter()
+            .all(|body| body["channel"] == "C1" && body["thread_ts"] == "1699.5"));
         assert!(requests
             .iter()
             .all(|(_, body)| body["text"].as_str().unwrap().chars().count() <= MESSAGE_LIMIT));
@@ -1615,7 +1884,10 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].0, "/api/chat.postEphemeral");
         assert_eq!(requests[0].1["user"], "UOWNER");
-        assert!(requests[0].1["text"].as_str().unwrap().contains("/omo-model <name>"));
+        assert!(requests[0].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("/omo-model <name>"));
     }
 
     #[tokio::test]
@@ -1624,14 +1896,21 @@ mod tests {
         let commands = commands(&fake).await;
 
         commands
-            .handle(&with_response_url(invocation("/omo-thread", "Plan", "UOWNER", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-thread", "Plan", "UOWNER", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
-        let mut nested = with_response_url(invocation("/omo-thread", "Plan", "UOWNER", "C1"), &fake);
+        let mut nested =
+            with_response_url(invocation("/omo-thread", "Plan", "UOWNER", "C1"), &fake);
         nested["thread_ts"] = json!("1.1");
         commands.handle(&nested).await.unwrap();
         commands
-            .handle(&with_response_url(invocation("/omo-thread", "Plan", "UOWNER", "D1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-thread", "Plan", "UOWNER", "D1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
@@ -1647,13 +1926,19 @@ mod tests {
         );
         assert_eq!(requests[2].1["response_type"], "in_channel");
         assert_eq!(requests[3].1["response_type"], "ephemeral");
-        assert!(requests[3].1["text"].as_str().unwrap().contains("existing thread"));
+        assert!(requests[3].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("existing thread"));
         assert_eq!(requests[4].1["response_type"], "ephemeral");
-        assert!(requests[4].1["text"].as_str().unwrap().contains("not in DMs"));
+        assert!(requests[4].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("not in DMs"));
         assert_eq!(requests.len(), 5);
 
-        let thread_key = SessionKey::new("slack", Some("T1"), "C1", Some("1700.0001"), "")
-            .with_bot_id("UBOT");
+        let thread_key =
+            SessionKey::new("slack", Some("T1"), "C1", Some("1700.0001"), "").with_bot_id("UBOT");
         let stored: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sessions WHERE session_key = ? AND platform = 'slack' AND thread_id = '1700.0001'",
         )
@@ -1668,13 +1953,19 @@ mod tests {
     async fn title_renames_bot_thread_root_and_explains_otherwise() {
         let fake = fake_slack().await;
         let commands = commands(&fake).await;
-        fake.replies.lock().push(json!({ "ts": "1700.5", "user": "UBOT", "text": "🧵 *Old*" }));
+        fake.replies
+            .lock()
+            .push(json!({ "ts": "1700.5", "user": "UBOT", "text": "🧵 *Old*" }));
 
         commands
-            .handle(&with_response_url(invocation("/omo-title", "New", "UOWNER", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-title", "New", "UOWNER", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
-        let mut threaded = with_response_url(invocation("/omo-title", "New", "UOWNER", "C1"), &fake);
+        let mut threaded =
+            with_response_url(invocation("/omo-title", "New", "UOWNER", "C1"), &fake);
         threaded["thread_ts"] = json!("1700.5");
         commands.handle(&threaded).await.unwrap();
         *fake.replies.lock() = vec![json!({ "ts": "1700.5", "user": "UOTHER", "text": "hello" })];
@@ -1682,7 +1973,10 @@ mod tests {
 
         let requests = fake.requests.lock().clone();
         assert_eq!(requests[0].1["response_type"], "ephemeral");
-        assert!(requests[0].1["text"].as_str().unwrap().contains("inside a thread"));
+        assert!(requests[0].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("inside a thread"));
         assert_eq!(requests[1].0, "/api/conversations.replies");
         assert_eq!(requests[1].1["ts"], "1700.5");
         assert_eq!(requests[2].0, "/api/chat.update");
@@ -1691,7 +1985,13 @@ mod tests {
         assert_eq!(requests[3].1["response_type"], "in_channel");
         assert_eq!(requests[4].0, "/api/conversations.replies");
         assert_eq!(requests[5].1["response_type"], "ephemeral");
-        assert_eq!(requests.iter().filter(|(path, _)| path == "/api/chat.update").count(), 1);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|(path, _)| path == "/api/chat.update")
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1708,17 +2008,37 @@ mod tests {
         };
 
         commands.handle(&status("UOWNER", "COTHER")).await.unwrap();
-        commands.handle(&status("UOWNER", "CIGNORED")).await.unwrap();
-        commands.handle(&status("UOWNER", "DANY")).await.unwrap();
-        commands.handle(&status("UOWNER", "CALLOWED")).await.unwrap();
-        commands.handle(&status("UPAIRED", "CALLOWED")).await.unwrap();
-
-        let code = commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
         commands
-            .handle(&with_response_url(invocation("/omo-pair", &code, "UOWNER", "DANY"), &fake))
+            .handle(&status("UOWNER", "CIGNORED"))
             .await
             .unwrap();
-        commands.handle(&status("UPAIRED", "CALLOWED")).await.unwrap();
+        commands.handle(&status("UOWNER", "DANY")).await.unwrap();
+        commands
+            .handle(&status("UOWNER", "CALLOWED"))
+            .await
+            .unwrap();
+        commands
+            .handle(&status("UPAIRED", "CALLOWED"))
+            .await
+            .unwrap();
+
+        let code = commands
+            .data
+            .pairing
+            .request_pairing_code("UPAIRED")
+            .await
+            .unwrap();
+        commands
+            .handle(&with_response_url(
+                invocation("/omo-pair", &code, "UOWNER", "DANY"),
+                &fake,
+            ))
+            .await
+            .unwrap();
+        commands
+            .handle(&status("UPAIRED", "CALLOWED"))
+            .await
+            .unwrap();
 
         let texts: Vec<(String, String)> = fake
             .requests
@@ -1726,7 +2046,10 @@ mod tests {
             .iter()
             .map(|(_, body)| {
                 (
-                    body["response_type"].as_str().unwrap_or_default().to_owned(),
+                    body["response_type"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
                     body["text"].as_str().unwrap_or_default().to_owned(),
                 )
             })
@@ -1738,46 +2061,97 @@ mod tests {
         assert_eq!(texts[4], ("ephemeral".into(), UNAUTHORIZED.into()));
         assert_eq!(
             texts[5],
-            ("in_channel".into(), "✅ Successfully paired and authorized user <@UPAIRED>!".into())
+            (
+                "in_channel".into(),
+                "✅ Successfully paired and authorized user <@UPAIRED>!".into()
+            )
         );
         assert!(texts[6].1.starts_with("Active sessions"));
 
         let fake = fake_slack().await;
-        let open = commands_with(&fake, SlackConfig { allow_all_users: true, ..test_config() }).await;
-        open.handle(&with_response_url(invocation("/omo-status", "", "UANYONE", "C1"), &fake))
-            .await
-            .unwrap();
-        assert!(fake.requests.lock()[0].1["text"].as_str().unwrap().starts_with("Active sessions"));
+        let open = commands_with(
+            &fake,
+            SlackConfig {
+                allow_all_users: true,
+                ..test_config()
+            },
+        )
+        .await;
+        open.handle(&with_response_url(
+            invocation("/omo-status", "", "UANYONE", "C1"),
+            &fake,
+        ))
+        .await
+        .unwrap();
+        assert!(fake.requests.lock()[0].1["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Active sessions"));
     }
 
     #[tokio::test]
     async fn pair_rejects_non_operators_and_reports_bad_codes_privately() {
         let fake = fake_slack().await;
         let commands = commands(&fake).await;
-        let code = commands.data.pairing.request_pairing_code("UNEW").await.unwrap();
-        commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
-        let paired_code = commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
-        commands.data.pairing.approve_code(&paired_code, "UOWNER").await.unwrap();
+        let code = commands
+            .data
+            .pairing
+            .request_pairing_code("UNEW")
+            .await
+            .unwrap();
+        commands
+            .data
+            .pairing
+            .request_pairing_code("UPAIRED")
+            .await
+            .unwrap();
+        let paired_code = commands
+            .data
+            .pairing
+            .request_pairing_code("UPAIRED")
+            .await
+            .unwrap();
+        commands
+            .data
+            .pairing
+            .approve_code(&paired_code, "UOWNER")
+            .await
+            .unwrap();
 
         commands
-            .handle(&with_response_url(invocation("/omo-pair", &code, "UPAIRED", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-pair", &code, "UPAIRED", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
         commands
-            .handle(&with_response_url(invocation("/omo-pair", "ZZZZ-ZZZZ", "UFRIEND", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-pair", "ZZZZ-ZZZZ", "UFRIEND", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
         commands
-            .handle(&with_response_url(invocation("/omo-pair", "", "UOWNER", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-pair", "", "UOWNER", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
         let requests = fake.requests.lock().clone();
         assert_eq!(requests[0].1["response_type"], "ephemeral");
-        assert!(requests[0].1["text"].as_str().unwrap().contains("not authorized to approve"));
+        assert!(requests[0].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("not authorized to approve"));
         assert_eq!(requests[1].1["response_type"], "ephemeral");
         assert_eq!(requests[1].1["text"], "❌ Invalid pairing code.");
-        assert!(requests[2].1["text"].as_str().unwrap().contains("/omo-pair <code>"));
+        assert!(requests[2].1["text"]
+            .as_str()
+            .unwrap()
+            .contains("/omo-pair <code>"));
         assert!(!commands.data.pairing.is_user_paired("UNEW").await);
     }
 
@@ -1786,8 +2160,11 @@ mod tests {
         let fake = fake_slack().await;
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let pool = db.pool().clone();
-        let multiplexer =
-            SessionMultiplexer::new(pool.clone(), Arc::new(NoopRunner), MultiplexerConfig::default());
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(NoopRunner),
+            MultiplexerConfig::default(),
+        );
         let mut deps = SlackCommandDeps::new(multiplexer, pool);
         assert!(deps.destructive_slash_confirm);
         deps.destructive_slash_confirm = false;
@@ -1799,7 +2176,10 @@ mod tests {
         );
 
         commands
-            .handle(&with_response_url(invocation("/omo-reset", "", "UOWNER", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-reset", "", "UOWNER", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
@@ -1820,7 +2200,10 @@ mod tests {
         .unwrap();
 
         commands
-            .handle(&with_response_url(invocation("/omo-skills", "pending", "UFRIEND", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-skills", "pending", "UFRIEND", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
@@ -1850,17 +2233,33 @@ mod tests {
     async fn paired_users_cannot_manage_skill_writes() {
         let fake = fake_slack().await;
         let commands = commands(&fake).await;
-        let code = commands.data.pairing.request_pairing_code("UPAIRED").await.unwrap();
-        commands.data.pairing.approve_code(&code, "UOWNER").await.unwrap();
+        let code = commands
+            .data
+            .pairing
+            .request_pairing_code("UPAIRED")
+            .await
+            .unwrap();
+        commands
+            .data
+            .pairing
+            .approve_code(&code, "UOWNER")
+            .await
+            .unwrap();
 
         commands
-            .handle(&with_response_url(invocation("/omo-skills", "pending", "UPAIRED", "C1"), &fake))
+            .handle(&with_response_url(
+                invocation("/omo-skills", "pending", "UPAIRED", "C1"),
+                &fake,
+            ))
             .await
             .unwrap();
 
         let requests = fake.requests.lock().clone();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].1["text"], "❌ Only operators can manage pending skill writes.");
+        assert_eq!(
+            requests[0].1["text"],
+            "❌ Only operators can manage pending skill writes."
+        );
     }
 
     #[test]

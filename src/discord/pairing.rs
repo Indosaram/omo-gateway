@@ -383,13 +383,9 @@ impl PairingStore {
         now: DateTime<Utc>,
     ) -> Result<String> {
         let mut tx = self.pool.begin().await?;
-        let code = Self::request_pairing_code_tx(
-            &mut tx,
-            DEFAULT_PLATFORM_KEY,
-            &user_id.to_string(),
-            now,
-        )
-        .await?;
+        let code =
+            Self::request_pairing_code_tx(&mut tx, DEFAULT_PLATFORM_KEY, &user_id.to_string(), now)
+                .await?;
         tx.commit().await?;
         Ok(code)
     }
@@ -671,7 +667,11 @@ impl SlackPairingStore {
         Ok(())
     }
 
-    pub async fn request_pairing_code_at(&self, user_id: &str, now: DateTime<Utc>) -> Result<String> {
+    pub async fn request_pairing_code_at(
+        &self,
+        user_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<String> {
         let mut tx = self.pool.begin().await?;
         let code = PairingStore::request_pairing_code_tx(
             &mut tx,
@@ -705,7 +705,8 @@ impl SlackPairingStore {
                 .fetch_optional(&mut *tx)
                 .await?;
         let user_key = Self::code_user_key(user_id);
-        if paired.is_some() || !PairingStore::claim_notification_tx(&mut tx, &user_key, now).await? {
+        if paired.is_some() || !PairingStore::claim_notification_tx(&mut tx, &user_key, now).await?
+        {
             tx.commit().await?;
             return Ok(None);
         }
@@ -814,7 +815,11 @@ impl SlackPairingStore {
         Ok(SlackPairingOutcome::Success { user_id })
     }
 
-    pub async fn approve_code(&self, input_code: &str, operator_id: &str) -> Result<SlackPairingOutcome> {
+    pub async fn approve_code(
+        &self,
+        input_code: &str,
+        operator_id: &str,
+    ) -> Result<SlackPairingOutcome> {
         self.approve_code_at(input_code, operator_id, Utc::now())
             .await
     }
@@ -1470,8 +1475,17 @@ mod tests {
             .await
             .unwrap()
             .expect("first prompt is sent");
-        assert_eq!(slack.check_and_record_notification("U0STRANGER").await.unwrap(), None);
-        assert_eq!(slack.request_pairing_code("U0STRANGER").await.unwrap(), code);
+        assert_eq!(
+            slack
+                .check_and_record_notification("U0STRANGER")
+                .await
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            slack.request_pairing_code("U0STRANGER").await.unwrap(),
+            code
+        );
 
         assert_eq!(
             discord.approve_code(&code, 1).await.unwrap(),
@@ -1480,7 +1494,9 @@ mod tests {
         );
         assert_eq!(
             slack.approve_code(&code, "UOWNER").await.unwrap(),
-            SlackPairingOutcome::Success { user_id: "U0STRANGER".into() }
+            SlackPairingOutcome::Success {
+                user_id: "U0STRANGER".into()
+            }
         );
         assert!(slack.is_user_paired("U0STRANGER").await);
         let (operator,): (String,) =
@@ -1495,11 +1511,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(discord_rows, 0);
-        assert_eq!(slack.check_and_record_notification("U0STRANGER").await.unwrap(), None);
+        assert_eq!(
+            slack
+                .check_and_record_notification("U0STRANGER")
+                .await
+                .unwrap(),
+            None
+        );
 
         let reloaded = SlackPairingStore::new(pool);
         reloaded.init_cache().await.unwrap();
-        assert_eq!(reloaded.get_paired_user_ids_sync(), vec!["U0STRANGER".to_owned()]);
+        assert_eq!(
+            reloaded.get_paired_user_ids_sync(),
+            vec!["U0STRANGER".to_owned()]
+        );
     }
 
     #[tokio::test]
@@ -1512,7 +1537,10 @@ mod tests {
 
         for _ in 0..MAX_FAILED_ATTEMPTS {
             assert_eq!(
-                slack.approve_code_at("ZZZZ-ZZZZ", "UOWNER", now).await.unwrap(),
+                slack
+                    .approve_code_at("ZZZZ-ZZZZ", "UOWNER", now)
+                    .await
+                    .unwrap(),
                 SlackPairingOutcome::InvalidCode
             );
         }
@@ -1528,12 +1556,17 @@ mod tests {
         assert!(!slack.is_platform_locked_at(later).await.unwrap());
         assert_eq!(
             slack.approve_code_at(&code, "UOWNER", later).await.unwrap(),
-            SlackPairingOutcome::Success { user_id: "U1".into() }
+            SlackPairingOutcome::Success {
+                user_id: "U1".into()
+            }
         );
         let expired = slack.request_pairing_code_at("U3", later).await.unwrap();
         let after_ttl = later + chrono::Duration::seconds(CODE_TTL_SECONDS + 1);
         assert_eq!(
-            slack.approve_code_at(&expired, "UOWNER", after_ttl).await.unwrap(),
+            slack
+                .approve_code_at(&expired, "UOWNER", after_ttl)
+                .await
+                .unwrap(),
             SlackPairingOutcome::Expired
         );
     }

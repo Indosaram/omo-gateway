@@ -19,6 +19,7 @@ pub mod sessions;
 pub mod slack;
 pub mod storage;
 pub mod tools;
+pub mod tracker;
 pub mod usage;
 pub mod voice;
 pub mod voice_transcription;

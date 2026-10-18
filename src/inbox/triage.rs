@@ -204,6 +204,10 @@ impl Triage {
         if pending && self.recovery_remaining > 0 {
             self.recovery_remaining -= 1;
             self.deadline = Some(now + chrono::Duration::seconds(120));
+        } else if pending {
+            // The judge breaker stays open for 30 minutes after an upstream rate limit; items
+            // left pending must be retried after it closes, not wait for the next new message.
+            self.deadline = Some(now + chrono::Duration::minutes(30));
         }
         result
     }

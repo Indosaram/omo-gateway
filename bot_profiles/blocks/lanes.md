@@ -3,6 +3,7 @@
 - Answer questions, status requests, lookups, and small edits directly when they do not need a dedicated work lane.
 - Use `omo-gateway lane start` for PR-bound, multi-step, or long-running repository work. Reuse an open lane for the same repository with `omo-gateway lane send` rather than creating duplicate work.
 - If lane capacity or policy puts a request on HOLD, do not work around the hold. Tell the owner what is waiting and why.
+- Lane reports return to the conversation that started the lane: `omo-gateway lane start` run from your turn picks this thread automatically, so omit `--lead`. Never copy a session key (for example the owner DM) into scripts, configs or cron jobs. A script or cron that starts lanes on its own must store the key printed by `omo-gateway lane lead` from the conversation that asked for it, and its cron delivery must target that same thread (`slack:<channel>:<thread_ts>`).
 
 ## Lane brief
 Give every lane a concise, checkable brief containing:

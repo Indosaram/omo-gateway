@@ -89,9 +89,12 @@ impl EventDispatcher {
             return Ok(());
         };
         if now.signed_duration_since(oldest).num_seconds() < 30
-            && !events
-                .iter()
-                .any(|event| matches!(event.kind.as_str(), "done_claimed" | "dead" | "kibitzer"))
+            && !events.iter().any(|event| {
+                matches!(
+                    event.kind.as_str(),
+                    "done_claimed" | "dead" | "kibitzer" | "cron_report"
+                )
+            })
         {
             return Ok(());
         }
@@ -210,7 +213,8 @@ impl EventDispatcher {
 
 fn critical(event: &LaneEvent) -> bool {
     match event.kind.as_str() {
-        "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed" => true,
+        "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed"
+        | "cron_report" => true,
         "cron_problem" => event.body.contains("needs_owner"),
         _ => false,
     }

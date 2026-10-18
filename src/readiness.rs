@@ -262,7 +262,10 @@ pub fn probe_gateway(bot_count: usize) -> CheckResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlackReadiness {
     Disabled,
-    Connected { bot_user_id: String, team_id: String },
+    Connected {
+        bot_user_id: String,
+        team_id: String,
+    },
     Failed(String),
 }
 
@@ -270,7 +273,10 @@ pub enum SlackReadiness {
 pub fn probe_slack(slack: &SlackReadiness) -> Option<CheckResult> {
     match slack {
         SlackReadiness::Disabled => None,
-        SlackReadiness::Connected { bot_user_id, team_id } => Some(
+        SlackReadiness::Connected {
+            bot_user_id,
+            team_id,
+        } => Some(
             CheckResult::ok()
                 .with_metric("bot_user_id", bot_user_id.as_str())
                 .with_metric("team_id", team_id.as_str()),
@@ -544,7 +550,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(connected.status, "ok");
-        assert_eq!(connected.metrics.get("bot_user_id"), Some(&serde_json::json!("UBOT")));
+        assert_eq!(
+            connected.metrics.get("bot_user_id"),
+            Some(&serde_json::json!("UBOT"))
+        );
         let failed = probe_slack(&SlackReadiness::Failed("invalid_auth".into())).unwrap();
         assert_eq!(failed.status, "degraded");
         assert!(failed.detail.unwrap().contains("invalid_auth"));
@@ -567,8 +576,7 @@ mod tests {
         .await;
         assert_eq!(report.checks["gateway"].status, "ok");
         assert_eq!(report.checks["slack"].status, "ok");
-        let discord_only =
-            collect_runtime_readiness(&pool, temp.path(), "custom-model", 1).await;
+        let discord_only = collect_runtime_readiness(&pool, temp.path(), "custom-model", 1).await;
         assert!(!discord_only.checks.contains_key("slack"));
     }
 

@@ -39,8 +39,13 @@ impl PlatformRouter {
         Some(router)
     }
 
-    pub fn with_platform(mut self, platform: &str, dispatcher: Arc<dyn OutboundDispatcher>) -> Self {
-        self.routes.insert(platform.to_ascii_lowercase(), dispatcher);
+    pub fn with_platform(
+        mut self,
+        platform: &str,
+        dispatcher: Arc<dyn OutboundDispatcher>,
+    ) -> Self {
+        self.routes
+            .insert(platform.to_ascii_lowercase(), dispatcher);
         self
     }
 
@@ -129,8 +134,8 @@ mod tests {
             if self.1 {
                 return Err(OmonError::Multiplexer("down".into()));
             }
-            let label = action_session(&action)
-                .map_or_else(|| "expire".to_owned(), |s| s.platform.clone());
+            let label =
+                action_session(&action).map_or_else(|| "expire".to_owned(), |s| s.platform.clone());
             self.0.lock().push(label);
             Ok(())
         }

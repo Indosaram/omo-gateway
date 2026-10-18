@@ -45,7 +45,10 @@ pub enum AllowBots {
 
 impl AllowBots {
     pub fn parse(raw: Option<&str>) -> Self {
-        match raw.map(|value| value.trim().to_ascii_lowercase()).as_deref() {
+        match raw
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
             Some("all") => Self::All,
             Some("mentions" | "mention") => Self::Mentions,
             _ => Self::None,
@@ -99,8 +102,18 @@ impl SlackConfig {
         }
         let home = std::env::var_os("HOME").map(PathBuf::from)?;
         let secrets = home.join(".omon").join("secrets");
-        let bot_token = token("SLACK_BOT_TOKEN", "SLACK_BOT_TOKEN_FILE", &secrets.join("slack-bot-token"), "xoxb-")?;
-        let app_token = token("SLACK_APP_TOKEN", "SLACK_APP_TOKEN_FILE", &secrets.join("slack-app-token"), "xapp-")?;
+        let bot_token = token(
+            "SLACK_BOT_TOKEN",
+            "SLACK_BOT_TOKEN_FILE",
+            &secrets.join("slack-bot-token"),
+            "xoxb-",
+        )?;
+        let app_token = token(
+            "SLACK_APP_TOKEN",
+            "SLACK_APP_TOKEN_FILE",
+            &secrets.join("slack-app-token"),
+            "xapp-",
+        )?;
         Some(Self::from_lookup(
             bot_token,
             app_token,
@@ -211,7 +224,8 @@ fn non_empty(value: Option<String>) -> Option<String> {
 }
 
 fn setting(lookup: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-    non_empty(lookup(&format!("SLACK_{name}"))).or_else(|| non_empty(lookup(&format!("DISCORD_{name}"))))
+    non_empty(lookup(&format!("SLACK_{name}")))
+        .or_else(|| non_empty(lookup(&format!("DISCORD_{name}"))))
 }
 
 fn flag(lookup: &dyn Fn(&str) -> Option<String>, name: &str, default: bool) -> bool {
@@ -219,14 +233,22 @@ fn flag(lookup: &dyn Fn(&str) -> Option<String>, name: &str, default: bool) -> b
 }
 
 fn parse_flag(raw: Option<&str>, default: bool) -> bool {
-    match raw.map(|value| value.trim().to_ascii_lowercase()).as_deref() {
+    match raw
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
         Some("1" | "true" | "yes" | "on") => true,
         Some("0" | "false" | "no" | "off") => false,
         _ => default,
     }
 }
 
-fn token(var: &str, file_var: &str, default_file: &std::path::Path, prefix: &str) -> Option<String> {
+fn token(
+    var: &str,
+    file_var: &str,
+    default_file: &std::path::Path,
+    prefix: &str,
+) -> Option<String> {
     let raw = std::env::var(var).ok().or_else(|| {
         let path = std::env::var_os(file_var)
             .map(PathBuf::from)
@@ -333,11 +355,21 @@ mod tests {
         let path = dir.path().join("tok");
         std::fs::write(&path, "  xoxb-abc\n").unwrap();
         assert_eq!(
-            token("OMON_TEST_UNSET_SLACK_VAR", "OMON_TEST_UNSET_SLACK_FILE", &path, "xoxb-"),
+            token(
+                "OMON_TEST_UNSET_SLACK_VAR",
+                "OMON_TEST_UNSET_SLACK_FILE",
+                &path,
+                "xoxb-"
+            ),
             Some("xoxb-abc".into())
         );
         assert_eq!(
-            token("OMON_TEST_UNSET_SLACK_VAR", "OMON_TEST_UNSET_SLACK_FILE", &path, "xapp-"),
+            token(
+                "OMON_TEST_UNSET_SLACK_VAR",
+                "OMON_TEST_UNSET_SLACK_FILE",
+                &path,
+                "xapp-"
+            ),
             None
         );
     }

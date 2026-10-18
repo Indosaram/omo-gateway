@@ -163,24 +163,39 @@ mod tests {
                 { "action_id": "no-value" },
             ],
         });
-        assert_eq!(approval_values(&payload), vec![format!("omon:approval:{id}:once")]);
+        assert_eq!(
+            approval_values(&payload),
+            vec![format!("omon:approval:{id}:once")]
+        );
         assert!(approval_values(&json!({})).is_empty());
     }
 
     #[test]
     fn decision_labels_cover_every_choice() {
-        assert_eq!(decision_label(&ApprovalDecision::Once, "U1"), "✅ Approved once by <@U1>");
+        assert_eq!(
+            decision_label(&ApprovalDecision::Once, "U1"),
+            "✅ Approved once by <@U1>"
+        );
         assert_eq!(
             decision_label(&ApprovalDecision::Session, "U1"),
             "✅ Approved for this session by <@U1>"
         );
-        assert_eq!(decision_label(&ApprovalDecision::Always, "U1"), "✅ Always approved by <@U1>");
-        assert_eq!(decision_label(&ApprovalDecision::deny(None), "U2"), "❌ Denied by <@U2>");
+        assert_eq!(
+            decision_label(&ApprovalDecision::Always, "U1"),
+            "✅ Always approved by <@U1>"
+        );
+        assert_eq!(
+            decision_label(&ApprovalDecision::deny(None), "U2"),
+            "❌ Denied by <@U2>"
+        );
     }
 
     #[test]
     fn payload_channel_falls_back_to_container() {
-        assert_eq!(payload_channel(&json!({ "channel": { "id": "C9" } })), Some("C9"));
+        assert_eq!(
+            payload_channel(&json!({ "channel": { "id": "C9" } })),
+            Some("C9")
+        );
         assert_eq!(
             payload_channel(&json!({ "container": { "channel_id": "D3" } })),
             Some("D3")
@@ -202,7 +217,10 @@ mod tests {
 
         assert_eq!(
             decided,
-            vec![(request_id, format!("✅ Approved for this session by <@{OWNER}>"))]
+            vec![(
+                request_id,
+                format!("✅ Approved for this session by <@{OWNER}>")
+            )]
         );
         assert_eq!(guard.pending_count().await, 0);
         assert!(calls.lock().is_empty());

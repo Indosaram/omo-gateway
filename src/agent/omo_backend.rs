@@ -353,6 +353,24 @@ impl OmoBackend {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
         let is_lane = session.key.platform == "lane";
+        if !is_cron && session.key.thread_id.is_none() {
+            if let (Some(pool), Some(id)) = (
+                &self.pool,
+                session
+                    .state
+                    .metadata
+                    .get("omo_thread_id")
+                    .and_then(Value::as_str)
+                    .map(String::from),
+            ) {
+                if thread_owns_conversation(pool, session, &id).await? {
+                    tracing::warn!(session = %session.key, omo_thread_id = %id, "conversation belongs to a thread of this channel; starting a fresh one");
+                    session.state.metadata.remove("omo_thread_id");
+                    self.thread_ids.lock().remove(&storage_key);
+                    clear_session_binding(pool, session).await?;
+                }
+            }
+        }
         if is_cron {
             session.state.metadata.remove("omo_thread_id");
             self.thread_ids.lock().remove(&storage_key);
@@ -1203,6 +1221,10 @@ impl OmoBackend {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
                 self.active_turns.lock().remove(&session.key.storage_key());
+                // Nothing reached the user and no tool ran, so the prompt can be re-run on the
+                // fallback model. The common cause is the primary model's quota being exhausted:
+                // the runtime then retries in silence and never forwards an event.
+                *fallback_eligible = total_tool_calls == 0;
                 return Err(OmonError::Llm(format!(
                     "turn interrupted: agent produced no output within {}s of starting the prompt",
                     initial_response_timeout.as_secs()
@@ -2077,7 +2099,10 @@ impl AgentBackend for OmoBackend {
         // A turn that got no frames back is how a wedged app-server looks from here (it
         // accepts the prompt, runs it, and never forwards the events). Restart the daemon
         // this gateway owns and run the turn once more instead of surfacing the error.
+        // A silent model looks the same from the event stream, but then the app-server still
+        // answers readyz; killing it would abort every other session's turn and fix nothing.
         if result.as_ref().is_err_and(is_backend_stall)
+            && !crate::agent::owned_daemon_responsive(&self.config.appserver_url).await
             && crate::agent::force_restart_owned_daemon(&self.config.appserver_url).await
         {
             retried = true;
@@ -2343,6 +2368,28 @@ async fn clear_session_binding(pool: &sqlx::SqlitePool, session: &SessionContext
     Ok(())
 }
 
+/// True when a thread session of the same channel is bound to `omo_thread_id`. A thread is
+/// the more specific conversation: work started there (and lane reports routed by the
+/// conversation id) must not continue in the channel-wide session.
+async fn thread_owns_conversation(
+    pool: &sqlx::SqlitePool,
+    session: &SessionContext,
+    omo_thread_id: &str,
+) -> Result<bool> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM sessions
+         WHERE platform = ? AND channel_id = ? AND thread_id IS NOT NULL AND session_key <> ?
+           AND json_extract(state_json, '$.metadata.omo_thread_id') = ?)",
+    )
+    .bind(&session.key.platform)
+    .bind(&session.key.channel_id)
+    .bind(session.key.storage_key())
+    .bind(omo_thread_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| OmonError::Database(format!("thread binding lookup: {e}")))
+}
+
 async fn persist_session_binding(
     pool: &sqlx::SqlitePool,
     session: &SessionContext,
@@ -2390,8 +2437,16 @@ async fn persist_message(
     obligation_id: &str,
 ) -> Result<()> {
     let now = chrono::Utc::now();
+    // A relayed frame can arrive more than once for one turn (resume replays, pre-ack relays);
+    // the transcript keeps one row per delivered text, not one per frame.
     sqlx::query(
-        "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at)
+         SELECT ?, ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (
+             SELECT 1 FROM messages
+             WHERE session_key = ? AND role = 'assistant' AND content = ?
+               AND json_extract(metadata_json, '$.delivery_obligation_id') = ?
+         )",
     )
     .bind(Uuid::new_v4().to_string())
     .bind(session.key.storage_key())
@@ -2399,6 +2454,9 @@ async fn persist_message(
     .bind(content)
     .bind(json!({"delivery_obligation_id": obligation_id}).to_string())
     .bind(now)
+    .bind(session.key.storage_key())
+    .bind(content)
+    .bind(obligation_id)
     .execute(pool)
     .await
     .map_err(|e| OmonError::Database(e.to_string()))?;

@@ -588,6 +588,7 @@ pub struct CronScheduler {
     state: Arc<SchedulerState>,
     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     pre_retire_gate: Option<(Arc<Notify>, Arc<Notify>)>,
+    review_output: bool,
 }
 
 #[derive(Clone)]
@@ -706,12 +707,20 @@ impl CronScheduler {
             poll_interval,
             clock: Arc::new(Utc::now),
             pre_retire_gate: None,
+            review_output: false,
             state: Arc::new(SchedulerState {
                 shutdown,
                 task: Mutex::new(None),
                 executions: Mutex::new(Vec::new()),
             }),
         }
+    }
+
+    /// Routes cron output and failures through the bot conversation of each destination
+    /// instead of posting them verbatim (see `queue_review`).
+    pub fn with_output_review(mut self) -> Self {
+        self.review_output = true;
+        self
     }
 
     pub fn with_hermes_sync(mut self, synchronizer: HermesStoreSynchronizer) -> Self {
@@ -1436,15 +1445,26 @@ impl CronScheduler {
                             else {
                                 return Ok(None);
                             };
-                            if let Err(error) = health::record_missed_occurrence(
-                                &self.pool,
-                                id,
-                                next_run,
-                                next_future,
+                            // A next_run computed under an older weekday mapping (or before an
+                            // expression edit) is not an occurrence of the current expression;
+                            // moving it forward is a reschedule, not a missed run.
+                            let is_occurrence = next_run_tz(
+                                &expression,
+                                next_run - TimeDelta::seconds(1),
+                                timezone,
                             )
-                            .await
-                            {
-                                tracing::error!(%error, job_id = id, "failed to record out-of-window missed occurrence");
+                            .is_ok_and(|occurrence| occurrence == next_run);
+                            if is_occurrence {
+                                if let Err(error) = health::record_missed_occurrence(
+                                    &self.pool,
+                                    id,
+                                    next_run,
+                                    next_future,
+                                )
+                                .await
+                                {
+                                    tracing::error!(%error, job_id = id, "failed to record out-of-window missed occurrence");
+                                }
                             }
                             sqlx::query(
                                 "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
@@ -2248,8 +2268,12 @@ impl CronScheduler {
                         {
                             let mut delivery_errors = Vec::new();
                             for destination in &destinations {
-                                if let Err(err) = self.deliver(job, destination, content_str).await
-                                {
+                                let sent = if self.reviews_before_delivery(&payload) {
+                                    self.queue_review(job, destination, content_str, true).await
+                                } else {
+                                    self.deliver(job, destination, content_str).await
+                                };
+                                if let Err(err) = sent {
                                     *delivery_failed = true;
                                     delivery_errors.push(err);
                                 }
@@ -2332,10 +2356,16 @@ impl CronScheduler {
                     };
                     if !failure_destinations.is_empty() {
                         let content = format!("Cron job {} failed: {error}", job.id);
+                        let review = job
+                            .payload()
+                            .is_ok_and(|payload| self.reviews_before_delivery(&payload));
                         for destination in &failure_destinations {
-                            if let Err(delivery_error) =
+                            let sent = if review {
+                                self.queue_review(job, destination, &content, false).await
+                            } else {
                                 self.deliver(job, destination, &content).await
-                            {
+                            };
+                            if let Err(delivery_error) = sent {
                                 tracing::error!(
                                     %delivery_error,
                                     job_id = %job.id,
@@ -2354,6 +2384,55 @@ impl CronScheduler {
                 Err(error)
             }
         }
+    }
+
+    /// Cron output is never relayed to a messenger verbatim: the bot reads it first, checks
+    /// the real outcome, works on a failure, and then reports. `"direct_delivery": true` keeps
+    /// the raw relay for a job whose output is already the final message.
+    fn reviews_before_delivery(&self, payload: &Value) -> bool {
+        self.review_output
+            && self.dispatcher.is_some()
+            && !payload
+                .get("direct_delivery")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+    }
+
+    /// Hands a cron result to the bot conversation of its destination as a lane event; the
+    /// bot's reply, not the raw output, is what reaches the destination.
+    async fn queue_review(
+        &self,
+        job: &CronJob,
+        destination: &crate::HermesOrigin,
+        content: &str,
+        succeeded: bool,
+    ) -> Result<()> {
+        let lead = review_session(&self.pool, destination)
+            .await?
+            .ok_or_else(|| OmonError::Config("no bot conversation for cron review".into()))?;
+        let dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+            .join(".omon")
+            .join("cron-reports");
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|error| OmonError::ToolExecution(format!("cron report dir: {error}")))?;
+        let path = dir.join(format!(
+            "{}-{}.txt",
+            job.id,
+            (self.clock)().format("%Y%m%dT%H%M%S%.3f")
+        ));
+        tokio::fs::write(&path, content)
+            .await
+            .map_err(|error| OmonError::ToolExecution(format!("cron report file: {error}")))?;
+        let outcome = if succeeded { "끝남" } else { "실패" };
+        let body = format!(
+            "크론 {} {outcome}. 전체 출력: {} . 이 출력을 그대로 옮기지 말 것. 직접 읽고 실제 결과(종료 코드, 건수, 로그, 수신 증거)를 확인해서 한국어로 짧게 보고할 것. 실패나 이상이 있으면 원인을 조사하고 할 수 있는 조치를 먼저 한 뒤, 사용자가 직접 해야 하는 일이 있으면 무엇을 왜 해야 하는지 분명히 요청할 것. 알릴 가치가 없으면 [SILENT].",
+            job.id,
+            path.display()
+        );
+        crate::storage::lanes::enqueue_lane_event(&self.pool, None, &lead, "cron_report", &body)
+            .await?;
+        Ok(())
     }
 
     async fn deliver(
@@ -2546,6 +2625,44 @@ pub async fn mirror_cron_delivery_to_session(
 
     let label = format!("cron:{job_id}");
     crate::mirror::mirror_to_session(pool, &key, "assistant", content, Some(&label)).await
+}
+
+/// The bot conversation that posts into `destination`: a Slack channel (or thread) session
+/// in the workspace the bot already talks in, else the owner home.
+async fn review_session(
+    pool: &SqlitePool,
+    destination: &crate::HermesOrigin,
+) -> Result<Option<String>> {
+    let home = std::env::var("OMON_LANE_DEFAULT_LEAD")
+        .ok()
+        .filter(|lead| !lead.trim().is_empty());
+    if !destination.platform.eq_ignore_ascii_case("slack") || destination.chat_id.starts_with('D') {
+        return Ok(home);
+    }
+    let bot = home
+        .as_deref()
+        .and_then(|lead| SessionKey::from_storage_key(lead).ok())
+        .and_then(|key| key.bot_id);
+    let team: Option<String> = sqlx::query_scalar(
+        "SELECT guild_id FROM sessions WHERE platform = 'slack' AND guild_id IS NOT NULL
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    let (Some(bot), Some(team)) = (bot, team) else {
+        return Ok(home);
+    };
+    Ok(Some(
+        SessionKey::new(
+            "slack",
+            Some(team),
+            destination.chat_id.clone(),
+            destination.thread_id.clone(),
+            "",
+        )
+        .with_bot_id(bot)
+        .storage_key(),
+    ))
 }
 
 pub fn delivery_destinations(payload: &Value) -> Result<Vec<crate::HermesOrigin>> {
@@ -3851,6 +3968,66 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn reviewed_cron_output_reaches_the_bot_instead_of_the_channel() {
+        let database = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let pool = database.pool();
+        std::env::set_var(
+            "OMON_LANE_DEFAULT_LEAD",
+            SessionKey::new("slack", None::<String>, "DHOME", None::<String>, "UOWNER")
+                .with_bot_id("UBOT")
+                .storage_key(),
+        );
+        let channel = SessionKey::new("slack", Some("TTEAM"), "CWORK", None::<String>, "")
+            .with_bot_id("UBOT");
+        insert_session(pool, &channel).await;
+        sqlx::query("UPDATE sessions SET guild_id = 'TTEAM' WHERE session_key = ?")
+            .bind(channel.storage_key())
+            .execute(pool)
+            .await
+            .unwrap();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let scheduler = CronScheduler::with_dispatcher(
+            pool.clone(),
+            Arc::new(SilentExecutor(Some("raw report".into()))),
+            Arc::new(RecordingDispatcher {
+                sessions: sent.clone(),
+            }),
+        )
+        .with_output_review();
+        let job = CronJob {
+            id: "reviewed".into(),
+            session_key: None,
+            expression: "interval:1h".into(),
+            payload_json: serde_json::json!({"deliver": "slack:CWORK"}).to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: String::new(),
+        };
+        scheduler.execute_job(&job).await.unwrap();
+        assert!(sent.lock().await.is_empty(), "raw output was relayed");
+        let (lead, kind, body): (String, String, String) =
+            sqlx::query_as("SELECT lead_session_key, kind, body FROM lane_events")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(lead, channel.storage_key());
+        assert_eq!(kind, "cron_report");
+        let path = body
+            .split("전체 출력: ")
+            .nth(1)
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "raw report");
+        std::fs::remove_file(path).unwrap();
+    }
+
     async fn insert_session(pool: &SqlitePool, key: &SessionKey) {
         let now = Utc::now();
         sqlx::query(
@@ -4072,6 +4249,42 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(rows, 1, "a delivered change is committed");
+    }
+
+    #[tokio::test]
+    async fn stale_next_run_off_the_schedule_is_rescheduled_not_reported_missed() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        // Sunday 2026-10-18: a Monday-only job whose stored next run predates the weekday fix.
+        let now = utc("2026-10-18T00:00:30Z");
+        let scheduler = CronScheduler::new(pool.clone(), Arc::new(SilentExecutor(None)))
+            .with_clock(move || now);
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "0 0 * * 1",
+                serde_json::json!({"channel_id": "test"}),
+            ))
+            .await
+            .unwrap();
+        sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = ?")
+            .bind(utc("2026-10-18T00:00:00Z"))
+            .bind(&job.id)
+            .execute(pool)
+            .await
+            .unwrap();
+        assert!(scheduler
+            .claim_job(&job.id, true, true)
+            .await
+            .unwrap()
+            .is_none());
+        let rescheduled = scheduler.get(&job.id).await.unwrap().unwrap();
+        assert_eq!(rescheduled.next_run_at, Some(utc("2026-10-19T00:00:00Z")));
+        let missed: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM cron_problems WHERE kind = 'missed'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(missed, 0);
     }
 
     #[tokio::test]

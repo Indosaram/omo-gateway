@@ -752,6 +752,103 @@ async fn initial_silence_interrupts_remote_turn_without_losing_thread_binding() 
 }
 
 #[tokio::test]
+async fn initial_silence_with_a_responsive_server_reruns_on_the_fallback_model() {
+    // The primary model's quota is exhausted: the runtime retries in silence, so no event
+    // arrives, while the app-server itself still answers readyz.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let mut models = Vec::new();
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut head = [0u8; 11];
+            socket.peek(&mut head).await.unwrap();
+            if &head == b"GET /readyz" {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 512];
+                let _ = socket.read(&mut buf).await;
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+                continue;
+            }
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let request: Value = serde_json::from_str(text.as_str()).unwrap();
+                let id = request["id"].clone();
+                match request["method"].as_str() {
+                    Some("turn/start") => {
+                        let model = request["params"]["model"].as_str().unwrap().to_owned();
+                        let fallback = model == "inferhub/cb/deepseek-v4.1-flash";
+                        models.push(model);
+                        ws.send(Message::text(
+                            json!({"id":id,"result":{"turn":{"id":"t1"}}}).to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                        if fallback {
+                            ws.send(Message::text(
+                                correlation_delta("r1", "t1", "Fallback OK").to_string(),
+                            ))
+                            .await
+                            .unwrap();
+                            ws.send(Message::text(
+                                correlation_terminal("t1", "completed").to_string(),
+                            ))
+                            .await
+                            .unwrap();
+                            return models;
+                        }
+                    }
+                    Some("turn/interrupt") => break,
+                    _ => {
+                        ws.send(Message::text(
+                            json!({"id":id,"result":{"thread":{"id":"r1"}}}).to_string(),
+                        ))
+                        .await
+                        .unwrap();
+                    }
+                }
+            }
+        }
+    });
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
+            .with_initial_response_timeout(std::time::Duration::from_millis(100))
+            .with_total_timeout(std::time::Duration::from_secs(5)),
+        dispatcher.clone(),
+    );
+    let key = SessionKey::new("local", None::<String>, "quota", None::<String>, "user");
+    let mut session = SessionContext::new(key.clone());
+    session.state.active_model = Some("custom/quota-dead-model".into());
+    session
+        .state
+        .metadata
+        .insert("omo_thread_id".into(), json!("r1"));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(&mut session, InboundEvent::message(key, "msg", "hello")),
+    )
+    .await
+    .unwrap();
+    assert!(
+        result.is_ok(),
+        "fallback turn must answer: {:?}",
+        result.err()
+    );
+    let models = tokio::time::timeout(std::time::Duration::from_secs(1), peer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        models,
+        ["custom/quota-dead-model", "inferhub/cb/deepseek-v4.1-flash"]
+    );
+}
+
+#[tokio::test]
 async fn rejects_foreign_and_stale_turn_frames() {
     let (result, chunks) = run_correlated_frames(vec![
         correlation_ack(),

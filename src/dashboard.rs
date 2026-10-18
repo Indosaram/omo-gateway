@@ -808,6 +808,10 @@ pub fn router(state: DashboardState) -> Router {
         )
         .route("/api/logs", get(list_logs))
         .route("/api/logs/ws", get(logs_ws))
+        .nest(
+            "/api/tracker",
+            omon_gateway::tracker::router(state.pool.clone()),
+        )
         .fallback(get(serve_static))
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(validate_host_and_origin))

@@ -896,8 +896,9 @@ pub fn map_event(
                 return None;
             }
         }
-        let thread = reply_thread
-            .or_else(|| (config.auto_thread && kind == "app_mention" && !free).then_some(ts));
+        // A top-level message (mention or free-response) roots its own thread session, so the
+        // conversation the agent remembers is the same thread its replies and lane reports land in.
+        let thread = reply_thread.or_else(|| config.auto_thread.then_some(ts));
         SessionKey::new(PLATFORM, Some(team_id), channel, thread, user)
     })
     .with_bot_id(bot_user_id);
@@ -1217,7 +1218,7 @@ mod tests {
     }
 
     #[test]
-    fn channel_mention_auto_threads_except_in_free_channels() {
+    fn top_level_channel_messages_root_their_own_thread_session() {
         let inbound = map(&config(), &channel_mention("app_mention"), false).unwrap();
         assert_eq!(
             inbound.session,
@@ -1229,8 +1230,30 @@ mod tests {
         let mut free = channel_mention("app_mention");
         free["channel"] = json!("CFREE");
         assert_eq!(
-            map(&config(), &free, false).unwrap().session.thread_id,
-            None
+            map(&config(), &free, false)
+                .unwrap()
+                .session
+                .thread_id
+                .as_deref(),
+            Some("1700000000.000100")
+        );
+        let mut free_plain = channel_mention("message");
+        free_plain["channel"] = json!("CFREE");
+        free_plain["text"] = json!("no mention here");
+        assert_eq!(
+            map(&config(), &free_plain, false)
+                .unwrap()
+                .session
+                .thread_id
+                .as_deref(),
+            Some("1700000000.000100")
+        );
+        let mut free_reply = free_plain.clone();
+        free_reply["ts"] = json!("1700000009.000000");
+        free_reply["thread_ts"] = json!("1700000000.000100");
+        assert_eq!(
+            map(&config(), &free_reply, false).unwrap().session,
+            map(&config(), &free_plain, false).unwrap().session
         );
 
         let mut no_thread = config();
