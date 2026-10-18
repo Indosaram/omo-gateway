@@ -12,6 +12,7 @@ pub const ENABLED_ENV: &str = "OMON_ACTION_LOOP_ENABLED";
 pub const DAILY_CAP_ENV: &str = "OMON_ACTION_LOOP_DAILY_CAP";
 pub const DEFAULT_DAILY_CAP: i64 = 24;
 pub const COALESCE_WINDOW: Duration = Duration::from_secs(120);
+const MAX_LISTED_ITEMS: usize = 20;
 
 pub fn action_loop_enabled() -> bool {
     matches!(
@@ -135,7 +136,14 @@ impl ActionLoop {
             return Ok(None);
         }
 
-        let formatted: Vec<String> = items.iter().map(LoopItem::format_entry).collect();
+        let mut formatted: Vec<String> = items
+            .iter()
+            .take(MAX_LISTED_ITEMS)
+            .map(LoopItem::format_entry)
+            .collect();
+        if items.len() > MAX_LISTED_ITEMS {
+            formatted.push(format!("+{} more", items.len() - MAX_LISTED_ITEMS));
+        }
         let body = format!(
             "[ACTION_LOOP] {} items: {}",
             items.len(),
@@ -162,7 +170,37 @@ impl ActionLoop {
         Ok(Some(res.last_insert_rowid()))
     }
 
+    /// On first enable, marks every existing candidate as seen without emitting, so only
+    /// rows that arrive after the loop is switched on become events.
+    pub async fn baseline_if_first_run(&self, now: DateTime<Utc>) -> sqlx::Result<usize> {
+        let seen: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM action_loop_seen")
+            .fetch_one(&self.pool)
+            .await?;
+        if seen > 0 {
+            return Ok(0);
+        }
+        let candidates = scan_unseen_candidates(&self.pool, &self.lead_session_key).await?;
+        for item in &candidates {
+            sqlx::query(
+                "INSERT INTO action_loop_seen (item_key, seen_at) VALUES (?, ?)
+                 ON CONFLICT(item_key) DO NOTHING",
+            )
+            .bind(&item.item_key)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        }
+        tracing::info!(
+            "action_loop baseline marked existing items seen items={}",
+            candidates.len()
+        );
+        Ok(candidates.len())
+    }
+
     pub async fn serve(self, wake: Arc<Notify>, shutdown: CancellationToken) -> crate::Result<()> {
+        if let Err(error) = self.baseline_if_first_run(Utc::now()).await {
+            tracing::warn!(%error, "action_loop baseline failed");
+        }
         let mut coalesce_deadline: Option<tokio::time::Instant> = None;
         let mut sweep_interval = tokio::time::interval(Duration::from_secs(30));
         sweep_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

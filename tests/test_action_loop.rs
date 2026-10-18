@@ -207,3 +207,37 @@ fn f_flag_on_means_kibitzer_is_not_started() {
     let kibitzer_should_start = !loop_on;
     assert!(!kibitzer_should_start);
 }
+
+#[tokio::test]
+async fn g_first_enable_baselines_backlog_and_caps_listed_items() {
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    for i in 1..=30 {
+        insert_inbox_item_and_decision(&pool, &format!("old-{i}"), "owner", "Old", "backlog").await;
+    }
+    let worker = ActionLoop::new(pool.clone(), LEAD);
+    assert_eq!(
+        worker.baseline_if_first_run(daytime_utc()).await.unwrap(),
+        30
+    );
+    assert_eq!(
+        worker.baseline_if_first_run(daytime_utc()).await.unwrap(),
+        0
+    );
+    assert_eq!(worker.flush_coalesced(daytime_utc()).await.unwrap(), None);
+
+    for i in 1..=25 {
+        insert_inbox_item_and_decision(&pool, &format!("new-{i}"), "owner", "New", "fresh").await;
+    }
+    worker
+        .flush_coalesced(daytime_utc())
+        .await
+        .unwrap()
+        .expect("new rows emit");
+    let events = take_undelivered_events_at(&pool, None, daytime_utc())
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].body.starts_with("[ACTION_LOOP] 25 items:"));
+    assert!(events[0].body.ends_with("| +5 more"));
+    assert!(!events[0].body.contains("backlog"));
+}
