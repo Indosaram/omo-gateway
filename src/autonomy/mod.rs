@@ -6,8 +6,8 @@ pub mod ledger;
 use std::str::FromStr;
 
 pub use effect::{
-    classify_argv, classify_command, classify_file_change, classify_frame, classify_json,
-    is_bare_eval_frame, requires_always_ask, Classification, Effect,
+    classify_argv, classify_command, classify_eval_code, classify_file_change, classify_frame,
+    classify_json, is_bare_eval_frame, requires_always_ask, Classification, Effect,
 };
 pub use ledger::{
     decide_proposal, evaluate_pre_ask, finalize_ask_result, find_matching_precedent, get_proposal,

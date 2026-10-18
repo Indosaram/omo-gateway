@@ -117,6 +117,85 @@ pub fn requires_always_ask(effect: Effect, tainted: bool) -> bool {
 
 /// True when an engine approval frame is the outer `Tool: eval` container request
 /// (`command == null`, `reason` starts with `"Tool: eval"` or `itemId == "approval-eval"`).
+impl Effect {
+    /// Higher means more consequential; used to pick the effect that decides an eval cell.
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::Read => 0,
+            Self::Draft => 1,
+            Self::WriteLocal => 2,
+            Self::VcsLocal => 3,
+            Self::VcsRemote => 4,
+            Self::Unknown => 5,
+            Self::ExternalSend => 6,
+            Self::Delete => 7,
+            Self::VcsProtected => 8,
+            Self::Spend => 9,
+        }
+    }
+}
+
+/// Shell commands an eval cell runs through Bun's template-literal shell, or a `command:` string.
+/// A bare eval approval frame carries no command, and a command run through Bun's shell raises no
+/// nested frame, so the cell's own code is the only place to see it.
+pub fn eval_shell_commands(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = code.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'$' && bytes[i + 1] == b'`' {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && !(bytes[j] == b'`' && bytes[j - 1] != b'\\') {
+                j += 1;
+            }
+            out.push(code[start..j.min(bytes.len())].to_string());
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    let mut rest = code;
+    while let Some(pos) = rest.find("command") {
+        let after = rest[pos + "command".len()..].trim_start();
+        let value = after
+            .strip_prefix(':')
+            .or_else(|| after.strip_prefix('='))
+            .map(str::trim_start);
+        if let Some(value) = value {
+            if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                if let Some(end) = value[1..].find(quote) {
+                    out.push(value[1..1 + end].to_string());
+                }
+            }
+        }
+        rest = &rest[pos + "command".len()..];
+    }
+    out.retain(|c| !c.trim().is_empty());
+    out
+}
+
+/// The most consequential side-effecting shell command in an eval cell, or None when it runs
+/// only reads or no shell command at all.
+pub fn classify_eval_code(code: &str, cwd: Option<&str>) -> Option<Classification> {
+    let mut found = Vec::new();
+    for cmd in eval_shell_commands(code) {
+        found.push(classify_command(&cmd, cwd));
+        // A fragment like a bare `cd` reads as unknown on its own; only known effects of the
+        // pieces of a compound command count.
+        for piece in cmd.split(['\n', ';']).flat_map(|s| s.split("&&")) {
+            let c = classify_command(piece, cwd);
+            if c.effect != Effect::Unknown {
+                found.push(c);
+            }
+        }
+    }
+    found
+        .into_iter()
+        .filter(|c| c.effect != Effect::Read)
+        .max_by_key(|c| c.effect.rank())
+}
+
 pub fn is_bare_eval_frame(frame: &Value) -> bool {
     let method = frame
         .get("method")

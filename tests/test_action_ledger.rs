@@ -640,3 +640,30 @@ async fn todo8_g_spend_never_auto_allows_and_emits_no_candidate() {
             .unwrap();
     assert_eq!(candidates, 0, "spend must never emit precedent_candidate");
 }
+
+#[test]
+fn f_eval_cell_shell_commands_are_classified_from_the_code() {
+    let push = "const r=await Bun.$`cd /tmp/repo && git push origin lane/x 2>&1`.nothrow();print(r.exitCode)";
+    let c = omon_gateway::autonomy::classify_eval_code(push, None).expect("push is a side effect");
+    assert_eq!(c.effect, Effect::VcsRemote);
+
+    let main = "await $`git push origin main`";
+    assert_eq!(
+        omon_gateway::autonomy::classify_eval_code(main, None)
+            .unwrap()
+            .effect,
+        Effect::VcsProtected
+    );
+
+    let bash_tool = r#"await tool.bash({ command: "rm -rf /tmp/x" })"#;
+    assert_eq!(
+        omon_gateway::autonomy::classify_eval_code(bash_tool, None)
+            .unwrap()
+            .effect,
+        Effect::Delete
+    );
+
+    let reads = "const s=await Bun.$`git status && ls -la`.text(); print(s)";
+    assert!(omon_gateway::autonomy::classify_eval_code(reads, None).is_none());
+    assert!(omon_gateway::autonomy::classify_eval_code("print(1+1)", None).is_none());
+}

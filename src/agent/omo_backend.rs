@@ -1043,6 +1043,9 @@ impl OmoBackend {
         // Tool items started but not yet completed. A tool runs silently (a subagent task, a long
         // command), so a frame gap while one is open is work in progress, not a wedged server.
         let mut open_tool_ids: std::collections::HashSet<String> = Default::default();
+        // Code of the latest eval tool item: its bare approval frame names no command, so the
+        // ledger classifies the shell commands in the cell instead.
+        let mut last_eval_code: Option<String> = None;
         let mut approval_denials: u32 = 0;
         let mut messages_delivered: usize = 0;
         let mut last_relay_at: Option<tokio::time::Instant> = None;
@@ -1576,7 +1579,24 @@ impl OmoBackend {
                     }
 
                     if self.is_ledger_enabled() && !toolset_blocked {
-                        if !session.state.yolo && crate::autonomy::is_bare_eval_frame(&val) {
+                        let eval_classification = if crate::autonomy::is_bare_eval_frame(&val) {
+                            last_eval_code.as_deref().and_then(|code| {
+                                crate::autonomy::classify_eval_code(
+                                    code,
+                                    session
+                                        .state
+                                        .metadata
+                                        .get("workspace_cwd")
+                                        .and_then(Value::as_str),
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        if !session.state.yolo
+                            && crate::autonomy::is_bare_eval_frame(&val)
+                            && eval_classification.is_none()
+                        {
                             let _ = ws.send(approval_allow_response(req_id)).await;
                             continue;
                         }
@@ -1591,7 +1611,8 @@ impl OmoBackend {
                             .metadata
                             .get("workspace_cwd")
                             .and_then(Value::as_str);
-                        let classification = crate::autonomy::classify_frame(&val, ws_cwd);
+                        let classification = eval_classification
+                            .unwrap_or_else(|| crate::autonomy::classify_frame(&val, ws_cwd));
                         if let Some(pool) = &self.pool {
                             let lead_key = if is_lane {
                                 sqlx::query_scalar::<_, String>(
@@ -1915,6 +1936,12 @@ impl OmoBackend {
                     if is_started && !item_id.is_empty() && started_ids.insert(item_id.to_string())
                     {
                         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                        if item.get("tool").and_then(Value::as_str) == Some("eval") {
+                            last_eval_code = item
+                                .pointer("/arguments/code")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                        }
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
                             open_tool_ids.insert(item_id.to_string());
                             if let Some(active) =
