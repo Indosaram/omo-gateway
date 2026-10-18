@@ -643,7 +643,7 @@ async fn todo8_g_spend_never_auto_allows_and_emits_no_candidate() {
 
 #[test]
 fn f_eval_cell_shell_commands_are_classified_from_the_code() {
-    let push = "const r=await Bun.$`cd /tmp/repo && git push origin lane/x 2>&1`.nothrow();print(r.exitCode)";
+    let push = "const r=await Bun.$`cd /tmp/repo && git checkout -B lane/x 2>&1 && git push origin lane/x 2>&1`.nothrow();print(r.exitCode)";
     let c = omon_gateway::autonomy::classify_eval_code(push, None).expect("push is a side effect");
     assert_eq!(c.effect, Effect::VcsRemote);
     assert!(

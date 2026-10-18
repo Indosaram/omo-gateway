@@ -184,8 +184,10 @@ pub fn classify_eval_code(code: &str, cwd: Option<&str>) -> Option<Classificatio
         // command replaces it only when strictly more consequential. A bare `cd` piece reads as
         // unknown on its own, so only known piece effects count.
         let mut cmd_best = classify_command(&cmd, cwd);
+        let (cd_dir, _) = peel_cd_prefix(&cmd, cwd);
+        let piece_cwd = cd_dir.as_deref().or(cwd);
         for piece in cmd.split(['\n', ';']).flat_map(|s| s.split("&&")) {
-            let c = classify_command(piece, cwd);
+            let c = classify_command(piece, piece_cwd);
             if c.effect != Effect::Unknown && c.effect.rank() > cmd_best.effect.rank() {
                 cmd_best = c;
             }
