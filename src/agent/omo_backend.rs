@@ -192,6 +192,7 @@ pub struct OmoBackend {
     pub active_turns: Arc<ParkingMutex<HashMap<String, ActiveTurn>>>,
     pub approval_requester: Option<Arc<crate::DiscordApprovalRequester>>,
     pub ledger_enabled: Option<bool>,
+    pub full_access: Option<bool>,
     pub clock: Option<UtcClock>,
 }
 
@@ -205,6 +206,7 @@ impl OmoBackend {
             active_turns: Arc::new(ParkingMutex::new(HashMap::new())),
             approval_requester: None,
             ledger_enabled: None,
+            full_access: None,
             clock: None,
         }
     }
@@ -227,6 +229,11 @@ impl OmoBackend {
         self
     }
 
+    pub fn with_full_access(mut self, enabled: bool) -> Self {
+        self.full_access = Some(enabled);
+        self
+    }
+
     pub fn with_clock<F>(mut self, clock: F) -> Self
     where
         F: Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync + 'static,
@@ -238,6 +245,12 @@ impl OmoBackend {
     fn is_ledger_enabled(&self) -> bool {
         self.ledger_enabled
             .unwrap_or_else(crate::agent::agent_workspace::approval_ledger_enabled)
+    }
+
+    /// The owner granted every permission: engine approvals run as under YOLO (payments still ask).
+    fn is_full_access(&self) -> bool {
+        self.full_access
+            .unwrap_or_else(crate::agent::agent_workspace::full_access_enabled)
     }
 
     fn now_utc(&self) -> chrono::DateTime<chrono::Utc> {
@@ -1607,6 +1620,7 @@ impl OmoBackend {
                         }
                     }
 
+                    let unrestricted = session.state.yolo || self.is_full_access();
                     if self.is_ledger_enabled() && !toolset_blocked {
                         let bare_eval = crate::autonomy::is_bare_eval_frame(&val);
                         let eval_classification = if bare_eval {
@@ -1625,7 +1639,7 @@ impl OmoBackend {
                         };
                         // Only a cell whose code was seen and has no side effect runs unasked; a
                         // bare eval frame without its code stays unknown and goes to the ledger.
-                        if !session.state.yolo
+                        if !unrestricted
                             && bare_eval
                             && last_eval_code.is_some()
                             && eval_classification.is_none()
@@ -1670,7 +1684,7 @@ impl OmoBackend {
                                     classification: &classification,
                                     payload_json: &payload_str,
                                     tainted: turn_tainted,
-                                    yolo: session.state.yolo,
+                                    yolo: unrestricted,
                                     always_mode,
                                     now: self.now_utc(),
                                 },
@@ -1826,7 +1840,7 @@ impl OmoBackend {
                         }
                     }
 
-                    if !toolset_blocked && session.state.yolo {
+                    if !toolset_blocked && unrestricted {
                         tracing::info!(
                             session = %session.key,
                             "approving daemon tool request under active YOLO mode"

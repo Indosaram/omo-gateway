@@ -185,6 +185,7 @@ async fn a_owner_once_within_thirty_minutes_sends_allow_for_req_id() {
         .with_pool(pool.clone())
         .with_approval_requester(requester)
         .with_ledger_enabled(true)
+        .with_full_access(false)
         .with_clock(daytime_clock);
 
     let key = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");
@@ -336,6 +337,7 @@ async fn b_timeout_sends_decline_sets_expired_and_leaves_denial_counter_unchange
         .with_pool(pool.clone())
         .with_approval_requester(requester)
         .with_ledger_enabled(true)
+        .with_full_access(false)
         .with_clock(daytime_clock);
 
     let key = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");
@@ -484,6 +486,7 @@ async fn c_no_inactivity_interrupt_fires_during_twenty_minute_wait() {
         .with_pool(pool.clone())
         .with_approval_requester(requester)
         .with_ledger_enabled(true)
+        .with_full_access(false)
         .with_clock(daytime_clock);
 
     let key = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");
@@ -498,6 +501,137 @@ async fn c_no_inactivity_interrupt_fires_during_twenty_minute_wait() {
         interrupts.lock().is_empty(),
         "no turn/interrupt may fire during a 20m approval wait"
     );
+}
+
+#[tokio::test]
+async fn full_access_allows_a_quiet_hour_push_without_asking() {
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    let guard = SmartApprovalGuard::new().with_pool(pool.clone());
+    let dispatcher = RecordingDispatcher::default();
+    let requester = Arc::new(DiscordApprovalRequester::new(
+        guard,
+        Duration::from_secs(1800),
+    ));
+    requester.set_dispatcher(Arc::new(dispatcher.clone())).await;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel::<Value>();
+
+    tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(stream).await.unwrap();
+        while let Some(Ok(Message::Text(text))) = ws.next().await {
+            let v: Value = serde_json::from_str(&text).unwrap();
+            let id = v.get("id").and_then(Value::as_u64);
+            let method = v.get("method").and_then(Value::as_str).unwrap_or("");
+            match (id, method) {
+                (Some(1), "initialize") => {
+                    ws.send(Message::text(
+                        json!({"jsonrpc":"2.0","id":1,"result":{}}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                }
+                (Some(2), "thread/start") => {
+                    ws.send(Message::text(
+                        json!({"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"th-d"}}})
+                            .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                }
+                (Some(3), "turn/start") => {
+                    ws.send(Message::text(
+                        json!({"jsonrpc":"2.0","id":3,"result":{"turn":{"id":"turn-d"}}})
+                            .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    ws.send(Message::text(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": 88,
+                            "method": "item/commandExecution/requestApproval",
+                            "params": {
+                                "threadId": "th-d",
+                                "turnId": "turn-d",
+                                "command": "git push origin lane/quiet",
+                                "reason": "push"
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                }
+                _ if v.get("id").and_then(Value::as_u64) == Some(88) => {
+                    let _ = resp_tx.send(v);
+                    ws.send(Message::text(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": "item/completed",
+                            "params": {
+                                "threadId": "th-d",
+                                "turnId": "turn-d",
+                                "item": { "id": "m-d", "type": "agentMessage", "text": "held for 08:00" }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    ws.send(Message::text(
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": "turn/completed",
+                            "params": {
+                                "threadId": "th-d",
+                                "turn": { "id": "turn-d", "status": "completed" }
+                            }
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    let config = OmoBackendConfig::new(format!("ws://{addr}"));
+    let backend = OmoBackend::new(config, Arc::new(dispatcher.clone()))
+        .with_pool(pool.clone())
+        .with_approval_requester(requester)
+        .with_ledger_enabled(true)
+        .with_full_access(true)
+        .with_clock(quiet_hour_clock);
+
+    let key = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");
+    let mut session = SessionContext::new(key.clone());
+    let event = InboundEvent::message(key, "md", "quiet push");
+    backend
+        .run_cancelable(&mut session, event, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let answer = resp_rx.await.unwrap();
+    assert_eq!(
+        answer.pointer("/result/decision").and_then(Value::as_str),
+        Some("accept")
+    );
+    assert!(
+        dispatcher.last_approval_request_id().is_none(),
+        "full access must not post an approval card"
+    );
+    let (origin, state): (String, String) =
+        sqlx::query_as("SELECT origin, state FROM action_proposals ORDER BY id DESC LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!((origin.as_str(), state.as_str()), ("yolo", "approved"));
 }
 
 #[tokio::test]
@@ -603,6 +737,7 @@ async fn d_quiet_hour_path_declines_and_sets_release_at() {
         .with_pool(pool.clone())
         .with_approval_requester(requester)
         .with_ledger_enabled(true)
+        .with_full_access(false)
         .with_clock(quiet_hour_clock);
 
     let key = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");

@@ -220,7 +220,11 @@ impl Config {
                 optional_env("DISCORD_PROCESSING_REACTIONS").as_deref(),
                 true,
             ),
-            approval_policy: ApprovalPolicy::parse(optional_env("APPROVAL_MODE").as_deref()),
+            approval_policy: if omon_gateway::agent::agent_workspace::full_access_enabled() {
+                ApprovalPolicy::Never
+            } else {
+                ApprovalPolicy::parse(optional_env("APPROVAL_MODE").as_deref())
+            },
             approval_timeout_secs: approval_timeout_secs_from(
                 optional_env("APPROVAL_TIMEOUT_SECS").as_deref(),
             ),

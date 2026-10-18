@@ -137,6 +137,18 @@ pub fn approval_ledger_enabled() -> bool {
         })
 }
 
+/// `OMON_FULL_ACCESS` (default on): the owner granted the agent every permission, so engine
+/// approval requests are allowed and recorded in the ledger instead of asking. Payments still
+/// ask. Set `0`/`false`/`off` to return to per-action approval.
+pub fn full_access_enabled() -> bool {
+    std::env::var("OMON_FULL_ACCESS").map_or(true, |value| {
+        !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
 /// Makes sure a bot workspace's `.omo/settings.json` carries `"permissionPreset": preset`
 /// when `enabled`. Other keys are kept; a missing file is created; an unreadable or non-JSON
 /// file is left alone; an already-correct file is not rewritten; a rewrite goes through a temp
