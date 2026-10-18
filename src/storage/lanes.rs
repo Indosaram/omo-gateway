@@ -211,6 +211,79 @@ pub async fn request_close(
     Ok(id)
 }
 
+/// True while the lane has an unresumed pause row.
+pub async fn is_lane_paused(pool: &SqlitePool, key: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = ? AND resumed_at IS NULL)",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await?)
+}
+
+pub async fn paused_lane_keys(pool: &SqlitePool) -> Result<std::collections::HashSet<String>> {
+    let keys: Vec<String> =
+        sqlx::query_scalar("SELECT lane_key FROM lane_pauses WHERE resumed_at IS NULL")
+            .fetch_all(pool)
+            .await?;
+    Ok(keys.into_iter().collect())
+}
+
+/// Pauses a live lane. Returns false when it was already paused. The status is left
+/// unchanged; the history row records the pause with from = to = current status.
+pub async fn pause_lane(pool: &SqlitePool, key: &str, by: &str) -> Result<bool> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let status: String = sqlx::query_scalar("SELECT status FROM lanes WHERE key = ?")
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| OmonError::Config(format!("lane not found: {key}")))?;
+    if matches!(status.as_str(), "closed" | "failed" | "verified_done") {
+        return Err(OmonError::Config(format!("cannot pause a {status} lane")));
+    }
+    let paused: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = ? AND resumed_at IS NULL)",
+    )
+    .bind(key)
+    .fetch_one(&mut *tx)
+    .await?;
+    if paused {
+        return Ok(false);
+    }
+    let now = Utc::now();
+    sqlx::query("INSERT INTO lane_pauses(lane_key, paused_at, paused_by, resumed_at) VALUES (?, ?, ?, NULL) ON CONFLICT(lane_key) DO UPDATE SET paused_at = excluded.paused_at, paused_by = excluded.paused_by, resumed_at = NULL")
+        .bind(key).bind(now).bind(by).execute(&mut *tx).await?;
+    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, ?, 'paused')")
+        .bind(key).bind(now).bind(&status).bind(&status).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Clears an active pause. Returns false when the lane was not paused.
+pub async fn resume_lane(pool: &SqlitePool, key: &str) -> Result<bool> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let now = Utc::now();
+    let cleared = sqlx::query(
+        "UPDATE lane_pauses SET resumed_at = ? WHERE lane_key = ? AND resumed_at IS NULL",
+    )
+    .bind(now)
+    .bind(key)
+    .execute(&mut *tx)
+    .await?;
+    if cleared.rows_affected() != 1 {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+    let status: String = sqlx::query_scalar("SELECT status FROM lanes WHERE key = ?")
+        .bind(key)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, ?, 'resumed')")
+        .bind(key).bind(now).bind(&status).bind(&status).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(true)
+}
+
 pub async fn bind_lane_thread(pool: &SqlitePool, key: &str, bot: &str) -> Result<()> {
     let changed = sqlx::query("INSERT INTO lane_thread_bindings(lane_key,bot_id) VALUES (?,?) ON CONFLICT(lane_key) DO UPDATE SET bot_id=excluded.bot_id WHERE lane_thread_bindings.bot_id=excluded.bot_id")
         .bind(key).bind(bot).execute(pool).await?;
@@ -773,16 +846,26 @@ pub async fn take_undelivered_events(
     pool: &SqlitePool,
     limit: Option<usize>,
 ) -> Result<Vec<LaneEvent>> {
+    take_undelivered_events_at(pool, limit, Utc::now()).await
+}
+
+pub async fn take_undelivered_events_at(
+    pool: &SqlitePool,
+    limit: Option<usize>,
+    now: DateTime<Utc>,
+) -> Result<Vec<LaneEvent>> {
     let rows = match limit {
         Some(lim) => sqlx::query_as::<_, LaneEvent>(
             r#"
                 SELECT id, lane_key, lead_session_key, kind, body, created_at, delivered_at
                 FROM lane_events
                 WHERE delivered_at IS NULL
+                  AND (release_at IS NULL OR julianday(release_at) <= julianday(?))
                 ORDER BY id ASC
                 LIMIT ?
                 "#,
         )
+        .bind(now)
         .bind(lim as i64)
         .fetch_all(pool)
         .await
@@ -792,9 +875,11 @@ pub async fn take_undelivered_events(
                 SELECT id, lane_key, lead_session_key, kind, body, created_at, delivered_at
                 FROM lane_events
                 WHERE delivered_at IS NULL
+                  AND (release_at IS NULL OR julianday(release_at) <= julianday(?))
                 ORDER BY id ASC
                 "#,
         )
+        .bind(now)
         .fetch_all(pool)
         .await
         .map_err(OmonError::from)?,

@@ -120,6 +120,13 @@ pub fn turn_steer_request(
 }
 
 pub fn approval_denial_response(req_id: &Value) -> Message {
+    approval_denial_with_reason(
+        req_id,
+        "denied by gateway policy - do not retry this tool; ask the user for the information instead",
+    )
+}
+
+pub fn approval_denial_with_reason(req_id: &Value, reason: &str) -> Message {
     Message::text(
         json!({
             "jsonrpc": "2.0",
@@ -127,7 +134,7 @@ pub fn approval_denial_response(req_id: &Value) -> Message {
             "result": {
                 "allow": false,
                 "decision": "decline",
-                "reason": "denied by gateway policy - do not retry this tool; ask the user for the information instead"
+                "reason": reason
             }
         })
         .to_string(),

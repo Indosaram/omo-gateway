@@ -371,6 +371,45 @@ impl Proposals {
         .ok_or_else(|| invalid("no actionable bot proposal in this owner channel"))?;
         sqlx::query("UPDATE inbox_decisions SET status='proposed' WHERE item_id=? AND class='bot' AND status='open'")
             .bind(item_id).execute(&mut **tx).await?;
+
+        let author: String =
+            sqlx::query_scalar("SELECT COALESCE(author, '') FROM inbox_items WHERE id = ?")
+                .bind(item_id)
+                .fetch_optional(&mut **tx)
+                .await?
+                .unwrap_or_default();
+        let (effect, target, signature) = classify_inbox_proposal(&proposal, action, &author);
+        let payload = serde_json::json!({
+            "inbox_proposal_number": proposal.number,
+            "item_id": proposal.item_id,
+            "action": action,
+        })
+        .to_string();
+        let initial_state = if effect == crate::autonomy::Effect::Read {
+            "auto_allowed"
+        } else {
+            "pending"
+        };
+        sqlx::query(
+            "INSERT INTO action_proposals
+                (origin, session_key, signature, effect, target, summary, payload_json, tainted, state)
+             SELECT 'inbox', ?, ?, ?, ?, ?, ?, 1, ?
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM action_proposals
+                 WHERE origin = 'inbox' AND json_extract(payload_json, '$.item_id') = ?
+             )",
+        )
+        .bind(channel_id)
+        .bind(&signature)
+        .bind(effect.as_str())
+        .bind(&target)
+        .bind(proposal.display())
+        .bind(&payload)
+        .bind(initial_state)
+        .bind(&proposal.item_id)
+        .execute(&mut **tx)
+        .await?;
+
         Ok(proposal)
     }
 
@@ -403,6 +442,18 @@ impl Proposals {
         let Some(proposal) = proposal else {
             return Ok(ApprovalResult::NotMatched);
         };
+        if let Some(ledger_id) = self.ledger_proposal_id(&proposal.item_id).await? {
+            let _ = crate::autonomy::decide_proposal(
+                &self.pool,
+                None,
+                ledger_id,
+                "allow",
+                crate::autonomy::PrecedentScope::Exact,
+                Some(reply.content),
+                Some(reply.channel_id),
+            )
+            .await;
+        }
         self.execute_approved(proposal, reply.message_id, actions)
             .await
     }
@@ -521,9 +572,241 @@ impl Proposals {
         if action != Action::Lookup {
             return Ok(ApprovalResult::NotMatched);
         }
+        if let Some(ledger_id) = self.ledger_proposal_id(&proposal.item_id).await? {
+            let _ = crate::autonomy::update_proposal_decision(
+                &self.pool,
+                ledger_id,
+                crate::autonomy::ProposalState::AutoAllowed,
+                None,
+                None,
+            )
+            .await;
+        }
         self.execute_approved(proposal, &format!("auto:inbox-proposal-{number}"), actions)
             .await
     }
+
+    pub async fn ledger_proposal_id(&self, item_id: &str) -> Result<Option<i64>> {
+        let id: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM action_proposals
+             WHERE origin = 'inbox' AND json_extract(payload_json, '$.item_id') = ?
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(item_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn evaluate_with_ledger(
+        &self,
+        number: i64,
+        actions: &dyn Actions,
+        dispatcher: Option<&dyn crate::OutboundDispatcher>,
+        session: Option<&crate::SessionKey>,
+    ) -> Result<ApprovalResult> {
+        let _ = backfill_pending_inbox_proposals(&self.pool).await?;
+        let proposal: Option<Proposal> =
+            sqlx::query_as("SELECT * FROM inbox_proposals WHERE number=? AND owner_id=?")
+                .bind(number)
+                .bind(&self.owner_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        let Some(proposal) = proposal else {
+            return Ok(ApprovalResult::NotMatched);
+        };
+        let action: Action =
+            serde_json::from_str(&proposal.action_json).map_err(|e| invalid(e.to_string()))?;
+        let author: String =
+            sqlx::query_scalar("SELECT COALESCE(author, '') FROM inbox_items WHERE id = ?")
+                .bind(&proposal.item_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or_default();
+        let (effect, target, signature) = classify_inbox_proposal(&proposal, &action, &author);
+        let ledger_id = self.ledger_proposal_id(&proposal.item_id).await?;
+
+        if effect == crate::autonomy::Effect::Read {
+            if let Some(id) = ledger_id {
+                let _ = crate::autonomy::update_proposal_decision(
+                    &self.pool,
+                    id,
+                    crate::autonomy::ProposalState::AutoAllowed,
+                    None,
+                    None,
+                )
+                .await;
+            }
+            return self
+                .execute_approved(proposal, &format!("auto:inbox-proposal-{number}"), actions)
+                .await;
+        }
+
+        if let Some(prec) =
+            crate::autonomy::find_matching_precedent(&self.pool, &signature, effect, &target, true)
+                .await?
+        {
+            if prec.decision == "allow" {
+                if let Some(id) = ledger_id {
+                    let _ = crate::autonomy::update_proposal_decision(
+                        &self.pool,
+                        id,
+                        crate::autonomy::ProposalState::AutoAllowed,
+                        Some(prec.id),
+                        None,
+                    )
+                    .await;
+                }
+                return self
+                    .execute_approved(
+                        proposal,
+                        &format!("precedent:{}:inbox-proposal-{number}", prec.id),
+                        actions,
+                    )
+                    .await;
+            }
+            if let Some(id) = ledger_id {
+                let _ = crate::autonomy::update_proposal_decision(
+                    &self.pool,
+                    id,
+                    crate::autonomy::ProposalState::AutoDenied,
+                    Some(prec.id),
+                    prec.owner_words.as_deref(),
+                )
+                .await;
+            }
+            return Ok(ApprovalResult::NotMatched);
+        }
+
+        if let (Some(disp), Some(sess)) = (dispatcher, session) {
+            let req_id = uuid::Uuid::new_v4();
+            disp.dispatch(crate::OutboundAction::ApprovalRequest {
+                session: sess.clone(),
+                request_id: req_id,
+                command: proposal.proposed_action.clone(),
+                reason: format!(
+                    "{}\neffect: {} | target: {}",
+                    proposal.display(),
+                    effect.as_str(),
+                    target
+                ),
+            })
+            .await?;
+            if let Some(id) = ledger_id {
+                let _ =
+                    crate::autonomy::set_proposal_message_id(&self.pool, id, &req_id.to_string())
+                        .await;
+            }
+        }
+        Ok(ApprovalResult::NotMatched)
+    }
+}
+
+pub fn classify_inbox_proposal(
+    proposal: &Proposal,
+    action: &Action,
+    author: &str,
+) -> (crate::autonomy::Effect, String, String) {
+    use crate::autonomy::Effect;
+    match action {
+        Action::Lookup => {
+            let target = proposal
+                .link
+                .clone()
+                .unwrap_or_else(|| proposal.item_id.clone());
+            (
+                Effect::Read,
+                target.clone(),
+                format!("read:inbox_lookup:{target}"),
+            )
+        }
+        Action::Repo { cwd, .. } => (
+            Effect::WriteLocal,
+            cwd.clone(),
+            format!("write_local:inbox_repo:{cwd}"),
+        ),
+        Action::Draft => {
+            let clean_author = author.trim();
+            let addresses_author = !clean_author.is_empty()
+                && (proposal.proposed_action.contains(clean_author)
+                    || proposal
+                        .proposed_action
+                        .to_ascii_lowercase()
+                        .contains("send")
+                    || proposal
+                        .proposed_action
+                        .to_ascii_lowercase()
+                        .contains("reply")
+                    || proposal.proposed_action.contains("답장")
+                    || proposal.proposed_action.contains("회신")
+                    || proposal.proposed_action.contains("발송"));
+            if addresses_author {
+                (
+                    Effect::ExternalSend,
+                    clean_author.to_string(),
+                    format!("external_send:inbox_draft:{clean_author}"),
+                )
+            } else {
+                let target = if !clean_author.is_empty() {
+                    clean_author.to_string()
+                } else {
+                    proposal.channel_id.clone()
+                };
+                (
+                    Effect::Draft,
+                    target.clone(),
+                    format!("draft:inbox_draft:{target}"),
+                )
+            }
+        }
+    }
+}
+
+pub async fn backfill_pending_inbox_proposals(pool: &SqlitePool) -> Result<usize> {
+    let _ = Proposals::new(pool.clone(), OWNER_ID).await?;
+    let pending: Vec<Proposal> =
+        sqlx::query_as("SELECT * FROM inbox_proposals WHERE state = 'pending' ORDER BY number ASC")
+            .fetch_all(pool)
+            .await?;
+    let mut inserted = 0usize;
+    for proposal in pending {
+        let action: Action = serde_json::from_str(&proposal.action_json).unwrap_or(Action::Draft);
+        let author: String =
+            sqlx::query_scalar("SELECT COALESCE(author, '') FROM inbox_items WHERE id = ?")
+                .bind(&proposal.item_id)
+                .fetch_optional(pool)
+                .await?
+                .unwrap_or_default();
+        let (effect, target, signature) = classify_inbox_proposal(&proposal, &action, &author);
+        let payload = serde_json::json!({
+            "inbox_proposal_number": proposal.number,
+            "item_id": proposal.item_id,
+            "action": action,
+        })
+        .to_string();
+        let res = sqlx::query(
+            "INSERT INTO action_proposals
+                (origin, session_key, signature, effect, target, summary, payload_json, tainted, state)
+             SELECT 'inbox', ?, ?, ?, ?, ?, ?, 1, 'pending'
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM action_proposals
+                 WHERE origin = 'inbox' AND json_extract(payload_json, '$.item_id') = ?
+             )",
+        )
+        .bind(&proposal.channel_id)
+        .bind(&signature)
+        .bind(effect.as_str())
+        .bind(&target)
+        .bind(proposal.display())
+        .bind(&payload)
+        .bind(&proposal.item_id)
+        .execute(pool)
+        .await?;
+        if res.rows_affected() == 1 {
+            inserted += 1;
+        }
+    }
+    Ok(inserted)
 }
 
 pub fn approval_number(content: &str) -> Option<i64> {

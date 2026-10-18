@@ -1,0 +1,99 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "ask",
+  "probe": "git_commit",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: git commit -m x",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 0,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4b-67ae-7f0d-835a-1b282524c391",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281404439,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4b-67ae-7f0d-835a-1b282524c391",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281404965,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ git commit -m x\n\nPatterns:\n  - git commit",
+        "command": "git commit -m x",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 0,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 3,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4b-67ae-7f0d-835a-1b282524c391",
+      "requestId": 0
+    },
+    {
+      "threadId": "01a14c4b-67ae-7f0d-835a-1b282524c391",
+      "requestId": 3
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: git commit -m x\\nNow: Run git commit command exactly once (Execution)\\nNext: none\\n\\nRemaining items (1):\\n  - Run git commit command exactly once [in_progress] (Execution)\\nOverall: 0/1 done, 1 open.\\nActive phase 1/1 \\\"Execution\\\" (0/1).\\n  Execution:\\n    - [ ] Run git commit command exactly on"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"[main 233d711] x\\n 1 file changed, 1 insertion(+)\\n create mode 100644 staged.txt\\nhasError: false\"}]"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: git commit -m x\\nNow: none - all tasks closed\\nNext: none\\n\\nRemaining items: none.\\nOverall: 1/1 done, 0 open.\\nActive phase 1/1 \\\"Execution\\\" (1/1).\\n  Execution:\\n    - [X] Run git commit command exactly once\\n\\nHandoff due: every task is closed. Your final message is the Ask / For you / Now / "
+    }
+  ],
+  "turnStatus": "completed"
+}

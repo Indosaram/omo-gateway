@@ -19,8 +19,9 @@ use super::backend::AgentBackend;
 
 use super::omo_config::OmoBackendConfig;
 use super::omo_protocol::{
-    approval_allow_response, approval_denial_response, initialize_request, is_approval_request,
-    thread_resume_request, thread_start_request, turn_start_request, turn_steer_request,
+    approval_allow_response, approval_denial_response, approval_denial_with_reason,
+    initialize_request, is_approval_request, thread_resume_request, thread_start_request,
+    turn_start_request, turn_steer_request,
 };
 use crate::models::{
     filter_intent_gate, filter_reasoning, is_explicit_silence, render_user_prompt, InboundEvent,
@@ -63,6 +64,7 @@ pub struct ActiveTurn {
     pub turn_id: Option<String>,
     /// When this submission was recorded, consumed by the stale-entry reclaim.
     pub inserted_at: tokio::time::Instant,
+    pub open_tools: usize,
 }
 
 /// A guard entry older than the turn's total deadline plus the stale margin
@@ -180,12 +182,17 @@ async fn ensure_cron_ttsr_disabled(settings_path: &std::path::Path) {
 /// Interactive (Discord) turns stop at 1800s (30m); cron turns keep their own budget.
 const INTERACTIVE_TURN_CAP: Duration = Duration::from_secs(1800);
 
+pub type UtcClock = Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>;
+
 pub struct OmoBackend {
     pub config: OmoBackendConfig,
     pub pool: Option<SqlitePool>,
     pub dispatcher: Arc<dyn OutboundDispatcher>,
     pub thread_ids: Arc<ParkingMutex<HashMap<String, String>>>,
     pub active_turns: Arc<ParkingMutex<HashMap<String, ActiveTurn>>>,
+    pub approval_requester: Option<Arc<crate::DiscordApprovalRequester>>,
+    pub ledger_enabled: Option<bool>,
+    pub clock: Option<UtcClock>,
 }
 
 impl OmoBackend {
@@ -196,12 +203,48 @@ impl OmoBackend {
             dispatcher,
             thread_ids: Arc::new(ParkingMutex::new(HashMap::new())),
             active_turns: Arc::new(ParkingMutex::new(HashMap::new())),
+            approval_requester: None,
+            ledger_enabled: None,
+            clock: None,
         }
     }
 
     pub fn with_pool(mut self, pool: SqlitePool) -> Self {
         self.pool = Some(pool);
         self
+    }
+
+    pub fn with_approval_requester(
+        mut self,
+        requester: Arc<crate::DiscordApprovalRequester>,
+    ) -> Self {
+        self.approval_requester = Some(requester);
+        self
+    }
+
+    pub fn with_ledger_enabled(mut self, enabled: bool) -> Self {
+        self.ledger_enabled = Some(enabled);
+        self
+    }
+
+    pub fn with_clock<F>(mut self, clock: F) -> Self
+    where
+        F: Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync + 'static,
+    {
+        self.clock = Some(Arc::new(clock));
+        self
+    }
+
+    fn is_ledger_enabled(&self) -> bool {
+        self.ledger_enabled
+            .unwrap_or_else(crate::agent::agent_workspace::approval_ledger_enabled)
+    }
+
+    fn now_utc(&self) -> chrono::DateTime<chrono::Utc> {
+        self.clock
+            .as_ref()
+            .map(|c| c())
+            .unwrap_or_else(chrono::Utc::now)
     }
 
     async fn connect_ws(&self, deadline: tokio::time::Instant) -> Result<WsStream> {
@@ -532,6 +575,13 @@ impl OmoBackend {
                 }
                 if is_cron {
                     ensure_cron_ttsr_disabled(&omo_dir.join("settings.json")).await;
+                } else if slug.starts_with("bot-") {
+                    crate::agent::agent_workspace::ensure_workspace_permission_preset(
+                        &omo_dir.join("settings.json"),
+                        crate::agent::agent_workspace::approval_ledger_enabled(),
+                        crate::agent::agent_workspace::WORKSPACE_PERMISSION_PRESET,
+                    )
+                    .await;
                 }
                 Some(ws)
             } else {
@@ -803,6 +853,11 @@ impl OmoBackend {
         briefings: Option<&crate::mirror::CronBriefings>,
     ) -> Result<()> {
         let mut user_prompt = render_user_prompt(&event);
+        if let Some(pool) = &self.pool {
+            if let Some(pack) = crate::context::pack_for_turn(pool, &event).await {
+                user_prompt = crate::context::wrap_prompt(&pack, &user_prompt);
+            }
+        }
         // Cron deliveries are posted by the scheduler, not by this thread; the agent
         // gets the ones it has not seen yet so follow-up questions about them work.
         // They are consumed only once turn/start is acknowledged (see below).
@@ -881,6 +936,7 @@ impl OmoBackend {
                         thread_id: thread_id.clone(),
                         turn_id: None,
                         inserted_at: submitted_at,
+                        open_tools: 0,
                     });
                     None
                 }
@@ -897,6 +953,7 @@ impl OmoBackend {
                         thread_id: thread_id.clone(),
                         turn_id: None,
                         inserted_at: submitted_at,
+                        open_tools: 0,
                     });
 
                     prior_turn_id.map(|turn_id| (prior_thread_id, turn_id))
@@ -990,6 +1047,13 @@ impl OmoBackend {
         // behind; the next turn that starts on the thread is processing our prompt.
         let mut awaiting_successor_turn = false;
         let _no_content_grace = self.config.no_content_grace;
+        let (approval_tx, mut approval_rx) = tokio::sync::mpsc::unbounded_channel::<(
+            Value,
+            String,
+            tokio::time::Instant,
+            crate::autonomy::AskResolution,
+        )>();
+        let mut auto_allowed_notices: Vec<String> = Vec::new();
 
         let ack_window = Duration::from_secs(30);
         let mut ack_deadline =
@@ -1271,10 +1335,54 @@ impl OmoBackend {
                 }
             }
 
-            let msg = match tokio::time::timeout_at(next_timeout, ws.next()).await {
-                Ok(Some(msg)) => msg,
-                Ok(None) => break,
-                Err(_) => continue,
+            let msg = tokio::select! {
+                biased;
+                Some((req_id, tool_id, ask_started, resolution)) = approval_rx.recv() => {
+                    open_tool_ids.remove(&tool_id);
+                    if let Some(active) = self.active_turns.lock().get_mut(&session.key.storage_key()) {
+                        active.open_tools = open_tool_ids.len();
+                    }
+                    let waited = ask_started.elapsed();
+                    deadline += waited;
+                    work_deadline += waited;
+                    prompt_started_at += waited;
+                    last_activity_at = tokio::time::Instant::now();
+                    last_steer_at = last_activity_at;
+                    match resolution {
+                        crate::autonomy::AskResolution::Allow => {
+                            let _ = ws.send(approval_allow_response(&req_id)).await;
+                        }
+                        crate::autonomy::AskResolution::Deny { reason, count_toward_limit } => {
+                            if count_toward_limit {
+                                approval_denials += 1;
+                                if approval_denials >= APPROVAL_DENIAL_TURN_LIMIT {
+                                    if let Some(turn_id) = &turn_id {
+                                        let interrupt = json!({
+                                            "jsonrpc": "2.0",
+                                            "id": 9_002,
+                                            "method": "turn/interrupt",
+                                            "params": { "threadId": thread_id, "turnId": turn_id }
+                                        });
+                                        let _ = ws.send(Message::text(interrupt.to_string())).await;
+                                    }
+                                    self.active_turns.lock().remove(&session.key.storage_key());
+                                    return Err(OmonError::Llm(format!(
+                                        "tool approval denied {approval_denials} times by gateway policy; turn aborted"
+                                    )));
+                                }
+                            }
+                            let _ = ws.send(approval_denial_with_reason(&req_id, &reason)).await;
+                        }
+                    }
+                    continue;
+                }
+                timed = tokio::time::timeout_at(next_timeout, ws.next()) => {
+                    match timed {
+                        Ok(Some(msg)) => msg,
+                        Ok(None) => break,
+                        Err(_) => continue,
+                    }
+                }
             };
 
             let msg = msg.map_err(|e| OmonError::Llm(format!("ws streaming error: {e}")))?;
@@ -1401,6 +1509,7 @@ impl OmoBackend {
                             thread_id: thread_id.clone(),
                             turn_id: Some(turn_id_str.clone()),
                             inserted_at,
+                            open_tools: open_tool_ids.len(),
                         },
                     );
                 }
@@ -1441,6 +1550,185 @@ impl OmoBackend {
                                 toolsets
                             );
                             toolset_blocked = true;
+                        }
+                    }
+
+                    if self.is_ledger_enabled() && !toolset_blocked {
+                        if !session.state.yolo && crate::autonomy::is_bare_eval_frame(&val) {
+                            let _ = ws.send(approval_allow_response(req_id)).await;
+                            continue;
+                        }
+                        let always_mode = matches!(
+                            std::env::var("APPROVAL_MODE")
+                                .or_else(|_| std::env::var("APPROVAL_POLICY"))
+                                .as_deref(),
+                            Ok("always")
+                        );
+                        let ws_cwd = session
+                            .state
+                            .metadata
+                            .get("workspace_cwd")
+                            .and_then(Value::as_str);
+                        let classification = crate::autonomy::classify_frame(&val, ws_cwd);
+                        if let Some(pool) = &self.pool {
+                            let lead_key = if is_lane {
+                                sqlx::query_scalar::<_, String>(
+                                    "SELECT lead_session_key FROM lanes WHERE key = ?",
+                                )
+                                .bind(&session.key.channel_id)
+                                .fetch_optional(pool)
+                                .await
+                                .ok()
+                                .flatten()
+                                .unwrap_or_else(|| crate::lanes::kibitzer::DEFAULT_LEAD.to_string())
+                            } else {
+                                session.key.storage_key()
+                            };
+                            let payload_str = val.to_string();
+                            let pre = crate::autonomy::evaluate_pre_ask(
+                                pool,
+                                crate::autonomy::PreAskInput {
+                                    origin: crate::autonomy::ProposalOrigin::EngineApproval,
+                                    session_key: &session.key.storage_key(),
+                                    lead_session_key: &lead_key,
+                                    classification: &classification,
+                                    payload_json: &payload_str,
+                                    tainted: false,
+                                    yolo: session.state.yolo,
+                                    always_mode,
+                                    now: self.now_utc(),
+                                },
+                            )
+                            .await;
+                            match pre {
+                                Ok(crate::autonomy::PreAskOutcome::Allow { notice, .. }) => {
+                                    if let Some(line) = notice {
+                                        crate::report::status::record_tool_activity(
+                                            &session.key,
+                                            &line,
+                                        );
+                                        auto_allowed_notices.push(line);
+                                    }
+                                    let _ = ws.send(approval_allow_response(req_id)).await;
+                                    continue;
+                                }
+                                Ok(crate::autonomy::PreAskOutcome::Deny {
+                                    reason,
+                                    count_toward_limit,
+                                    ..
+                                }) => {
+                                    if count_toward_limit {
+                                        approval_denials += 1;
+                                        if approval_denials >= APPROVAL_DENIAL_TURN_LIMIT {
+                                            if let Some(turn_id) = &turn_id {
+                                                let interrupt = json!({
+                                                    "jsonrpc": "2.0",
+                                                    "id": 9_002,
+                                                    "method": "turn/interrupt",
+                                                    "params": { "threadId": thread_id, "turnId": turn_id }
+                                                });
+                                                let _ = ws
+                                                    .send(Message::text(interrupt.to_string()))
+                                                    .await;
+                                            }
+                                            self.active_turns
+                                                .lock()
+                                                .remove(&session.key.storage_key());
+                                            return Err(OmonError::Llm(format!(
+                                                "tool approval denied {approval_denials} times by gateway policy; turn aborted"
+                                            )));
+                                        }
+                                    }
+                                    let _ =
+                                        ws.send(approval_denial_with_reason(req_id, &reason)).await;
+                                    continue;
+                                }
+                                Ok(crate::autonomy::PreAskOutcome::Ask { proposal_id }) => {
+                                    if let Some(requester) = self.approval_requester.clone() {
+                                        let tool_id = format!("approval:{proposal_id}");
+                                        open_tool_ids.insert(tool_id.clone());
+                                        if let Some(active) = self
+                                            .active_turns
+                                            .lock()
+                                            .get_mut(&session.key.storage_key())
+                                        {
+                                            active.open_tools = open_tool_ids.len();
+                                        }
+                                        let ask_started = tokio::time::Instant::now();
+                                        let req_id_owned = req_id.clone();
+                                        let pool_clone = pool.clone();
+                                        let ask_session = if is_lane {
+                                            crate::SessionKey::from_storage_key(&lead_key)
+                                                .unwrap_or_else(|_| session.key.clone())
+                                        } else {
+                                            session.key.clone()
+                                        };
+                                        let engine_reason = val
+                                            .pointer("/params/reason")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or(&classification.summary);
+                                        let card_reason = format!(
+                                            "{engine_reason}\neffect: {} | target: {}",
+                                            classification.effect.as_str(),
+                                            classification.target
+                                        );
+                                        let cmd_display = classification.summary.clone();
+                                        let tx = approval_tx.clone();
+                                        tokio::spawn(async move {
+                                            let res = requester
+                                                .request_for_proposal(
+                                                    &ask_session,
+                                                    proposal_id,
+                                                    &cmd_display,
+                                                    &card_reason,
+                                                )
+                                                .await
+                                                .map(|(_, d)| d);
+                                            let resolution = crate::autonomy::finalize_ask_result(
+                                                &pool_clone,
+                                                proposal_id,
+                                                &classification,
+                                                "engine_approval",
+                                                &lead_key,
+                                                res,
+                                            )
+                                            .await
+                                            .unwrap_or(crate::autonomy::AskResolution::Deny {
+                                                reason: format!(
+                                                    "owner has not answered yet; continue with other work and mention pending proposal #{proposal_id} in your report"
+                                                ),
+                                                count_toward_limit: false,
+                                            });
+                                            let _ = tx.send((
+                                                req_id_owned,
+                                                tool_id,
+                                                ask_started,
+                                                resolution,
+                                            ));
+                                        });
+                                        continue;
+                                    } else {
+                                        let _ = crate::autonomy::update_proposal_decision(
+                                            pool,
+                                            proposal_id,
+                                            crate::autonomy::ProposalState::Expired,
+                                            None,
+                                            None,
+                                        )
+                                        .await;
+                                        let reason = format!(
+                                            "owner has not answered yet; continue with other work and mention pending proposal #{proposal_id} in your report"
+                                        );
+                                        let _ = ws
+                                            .send(approval_denial_with_reason(req_id, &reason))
+                                            .await;
+                                        continue;
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::warn!(session = %session.key, %error, "action ledger pre-ask failed");
+                                }
+                            }
                         }
                     }
 
@@ -1595,6 +1883,11 @@ impl OmoBackend {
                     let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
                     if !is_started {
                         open_tool_ids.remove(item_id);
+                        if let Some(active) =
+                            self.active_turns.lock().get_mut(&session.key.storage_key())
+                        {
+                            active.open_tools = open_tool_ids.len();
+                        }
                     }
 
                     if is_started && !item_id.is_empty() && started_ids.insert(item_id.to_string())
@@ -1602,6 +1895,12 @@ impl OmoBackend {
                         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
                             open_tool_ids.insert(item_id.to_string());
+                            if let Some(active) =
+                                self.active_turns.lock().get_mut(&session.key.storage_key())
+                            {
+                                active.open_tools = open_tool_ids.len();
+                            }
+                            crate::report::status::record_tool_activity(&session.key, item_type);
                             // If the agent emitted an initial status/plan message before invoking tools,
                             // immediately deliver it to Discord so the user is never left waiting in silence.
                             // The first status goes out as the acknowledgement. After that a
@@ -1789,11 +2088,15 @@ impl OmoBackend {
 
                     // A closing placeholder only helps when the user has seen nothing.
                     if !scrubbed_content.trim().is_empty() || messages_delivered == 0 {
-                        let rendered = if scrubbed_content.trim().is_empty() {
+                        let mut rendered = if scrubbed_content.trim().is_empty() {
                             "✅ Done.".to_string()
                         } else {
                             scrubbed_content.clone()
                         };
+                        if !is_cron_session && !auto_allowed_notices.is_empty() {
+                            rendered.push_str("\n\n");
+                            rendered.push_str(&auto_allowed_notices.join("\n"));
+                        }
 
                         self.deliver_rendered_result(
                             session,
@@ -2268,6 +2571,19 @@ impl AgentBackend for OmoBackend {
     }
 
     async fn steer(&self, session: &SessionContext, guidance: &str) -> Result<bool> {
+        if self.is_ledger_enabled() {
+            let guard = self.approval_requester.as_ref().map(|r| r.guard());
+            if let Ok(true) = crate::autonomy::try_resolve_short_reply(
+                self.pool.as_ref(),
+                guard,
+                &session.key,
+                guidance,
+            )
+            .await
+            {
+                return Ok(true);
+            }
+        }
         let storage_key = session.key.storage_key();
         let active = self.active_turns.lock().get(&storage_key).cloned();
         let Some(active) = active else {
@@ -2325,6 +2641,13 @@ impl AgentBackend for OmoBackend {
             );
             return Ok(true);
         }
+    }
+
+    async fn tool_in_flight(&self, session: &SessionContext) -> Option<bool> {
+        self.active_turns
+            .lock()
+            .get(&session.key.storage_key())
+            .map(|active| active.open_tools > 0)
     }
 }
 

@@ -184,6 +184,7 @@ impl PrefilterRules {
                 }
                 None
             }
+            InboxSourceKind::Github => None,
         }
     }
 

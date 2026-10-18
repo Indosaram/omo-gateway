@@ -37,7 +37,7 @@ async fn resolve_approvals(
         .pointer("/user/id")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if !config.is_allowed(user) {
+    if user.is_empty() || user != config.owner_id() || !config.is_allowed(user) {
         tracing::warn!(user, "rejected Slack approval click from unauthorized user");
         if let Some(channel) = payload_channel(payload) {
             api.post_ephemeral(channel, user, NOT_AUTHORIZED).await?;

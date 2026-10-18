@@ -26,6 +26,9 @@ pub enum LaneCommand {
     List {
         #[arg(long)]
         status: Option<LaneStatus>,
+        /// Accepted for scripts; output is always JSON.
+        #[arg(long)]
+        json: bool,
     },
     Log {
         key: String,
@@ -67,6 +70,14 @@ pub enum LaneCommand {
         path: PathBuf,
     },
     CanLaunch,
+    /// Stop a lane: cancel its running turn and start no new one until resumed.
+    Pause {
+        key: String,
+    },
+    /// Let a paused lane take turns again. Exits 2 with NOT_PAUSED when it is not paused.
+    Resume {
+        key: String,
+    },
     /// Print the session that lanes started from here would report to.
     Lead,
     Heavy {
@@ -154,12 +165,42 @@ pub async fn execute(
                 .map_err(|error| invalid(error.to_string()))?;
             start(pool, args, judge, decision).await
         }
-        LaneCommand::List { status } => {
+        LaneCommand::List { status, .. } => {
             let statuses: Vec<&str> = status
                 .as_ref()
                 .map(|status| vec![status.as_str()])
                 .unwrap_or_default();
-            Ok((0, json!({"lanes": list_lanes(pool, &statuses).await?})))
+            let paused = crate::storage::lanes::paused_lane_keys(pool).await?;
+            let lanes: Vec<Value> = list_lanes(pool, &statuses)
+                .await?
+                .into_iter()
+                .map(|lane| {
+                    let is_paused = paused.contains(&lane.key);
+                    let mut value = json!(lane);
+                    value["paused"] = json!(is_paused);
+                    value
+                })
+                .collect();
+            Ok((0, json!({"lanes": lanes})))
+        }
+        LaneCommand::Pause { key } => {
+            control_enabled()?;
+            require_lane(pool, &key).await?;
+            let by = std::env::var("PI_SESSION_ID")
+                .map(|id| format!("session:{id}"))
+                .unwrap_or_else(|_| "local-cli".into());
+            let changed = crate::storage::lanes::pause_lane(pool, &key, &by).await?;
+            wake(pool).await?;
+            Ok((0, json!({"key": key, "paused": true, "changed": changed})))
+        }
+        LaneCommand::Resume { key } => {
+            control_enabled()?;
+            require_lane(pool, &key).await?;
+            if !crate::storage::lanes::resume_lane(pool, &key).await? {
+                return Ok((2, json!({"ok": false, "key": key, "error": "NOT_PAUSED"})));
+            }
+            wake(pool).await?;
+            Ok((0, json!({"key": key, "paused": false})))
         }
         LaneCommand::Log { key, last } => {
             require_lane(pool, &key).await?;
@@ -416,6 +457,11 @@ pub async fn start(
             }
         }
     };
+    // A repo lane runs in its own worktree so parallel lanes on one repository never
+    // block each other's done checks. Created last before the row so earlier validation
+    // failures leave nothing behind; every later failure path discards it.
+    let auto_worktree = super::runner::create_auto_worktree(&cwd, &args.key).await?;
+    let cwd = auto_worktree.as_ref().map_or(cwd, |tree| tree.path.clone());
     let mut lane = Lane::new(
         &args.key,
         args.title,
@@ -431,9 +477,15 @@ pub async fn start(
     let mut created_bot = None;
     if !decision.is_hold() {
         if let Some(parent) = &args.thread {
-            let (bot, thread) = super::guard::create_lane_thread(&lane, parent)
-                .await
-                .map_err(invalid)?;
+            let (bot, thread) = match super::guard::create_lane_thread(&lane, parent).await {
+                Ok(created) => created,
+                Err(error) => {
+                    if let Some(tree) = &auto_worktree {
+                        super::runner::discard_auto_worktree(tree).await;
+                    }
+                    return Err(invalid(error));
+                }
+            };
             created_bot = Some(bot);
             lane.thread_channel_id = Some(thread);
         }
@@ -485,10 +537,23 @@ pub async fn start(
         tracing::warn!(key = %lane.key, %thread, "lane thread not kept (cap re-check or insert failed); archiving");
         super::guard::discard_orphan_thread(&thread).await;
     }
+    if inserted.is_err() {
+        if let Some(tree) = &auto_worktree {
+            super::runner::discard_auto_worktree(tree).await;
+        }
+    }
     inserted?;
     // The lane row is committed: a failure below must not report the start as
     // failed (a retry would hit "lane key already exists"), and the wake must still go out.
     let mut warnings = Vec::new();
+    if let Some(tree) = &auto_worktree {
+        if let Err(error) =
+            super::runner::register_owned_worktree(pool, &lane.key, &tree.repo, &tree.path).await
+        {
+            tracing::warn!(key = %lane.key, %error, "auto worktree registration failed");
+            warnings.push(format!("auto worktree not registered: {error}"));
+        }
+    }
     if let Err(error) = crate::usage::capture_lane_start(
         pool,
         &lane.key,
@@ -527,6 +592,16 @@ async fn require_lane(pool: &SqlitePool, key: &str) -> Result<Lane> {
     get_lane(pool, key)
         .await?
         .ok_or_else(|| invalid(format!("lane not found: {key}")))
+}
+
+fn control_enabled() -> Result<()> {
+    if super::runner::lane_control_enabled() {
+        Ok(())
+    } else {
+        Err(invalid(
+            "lane control is disabled (OMON_LANE_CONTROL_ENABLED)",
+        ))
+    }
 }
 
 pub async fn enqueue(pool: &SqlitePool, key: &str, text: &str) -> Result<()> {

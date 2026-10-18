@@ -1,0 +1,54 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "accept-edits",
+  "probe": "eval_write",
+  "prompt": "Call the eval tool exactly once (language js) with this code and nothing else: await write(\"eval-out.txt\", \"hi\")",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 11,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4a-5f4d-76a9-b3d6-4855005ae149",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281335612,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 11,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4a-5f4d-76a9-b3d6-4855005ae149",
+      "requestId": 11
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"\\\"/tmp/omon-approval-spike/eval-out.txt\\\"\"}]"
+    }
+  ],
+  "turnStatus": "completed"
+}

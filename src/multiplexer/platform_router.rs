@@ -118,6 +118,17 @@ impl OutboundDispatcher for PlatformRouter {
             .dispatch_direct_reply(session, content)
             .await
     }
+
+    async fn post_status(
+        &self,
+        session: &SessionKey,
+        content: String,
+        reply_to: Option<String>,
+    ) -> Result<Option<String>> {
+        self.for_session(session)?
+            .post_status(session, content, reply_to)
+            .await
+    }
 }
 
 #[cfg(test)]

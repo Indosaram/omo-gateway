@@ -20,8 +20,8 @@ pub use db::{
 pub use lanes::{
     append_transcript, enqueue_lane_event, get_lane, get_lane_by_thread, get_lane_history,
     insert_lane, list_lanes, mark_events_delivered, read_transcript, set_lane_fields,
-    take_undelivered_events, transition_lane, IntoReason, Lane, LaneEvent, LaneFieldsUpdate,
-    LaneHistoryEntry, LaneTranscriptEntry, LaneUpdate,
+    take_undelivered_events, take_undelivered_events_at, transition_lane, IntoReason, Lane,
+    LaneEvent, LaneFieldsUpdate, LaneHistoryEntry, LaneTranscriptEntry, LaneUpdate,
 };
 pub use message_search::{MessageSearchDocument, MessageSearchHit, MessageSearchIndex};
 pub use messenger_policy::MessengerPolicyStore;

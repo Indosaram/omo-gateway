@@ -1233,6 +1233,8 @@ mod tests {
             "cron_runs",
             "delivery_obligations",
             "approval_allowlist",
+            "action_proposals",
+            "action_precedents",
             "pending_writes",
         ] {
             assert!(tables.contains(expected), "missing table {expected}");

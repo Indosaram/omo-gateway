@@ -1,0 +1,4 @@
+CREATE TABLE action_loop_seen (
+    item_key TEXT PRIMARY KEY,
+    seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

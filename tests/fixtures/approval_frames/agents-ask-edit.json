@@ -1,0 +1,45 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "ask",
+  "probe": "edit",
+  "prompt": "Use the edit tool exactly once to replace the text \"alpha\" with \"beta\" in the file note.txt. Do not read it first and use no other tool.",
+  "method": "item/fileChange/requestApproval",
+  "frames": [
+    {
+      "id": 0,
+      "method": "item/fileChange/requestApproval",
+      "params": {
+        "threadId": "01a14c50-92b9-7a40-8a38-625661b2720f",
+        "turnId": "turn-approval",
+        "itemId": "approval-edit",
+        "startedAtMs": 1792281755834,
+        "reason": "File: note.txt\n\nPatterns:\n  - note.txt",
+        "grantRoot": null
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 0,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c50-92b9-7a40-8a38-625661b2720f",
+      "requestId": 0
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "fileChange",
+      "tool": null,
+      "status": "completed",
+      "success": null,
+      "output": "[{\"path\":\"note.txt\",\"kind\":{\"type\":\"update\",\"move_path\":null},\"diff\":\"--- note.txt\\n+++ note.txt\\n@@ -1,1 +1,1 @@\\n-alpha\\n+beta\\n\"}]"
+    }
+  ],
+  "turnStatus": "completed"
+}

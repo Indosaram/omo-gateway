@@ -1,0 +1,68 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "auto",
+  "probe": "gh_pr",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: gh pr create --title x --body x",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 3,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c49-8926-763a-b251-958c2aa989e6",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281261127,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 3,
+      "result": {
+        "decision": "decline"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c49-8926-763a-b251-958c2aa989e6",
+      "requestId": 3
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: gh pr create --title x --body x\\nNow: Run gh pr create command once (Execution)\\nNext: Report command output to user (Execution)\\n\\nRemaining items (2):\\n  - Run gh pr create command once [in_progress] (Execution)\\n  - Report command output to user [pending] (Execution)\\nOverall: 0/2 done, 2 open."
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "failed",
+      "success": false,
+      "output": "[{\"type\":\"inputText\",\"text\":\"The user rejected permission to use this specific tool call.\"}]"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: gh pr create --title x --body x\\nNow: none - all tasks closed\\nNext: none\\n\\nRemaining items: none.\\nOverall: 2/2 done, 0 open.\\nActive phase 1/1 \\\"Execution\\\" (2/2).\\n  Execution:\\n    - [ ] Run gh pr create command once (dropped)\\n    - [ ] Report command output to user (dropped)\\n\\nHandoff due:"
+    }
+  ],
+  "turnStatus": "completed"
+}

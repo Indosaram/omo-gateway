@@ -119,6 +119,7 @@ impl ApprovalPrompt {
 #[derive(Debug)]
 struct PendingApprovalEntry {
     session: Option<SessionKey>,
+    proposal_id: Option<i64>,
     sender: oneshot::Sender<ApprovalDecision>,
     created_at: std::time::Instant,
 }
@@ -411,6 +412,93 @@ impl DiscordApprovalRequester {
         }
         result
     }
+
+    pub async fn request_for_proposal(
+        &self,
+        session: &SessionKey,
+        proposal_id: i64,
+        command: &str,
+        reason: &str,
+    ) -> Result<(Uuid, ApprovalDecision), ApprovalError> {
+        let dispatcher = self
+            .dispatcher
+            .read()
+            .await
+            .clone()
+            .ok_or(ApprovalError::Cancelled)?;
+        let (display_command, display_reason) = match (
+            crate::security::redact_approval_display(command),
+            crate::security::redact_approval_display(reason),
+        ) {
+            (Ok(command), Ok(reason)) => (command, reason),
+            (Err(error), _) | (_, Err(error)) => {
+                tracing::warn!(%error, "approval display preparation failed");
+                return Err(ApprovalError::Cancelled);
+            }
+        };
+        let prompt = self
+            .guard
+            .request_with_session_and_proposal(Some(session.clone()), Some(proposal_id))
+            .await;
+        let request_id = prompt.request_id;
+        if let Some(pool) = self.guard.pool.read().await.clone() {
+            let _ = crate::autonomy::set_proposal_message_id(
+                &pool,
+                proposal_id,
+                &request_id.to_string(),
+            )
+            .await;
+        }
+        let (terminal, ended) = oneshot::channel::<()>();
+        let (sent, delivered) = oneshot::channel();
+        let action = OutboundAction::ApprovalRequest {
+            session: session.clone(),
+            request_id,
+            command: display_command,
+            reason: display_reason,
+        };
+        let delivery = tokio::spawn(async move {
+            let result =
+                tokio::time::timeout(Duration::from_secs(10), dispatcher.dispatch(action)).await;
+            let success = matches!(result, Ok(Ok(())));
+            if let Ok(Err(error)) = &result {
+                tracing::warn!(%error, %request_id, "approval delivery failed");
+            }
+            let _ = sent.send(success);
+            let _ = ended.await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(10),
+                dispatcher.dispatch(OutboundAction::ExpireApproval { request_id }),
+            )
+            .await;
+        });
+        if delivered.await != Ok(true) {
+            drop(prompt);
+            drop(terminal);
+            let _ = delivery.await;
+            return Err(ApprovalError::Cancelled);
+        }
+        let heartbeat = self.heartbeat.read().await.clone();
+        let heartbeat_interval = self.heartbeat_interval;
+        let result = match heartbeat {
+            Some(hb) => {
+                let session_clone = session.clone();
+                prompt
+                    .wait_with_heartbeat(self.timeout, heartbeat_interval, move || {
+                        hb(&session_clone);
+                    })
+                    .await
+            }
+            None => prompt.wait(self.timeout).await,
+        };
+        let result = result.map(|decision| match decision {
+            ApprovalDecision::Session => ApprovalDecision::Once,
+            other => other,
+        });
+        drop(terminal);
+        let _ = tokio::time::timeout(Duration::from_secs(2), delivery).await;
+        result.map(|d| (request_id, d))
+    }
 }
 impl SmartApprovalGuard {
     pub fn new() -> Self {
@@ -431,9 +519,11 @@ impl SmartApprovalGuard {
         let Some(pool) = pool else {
             return Ok(0);
         };
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT pattern_key FROM approval_allowlist")
-            .fetch_all(&pool)
-            .await?;
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT signature FROM action_precedents WHERE decision = 'allow' AND scope = 'exact' AND revoked_at IS NULL",
+        )
+        .fetch_all(&pool)
+        .await?;
         let mut always = self.always_cache.write().await;
         let count = rows.len();
         for (pattern,) in rows {
@@ -518,7 +608,14 @@ impl SmartApprovalGuard {
         if let Some(pool) = pool {
             let pattern = pattern_key.to_string();
             sqlx::query(
-                "INSERT INTO approval_allowlist (pattern_key) VALUES (?) ON CONFLICT(pattern_key) DO NOTHING",
+                "INSERT INTO action_precedents
+                    (signature, effect, target_scope, decision, scope, approvals, declines, origin, revoked_at)
+                 VALUES (?, 'unknown', '', 'allow', 'exact', 1, 0, 'tool_approval', NULL)
+                 ON CONFLICT(signature, scope) DO UPDATE SET
+                    decision = 'allow',
+                    approvals = action_precedents.approvals + 1,
+                    revoked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP",
             )
             .bind(&pattern)
             .execute(&pool)
@@ -575,12 +672,21 @@ impl SmartApprovalGuard {
     }
 
     pub async fn request_with_session(&self, session: Option<SessionKey>) -> ApprovalPrompt {
+        self.request_with_session_and_proposal(session, None).await
+    }
+
+    pub async fn request_with_session_and_proposal(
+        &self,
+        session: Option<SessionKey>,
+        proposal_id: Option<i64>,
+    ) -> ApprovalPrompt {
         let request_id = Uuid::new_v4();
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().insert(
             request_id,
             PendingApprovalEntry {
                 session,
+                proposal_id,
                 sender,
                 created_at: std::time::Instant::now(),
             },
@@ -594,6 +700,61 @@ impl SmartApprovalGuard {
                 pending: self.pending.clone(),
             },
         }
+    }
+
+    pub fn pending_for_session(&self, session: &SessionKey) -> Vec<Uuid> {
+        let storage_key = session.storage_key();
+        self.pending
+            .lock()
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s == session || s.storage_key() == storage_key)
+            })
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    pub fn resolve_single_session_decision(
+        &self,
+        session: &SessionKey,
+        decision: ApprovalDecision,
+    ) -> bool {
+        let storage_key = session.storage_key();
+        let mut lock = self.pending.lock();
+        let matching: Vec<Uuid> = lock
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .session
+                    .as_ref()
+                    .is_some_and(|s| s == session || s.storage_key() == storage_key)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if matching.len() != 1 {
+            return false;
+        }
+        if let Some(entry) = lock.remove(&matching[0]) {
+            return entry.sender.send(decision).is_ok();
+        }
+        false
+    }
+
+    pub fn resolve_proposal_id(&self, proposal_id: i64, decision: ApprovalDecision) -> bool {
+        let mut lock = self.pending.lock();
+        let found = lock
+            .iter()
+            .find(|(_, entry)| entry.proposal_id == Some(proposal_id))
+            .map(|(id, _)| *id);
+        if let Some(request_id) = found {
+            if let Some(entry) = lock.remove(&request_id) {
+                return entry.sender.send(decision).is_ok();
+            }
+        }
+        false
     }
 
     pub async fn resolve_custom_id(&self, custom_id: &str) -> bool {
@@ -1185,10 +1346,12 @@ mod tests {
         assert!(guard_1.is_approved(&session, &pattern_key).await);
 
         // 2. Verify row exists in DB
-        let db_rows: Vec<(String,)> = sqlx::query_as("SELECT pattern_key FROM approval_allowlist")
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
+        let db_rows: Vec<(String,)> =
+            sqlx::query_as("SELECT signature FROM action_precedents WHERE signature = ?")
+                .bind(&pattern_key)
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
         assert_eq!(db_rows.len(), 1);
         assert_eq!(db_rows[0].0, pattern_key);
 
@@ -1298,7 +1461,7 @@ mod tests {
         store.approve_always(pattern).await.unwrap();
         assert!(store.always_cache.read().await.contains(pattern));
         let persisted: Option<(String,)> =
-            sqlx::query_as("SELECT pattern_key FROM approval_allowlist WHERE pattern_key = ?")
+            sqlx::query_as("SELECT signature FROM action_precedents WHERE signature = ?")
                 .bind(pattern)
                 .fetch_optional(&pool)
                 .await

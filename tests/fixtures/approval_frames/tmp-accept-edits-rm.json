@@ -1,0 +1,85 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "accept-edits",
+  "probe": "rm",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: rm /tmp/omon-approval-spike/f",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 10,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4a-4a4d-72a6-b11a-5c5e898a9f26",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281334837,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4a-4a4d-72a6-b11a-5c5e898a9f26",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281337415,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ rm /tmp/omon-approval-spike/f\n\nPatterns:\n  - rm",
+        "command": "rm /tmp/omon-approval-spike/f",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 10,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 13,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4a-4a4d-72a6-b11a-5c5e898a9f26",
+      "requestId": 10
+    },
+    {
+      "threadId": "01a14c4a-4a4d-72a6-b11a-5c5e898a9f26",
+      "requestId": 13
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"{\\\"text\\\":\\\"(no output)\\\",\\\"details\\\":{\\\"status\\\":\\\"completed\\\"},\\\"images\\\":[],\\\"hasError\\\":false}\"}]"
+    }
+  ],
+  "turnStatus": "completed"
+}

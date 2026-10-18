@@ -1,0 +1,99 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "ask",
+  "probe": "git_push",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: git push origin lane/x",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 3,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4f-d224-7e36-bbe2-77f9a1ae7cf8",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281757029,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 10,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4f-d224-7e36-bbe2-77f9a1ae7cf8",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281761237,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ git push origin lane/x\n\nPatterns:\n  - git push",
+        "command": "git push origin lane/x",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 3,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 10,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4f-d224-7e36-bbe2-77f9a1ae7cf8",
+      "requestId": 3
+    },
+    {
+      "threadId": "01a14c4f-d224-7e36-bbe2-77f9a1ae7cf8",
+      "requestId": 10
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: git push origin lane/x\\nNow: Run git push origin lane/x (Push)\\nNext: none\\n\\nRemaining items (1):\\n  - Run git push origin lane/x [in_progress] (Push)\\nOverall: 0/1 done, 1 open.\\nActive phase 1/1 \\\"Push\\\" (0/1).\\n  Push:\\n    - [ ] Run git push origin lane/x (in progress)\\n\\nHandoff due: the pla"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Enumerating objects: 5, done.\\nCounting objects: 100% (5/5), done.\\nDelta compression using up to 16 threads\\nCompressing objects: 100% (2/2), done.\\nWriting objects: 100% (5/5), 314 bytes | 314.00 KiB/s, done.\\nTotal 5 (delta 0), reused 0 (delta 0), pack-reused 0 (from 0)\\nTo /tmp/omon-approval-spike-remote.git\\n * [new branch]      lane/x -> lane/x\"}]"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: git push origin lane/x\\nNow: none - all tasks closed\\nNext: none\\n\\nRemaining items: none.\\nOverall: 1/1 done, 0 open.\\nActive phase 1/1 \\\"Push\\\" (1/1).\\n  Push:\\n    - [X] Run git push origin lane/x\\n\\nHandoff due: every task is closed. Your final message is the Ask / For you / Now / Next block, "
+    }
+  ],
+  "turnStatus": "completed"
+}

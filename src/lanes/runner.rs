@@ -29,6 +29,43 @@ tokio::task_local! {
 
 pub const DEFAULT_MAX_TURNS: i64 = 24;
 
+/// A working lane quiet this long gets one progress nudge per silence.
+pub const NUDGE_AFTER: chrono::Duration = chrono::Duration::minutes(15);
+pub const NUDGE_TEXT: &str = "[LEAD] 진행 상황을 [REPORT] 한 줄로 보고하고 계속하세요";
+
+/// OMON_LANE_CONTROL_ENABLED (default true), read once per process.
+pub fn lane_control_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("OMON_LANE_CONTROL_ENABLED").map_or(true, |value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+    })
+}
+
+/// OMON_LANE_AUTO_WORKTREE (default true), read once per process.
+pub fn auto_worktree_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("OMON_LANE_AUTO_WORKTREE").map_or(true, |value| {
+            !matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        })
+    })
+}
+
+async fn paused(pool: &SqlitePool, key: &str) -> Result<bool> {
+    if !lane_control_enabled() {
+        return Ok(false);
+    }
+    crate::storage::lanes::is_lane_paused(pool, key).await
+}
+
 async fn reopen_generation(pool: &SqlitePool, key: &str) -> Result<i64> {
     let (generation,): (i64,) = sqlx::query_as(
         "SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened'",
@@ -375,6 +412,127 @@ pub async fn register_owned_worktree(
     Ok(())
 }
 
+/// A worktree `lane start` created for one lane.
+#[derive(Debug, Clone)]
+pub struct AutoWorktree {
+    pub repo: PathBuf,
+    pub path: PathBuf,
+    pub branch: String,
+}
+
+/// Creates `<repo-parent>/<repo-name>-lanes/<key>` on a new `lane/<key>` branch from HEAD
+/// when `cwd` (canonical) is the root of a main git worktree, so parallel lanes on one
+/// repository never share a tree. Returns None, and logs why, for any other cwd.
+pub async fn create_auto_worktree(
+    cwd: &std::path::Path,
+    key: &str,
+) -> Result<Option<AutoWorktree>> {
+    if !auto_worktree_enabled() {
+        return Ok(None);
+    }
+    let probe = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--absolute-git-dir",
+            "--git-common-dir",
+        ])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(io_error)?;
+    if !probe.status.success() {
+        let stderr = String::from_utf8_lossy(&probe.stderr);
+        if stderr.contains("not a git repository") {
+            tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: not a git repository");
+            return Ok(None);
+        }
+        return Err(OmonError::Config(format!(
+            "auto worktree probe {}: {}",
+            cwd.display(),
+            stderr.trim()
+        )));
+    }
+    let stdout = String::from_utf8_lossy(&probe.stdout).into_owned();
+    let mut lines = stdout.lines();
+    let (Some(top), Some(git_dir), Some(common)) = (lines.next(), lines.next(), lines.next())
+    else {
+        return Err(OmonError::Config(
+            "auto worktree probe: unexpected output".into(),
+        ));
+    };
+    let top = tokio::fs::canonicalize(top).await.map_err(io_error)?;
+    let git_dir = tokio::fs::canonicalize(git_dir).await.map_err(io_error)?;
+    let common = tokio::fs::canonicalize(common).await.map_err(io_error)?;
+    if git_dir != common {
+        tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: cwd is already a linked worktree");
+        return Ok(None);
+    }
+    if top != cwd {
+        tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: cwd is not the repository root");
+        return Ok(None);
+    }
+    let repo = top.to_string_lossy().into_owned();
+    if git(&repo, &["rev-parse", "--verify", "--quiet", "HEAD"])
+        .await
+        .is_err()
+    {
+        tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: repository has no commits");
+        return Ok(None);
+    }
+    let (Some(name), Some(parent)) = (top.file_name(), top.parent()) else {
+        return Err(OmonError::Config(
+            "auto worktree: repository root has no parent".into(),
+        ));
+    };
+    let lanes_dir = parent.join(format!("{}-lanes", name.to_string_lossy()));
+    tokio::fs::create_dir_all(&lanes_dir)
+        .await
+        .map_err(io_error)?;
+    let path = lanes_dir.join(key);
+    let branch = format!("lane/{key}");
+    let target = path.to_string_lossy().into_owned();
+    git(&repo, &["worktree", "add", "-b", &branch, &target, "HEAD"]).await?;
+    let path = tokio::fs::canonicalize(&path).await.map_err(io_error)?;
+    tracing::info!(key, path = %path.display(), "auto worktree created");
+    Ok(Some(AutoWorktree {
+        repo: top,
+        path,
+        branch,
+    }))
+}
+
+/// Undoes `create_auto_worktree` when the lane row was never stored. The tree is fresh
+/// and clean and its branch sits at HEAD, so neither command needs a force flag.
+pub async fn discard_auto_worktree(tree: &AutoWorktree) {
+    let repo = tree.repo.to_string_lossy();
+    if let Err(error) = git(&repo, &["worktree", "remove", &tree.path.to_string_lossy()]).await {
+        tracing::warn!(path = %tree.path.display(), %error, "unused auto worktree not removed");
+        return;
+    }
+    if let Err(error) = git(&repo, &["branch", "-d", &tree.branch]).await {
+        tracing::warn!(branch = %tree.branch, %error, "unused auto worktree branch not deleted");
+    }
+}
+
+/// Why a worktree must survive the sweep: local changes, or commits no remote has.
+async fn keep_reason(path: &str) -> Result<Option<&'static str>> {
+    if !git(path, &["status", "--porcelain"]).await?.is_empty() {
+        return Ok(Some("dirty"));
+    }
+    if !git(path, &["remote"]).await?.is_empty()
+        && !git(path, &["log", "HEAD", "--not", "--remotes", "--oneline"])
+            .await?
+            .is_empty()
+    {
+        return Ok(Some("unpushed"));
+    }
+    Ok(None)
+}
+
 async fn validate_owned(worktree: &crate::storage::lanes::OwnedWorktree) -> Result<()> {
     let proof = worktree_proof(&worktree.repo, &worktree.path).await?;
     if proof
@@ -638,6 +796,7 @@ pub struct CapturingDispatcher {
     pool: SqlitePool,
     streams: tokio::sync::Mutex<HashMap<(String, uuid::Uuid), StreamCapture>>,
     posts_ready: Arc<Notify>,
+    approval_dispatcher: Option<Arc<dyn OutboundDispatcher>>,
 }
 
 impl CapturingDispatcher {
@@ -646,7 +805,13 @@ impl CapturingDispatcher {
             pool,
             streams: tokio::sync::Mutex::new(HashMap::new()),
             posts_ready: Arc::new(Notify::new()),
+            approval_dispatcher: None,
         }
+    }
+
+    pub fn with_approval_dispatcher(mut self, dispatcher: Arc<dyn OutboundDispatcher>) -> Self {
+        self.approval_dispatcher = Some(dispatcher);
+        self
     }
 }
 
@@ -690,10 +855,55 @@ impl OutboundDispatcher for CapturingDispatcher {
                 format!("[file] {}", path.display()),
                 uuid::Uuid::new_v4().to_string(),
             )),
-            OutboundAction::ApprovalRequest { .. } => {
-                return Err(OmonError::Config(
-                    "lane approval requires lead intervention".into(),
-                ));
+            OutboundAction::ApprovalRequest {
+                session,
+                request_id,
+                command,
+                reason,
+            } => {
+                let lead_key = if session.platform == "lane" {
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT lead_session_key FROM lanes WHERE key = ?",
+                    )
+                    .bind(&session.channel_id)
+                    .fetch_optional(&self.pool)
+                    .await?
+                    .unwrap_or_else(|| super::kibitzer::DEFAULT_LEAD.to_string())
+                } else {
+                    session.storage_key()
+                };
+                let owner_session =
+                    SessionKey::from_storage_key(&lead_key).unwrap_or_else(|_| session.clone());
+                if let Some(dispatcher) = &self.approval_dispatcher {
+                    dispatcher
+                        .dispatch(OutboundAction::ApprovalRequest {
+                            session: owner_session,
+                            request_id,
+                            command,
+                            reason,
+                        })
+                        .await?;
+                    return Ok(());
+                }
+                let body = format!(
+                    "[APPROVAL_REQUEST] lane={} request_id={} command={} reason={}",
+                    session.channel_id, request_id, command, reason
+                );
+                sqlx::query(
+                    "INSERT INTO lane_events (lane_key, lead_session_key, kind, body, created_at)
+                     VALUES (?, ?, 'action_loop', ?, ?)",
+                )
+                .bind(if session.platform == "lane" {
+                    Some(session.channel_id.as_str())
+                } else {
+                    None
+                })
+                .bind(&lead_key)
+                .bind(&body)
+                .bind(Utc::now())
+                .execute(&self.pool)
+                .await?;
+                return Ok(());
             }
             OutboundAction::DeleteMessage { .. }
             | OutboundAction::Typing { .. }
@@ -926,6 +1136,90 @@ impl LaneRunner {
         result
     }
 
+    /// Startup sweep: an owned worktree still registered to a closed or failed lane is
+    /// removed through the close path (a failed lane takes a forced close, a closed one
+    /// replays its completed close intent). A dirty or unpushed worktree is kept and
+    /// reported once as a `worktree_kept` lane event.
+    pub async fn sweep_orphan_worktrees(&self) -> Result<()> {
+        if !auto_worktree_enabled() {
+            return Ok(());
+        }
+        let lanes: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT DISTINCT l.key, l.status, l.lead_session_key FROM lanes l
+             JOIN lane_owned_worktrees w ON w.lane_key = l.key
+             WHERE w.state = 'registered' AND l.status IN ('closed','failed') ORDER BY l.key",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for (key, status, lead) in lanes {
+            let result: Result<()> = async {
+                let paths: Vec<String> = sqlx::query_scalar(
+                    "SELECT path FROM lane_owned_worktrees WHERE lane_key=? AND state='registered' ORDER BY id",
+                )
+                .bind(&key)
+                .fetch_all(&self.pool)
+                .await?;
+                let mut kept = Vec::new();
+                for path in &paths {
+                    if let Some(reason) = keep_reason(path).await? {
+                        kept.push(format!("{reason} {path}"));
+                    }
+                }
+                if !kept.is_empty() {
+                    let body = super::scrub::scrub(&format!(
+                        "worktree kept for {status} lane {key}: {}",
+                        kept.join("; ")
+                    ));
+                    let reported: bool = sqlx::query_scalar(
+                        "SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key=? AND kind='worktree_kept' AND body=?)",
+                    )
+                    .bind(&key)
+                    .bind(&body)
+                    .fetch_one(&self.pool)
+                    .await?;
+                    if !reported {
+                        crate::storage::lanes::enqueue_lane_event(
+                            &self.pool,
+                            Some(&key),
+                            &lead,
+                            "worktree_kept",
+                            &body,
+                        )
+                        .await?;
+                    }
+                    return Ok(());
+                }
+                if status == "failed" {
+                    let id = crate::storage::lanes::request_close(
+                        &self.pool,
+                        &key,
+                        true,
+                        Some("forced: startup sweep of orphan lane worktree"),
+                    )
+                    .await?;
+                    return self.close_intent(id).await;
+                }
+                let intent: Option<crate::storage::lanes::CloseIntent> = sqlx::query_as(
+                    "SELECT * FROM lane_close_intents WHERE lane_key=? AND state='completed' ORDER BY id DESC LIMIT 1",
+                )
+                .bind(&key)
+                .fetch_optional(&self.pool)
+                .await?;
+                match intent {
+                    Some(intent) => remove_owned(&self.pool, &intent).await,
+                    None => Err(OmonError::Config(
+                        "closed lane has no completed close intent".into(),
+                    )),
+                }
+            }
+            .await;
+            if let Err(error) = result {
+                tracing::warn!(%key, %error, "orphan lane worktree sweep failed");
+            }
+        }
+        Ok(())
+    }
+
     pub async fn apply_owner_replies(&self) -> Result<()> {
         let replies: Vec<(String,String,Option<String>,i64)>=sqlx::query_as("SELECT message_id,lane_key,text,generation FROM lane_owner_replies WHERE state='pending' AND error IS NULL ORDER BY rowid").fetch_all(&self.pool).await?;
         for (id, key, text, generation) in replies {
@@ -1063,6 +1357,9 @@ impl LaneRunner {
         sqlx::query("UPDATE lane_close_intents SET state='pending' WHERE state='running'")
             .execute(&self.pool)
             .await?;
+        if let Err(error) = self.sweep_orphan_worktrees().await {
+            tracing::warn!(%error, "orphan lane worktree sweep failed");
+        }
         posts::recover(&self.pool).await?;
         if let Some(sink) = &self.post_sink {
             posts::drain_with_status(&self.pool, sink.as_ref(), Utc::now()).await?;
@@ -1104,6 +1401,10 @@ impl LaneRunner {
                 if released { continue; }
                 let closing: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_close_intents WHERE lane_key=? AND state IN ('pending','running'))").bind(&lane.key).fetch_one(&self.pool).await?;
                 if closing { continue; }
+                if paused(&self.pool, &lane.key).await? {
+                    if let Some((notify, _)) = active.get(&lane.key) { notify.notify_one(); }
+                    continue;
+                }
                 if !active.contains_key(&lane.key) {
                     let notify = Arc::new(Notify::new());
                     let runner = self.clone();
@@ -1214,6 +1515,9 @@ impl LaneRunner {
         shutdown: CancellationToken,
     ) -> Result<()> {
         let initial = self.lane(key).await?;
+        if paused(&self.pool, key).await? {
+            return Ok(());
+        }
         if crate::sessions::external::ExternalDriver::<
             crate::sessions::registry::ProcessCommandRunner,
         >::is_external(&self.pool, key)
@@ -1265,9 +1569,11 @@ impl LaneRunner {
             }
             let lane = self.lane(key).await?;
             let closing: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_close_intents WHERE lane_key=? AND state IN ('pending','running'))").bind(key).fetch_one(&self.pool).await?;
+            // A paused lane ends its task; the service respawns it after `lane resume` wakes it.
             if shutdown.is_cancelled()
                 || closing
                 || !matches!(lane.status.as_str(), "working" | "not_done")
+                || paused(&self.pool, key).await?
             {
                 return Ok(());
             }
@@ -1296,7 +1602,7 @@ impl LaneRunner {
                     crate::agent::ModelPurpose::LaneSmall,
                 ))
             {
-                let (failed_checks,): (i64,) = sqlx::query_as("SELECT count(*) FROM lane_history WHERE lane_key = ? AND to_status = 'not_done'")
+                let (failed_checks,): (i64,) = sqlx::query_as("SELECT count(*) FROM lane_history WHERE lane_key = ? AND to_status = 'not_done' AND COALESCE(reason, '') NOT IN ('paused', 'resumed')")
                     .bind(key).fetch_one(&self.pool).await?;
                 if failed_checks >= 2 {
                     let mut tx = self.pool.begin().await?;
@@ -1431,8 +1737,15 @@ impl LaneRunner {
                                 continue;
                             }
                             self.posts_ready.notify_one();
+                            if !turn_task.is_finished() {
+                                self.nudge_quiet(key, &steering_session, generation).await?;
+                            }
                         }
                         _ = notify.notified(), if !turn_cancel.is_cancelled() => {
+                            if paused(&self.pool, key).await? {
+                                turn_cancel.cancel();
+                                continue;
+                            }
                             let current = self.lane(key).await?;
                             let current_generation = reopen_generation(&self.pool, key).await?;
                             if current_generation != generation || !matches!(current.status.as_str(), "working" | "not_done" | "done_claimed") {
@@ -1510,8 +1823,10 @@ impl LaneRunner {
                 .metadata
                 .get("omo_thread_id")
                 .and_then(|value| value.as_str());
+            let paused_now = paused(&self.pool, key).await?;
             let outcome_text = match &outcome {
                 Ok(()) => "completed".into(),
+                Err(_) if paused_now => "paused".into(),
                 Err(error) => format!("error: {error}"),
             };
             let mut tx = self.pool.begin().await?;
@@ -1566,7 +1881,7 @@ impl LaneRunner {
                         .bind(Utc::now()).bind(id).bind(key).bind(key).bind(generation).execute(&self.pool).await?;
                 }
             }
-            if shutdown.is_cancelled() {
+            if shutdown.is_cancelled() || paused_now {
                 return Ok(());
             }
             errors = if outcome.is_err() { errors + 1 } else { 0 };
@@ -1614,6 +1929,54 @@ impl LaneRunner {
                 }
             }
         }
+    }
+
+    pub async fn nudge_quiet(
+        &self,
+        key: &str,
+        session: &SessionContext,
+        generation: i64,
+    ) -> Result<bool> {
+        self.nudge_quiet_at(key, session, generation, Utc::now())
+            .await
+    }
+
+    /// Steers a working, unpaused lane that has been quiet for [`NUDGE_AFTER`] once per
+    /// silence, and only when the backend reports no tool item in flight. A silence ends
+    /// when captured output moves `last_activity_at` past the previous nudge.
+    pub async fn nudge_quiet_at(
+        &self,
+        key: &str,
+        session: &SessionContext,
+        generation: i64,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<bool> {
+        if !lane_control_enabled() || paused(&self.pool, key).await? {
+            return Ok(false);
+        }
+        let lane = self.lane(key).await?;
+        if lane.status != "working"
+            || lane.last_activity_at > now - NUDGE_AFTER
+            || reopen_generation(&self.pool, key).await? != generation
+        {
+            return Ok(false);
+        }
+        let nudged: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key = ? AND kind = 'nudged' AND created_at >= ?)")
+            .bind(key).bind(lane.last_activity_at).fetch_one(&self.pool).await?;
+        if nudged || self.backend.tool_in_flight(session).await != Some(false) {
+            return Ok(false);
+        }
+        match self.backend.steer(session, NUDGE_TEXT).await {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(error) => {
+                tracing::warn!(%key, %error, "lane nudge deferred");
+                return Ok(false);
+            }
+        }
+        sqlx::query("INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) VALUES (?, ?, 'nudged', ?, ?)")
+            .bind(key).bind(&lane.lead_session_key).bind(NUDGE_TEXT).bind(now).execute(&self.pool).await?;
+        Ok(true)
     }
 
     async fn lane(&self, key: &str) -> Result<Lane> {

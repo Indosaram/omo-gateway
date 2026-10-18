@@ -1,0 +1,85 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "auto",
+  "probe": "git_status",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: git status",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 2,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4c-56d3-793a-b35a-9abe3c249f41",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281476803,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4c-56d3-793a-b35a-9abe3c249f41",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281477093,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ git status\n\nPatterns:\n  - git status",
+        "command": "git status",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 2,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 3,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4c-56d3-793a-b35a-9abe3c249f41",
+      "requestId": 2
+    },
+    {
+      "threadId": "01a14c4c-56d3-793a-b35a-9abe3c249f41",
+      "requestId": 3
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"On branch main\\nChanges to be committed:\\n  (use \\\"git restore --staged <file>...\\\" to unstage)\\n\\tnew file:   staged.txt\\n\\nChanges not staged for commit:\\n  (use \\\"git add <file>...\\\" to update what will be committed)\\n  (use \\\"git restore <file>...\\\" to discard changes in working directory)\\n\\tmodified:   note.txt\\n\\nUntracked files:\\n  (use \\\"git add <file>...\\\" to"
+    }
+  ],
+  "turnStatus": "completed"
+}

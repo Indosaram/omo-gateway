@@ -2,6 +2,7 @@
 
 pub mod cli;
 pub mod digest;
+pub mod health;
 pub mod list;
 pub mod prefilter;
 pub mod proposals;
@@ -46,6 +47,7 @@ pub enum InboxSourceKind {
     Discord,
     Imessage,
     Slack,
+    Github,
 }
 
 impl InboxSourceKind {
@@ -56,6 +58,7 @@ impl InboxSourceKind {
             Self::Discord => "discord",
             Self::Imessage => "imessage",
             Self::Slack => "slack",
+            Self::Github => "github",
         }
     }
 }
@@ -292,6 +295,10 @@ async fn commit_source(
     .bind(Utc::now())
     .execute(&mut *tx)
     .await?;
+    sqlx::query("DELETE FROM source_health WHERE source = ?")
+        .bind(source.as_str())
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(stats)
 }

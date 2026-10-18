@@ -76,6 +76,8 @@ pub struct SlackEgress {
     dead_targets_loaded: OnceCell<()>,
     probe_interval: Duration,
     upload_limit: u64,
+    claim_filter: crate::report::claims::StreamClaimFilter,
+    claim_delay: Duration,
 }
 
 impl SlackEgress {
@@ -96,7 +98,14 @@ impl SlackEgress {
             dead_targets_loaded: OnceCell::new(),
             probe_interval: DEAD_TARGET_PROBE_INTERVAL,
             upload_limit: MAX_UPLOAD_BYTES,
+            claim_filter: crate::report::claims::StreamClaimFilter::new(),
+            claim_delay: crate::report::claims::DEFAULT_REMEASURE_DELAY,
         }
+    }
+
+    pub fn with_claim_delay(mut self, delay: Duration) -> Self {
+        self.claim_delay = delay;
+        self
     }
 
     /// Extra root `MEDIA:` directives may upload from, besides the temp directories.
@@ -161,7 +170,12 @@ impl SlackEgress {
         content: &str,
         reply_to: Option<&str>,
     ) -> Result<()> {
-        let filtered = filter_reasoning(content);
+        let (claim_stripped, extracted_claims) = if crate::report::claims::report_claims_enabled() {
+            crate::report::claims::strip_and_extract_claims(content)
+        } else {
+            (content.to_string(), Vec::new())
+        };
+        let filtered = filter_reasoning(&claim_stripped);
         if filtered.is_empty() || is_explicit_silence(&filtered) {
             return Ok(());
         }
@@ -180,8 +194,18 @@ impl SlackEgress {
         };
         let (without_media, media_error) = self.deliver_media(channel, thread, &decorated).await;
         let (text, tables) = transform_markdown_tables_to_images(&without_media);
+        let mut first_ts = None;
         for chunk in render(&text) {
-            self.post(channel, &chunk, thread, None).await?;
+            let ts = self.post(channel, &chunk, thread, None).await?;
+            if first_ts.is_none() {
+                first_ts = Some(ts);
+            }
+        }
+        if let (Some(pool), Some(ts)) = (self.pool.clone(), first_ts) {
+            if !extracted_claims.is_empty() {
+                self.spawn_claim_checks(pool, session.clone(), ts, extracted_claims)
+                    .await;
+            }
         }
         let tables_result = self.deliver_tables(channel, thread, &tables).await;
         match media_error {
@@ -218,7 +242,13 @@ impl SlackEgress {
             return Ok(());
         }
         let thread = reply_thread(session, chunk.reply_to.as_deref());
-        let filtered = filter_reasoning(&chunk.content);
+        let (claim_stripped, extracted_claims) = if crate::report::claims::report_claims_enabled() {
+            self.claim_filter
+                .filter_chunk(&key.0, chunk.stream_id, &chunk.content, chunk.is_final)
+        } else {
+            (chunk.content.clone(), Vec::new())
+        };
+        let filtered = filter_reasoning(&claim_stripped);
 
         if !chunk.is_final {
             if state
@@ -281,8 +311,15 @@ impl SlackEgress {
             }
             state.final_sent = index + 1;
         }
+        let final_ts = state.ts.clone();
         drop(state);
         self.finish_stream(key);
+        if let (Some(pool), Some(ts)) = (self.pool.clone(), final_ts) {
+            if !extracted_claims.is_empty() {
+                self.spawn_claim_checks(pool, session.clone(), ts, extracted_claims)
+                    .await;
+            }
+        }
         let tables_result = self.deliver_tables(channel, thread, &tables).await;
         match media_error {
             Some(error) => Err(error),
@@ -295,6 +332,53 @@ impl SlackEgress {
         let mut completed = self.completed.lock();
         completed.retain(|_, at| at.elapsed() < COMPLETED_RETENTION);
         completed.insert(key, Instant::now());
+    }
+
+    async fn spawn_claim_checks(
+        &self,
+        pool: SqlitePool,
+        session: SessionKey,
+        platform_message_id: String,
+        claims: Vec<crate::report::claims::ExtractedClaim>,
+    ) {
+        struct SlackClaimReplyDispatcher {
+            api: SlackApi,
+        }
+        #[async_trait]
+        impl OutboundDispatcher for SlackClaimReplyDispatcher {
+            async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+                if let OutboundAction::SendMessage {
+                    session,
+                    content,
+                    reply_to,
+                } = action
+                {
+                    let thread = reply_thread(&session, reply_to.as_deref());
+                    let _ = self
+                        .api
+                        .post_message(&session.channel_id, &content, thread, None)
+                        .await?;
+                }
+                Ok(())
+            }
+        }
+        let disp: Arc<dyn OutboundDispatcher> = Arc::new(SlackClaimReplyDispatcher {
+            api: self.api.clone(),
+        });
+        let cwd = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+        let _ = crate::report::claims::record_and_schedule_claims(
+            pool,
+            disp,
+            session,
+            platform_message_id,
+            claims,
+            cwd,
+            self.claim_delay,
+        )
+        .await;
     }
 
     /// Uploads every `MEDIA:` directive and returns the text without them. Media problems never
@@ -706,6 +790,21 @@ impl OutboundDispatcher for SlackEgress {
             }
             OutboundAction::ExpireApproval { request_id } => self.expire_approval(request_id).await,
         }
+    }
+
+    async fn post_status(
+        &self,
+        session: &SessionKey,
+        content: String,
+        reply_to: Option<String>,
+    ) -> Result<Option<String>> {
+        let channel = session.channel_id.as_str();
+        self.skip_dead(channel).await?;
+        let Some(text) = render(&content).into_iter().next() else {
+            return Ok(None);
+        };
+        let thread = reply_thread(session, reply_to.as_deref());
+        self.post(channel, &text, thread, None).await.map(Some)
     }
 }
 

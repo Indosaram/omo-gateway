@@ -214,11 +214,12 @@ mod sec01 {
                         first,
                         json!({"name":"execute","arguments":{"sentinel":"A"}})
                     );
-                    let persisted: i64 =
-                        sqlx::query_scalar("SELECT COUNT(*) FROM approval_allowlist")
-                            .fetch_one(pool)
-                            .await
-                            .unwrap();
+                    let persisted: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM action_precedents WHERE origin != 'legacy_allowlist'",
+                    )
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
                     assert_eq!(persisted, 1, "Always must reach real SQLite persistence");
 
                     let second = registry

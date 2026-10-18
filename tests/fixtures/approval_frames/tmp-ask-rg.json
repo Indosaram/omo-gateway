@@ -1,0 +1,99 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "ask",
+  "probe": "rg",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: rg x",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 11,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4b-4167-7abf-a5ba-bff202c64fa3",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281408554,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4b-4167-7abf-a5ba-bff202c64fa3",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281408682,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ rg x\n\nPatterns:\n  - rg",
+        "command": "rg x",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 11,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 12,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4b-4167-7abf-a5ba-bff202c64fa3",
+      "requestId": 11
+    },
+    {
+      "threadId": "01a14c4b-4167-7abf-a5ba-bff202c64fa3",
+      "requestId": 12
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: rg x\\nNow: Run rg x command via bash (Execution)\\nNext: Report rg x output to user (Execution)\\n\\nRemaining items (2):\\n  - Run rg x command via bash [in_progress] (Execution)\\n  - Report rg x output to user [pending] (Execution)\\nOverall: 0/2 done, 2 open.\\nActive phase 1/1 \\\"Execution\\\" (0/2).\\n"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Command exited with code 1\"}]"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: rg x\\nNow: none - all tasks closed\\nNext: none\\n\\nRemaining items: none.\\nOverall: 2/2 done, 0 open.\\nActive phase 1/1 \\\"Execution\\\" (2/2).\\n  Execution:\\n    - [X] Run rg x command via bash\\n    - [X] Report rg x output to user\\n\\nHandoff due: every task is closed. Your final message is the Ask /"
+    }
+  ],
+  "turnStatus": "completed"
+}

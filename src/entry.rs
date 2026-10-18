@@ -1,6 +1,8 @@
 use clap::{Parser, Subcommand};
 use omon_gateway::migrate::MigrateArgs;
-use omon_gateway::profiles::{apply_block, export_json, export_profile};
+use omon_gateway::profiles::{
+    apply_block_with_markers, export_json, export_profile, BlockMarkers, DEFAULT_BLOCK_NAME,
+};
 use omon_gateway::{OmonError, Result};
 use tokio_util::sync::CancellationToken;
 
@@ -65,6 +67,7 @@ enum Command {
     Sessions(omon_gateway::sessions::cli::SessionsArgs),
     Usage(omon_gateway::usage::UsageArgs),
     Cron(omon_gateway::cron::report::CronArgs),
+    Autonomy(omon_gateway::autonomy::AutonomyArgs),
 }
 
 #[derive(Debug, clap::Args)]
@@ -83,6 +86,9 @@ enum ProfileCommand {
         bot_id: String,
         #[arg(long)]
         block_file: std::path::PathBuf,
+        /// Block name: the file's `<!-- omon:<name>:begin/end -->` markers.
+        #[arg(long, default_value = DEFAULT_BLOCK_NAME)]
+        block: String,
     },
 }
 
@@ -117,6 +123,9 @@ async fn main() -> Result<()> {
     if let Command::Sessions(args) = command {
         std::process::exit(omon_gateway::sessions::cli::run(args).await);
     }
+    if let Command::Autonomy(args) = command {
+        std::process::exit(omon_gateway::autonomy::run_cli(args).await);
+    }
     legacy::dashboard::init_tracing();
 
     match command {
@@ -144,6 +153,7 @@ async fn main() -> Result<()> {
         Command::Sessions(args) => std::process::exit(omon_gateway::sessions::cli::run(args).await),
         Command::Usage(args) => std::process::exit(omon_gateway::usage::run(args).await),
         Command::Cron(args) => std::process::exit(omon_gateway::cron::report::run(args).await),
+        Command::Autonomy(args) => std::process::exit(omon_gateway::autonomy::run_cli(args).await),
     }
 }
 
@@ -169,11 +179,17 @@ async fn run_profile(args: ProfileArgs) -> i32 {
                     .ok_or_else(|| format!("unknown bot id: {bot_id}"))?;
                 export_json(&profile).map_err(|error| error.to_string())
             }
-            ProfileCommand::ApplyBlock { bot_id, block_file } => {
+            ProfileCommand::ApplyBlock {
+                bot_id,
+                block_file,
+                block: block_name,
+            } => {
+                let markers =
+                    BlockMarkers::named(&block_name).map_err(|error| error.to_string())?;
                 let block = tokio::fs::read_to_string(block_file)
                     .await
                     .map_err(|error| error.to_string())?;
-                let applied = apply_block(database.pool(), &bot_id, &block)
+                let applied = apply_block_with_markers(database.pool(), &bot_id, &markers, &block)
                     .await
                     .map_err(|error| error.to_string())?;
                 serde_json::to_string_pretty(&serde_json::json!({
