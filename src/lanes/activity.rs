@@ -298,10 +298,10 @@ impl LaneActivity {
         let now = self.clock.now();
         let mut tx = self.pool.begin().await?;
         let lane: Option<Lane> = if let Some(generation) = generation {
-            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? RETURNING *")
+            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? AND NOT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = lanes.key AND resumed_at IS NULL) AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? RETURNING *")
                 .bind(now).bind(now).bind(key).bind(now - Duration::minutes(20)).bind(key).bind(generation).fetch_optional(&mut *tx).await?
         } else {
-            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? RETURNING *")
+            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? AND NOT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = lanes.key AND resumed_at IS NULL) RETURNING *")
                 .bind(now).bind(now).bind(key).bind(now - Duration::minutes(20)).fetch_optional(&mut *tx).await?
         };
         let mut decision = ActivityDecision::default();

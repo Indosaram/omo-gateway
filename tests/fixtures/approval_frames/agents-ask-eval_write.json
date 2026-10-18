@@ -1,0 +1,54 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "ask",
+  "probe": "eval_write",
+  "prompt": "Call the eval tool exactly once (language js) with this code and nothing else: await write(\"eval-out.txt\", \"hi\")",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 2,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c50-6e2d-75a3-ad2b-433f09c36140",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281756401,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 2,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c50-6e2d-75a3-ad2b-433f09c36140",
+      "requestId": 2
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"\\\"/Users/indo/.omon/workspace/agents/spike-approval/eval-out.txt\\\"\"}]"
+    }
+  ],
+  "turnStatus": "completed"
+}

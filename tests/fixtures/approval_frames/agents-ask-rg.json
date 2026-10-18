@@ -1,0 +1,85 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "ask",
+  "probe": "rg",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: rg x",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 4,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4f-3781-71e5-ac1a-ce9f7ee48252",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281757320,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4f-3781-71e5-ac1a-ce9f7ee48252",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281759202,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ rg x\n\nPatterns:\n  - rg",
+        "command": "rg x",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 4,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 7,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4f-3781-71e5-ac1a-ce9f7ee48252",
+      "requestId": 4
+    },
+    {
+      "threadId": "01a14c4f-3781-71e5-ac1a-ce9f7ee48252",
+      "requestId": 7
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Command exited with code 1\"}]"
+    }
+  ],
+  "turnStatus": "completed"
+}

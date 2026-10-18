@@ -119,6 +119,81 @@ fn workspace_bot_alias_from(
     (source != bot_id).then_some(source)
 }
 
+/// Engine permission preset provisioned into bot workspaces when the approval ledger is on.
+/// Chosen by the todo-0 spike (.omo/evidence/autonomy-two-axis/task-0.md): under `auto`, every
+/// side-effect tool call (bash writes, git push, eval, edits outside the provable project set)
+/// reaches the gateway as an approval frame even in `~/.omon/workspace/agents/<slug>`.
+pub const WORKSPACE_PERMISSION_PRESET: &str = "auto";
+
+/// `OMON_APPROVAL_LEDGER_ENABLED` gate for the learned-autonomy approval path (default off).
+pub fn approval_ledger_enabled() -> bool {
+    std::env::var("OMON_APPROVAL_LEDGER_ENABLED")
+        .ok()
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+}
+
+/// Makes sure a bot workspace's `.omo/settings.json` carries `"permissionPreset": preset`
+/// when `enabled`. Other keys are kept; a missing file is created; an unreadable or non-JSON
+/// file is left alone; an already-correct file is not rewritten; a rewrite goes through a temp
+/// file. Returns true only when the file was written.
+pub async fn ensure_workspace_permission_preset(
+    settings_path: &Path,
+    enabled: bool,
+    preset: &str,
+) -> bool {
+    if !enabled {
+        return false;
+    }
+    let mut settings: serde_json::Map<String, serde_json::Value> = match tokio::fs::read_to_string(
+        settings_path,
+    )
+    .await
+    {
+        Ok(raw) => match serde_json::from_str(&raw) {
+            Ok(map) => map,
+            Err(error) => {
+                tracing::warn!(path = %settings_path.display(), %error, "workspace settings.json is not a JSON object; leaving it untouched");
+                return false;
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(error) => {
+            tracing::warn!(path = %settings_path.display(), %error, "cannot read workspace settings.json; leaving it untouched");
+            return false;
+        }
+    };
+    if settings
+        .get("permissionPreset")
+        .and_then(serde_json::Value::as_str)
+        == Some(preset)
+    {
+        return false;
+    }
+    settings.insert(
+        "permissionPreset".to_string(),
+        serde_json::Value::String(preset.to_string()),
+    );
+    let Ok(content) = serde_json::to_string_pretty(&serde_json::Value::Object(settings)) else {
+        return false;
+    };
+    let tmp_path = settings_path.with_extension("json.tmp");
+    if let Err(error) = tokio::fs::write(&tmp_path, content.as_bytes()).await {
+        tracing::warn!(path = %tmp_path.display(), %error, "failed to write workspace settings.json");
+        return false;
+    }
+    if let Err(error) = tokio::fs::rename(&tmp_path, settings_path).await {
+        tracing::warn!(path = %settings_path.display(), %error, "failed to replace workspace settings.json");
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return false;
+    }
+    true
+}
+
 pub fn resolve_workspace(base: &Path, slug: &str) -> AgentWorkspace {
     let cwd = base.join("agents").join(slug);
     let roots = vec![cwd.clone(), base.join("shared")];

@@ -1,4 +1,6 @@
 pub mod agent;
+pub mod autonomy;
+pub mod context;
 pub mod cron;
 pub mod discord;
 pub mod drain_control;
@@ -14,6 +16,7 @@ pub mod models;
 pub mod multiplexer;
 pub mod profiles;
 pub mod readiness;
+pub mod report;
 pub mod security;
 pub mod sessions;
 pub mod slack;

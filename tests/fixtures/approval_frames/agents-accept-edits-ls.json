@@ -1,0 +1,85 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "accept-edits",
+  "probe": "ls",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: ls",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 5,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4d-6669-7113-af7b-19c620e0e260",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281564971,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 8,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4d-6669-7113-af7b-19c620e0e260",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281565999,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ ls\n\nPatterns:\n  - ls",
+        "command": "ls",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 5,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 8,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4d-6669-7113-af7b-19c620e0e260",
+      "requestId": 5
+    },
+    {
+      "threadId": "01a14c4d-6669-7113-af7b-19c620e0e260",
+      "requestId": 8
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"eval-out.txt\\tnote.txt\\tstaged.txt\"}]"
+    }
+  ],
+  "turnStatus": "completed"
+}

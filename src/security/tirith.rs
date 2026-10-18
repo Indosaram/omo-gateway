@@ -331,10 +331,12 @@ mod tests {
                         executions += 1;
                     }
                 }
-                let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approval_allowlist")
-                    .fetch_one(db.pool())
-                    .await
-                    .unwrap();
+                let persisted: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM action_precedents WHERE origin != 'legacy_allowlist'",
+                )
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
                 let prompt_count = prompts.load(Ordering::SeqCst);
                 println!("action={action} combined={combined} prompts={prompt_count} executions={executions} persisted={persisted} HTTP={}", calls.load(Ordering::SeqCst));
                 if executions != 3

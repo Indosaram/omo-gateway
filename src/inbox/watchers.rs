@@ -15,6 +15,7 @@ pub enum InboxWatcherEvent {
     IMessage { rowid: Option<i64> },
     Mail,
     Periodic,
+    Github,
 }
 
 pub type InboxEventSender = tokio::sync::mpsc::Sender<InboxWatcherEvent>;
@@ -62,6 +63,12 @@ pub async fn on_periodic(
     sender.send(InboxWatcherEvent::Periodic).await
 }
 
+pub async fn on_github_tick(
+    sender: &InboxEventSender,
+) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<InboxWatcherEvent>> {
+    sender.send(InboxWatcherEvent::Github).await
+}
+
 pub fn filter_sources_for_event<'a>(
     sources: &[&'a dyn InboxSource],
     event: &InboxWatcherEvent,
@@ -88,6 +95,13 @@ pub fn filter_sources_for_event<'a>(
             .copied()
             .filter(|s| s.name() == InboxSourceKind::Kakao)
             .collect(),
+        InboxWatcherEvent::Github => {
+            return sources
+                .iter()
+                .copied()
+                .filter(|s| s.name() == InboxSourceKind::Github)
+                .collect();
+        }
     };
     if matched.is_empty() {
         sources.to_vec()

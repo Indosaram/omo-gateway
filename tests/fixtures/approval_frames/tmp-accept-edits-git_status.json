@@ -1,0 +1,99 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "accept-edits",
+  "probe": "git_status",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: git status",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 5,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4a-2929-787f-8d2a-8f43d5fe0711",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281332324,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4a-2929-787f-8d2a-8f43d5fe0711",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281334315,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ git status\n\nPatterns:\n  - git status",
+        "command": "git status",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 5,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 9,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c4a-2929-787f-8d2a-8f43d5fe0711",
+      "requestId": 5
+    },
+    {
+      "threadId": "01a14c4a-2929-787f-8d2a-8f43d5fe0711",
+      "requestId": 9
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: git status\\nNow: Run git status via bash tool (Execution)\\nNext: none\\n\\nRemaining items (1):\\n  - Run git status via bash tool [in_progress] (Execution)\\nOverall: 0/1 done, 1 open.\\nActive phase 1/1 \\\"Execution\\\" (0/1).\\n  Execution:\\n    - [ ] Run git status via bash tool (in progress)\\n\\nHandof"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"On branch main\\nChanges not staged for commit:\\n  (use \\\"git add <file>...\\\" to update what will be committed)\\n  (use \\\"git restore <file>...\\\" to discard changes in working directory)\\n\\tmodified:   note.txt\\n\\nUntracked files:\\n  (use \\\"git add <file>...\\\" to include in what will be committed)\\n\\tf\\n\\nno changes added to commit (use \\\"git add\\\" and/or \\\"git commit -"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: git status\\nNow: none - all tasks closed\\nNext: none\\n\\nRemaining items: none.\\nOverall: 1/1 done, 0 open.\\nActive phase 1/1 \\\"Execution\\\" (1/1).\\n  Execution:\\n    - [X] Run git status via bash tool\\n\\nHandoff due: every task is closed. Your final message is the Ask / For you / Now / Next block, "
+    }
+  ],
+  "turnStatus": "completed"
+}

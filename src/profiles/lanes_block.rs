@@ -2,8 +2,36 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
-const BEGIN_MARKER: &str = "<!-- omon:lanes:begin -->";
-const END_MARKER: &str = "<!-- omon:lanes:end -->";
+/// Block name used by `apply_block` and the CLI when `--block` is omitted.
+pub const DEFAULT_BLOCK_NAME: &str = "lanes";
+
+/// The begin/end comment markers that delimit one named persona block,
+/// e.g. `<!-- omon:lanes:begin -->` ... `<!-- omon:lanes:end -->`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockMarkers {
+    pub begin: String,
+    pub end: String,
+}
+
+impl BlockMarkers {
+    /// Markers for `omon:<name>`. The name is a CLI boundary value, so it is
+    /// restricted to lowercase ASCII letters, digits and `-`.
+    pub fn named(name: &str) -> std::result::Result<Self, ApplyBlockError> {
+        let valid = !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if !valid {
+            return Err(ApplyBlockError::InvalidBlock(format!(
+                "block name must match [a-z0-9-]+: {name:?}"
+            )));
+        }
+        Ok(Self {
+            begin: format!("<!-- omon:{name}:begin -->"),
+            end: format!("<!-- omon:{name}:end -->"),
+        })
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, sqlx::FromRow)]
 pub struct BotProfileExport {
     pub bot_id: String,
@@ -60,17 +88,18 @@ fn digest(prompt: &str) -> PromptDigest {
     }
 }
 
-fn validate_block(block: &str) -> std::result::Result<(), ApplyBlockError> {
-    let begins = block.match_indices(BEGIN_MARKER).count();
-    let ends = block.match_indices(END_MARKER).count();
+fn validate_block(markers: &BlockMarkers, block: &str) -> std::result::Result<(), ApplyBlockError> {
+    let (begin_marker, end_marker) = (markers.begin.as_str(), markers.end.as_str());
+    let begins = block.match_indices(begin_marker).count();
+    let ends = block.match_indices(end_marker).count();
     if begins != 1 || ends != 1 {
         return Err(ApplyBlockError::InvalidBlock(
             "expected exactly one begin and end marker".into(),
         ));
     }
-    let begin = block.find(BEGIN_MARKER).expect("marker count checked");
-    let end = block.find(END_MARKER).expect("marker count checked");
-    if end < begin + BEGIN_MARKER.len() {
+    let begin = block.find(begin_marker).expect("marker count checked");
+    let end = block.find(end_marker).expect("marker count checked");
+    if end < begin + begin_marker.len() {
         return Err(ApplyBlockError::InvalidBlock(
             "end marker precedes begin marker".into(),
         ));
@@ -78,9 +107,9 @@ fn validate_block(block: &str) -> std::result::Result<(), ApplyBlockError> {
     Ok(())
 }
 
-fn marked_block(block: &str) -> &str {
-    let begin = block.find(BEGIN_MARKER).expect("validated begin marker");
-    let end = block.find(END_MARKER).expect("validated end marker") + END_MARKER.len();
+fn marked_block<'a>(markers: &BlockMarkers, block: &'a str) -> &'a str {
+    let begin = block.find(&markers.begin).expect("validated begin marker");
+    let end = block.find(&markers.end).expect("validated end marker") + markers.end.len();
     &block[begin..end]
 }
 
@@ -98,13 +127,28 @@ pub async fn export_profile(
     .await
 }
 
+/// Apply the default `omon:lanes` block.
 pub async fn apply_block(
     pool: &SqlitePool,
     bot_id: &str,
     block: &str,
 ) -> std::result::Result<ApplyBlockResult, ApplyBlockError> {
-    validate_block(block)?;
-    let block = marked_block(block);
+    let markers = BlockMarkers::named(DEFAULT_BLOCK_NAME)?;
+    apply_block_with_markers(pool, bot_id, &markers, block).await
+}
+
+/// Insert or replace the block delimited by `markers` in the bot's system
+/// prompt. Text outside those markers, including other named blocks, is kept
+/// byte-for-byte; re-applying the same block is a no-op.
+pub async fn apply_block_with_markers(
+    pool: &SqlitePool,
+    bot_id: &str,
+    markers: &BlockMarkers,
+    block: &str,
+) -> std::result::Result<ApplyBlockResult, ApplyBlockError> {
+    validate_block(markers, block)?;
+    let block = marked_block(markers, block);
+    let (begin_marker, end_marker) = (markers.begin.as_str(), markers.end.as_str());
     let mut tx = pool
         .begin_with("BEGIN IMMEDIATE")
         .await
@@ -124,10 +168,10 @@ pub async fn apply_block(
 
     let old_prompt = prompt.unwrap_or_default();
     let before = digest(&old_prompt);
-    let begin = old_prompt.find(BEGIN_MARKER);
-    let end = old_prompt.find(END_MARKER);
-    let begin_count = old_prompt.match_indices(BEGIN_MARKER).count();
-    let end_count = old_prompt.match_indices(END_MARKER).count();
+    let begin = old_prompt.find(begin_marker);
+    let end = old_prompt.find(end_marker);
+    let begin_count = old_prompt.match_indices(begin_marker).count();
+    let end_count = old_prompt.match_indices(end_marker).count();
     let new_prompt = match (begin, end) {
         (None, None) => {
             if begin_count != 0 || end_count != 0 {
@@ -146,9 +190,9 @@ pub async fn apply_block(
             format!("{old_prompt}{separator}{block}")
         }
         (Some(start), Some(end))
-            if begin_count == 1 && end_count == 1 && end >= start + BEGIN_MARKER.len() =>
+            if begin_count == 1 && end_count == 1 && end >= start + begin_marker.len() =>
         {
-            let after_end = end + END_MARKER.len();
+            let after_end = end + end_marker.len();
             if old_prompt[start..after_end] == *block {
                 old_prompt.clone()
             } else {

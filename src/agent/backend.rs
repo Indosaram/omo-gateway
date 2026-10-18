@@ -60,4 +60,10 @@ pub trait AgentBackend: Send + Sync + 'static {
     async fn steer(&self, _session: &SessionContext, _guidance: &str) -> Result<bool> {
         Ok(false)
     }
+
+    /// Whether a tool item of the session's active turn is still running. `None` means the
+    /// backend cannot tell; callers that must not interrupt a tool treat that as busy.
+    async fn tool_in_flight(&self, _session: &SessionContext) -> Option<bool> {
+        None
+    }
 }

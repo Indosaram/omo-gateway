@@ -318,6 +318,19 @@ impl OutboundDispatcher for SharedDispatcher {
             })?;
         dispatcher.dispatch(action).await
     }
+
+    async fn post_status(
+        &self,
+        session: &SessionKey,
+        content: String,
+        reply_to: Option<String>,
+    ) -> Result<Option<String>> {
+        let dispatcher =
+            self.inner.read().await.clone().ok_or_else(|| {
+                OmonError::Config("outbound dispatcher is not initialized".into())
+            })?;
+        dispatcher.post_status(session, content, reply_to).await
+    }
 }
 
 pub use omon_gateway::ledger::recover_pending_delivery_obligations;
@@ -1232,6 +1245,26 @@ async fn run_gateway_with_dashboard(
     );
     let loaded_yolo = approval_guard.load_persisted_yolo().await?;
     info!(loaded_yolo, "loaded persisted yolo sessions");
+    if omon_gateway::report::claims::report_claims_enabled() {
+        let _ = omon_gateway::report::claims::recover_stale_report_claims(
+            &pool,
+            chrono::Utc::now(),
+        )
+        .await;
+    }
+    let _ = omon_gateway::inbox::proposals::backfill_pending_inbox_proposals(&pool).await;
+    if omon_gateway::agent::agent_workspace::approval_ledger_enabled() {
+        let lead = default_lead();
+        match omon_gateway::autonomy::recover_pending_proposals_on_startup(&pool, &lead).await {
+            Ok(expired) if expired > 0 => {
+                info!(expired, "recovered pending action proposals on startup");
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(%error, "failed to recover pending action proposals on startup");
+            }
+        }
+    }
     let approval_requester = Arc::new(DiscordApprovalRequester::new(
         approval_guard.clone(),
         std::time::Duration::from_secs(config.approval_timeout_secs),
@@ -1319,7 +1352,9 @@ async fn run_gateway_with_dashboard(
     );
     let shared_dispatcher = Arc::new(SharedDispatcher::default());
     let omo_backend = Arc::new(
-        OmoBackend::new(omo_config.clone(), shared_dispatcher.clone()).with_pool(pool.clone()),
+        OmoBackend::new(omo_config.clone(), shared_dispatcher.clone())
+            .with_pool(pool.clone())
+            .with_approval_requester(approval_requester.clone()),
     );
     let runner: Arc<dyn AgentBackend> = omo_backend.clone();
     let profile_router = ProfileRouter::new(config.profile_routes.clone());
@@ -2606,10 +2641,11 @@ async fn stop_lead_runtime(
 async fn initialize_kibitzer(
     pool: &SqlitePool,
 ) -> Result<Option<omon_gateway::lanes::kibitzer::Kibitzer>> {
-    initialize_kibitzer_when_enabled(
-        parse_bool_from(optional_env("OMON_KIBITZER_ENABLED").as_deref(), true),
-        || omon_gateway::lanes::kibitzer::Kibitzer::from_env(pool.clone()),
-    )
+    let enabled = !omon_gateway::autonomy::action_loop::action_loop_enabled()
+        && parse_bool_from(optional_env("OMON_KIBITZER_ENABLED").as_deref(), true);
+    initialize_kibitzer_when_enabled(enabled, || {
+        omon_gateway::lanes::kibitzer::Kibitzer::from_env(pool.clone())
+    })
     .await
 }
 
@@ -2647,10 +2683,19 @@ fn spawn_lane_service(
     kibitzer: Option<omon_gateway::lanes::kibitzer::Kibitzer>,
 ) -> Result<tokio::task::JoinSet<Result<()>>> {
     let mut tasks = tokio::task::JoinSet::new();
-    let kibitzer_hint = spawn_kibitzer(&mut tasks, kibitzer, shutdown);
+    let mut wake_hint = spawn_kibitzer(&mut tasks, kibitzer, shutdown);
+    if omon_gateway::autonomy::action_loop::action_loop_enabled() {
+        let hint = Arc::new(tokio::sync::Notify::new());
+        let serve_hint = hint.clone();
+        let loop_worker =
+            omon_gateway::autonomy::action_loop::ActionLoop::new(pool.clone(), default_lead());
+        let loop_shutdown = shutdown.clone();
+        tasks.spawn(async move { loop_worker.serve(serve_hint, loop_shutdown).await });
+        wake_hint = Some(hint);
+    }
     if parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
         let mut runner = omon_gateway::lanes::runner::LaneRunner::from_env(pool.clone())?;
-        if let Some(hint) = kibitzer_hint {
+        if let Some(hint) = wake_hint {
             runner = runner.with_kibitzer_hint(hint);
         }
         tasks.spawn(runner.serve(shutdown.clone()));
@@ -2711,14 +2756,22 @@ fn spawn_enabled_inbox_collector(
         default_lead(),
     );
     let triage_shutdown = shutdown.clone();
+    let github_enabled = omon_gateway::inbox::sources::github::enabled();
+    let health_lead = default_lead();
     let task = tokio::spawn(async move {
         let mut tasks = tokio::task::JoinSet::new();
 
+        let mut sources = inbox_sources(&pool, slack);
+        if github_enabled {
+            sources.push(Box::new(
+                omon_gateway::inbox::sources::github::GithubSource::default(),
+            ));
+        }
         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(16);
         tasks.spawn(
             omon_gateway::inbox::watchers::run_event_watch_with_shutdown(
                 pool.clone(),
-                inbox_sources(&pool, slack),
+                sources,
                 rules,
                 event_rx,
                 Some(progress_tx),
@@ -2731,7 +2784,14 @@ fn spawn_enabled_inbox_collector(
             watcher_tx.clone(),
             shutdown.clone(),
         ));
-        tasks.spawn(run_mail_event_watcher(watcher_tx.clone(), shutdown.clone()));
+        tasks.spawn(run_mail_event_watcher(
+            watcher_tx.clone(),
+            shutdown.clone(),
+            Some((pool.clone(), health_lead)),
+        ));
+        if github_enabled {
+            tasks.spawn(run_github_event_timer(watcher_tx.clone(), shutdown.clone()));
+        }
         tasks.spawn(run_kakao_event_timer(watcher_tx, shutdown.clone()));
 
         let mut shutdown = shutdown;
@@ -2827,9 +2887,6 @@ async fn run_kakao_event_timer(
     }
 }
 
-const WATCHER_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(5);
-const WATCHER_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(300);
-const WATCHER_HEALTHY_RUN: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// How one watcher child lifetime ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2945,10 +3002,6 @@ pub(crate) fn is_mail_event_line(line: &str) -> bool {
     !trimmed.is_empty() && !trimmed.starts_with('#')
 }
 
-fn next_watcher_backoff(current: std::time::Duration) -> std::time::Duration {
-    (current * 2).min(WATCHER_BACKOFF_MAX)
-}
-
 /// Sleeps for `delay`; false when shutdown arrived first.
 async fn watcher_backoff(
     shutdown: &mut tokio::sync::watch::Receiver<bool>,
@@ -2972,13 +3025,27 @@ async fn watcher_backoff(
 /// letting one failure end the watcher until the gateway restarts.
 async fn supervise_watcher<F, Fut>(
     name: &'static str,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+    run_once: F,
+) where
+    F: FnMut(tokio::sync::watch::Receiver<bool>) -> Fut,
+    Fut: std::future::Future<Output = WatcherExit>,
+{
+    supervise_watcher_with_health(name, shutdown, None, run_once).await;
+}
+
+/// `health` is (pool, owner lead): auth failures then stop resetting the backoff and
+/// report the dead source once per KST day.
+async fn supervise_watcher_with_health<F, Fut>(
+    name: &'static str,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    health: Option<(SqlitePool, String)>,
     mut run_once: F,
 ) where
     F: FnMut(tokio::sync::watch::Receiver<bool>) -> Fut,
     Fut: std::future::Future<Output = WatcherExit>,
 {
-    let mut delay = WATCHER_BACKOFF_INITIAL;
+    let mut backoff = omon_gateway::inbox::health::Backoff::default();
     let mut last_fda_error: Option<String> = None;
     loop {
         if *shutdown.borrow() {
@@ -2986,12 +3053,11 @@ async fn supervise_watcher<F, Fut>(
         }
         let started = tokio::time::Instant::now();
         let outcome = run_once(shutdown.clone()).await;
-        let wait = match outcome {
+        let (run, tail) = match outcome {
             WatcherExit::Stop => return,
             WatcherExit::Completed => {
                 last_fda_error = None;
-                delay = WATCHER_BACKOFF_INITIAL;
-                delay
+                (omon_gateway::inbox::health::WatcherRun::Completed, String::new())
             }
             WatcherExit::Failed { stderr_tail } => {
                 if name == "imsg"
@@ -3005,16 +3071,23 @@ async fn supervise_watcher<F, Fut>(
                         stderr_tail = %stderr_tail,
                         "imsg watcher failed due to missing Full Disk Access; grant Full Disk Access to omo-gateway in System Settings to resume iMessage collection"
                     );
-                    last_fda_error = Some(stderr_tail);
+                    last_fda_error = Some(stderr_tail.clone());
                 }
-                if started.elapsed() >= WATCHER_HEALTHY_RUN {
-                    delay = WATCHER_BACKOFF_INITIAL;
-                }
-                let wait = delay;
-                delay = next_watcher_backoff(delay);
-                wait
+                let run = if health.is_some()
+                    && omon_gateway::inbox::health::is_auth_failure(&stderr_tail)
+                {
+                    omon_gateway::inbox::health::WatcherRun::AuthFailed
+                } else {
+                    omon_gateway::inbox::health::WatcherRun::Failed
+                };
+                (run, stderr_tail)
             }
         };
+        let step = backoff.step(run, started.elapsed());
+        if let Some((pool, lead)) = health.as_ref() {
+            record_watcher_health(pool, name, lead, step.health, &tail).await;
+        }
+        let wait = step.wait;
         warn!(
             watcher = name,
             retry_in_secs = wait.as_secs(),
@@ -3162,12 +3235,59 @@ async fn run_imessage_watch_once(
 async fn run_mail_event_watcher(
     sender: omon_gateway::inbox::watchers::InboxEventSender,
     shutdown: tokio::sync::watch::Receiver<bool>,
+    health: Option<(SqlitePool, String)>,
 ) {
-    supervise_watcher("mail", shutdown, move |shutdown| {
+    supervise_watcher_with_health("mail", shutdown, health, move |shutdown| {
         let sender = sender.clone();
         async move { run_mail_watch_once(&sender, shutdown).await }
     })
     .await;
+}
+
+async fn record_watcher_health(
+    pool: &SqlitePool,
+    name: &str,
+    lead: &str,
+    action: omon_gateway::inbox::health::HealthAction,
+    tail: &str,
+) {
+    use omon_gateway::inbox::health::{self, HealthAction};
+    let result = match action {
+        HealthAction::Healthy => health::clear(pool, name).await.map(|_| false),
+        HealthAction::Degraded => Ok(false),
+        HealthAction::Dead => health::report_dead(pool, name, tail, lead, chrono::Utc::now()).await,
+    };
+    match result {
+        Ok(true) => warn!(watcher = name, "source auth is dead; owner notified once for today"),
+        Ok(false) => {}
+        Err(error) => warn!(watcher = name, %error, "could not record inbox source health"),
+    }
+}
+
+async fn run_github_event_timer(
+    sender: omon_gateway::inbox::watchers::InboxEventSender,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let period = omon_gateway::inbox::sources::github::POLL_INTERVAL;
+    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        tokio::select! {
+            _ = interval.tick() => {},
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() { break; }
+            }
+        }
+        tokio::select! {
+            result = omon_gateway::inbox::watchers::on_github_tick(&sender) => {
+                if result.is_err() { break; }
+            }
+            _ = shutdown.changed() => break,
+        }
+    }
 }
 
 /// One `zele mail watch` child lifetime. Every output line raises a mail event
@@ -4253,12 +4373,12 @@ mod runner_tests {
         assert_eq!(runs.load(Ordering::SeqCst), 3, "failures must be retried");
         assert_eq!(
             started.elapsed(),
-            super::WATCHER_BACKOFF_INITIAL * 3,
+            omon_gateway::inbox::health::BACKOFF_INITIAL * 3,
             "backoff doubles between consecutive failures (5s + 10s)"
         );
         assert_eq!(
-            super::next_watcher_backoff(super::WATCHER_BACKOFF_MAX),
-            super::WATCHER_BACKOFF_MAX
+            omon_gateway::inbox::health::next_backoff(omon_gateway::inbox::health::BACKOFF_MAX),
+            omon_gateway::inbox::health::BACKOFF_MAX
         );
     }
 

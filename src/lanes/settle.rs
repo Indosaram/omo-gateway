@@ -49,6 +49,11 @@ impl Settler {
         let now = self.clock.now();
         let mut verified = Vec::new();
         for listed in list_lanes(&self.pool, &["done_claimed"]).await? {
+            if super::runner::lane_control_enabled()
+                && crate::storage::lanes::is_lane_paused(&self.pool, &listed.key).await?
+            {
+                continue;
+            }
             let mut tx = self.pool.begin().await?;
             // Read the authoritative attempt only after acquiring SQLite's write lock.
             sqlx::query("UPDATE lanes SET updated_at = updated_at WHERE key = ?")
@@ -117,7 +122,11 @@ impl Settler {
                     }
                     Err(error) => reasons.push(error.to_string()),
                 }
-                match worktree_reasons(&lane).await {
+                let checks = match other_lane_worktrees(&self.pool, &lane.key).await {
+                    Ok(owned) => worktree_reasons(&lane, &owned).await,
+                    Err(error) => Err(error),
+                };
+                match checks {
                     Ok(checks) => reasons.extend(checks),
                     Err(error) => reasons.push(error.to_string()),
                 }
@@ -530,7 +539,19 @@ async fn git(cwd: &Path, args: &[&str]) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-async fn worktree_reasons(lane: &Lane) -> Result<Vec<String>> {
+/// Worktrees another lane owns: each lane's own done check covers them, so they never
+/// count against this lane's claim even when created after it started.
+async fn other_lane_worktrees(pool: &SqlitePool, key: &str) -> Result<Vec<PathBuf>> {
+    let paths: Vec<String> = sqlx::query_scalar(
+        "SELECT path FROM lane_owned_worktrees WHERE lane_key <> ? AND state = 'registered'",
+    )
+    .bind(key)
+    .fetch_all(pool)
+    .await?;
+    Ok(paths.into_iter().map(PathBuf::from).collect())
+}
+
+async fn worktree_reasons(lane: &Lane, other_lanes: &[PathBuf]) -> Result<Vec<String>> {
     let cwd = tokio::fs::canonicalize(&lane.cwd)
         .await
         .map_err(super::runner::io_error)?;
@@ -566,6 +587,16 @@ async fn worktree_reasons(lane: &Lane) -> Result<Vec<String>> {
         let path = PathBuf::from(path);
         // A prunable registration (directory deleted) has nothing to verify.
         if !tokio::fs::try_exists(&path).await.unwrap_or(true) {
+            continue;
+        }
+        let canonical = tokio::fs::canonicalize(&path)
+            .await
+            .unwrap_or_else(|_| path.clone());
+        if !canonical.starts_with(&cwd)
+            && other_lanes
+                .iter()
+                .any(|owned| *owned == canonical || *owned == path)
+        {
             continue;
         }
         if include_worktree(&path, &cwd, lane.created_at, external_creation_time(&path)).await?
@@ -780,7 +811,7 @@ mod tests {
             "file x",
         );
         lane.created_at = Some(Utc::now() - chrono::Duration::hours(1));
-        let reasons = worktree_reasons(&lane).await.unwrap();
+        let reasons = worktree_reasons(&lane, &[]).await.unwrap();
         assert!(reasons.is_empty(), "{reasons:?}");
     }
 

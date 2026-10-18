@@ -1383,14 +1383,18 @@ pub async fn handle_event(
                     .unwrap_or_default();
                 let user_id = component.user.id.get();
                 let is_paired = data.pairing_store.is_user_paired_sync(user_id);
-                if !is_paired
-                    && !is_user_authorized(
-                        user_id,
-                        &component_roles,
-                        &data.allowed_users,
-                        &data.allowed_roles,
-                        data.allow_all_users,
-                    )
+                let ledger_owner_required =
+                    crate::agent::agent_workspace::approval_ledger_enabled();
+                let is_discord_owner = user_id.to_string() == crate::inbox::proposals::OWNER_ID;
+                if (ledger_owner_required && !is_discord_owner)
+                    || (!is_paired
+                        && !is_user_authorized(
+                            user_id,
+                            &component_roles,
+                            &data.allowed_users,
+                            &data.allowed_roles,
+                            data.allow_all_users,
+                        ))
                 {
                     let refusal = CreateInteractionResponse::Message(
                         CreateInteractionResponseMessage::new()
@@ -3390,7 +3394,13 @@ impl DiscordEgress {
             self.keep_typing(&session).await;
             return Ok(());
         };
-        let filtered_content = filter_reasoning(content);
+        let (claim_stripped, _extracted_claims) = if crate::report::claims::report_claims_enabled()
+        {
+            crate::report::claims::strip_and_extract_claims(content)
+        } else {
+            (content.to_string(), Vec::new())
+        };
+        let filtered_content = filter_reasoning(&claim_stripped);
         let identity = self.identity(&session).to_owned();
         let key = (identity.clone(), chunk.stream_id);
         let channel = Self::target(&session)?;
@@ -3540,6 +3550,37 @@ impl OutboundDispatcher for DiscordEgress {
         })
         .await
         .unwrap_or(false)
+    }
+
+    async fn post_status(
+        &self,
+        session: &SessionKey,
+        content: String,
+        _reply_to: Option<String>,
+    ) -> Result<Option<String>> {
+        let bot_id = self.identity(session).to_owned();
+        let http = self.http_for(session)?;
+        let channel = Self::target(session)?;
+        if self.dead_targets.is_dead_for_bot(&bot_id, channel.get()) {
+            return Err(OmonError::Multiplexer(format!(
+                "dead target short-circuited: bot={bot_id}, channel={}",
+                channel.get()
+            )));
+        }
+        let message_id = if let Some(transport) = &self.message_transport {
+            transport.send_message(channel, content).await?
+        } else {
+            channel
+                .send_message(
+                    &http,
+                    CreateMessage::new()
+                        .content(content)
+                        .allowed_mentions(safe_allowed_mentions()),
+                )
+                .await?
+                .id
+        };
+        Ok(Some(message_id.to_string()))
     }
 
     async fn dispatch_direct_reply(&self, session: SessionKey, content: String) -> Result<()> {

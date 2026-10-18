@@ -165,6 +165,17 @@ pub trait OutboundDispatcher: Send + Sync + 'static {
         })
         .await
     }
+
+    /// Posts one message and returns its platform id, so it can be edited in place later.
+    /// `None` means this transport cannot report message ids.
+    async fn post_status(
+        &self,
+        _session: &SessionKey,
+        _content: String,
+        _reply_to: Option<String>,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 pub(crate) enum ActorCommand {
@@ -542,6 +553,32 @@ impl SessionActor {
                         }
                     }
 
+                    let mut status_driver = match &self.dispatcher {
+                        Some(dispatcher)
+                            if crate::report::status::status_message_enabled()
+                                && event.origin == crate::EventOrigin::User
+                                && !turn_context.key.user_id.starts_with("cron:")
+                                && is_owner_lead_session(&turn_context.key, None) =>
+                        {
+                            Some(
+                                crate::report::status::StatusDriver::start(
+                                    self.pool.clone(),
+                                    dispatcher.clone(),
+                                    crate::report::status::TurnStart {
+                                        session: turn_context.key.clone(),
+                                        event_id: event_id.to_string(),
+                                        owner_text: event.content.clone(),
+                                        reply_to: Some(reply_to.clone()),
+                                        owner_message_at: Some(event.received_at),
+                                        started_at: Utc::now(),
+                                    },
+                                )
+                                .await,
+                            )
+                        }
+                        _ => None,
+                    };
+
                     let runner = self.runner.clone();
                     let mut run = Box::pin(runner.run_cancelable(
                         &mut turn_context,
@@ -549,6 +586,18 @@ impl SessionActor {
                         cancellation.clone(),
                     ));
                     let outcome = loop {
+                        let status_due = status_driver.as_ref().map(|driver| {
+                            tokio::time::Instant::now()
+                                + (driver.next_due() - Utc::now())
+                                    .to_std()
+                                    .unwrap_or(Duration::ZERO)
+                        });
+                        let status_sleep = async move {
+                            match status_due {
+                                Some(due) => tokio::time::sleep_until(due).await,
+                                None => std::future::pending::<()>().await,
+                            }
+                        };
                         tokio::select! {
                             biased;
                             _ = service_shutdown.cancelled() => {
@@ -575,6 +624,29 @@ impl SessionActor {
                                         pending_events.push_back(command);
                                     }
                                     Some(ActorCommand::Event(next)) => {
+                                        if next.origin == crate::EventOrigin::User
+                                            && is_owner_lead_session(
+                                                &self.context.key,
+                                                next.author_id.as_deref(),
+                                            )
+                                            && crate::autonomy::parse_short_owner_reply(
+                                                &next.content,
+                                            )
+                                            .is_some()
+                                        {
+                                            if let Ok(true) = self
+                                                .runner
+                                                .steer(&self.context, &next.content)
+                                                .await
+                                            {
+                                                self.complete_delivery(
+                                                    next.delivery_id.as_deref(),
+                                                    &Ok(()),
+                                                )
+                                                .await;
+                                                continue;
+                                            }
+                                        }
                                         if pending_events.len() < MAX_PENDING_EVENTS {
                                             pending_events.push_back(ActorCommand::Event(next));
                                         } else {
@@ -692,9 +764,35 @@ impl SessionActor {
                                 }
                             }
                             result = &mut run => break TurnOutcome::Completed(result),
+                            _ = status_sleep => {
+                                if let Some(driver) = status_driver.as_mut() {
+                                    driver.tick(Utc::now()).await;
+                                }
+                            }
                         }
                     };
                     drop(run);
+
+                    if let Some(driver) = status_driver.take() {
+                        match &outcome {
+                            TurnOutcome::Completed(Ok(())) => {
+                                driver.finish(Utc::now(), Ok(())).await
+                            }
+                            TurnOutcome::Completed(Err(error)) => {
+                                driver.finish(Utc::now(), Err(error.to_string())).await
+                            }
+                            TurnOutcome::Stopped(_) => {
+                                driver
+                                    .finish(Utc::now(), Err("stopped by user".into()))
+                                    .await
+                            }
+                            TurnOutcome::Reset(_) => {
+                                driver.finish(Utc::now(), Err("session reset".into())).await
+                            }
+                            // The restarted turn re-adopts the stored message by event id.
+                            TurnOutcome::Shutdown => driver.abandon(),
+                        }
+                    }
 
                     // Durable remote binding must never be lost on failure or overwritten by a stale actor copy,
                     // unless a mid-turn reset deliberately cleared it.

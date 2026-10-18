@@ -563,6 +563,18 @@ impl OutboundDispatcher for CompositeDispatcher {
             self.primary.dispatch(action).await
         }
     }
+
+    async fn post_status(
+        &self,
+        session: &SessionKey,
+        content: String,
+        reply_to: Option<String>,
+    ) -> omon_gateway::Result<Option<String>> {
+        if session.platform == "web" {
+            return Ok(None);
+        }
+        self.primary.post_status(session, content, reply_to).await
+    }
 }
 
 fn action_session(action: &OutboundAction) -> Option<&SessionKey> {
@@ -801,6 +813,7 @@ pub fn router(state: DashboardState) -> Router {
         .route("/api/approvals/pending", get(list_pending_approvals))
         .route("/api/approvals/{id}/resolve", post(resolve_approval))
         .route("/api/approvals/allowlist", get(list_approval_allowlist))
+        .route("/api/autonomy/precedents", get(list_autonomy_precedents))
         .route("/api/bots", get(list_bots).post(create_bot))
         .route(
             "/api/bots/{id}",
@@ -1300,7 +1313,8 @@ async fn post_chat(
     })?;
     let key = resolve_session_key(&state.pool, &id).await?;
     reject_detached_messenger_session(&state, &key)?;
-    let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
+    let mut event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
+    event.author_id = omon_gateway::context::owner_author_for(&key);
     let owner = omon_gateway::sessions::status_reply::owner_id();
     let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
     let private_owner = private_owner
@@ -1412,7 +1426,8 @@ async fn handle_session_socket(
                                     let _ = send_ws_error(&mut socket, "chat runtime is not configured").await;
                                     continue;
                                 };
-                                let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), content);
+                                let mut event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), content);
+                                event.author_id = omon_gateway::context::owner_author_for(&key);
                                 let owner = omon_gateway::sessions::status_reply::owner_id();
                                 let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
                                 let private_owner = private_owner || (omon_gateway::sessions::status_reply::matches_intent(content)
@@ -2406,7 +2421,7 @@ struct ResolveApprovalRequest {
 
 async fn resolve_approval(
     State(state): State<DashboardState>,
-    AxumPath(id): AxumPath<Uuid>,
+    AxumPath(id): AxumPath<String>,
     Json(request): Json<ResolveApprovalRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let suffix = match request.decision.trim().to_ascii_lowercase().as_str() {
@@ -2421,7 +2436,42 @@ async fn resolve_approval(
             ));
         }
     };
-    let custom_id = format!("omon:approval:{id}:{suffix}");
+    let resolved_uuid = if let Ok(uuid) = Uuid::parse_str(id.trim()) {
+        Some(uuid)
+    } else if let Ok(proposal_id) = id.trim().parse::<i64>() {
+        let msg_id: Option<String> = sqlx::query_scalar(
+            "SELECT platform_message_id FROM action_proposals WHERE id = ?",
+        )
+        .bind(proposal_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten();
+        if let Some(raw) = msg_id {
+            Uuid::parse_str(raw.trim()).ok()
+        } else {
+            let decision = match suffix {
+                "once" | "session" => omon_gateway::ApprovalDecision::Once,
+                "always" => omon_gateway::ApprovalDecision::Always,
+                _ => omon_gateway::ApprovalDecision::Deny { reason: None },
+            };
+            if state.approvals.resolve_proposal_id(proposal_id, decision) {
+                return Ok(Json(
+                    json!({"resolved": true, "id": proposal_id, "decision": suffix}),
+                ));
+            }
+            None
+        }
+    } else {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "invalid approval request id",
+        ));
+    };
+
+    let Some(uuid) = resolved_uuid else {
+        return Err(ApiError::not_found("approval request"));
+    };
+    let custom_id = format!("omon:approval:{uuid}:{suffix}");
     if !state.approvals.resolve_custom_id(&custom_id).await {
         if state.detached_from_gateway {
             return Err(ApiError::new(
@@ -2433,10 +2483,16 @@ async fn resolve_approval(
         }
         return Err(ApiError::not_found("approval request"));
     }
-    // The requester's terminal event updates both dashboard and Discord UI.
     Ok(Json(
-        json!({"resolved": true, "id": id, "decision": suffix}),
+        json!({"resolved": true, "id": uuid, "decision": suffix}),
     ))
+}
+
+async fn list_autonomy_precedents(
+    State(state): State<DashboardState>,
+) -> Result<Json<Value>, ApiError> {
+    let rows = omon_gateway::autonomy::list_active_precedents(&state.pool).await?;
+    Ok(Json(json!({"items": rows})))
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -2449,7 +2505,9 @@ async fn list_approval_allowlist(
     State(state): State<DashboardState>,
 ) -> Result<Json<Value>, ApiError> {
     let rows = sqlx::query_as::<_, ApprovalAllowlistRow>(
-        "SELECT pattern_key, created_at FROM approval_allowlist ORDER BY created_at DESC, pattern_key",
+        "SELECT signature AS pattern_key, created_at FROM action_precedents
+         WHERE decision = 'allow' AND revoked_at IS NULL
+         ORDER BY created_at DESC, signature",
     )
     .fetch_all(&state.pool)
     .await?;

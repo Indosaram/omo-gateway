@@ -1,0 +1,68 @@
+{
+  "location": "/tmp/omon-approval-spike",
+  "preset": "auto",
+  "probe": "ls",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: ls",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 9,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c49-3f33-7e5d-b96c-18f9255c4a1b",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281262670,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 9,
+      "result": {
+        "decision": "accept"
+      }
+    }
+  ],
+  "serverRequestResolved": [
+    {
+      "threadId": "01a14c49-3f33-7e5d-b96c-18f9255c4a1b",
+      "requestId": 9
+    }
+  ],
+  "toolCalls": [
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: ls\\nNow: Run ls in the working directory (Tasks)\\nNext: none\\n\\nRemaining items (1):\\n  - Run ls in the working directory [in_progress] (Tasks)\\nOverall: 0/1 done, 1 open.\\nActive phase 1/1 \\\"Tasks\\\" (0/1).\\n  Tasks:\\n    - [ ] Run ls in the working directory (in progress)\\n\\nHandoff due: the plan"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "eval",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"eval-out.txt\\tf\\t\\tnote.txt\\tstaged.txt\\nhasError: false\"}]"
+    },
+    {
+      "type": "dynamicToolCall",
+      "tool": "todo",
+      "status": "completed",
+      "success": true,
+      "output": "[{\"type\":\"inputText\",\"text\":\"Ask: Run exactly this shell command with the bash tool and nothing else: ls\\nNow: none - all tasks closed\\nNext: none\\n\\nRemaining items: none.\\nOverall: 1/1 done, 0 open.\\nActive phase 1/1 \\\"Tasks\\\" (1/1).\\n  Tasks:\\n    - [X] Run ls in the working directory\\n\\nHandoff due: every task is closed. Your final message is the Ask / For you / Now / Next block, with Now and "
+    }
+  ],
+  "turnStatus": "completed"
+}

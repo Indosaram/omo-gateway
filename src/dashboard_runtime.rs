@@ -149,8 +149,11 @@ pub async fn run_standalone(
         appserver_url = %omo_config.appserver_url,
         "Configured dashboard agent backend: OMO app-server"
     );
-    let omo_backend =
-        Arc::new(OmoBackend::new(omo_config.clone(), dispatcher.clone()).with_pool(pool.clone()));
+    let omo_backend = Arc::new(
+        OmoBackend::new(omo_config.clone(), dispatcher.clone())
+            .with_pool(pool.clone())
+            .with_approval_requester(approval_requester.clone()),
+    );
     let mux = SessionMultiplexer::with_dispatcher(
         pool.clone(),
         omo_backend.clone(),

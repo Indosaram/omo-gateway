@@ -430,6 +430,10 @@ impl Triage {
         }
         // Recover durable pending work once on startup, including deduplicated collections.
         if enabled() {
+            if let Err(error) = super::proposals::backfill_pending_inbox_proposals(&self.pool).await
+            {
+                tracing::warn!(%error, "inbox startup proposal ledger backfill failed");
+            }
             match sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM inbox_items i LEFT JOIN inbox_decisions d ON d.item_id=i.id WHERE d.item_id IS NULL)")
                 .fetch_one(&self.pool).await {
                 Ok(true) => self.deadline = Some(Utc::now() + chrono::Duration::seconds(120)),
@@ -441,9 +445,7 @@ impl Triage {
             if *shutdown.borrow() {
                 return;
             }
-            if enabled()
-                && std::env::var("OMON_INBOX_AUTO_LOOKUP").is_ok_and(|value| value == "true")
-            {
+            if enabled() {
                 let result = async {
                     let proposals = super::proposals::Proposals::new(
                         self.pool.clone(),
@@ -459,7 +461,6 @@ impl Triage {
                         let actions =
                             super::proposals::GatewayActions::from_env(self.pool.clone())?;
                         for proposal in pending {
-                            // One failing proposal must not skip the rest of the loop.
                             if let Err(error) = proposals
                                 .auto_lookup(proposal.number, true, &actions)
                                 .await

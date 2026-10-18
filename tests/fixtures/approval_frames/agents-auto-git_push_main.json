@@ -1,0 +1,68 @@
+{
+  "location": "~/.omon/workspace/agents/spike-approval",
+  "preset": "auto",
+  "probe": "git_push_main",
+  "prompt": "Run exactly this shell command with the bash tool and nothing else: git push origin main",
+  "method": "item/commandExecution/requestApproval",
+  "frames": [
+    {
+      "id": 21,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4c-7766-7664-8c04-46fa3ea90ad6",
+        "turnId": "turn-approval",
+        "itemId": "approval-eval",
+        "startedAtMs": 1792281480409,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Tool: eval\n\nPatterns:\n  - *",
+        "command": null,
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    },
+    {
+      "id": 22,
+      "method": "item/commandExecution/requestApproval",
+      "params": {
+        "threadId": "01a14c4c-7766-7664-8c04-46fa3ea90ad6",
+        "turnId": "turn-approval",
+        "itemId": "approval-bash",
+        "startedAtMs": 1792281480929,
+        "approvalId": null,
+        "environmentId": null,
+        "reason": "Command: $ git push origin main\n\nPatterns:\n  - git push",
+        "command": "git push origin main",
+        "cwd": null,
+        "availableDecisions": [
+          "accept",
+          "acceptForSession",
+          "decline",
+          "cancel"
+        ]
+      }
+    }
+  ],
+  "responses": [
+    {
+      "id": 21,
+      "result": {
+        "decision": "accept"
+      }
+    },
+    {
+      "id": 22,
+      "result": {
+        "decision": "decline"
+      }
+    }
+  ],
+  "serverRequestResolved": [],
+  "toolCalls": [],
+  "turnStatus": "completed"
+}
