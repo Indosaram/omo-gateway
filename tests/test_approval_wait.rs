@@ -820,14 +820,21 @@ async fn f_short_reply_with_one_pending_resolves_once_and_with_two_pending_route
 #[tokio::test]
 async fn g_restart_turns_pending_rows_into_expired_and_emits_one_loop_event() {
     let pool = init_pool("sqlite::memory:").await.unwrap();
-    let lead = "slack:T1:C1::U1";
+    let lead = omon_gateway::SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1")
+        .storage_key();
+    let lead = lead.as_str();
 
     for i in 1..=2 {
         insert_proposal(
             &pool,
             &NewProposal {
                 origin: ProposalOrigin::EngineApproval,
-                session_key: lead.to_string(),
+                // An inbox proposal stores the bare channel id, which is not a session key.
+                session_key: if i == 1 {
+                    lead.to_string()
+                } else {
+                    "D0C9HNVUK5M".into()
+                },
                 signature: format!("vcs_remote:git push:/repo-{i}"),
                 effect: Effect::VcsRemote,
                 target: format!("/repo-{i}"),
@@ -869,6 +876,7 @@ async fn g_restart_turns_pending_rows_into_expired_and_emits_one_loop_event() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, "action_loop");
     assert!(events[0].body.contains("[ACTION_LOOP]"));
+    assert_eq!(events[0].lead_session_key, lead);
 }
 
 #[tokio::test]

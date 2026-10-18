@@ -289,6 +289,20 @@ if [[ -f "$PLIST" ]]; then
             || die "failed to set DASHBOARD_WEB_ROOT in $PLIST"
         plist_modified=1
     fi
+    # A kickstart keeps the environment launchd loaded; reload when the plist's
+    # EnvironmentVariables changed since then (for example a new feature flag).
+    if [[ "$plist_modified" != 1 ]]; then
+        loaded_env="$(launchctl print "gui/${UID:-$(id -u)}/$LABEL" 2>/dev/null \
+            | sed -n '/^\tenvironment = {/,/^\t}/p' | sed -n 's/^\t\t\([^ ]*\) => \(.*\)$/\1=\2/p' | sort)"
+        plist_env="$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables" "$PLIST" 2>/dev/null \
+            | sed -n 's/^ *\([^ ]*\) = \(.*\)$/\1=\2/p' | sort)"
+        if [[ -n "$loaded_env" ]] && ! comm -23 <(printf '%s\n' "$plist_env") <(printf '%s\n' "$loaded_env") | grep -q .; then
+            :
+        elif [[ -n "$loaded_env" ]]; then
+            say "plist EnvironmentVariables differ from the loaded job; reloading"
+            plist_modified=1
+        fi
+    fi
 fi
 
 old_pid="$(detect_old_pid)"

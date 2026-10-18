@@ -640,7 +640,7 @@ pub async fn recover_pending_proposals_on_startup(
                 .fetch_optional(pool)
                 .await?
                 .unwrap_or_else(|| default_lead.to_string())
-        } else if !p.session_key.is_empty() {
+        } else if SessionKey::from_storage_key(&p.session_key).is_ok() {
             p.session_key.clone()
         } else {
             default_lead.to_string()
@@ -683,7 +683,13 @@ pub async fn decide_proposal(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("proposal #{proposal_id} not found"))?;
     let effect = Effect::from_str(&proposal.effect)?;
-    let lead = lead_session_key.unwrap_or(&proposal.session_key);
+    let fallback_lead = std::env::var("OMON_LANE_DEFAULT_LEAD").ok();
+    let lead = [lead_session_key, Some(proposal.session_key.as_str())]
+        .into_iter()
+        .flatten()
+        .find(|key| SessionKey::from_storage_key(key).is_ok())
+        .or(fallback_lead.as_deref())
+        .unwrap_or(&proposal.session_key);
     let sig_for_scope = match scope {
         PrecedentScope::Exact => proposal.signature.clone(),
         PrecedentScope::Class => format!("{}:class:{}", effect.as_str(), proposal.target),
