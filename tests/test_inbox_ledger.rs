@@ -304,3 +304,53 @@ async fn e_startup_pass_is_idempotent() {
             .unwrap();
     assert_eq!(count, 2);
 }
+
+#[tokio::test]
+async fn m4_production_call_without_card_sink_runs_lookup_and_leaves_draft_pending() {
+    // triage.rs serve() calls evaluate_with_ledger(number, actions, None, None) for each
+    // pending proposal; drafts stay pending for the owner's numbered reply.
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    let proposals = Proposals::new(pool.clone(), OWNER_ID).await.unwrap();
+    seed_bot_item(
+        &pool,
+        "m4-lookup",
+        "alice@example.com",
+        "Status",
+        "lookup link",
+    )
+    .await;
+    seed_bot_item(
+        &pool,
+        "m4-draft",
+        "bob@example.com",
+        "Notes",
+        "prepare summary note",
+    )
+    .await;
+    let lookup = proposals
+        .propose("m4-lookup", "C1", &Action::Lookup)
+        .await
+        .unwrap();
+    let draft = proposals
+        .propose("m4-draft", "C1", &Action::Draft)
+        .await
+        .unwrap();
+    let actions = FakeActions::default();
+
+    for number in [lookup.number, draft.number] {
+        proposals
+            .evaluate_with_ledger(number, &actions, None, None)
+            .await
+            .unwrap();
+    }
+    assert_eq!(actions.lookups.lock().as_slice(), &[lookup.number]);
+    assert!(actions.drafts.lock().is_empty());
+    let pending: Vec<i64> = proposals
+        .pending("C1")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.number)
+        .collect();
+    assert_eq!(pending, vec![draft.number]);
+}

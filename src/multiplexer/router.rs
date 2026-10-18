@@ -515,6 +515,15 @@ impl SessionMultiplexer {
         self.sessions.len()
     }
 
+    /// Answers a pending approval with a short reply from the verified owner. Never reached
+    /// from lane steers or system text.
+    pub async fn resolve_owner_reply(&self, key: &SessionKey, text: &str) -> Result<bool> {
+        if crate::autonomy::parse_short_owner_reply(text).is_none() {
+            return Ok(false);
+        }
+        self.runner.resolve_owner_reply(key, text).await
+    }
+
     pub async fn session_is_idle(&self, key: &SessionKey) -> Result<bool> {
         let Some(handle) = self.sessions.get(key).map(|entry| entry.clone()) else {
             return Ok(true);

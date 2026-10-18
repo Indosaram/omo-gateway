@@ -624,21 +624,27 @@ impl SessionActor {
                                         pending_events.push_back(command);
                                     }
                                     Some(ActorCommand::Event(next)) => {
+                                        // A short reply answers a pending approval only when the
+                                        // platform author is the owner; run it off the loop.
+                                        let owner = crate::context::owner_author_for(&self.context.key);
                                         if next.origin == crate::EventOrigin::User
-                                            && is_owner_lead_session(
-                                                &self.context.key,
-                                                next.author_id.as_deref(),
-                                            )
+                                            && owner.is_some()
+                                            && next.author_id.as_deref() == owner.as_deref()
+                                            && is_owner_lead_session(&self.context.key, None)
                                             && crate::autonomy::parse_short_owner_reply(
                                                 &next.content,
                                             )
                                             .is_some()
                                         {
-                                            if let Ok(true) = self
-                                                .runner
-                                                .steer(&self.context, &next.content)
-                                                .await
-                                            {
+                                            let resolved = tokio::time::timeout(
+                                                Duration::from_secs(5),
+                                                self.runner.resolve_owner_reply(
+                                                    &self.context.key,
+                                                    &next.content,
+                                                ),
+                                            )
+                                            .await;
+                                            if let Ok(Ok(true)) = resolved {
                                                 self.complete_delivery(
                                                     next.delivery_id.as_deref(),
                                                     &Ok(()),

@@ -663,7 +663,13 @@ async fn steer_claimed_event(
     event: &InboundEvent,
     delivery_id: &str,
 ) -> Result<bool> {
-    if !multiplexer.steer(&event.session, &event.content).await? {
+    // A short owner reply answers a pending approval card instead of steering the turn.
+    let answered = event.author_id.as_deref() == Some(crate::slack::owner_id().as_str())
+        && multiplexer
+            .resolve_owner_reply(&event.session, &event.content)
+            .await
+            .unwrap_or(false);
+    if !answered && !multiplexer.steer(&event.session, &event.content).await? {
         return Ok(false);
     }
     let ledger = DeliveryLedgerService::new(pool.clone());

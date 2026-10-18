@@ -315,7 +315,8 @@ pub async fn evaluate_pre_ask(
     input: PreAskInput<'_>,
 ) -> Result<PreAskOutcome, sqlx::Error> {
     let cls = input.classification;
-    if input.yolo {
+    // Payments always ask, even in yolo.
+    if input.yolo && cls.effect != Effect::Spend {
         let id = insert_proposal(
             pool,
             &NewProposal {
@@ -449,6 +450,10 @@ pub async fn evaluate_pre_ask(
         .bind(release_at)
         .execute(pool)
         .await?;
+        // The action did not run. The 08:00 action_loop event asks the lead to re-issue it,
+        // which creates a fresh proposal; this row must never be approved later by a short
+        // reply or count toward a precedent candidate.
+        update_proposal_decision(pool, proposal_id, ProposalState::Expired, None, None).await?;
 
         return Ok(PreAskOutcome::Deny {
             proposal_id,
@@ -555,16 +560,35 @@ pub async fn record_once_and_check_candidate(
     if !effect.allows_class_precedent() {
         return Ok(false);
     }
+    // Count only owner-decided once approvals: yolo rows are `approved` with NULL precedent
+    // too, but no owner answered them.
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM action_proposals
-         WHERE state = 'approved' AND effect = ? AND target = ? AND precedent_id IS NULL",
+         WHERE state = 'approved' AND effect = ? AND target = ? AND precedent_id IS NULL
+           AND origin != 'yolo'",
     )
     .bind(effect.as_str())
     .bind(target)
     .fetch_one(pool)
     .await?;
 
-    if count != 3 {
+    if count < 3 {
+        return Ok(false);
+    }
+    let already_emitted: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM lane_events
+            WHERE kind = 'precedent_candidate' AND body LIKE ?
+        )",
+    )
+    .bind(format!(
+        "precedent_candidate effect={} target={} proposal_id=%",
+        effect.as_str(),
+        target
+    ))
+    .fetch_one(pool)
+    .await?;
+    if already_emitted {
         return Ok(false);
     }
 
@@ -586,7 +610,7 @@ pub async fn record_once_and_check_candidate(
 
     let sigs: Vec<(String,)> = sqlx::query_as(
         "SELECT DISTINCT signature FROM action_proposals
-         WHERE state = 'approved' AND effect = ? AND target = ?
+         WHERE state = 'approved' AND effect = ? AND target = ? AND origin != 'yolo'
          ORDER BY id ASC",
     )
     .bind(effect.as_str())
@@ -616,17 +640,22 @@ pub async fn recover_pending_proposals_on_startup(
     pool: &SqlitePool,
     default_lead: &str,
 ) -> Result<usize, sqlx::Error> {
-    let pending: Vec<ActionProposal> =
-        sqlx::query_as("SELECT * FROM action_proposals WHERE state = 'pending' ORDER BY id ASC")
-            .fetch_all(pool)
-            .await?;
+    // Inbox/github/loop rows are durable drafts owned by their own flows; only engine and
+    // tool approval frames die with the process.
+    let pending: Vec<ActionProposal> = sqlx::query_as(
+        "SELECT * FROM action_proposals
+         WHERE state = 'pending' AND origin IN ('engine_approval','tool_approval')
+         ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await?;
     if pending.is_empty() {
         return Ok(0);
     }
     sqlx::query(
         "UPDATE action_proposals
          SET state = 'expired', decided_at = CURRENT_TIMESTAMP
-         WHERE state = 'pending'",
+         WHERE state = 'pending' AND origin IN ('engine_approval','tool_approval')",
     )
     .execute(pool)
     .await?;

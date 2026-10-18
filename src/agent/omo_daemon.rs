@@ -391,25 +391,29 @@ async fn reclaim_leftover_daemon(listen_url: &str) {
     }
 }
 
-/// The senpi app-server drops turn events after a thread is reloaded unless its
-/// TurnEngine subscription is patched; every omo/senpi reinstall wipes the patch.
-/// None when the bundle is not found (custom install), Some(false) when unpatched.
-fn senpi_subscription_patch_present(chunks_dir: &std::path::Path) -> Option<bool> {
-    let worker = std::fs::read_to_string(chunks_dir.join("session-worker.js")).ok()?;
-    Some(worker.contains("_turnEngineSubscribed"))
+/// The app-server drops turn events after a thread is reloaded unless its TurnEngine
+/// subscription is patched. omo 5.1.35 removed `omo app-server`, so the gateway launches a
+/// preserved runtime through a wrapper script (OMON_OMO_BIN); the patch lives in that
+/// runtime, never in the global senpi bundle. Returns the checked file and whether it is
+/// patched, or None when `bin` is not such a wrapper (nothing to check).
+fn app_server_patch_state(bin: &str) -> Option<(std::path::PathBuf, bool)> {
+    let wrapper = std::fs::read_to_string(bin).ok()?;
+    let cli_main = wrapper
+        .split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+        .find(|word| word.ends_with("/dist/cli-main.js"))?;
+    let turns = std::path::Path::new(cli_main)
+        .parent()?
+        .join("modes/app-server/threads/turns.js");
+    let source = std::fs::read_to_string(&turns).ok()?;
+    Some((turns, source.contains("_turnEngineSubscribed")))
 }
 
-fn warn_if_senpi_unpatched() {
-    let Some(home) = std::env::var_os("HOME") else {
-        return;
-    };
-    let chunks = std::path::PathBuf::from(home)
-        .join(".bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/chunks");
-    if senpi_subscription_patch_present(&chunks) == Some(false) {
+fn warn_if_app_server_unpatched(bin: &str) {
+    if let Some((path, false)) = app_server_patch_state(bin) {
         tracing::warn!(
-            path = %chunks.display(),
-            "senpi app-server subscription patch is missing (wiped by an omo/senpi update); \
-             stalled turns will be recovered by restarting the app-server, but replies may lag"
+            path = %path.display(),
+            "app-server runtime lacks the TurnEngine subscription patch; stalled turns will be \
+             recovered by restarting the app-server, but replies may lag"
         );
     }
 }
@@ -531,7 +535,7 @@ impl OmoDaemonSupervisor {
         if !autospawn_enabled() || !is_local_url(&cfg.appserver_url) {
             return Ok(None);
         }
-        warn_if_senpi_unpatched();
+        warn_if_app_server_unpatched(&bin);
         reclaim_leftover_daemon(&cfg.appserver_url).await;
         if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
             // A daemon spawned by another live omon process (a standalone dashboard) dies
@@ -1240,21 +1244,34 @@ while True:
     }
 
     #[test]
-    fn senpi_patch_detection_reads_the_worker_bundle() {
+    fn patch_check_follows_the_runtime_wrapper_not_the_global_bundle() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(senpi_subscription_patch_present(dir.path()), None);
+        let dist = dir.path().join("rt/dist");
+        let threads = dist.join("modes/app-server/threads");
+        std::fs::create_dir_all(&threads).unwrap();
+        let wrapper = dir.path().join("omo-gateway-runtime");
         std::fs::write(
-            dir.path().join("session-worker.js"),
-            "this.subscribedThreadIds.has(t)",
+            &wrapper,
+            format!(
+                "#!/bin/sh\nexec bun {}/cli-main.js \"$@\" --extension x\n",
+                dist.display()
+            ),
         )
         .unwrap();
-        assert_eq!(senpi_subscription_patch_present(dir.path()), Some(false));
-        std::fs::write(
-            dir.path().join("session-worker.js"),
-            "e.session._turnEngineSubscribed||",
-        )
-        .unwrap();
-        assert_eq!(senpi_subscription_patch_present(dir.path()), Some(true));
+        let wrapper = wrapper.to_str().unwrap();
+
+        // A plain `omo` binary or a wrapper whose runtime has no app-server: nothing to check.
+        assert_eq!(app_server_patch_state("omo"), None);
+        assert_eq!(app_server_patch_state(wrapper), None);
+
+        let turns = threads.join("turns.js");
+        std::fs::write(&turns, "this.subscribedThreadIds.has(t)").unwrap();
+        assert_eq!(
+            app_server_patch_state(wrapper),
+            Some((turns.clone(), false))
+        );
+        std::fs::write(&turns, "e.session._turnEngineSubscribed||").unwrap();
+        assert_eq!(app_server_patch_state(wrapper), Some((turns, true)));
     }
 
     #[tokio::test]

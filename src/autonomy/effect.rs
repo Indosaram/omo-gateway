@@ -89,13 +89,26 @@ impl Classification {
     ) -> Self {
         let program = program.into();
         let target = normalize_target(&target.into());
-        let signature = format!("{}:{}:{}", effect.as_str(), program, target);
+        let summary = summary.into();
+        let mut signature = format!("{}:{}:{}", effect.as_str(), program, target);
+        // An exact precedent for a destructive or outward action covers only the exact
+        // command the owner saw (rm -rf ., push --force, another PR are different cases).
+        if matches!(
+            effect,
+            Effect::Delete | Effect::VcsProtected | Effect::ExternalSend
+        ) {
+            let exact = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !exact.is_empty() {
+                signature.push('|');
+                signature.push_str(&exact);
+            }
+        }
         Self {
             effect,
             program,
             target,
             signature,
-            summary: summary.into(),
+            summary,
         }
     }
 }
@@ -117,6 +130,171 @@ pub fn requires_always_ask(effect: Effect, tainted: bool) -> bool {
 
 /// True when an engine approval frame is the outer `Tool: eval` container request
 /// (`command == null`, `reason` starts with `"Tool: eval"` or `itemId == "approval-eval"`).
+impl Effect {
+    /// Higher means more consequential; used to pick the effect that decides an eval cell.
+    pub fn rank(&self) -> u8 {
+        match self {
+            Self::Read => 0,
+            Self::Draft => 1,
+            Self::WriteLocal => 2,
+            Self::VcsLocal => 3,
+            Self::VcsRemote => 4,
+            Self::Unknown => 5,
+            Self::ExternalSend => 6,
+            Self::Delete => 7,
+            Self::VcsProtected => 8,
+            Self::Spend => 9,
+        }
+    }
+}
+
+/// Shell commands an eval cell runs through Bun's template-literal shell, or a `command:` string.
+/// A bare eval approval frame carries no command, and a command run through Bun's shell raises no
+/// nested frame, so the cell's own code is the only place to see it.
+pub fn eval_shell_commands(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = code.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'$' && bytes[i + 1] == b'`' {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && !(bytes[j] == b'`' && bytes[j - 1] != b'\\') {
+                j += 1;
+            }
+            out.push(code[start..j.min(bytes.len())].to_string());
+            i = j + 1;
+            continue;
+        }
+        i += 1;
+    }
+    let mut rest = code;
+    while let Some(pos) = rest.find("command") {
+        let after = rest[pos + "command".len()..].trim_start();
+        let value = after
+            .strip_prefix(':')
+            .or_else(|| after.strip_prefix('='))
+            .map(str::trim_start);
+        if let Some(value) = value {
+            if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+                if let Some(end) = value[1..].find(quote) {
+                    out.push(value[1..1 + end].to_string());
+                }
+            }
+        }
+        rest = &rest[pos + "command".len()..];
+    }
+    out.retain(|c| !c.trim().is_empty());
+    out
+}
+
+/// The most consequential side-effecting shell command in an eval cell, or None when it runs
+/// only reads or no shell command at all.
+pub fn classify_eval_code(code: &str, cwd: Option<&str>) -> Option<Classification> {
+    let mut best: Option<Classification> = None;
+    let mut consider = |c: Classification| {
+        if c.effect != Effect::Read
+            && best
+                .as_ref()
+                .is_none_or(|b| c.effect.rank() > b.effect.rank())
+        {
+            best = Some(c);
+        }
+    };
+    for cmd in eval_shell_commands(code) {
+        // A command built from variables cannot be read from the cell's text.
+        if cmd.contains("${") {
+            consider(eval_unknown(code, cwd, "interpolated shell command"));
+            continue;
+        }
+        consider(classify_command(&cmd, cwd));
+    }
+    for path in eval_written_paths(code) {
+        consider(classify_file_change(&path, cwd));
+    }
+    if let Some(api) = eval_opaque_api(code) {
+        consider(eval_unknown(code, cwd, api));
+    }
+    best
+}
+
+/// A side effect the classifier cannot read from the cell text. The signature carries a hash of
+/// the code, so a precedent never covers a different cell.
+fn eval_unknown(code: &str, cwd: Option<&str>, why: &str) -> Classification {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    code.hash(&mut h);
+    let mut c = Classification::new(
+        Effect::Unknown,
+        "eval",
+        resolve_target_scope(None, cwd),
+        format!("eval ({why})"),
+    );
+    c.signature = format!("{}|{:016x}", c.signature, h.finish());
+    c
+}
+
+/// JS calls in an eval cell that act outside the shell and the file helpers.
+fn eval_opaque_api(code: &str) -> Option<&'static str> {
+    const APIS: &[(&str, &str)] = &[
+        ("Bun.spawn", "Bun.spawn"),
+        ("child_process", "child_process"),
+        ("execSync", "exec"),
+        ("spawnSync", "spawn"),
+        ("fetch(", "fetch"),
+        ("rmSync", "fs delete"),
+        ("rm(", "fs delete"),
+        ("unlink", "fs delete"),
+        ("rmdir", "fs delete"),
+        ("renameSync", "fs rename"),
+        ("WebSocket", "socket"),
+        ("Bun.serve", "server"),
+        ("agent(", "subagent"),
+        ("tool.bash", "tool.bash"),
+        ("tool.task", "tool.task"),
+        ("import(", "dynamic import"),
+        ("require(", "require"),
+    ];
+    // Shell commands passed to tool.bash as literals are classified on their own.
+    let stripped = code
+        .replace("tool.bash({ command:", "")
+        .replace("tool.bash({command:", "");
+    APIS.iter()
+        .find(|(needle, _)| stripped.contains(needle))
+        .map(|(_, why)| *why)
+}
+
+/// Literal paths an eval cell writes through `write(..)`, `Bun.write(..)` or `fs.writeFile*`.
+fn eval_written_paths(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for call in [
+        "write(",
+        "writeFile(",
+        "writeFileSync(",
+        "appendFile(",
+        "appendFileSync(",
+    ] {
+        let mut rest = code;
+        while let Some(pos) = rest.find(call) {
+            let after = rest[pos + call.len()..].trim_start();
+            let quote = after.chars().next();
+            let path = match quote {
+                Some(q @ ('"' | '\'' | '`')) => {
+                    after[1..].find(q).map(|end| after[1..1 + end].to_string())
+                }
+                _ => None,
+            };
+            // A path built from variables cannot be read; treat it as an unknown write.
+            out.push(match path {
+                Some(p) if !p.contains("${") => p,
+                _ => "unknown".to_string(),
+            });
+            rest = &rest[pos + call.len()..];
+        }
+    }
+    out
+}
+
 pub fn is_bare_eval_frame(frame: &Value) -> bool {
     let method = frame
         .get("method")
@@ -277,6 +455,44 @@ pub fn classify_command(command: &str, cwd: Option<&str>) -> Classification {
     if trimmed.is_empty() {
         return Classification::new(Effect::Unknown, "empty", "", "empty command");
     }
+    // Command and process substitution run arbitrary code the tokenizer cannot see.
+    if has_unquoted_substitution(trimmed) {
+        return Classification::new(
+            Effect::Unknown,
+            "shell",
+            resolve_target_scope(None, cwd),
+            trimmed.to_string(),
+        );
+    }
+    let segments = split_shell_segments(trimmed);
+    if segments.len() > 1 {
+        // Every segment runs, so the most consequential one decides; `cd` carries forward.
+        let mut seg_cwd = cwd.map(str::to_string);
+        let mut worst: Option<Classification> = None;
+        for seg in &segments {
+            let (next_cwd, body) = peel_cd_prefix(seg, seg_cwd.as_deref());
+            if body.is_empty() || body == "cd" || body.starts_with("cd ") {
+                if let Some(dir) = body.strip_prefix("cd ") {
+                    seg_cwd = Some(dir.trim().trim_matches('"').trim_matches('\'').to_string());
+                }
+                continue;
+            }
+            let c = classify_command(body, next_cwd.as_deref());
+            if worst
+                .as_ref()
+                .is_none_or(|w| c.effect.rank() > w.effect.rank())
+            {
+                worst = Some(c);
+            }
+        }
+        return match worst {
+            Some(mut c) => {
+                c.summary = trimmed.to_string();
+                c
+            }
+            None => Classification::new(Effect::Read, "cd", "", trimmed.to_string()),
+        };
+    }
 
     let (effective_cwd, body) = peel_cd_prefix(trimmed, cwd);
     let cwd_ref = effective_cwd.as_deref();
@@ -343,8 +559,8 @@ fn classify_tokens(tokens: &[String], cwd: Option<&str>, summary: &str) -> Class
             }
         }
         "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "stat" | "file" | "du" | "df" | "which"
-        | "type" | "uname" | "date" | "whoami" | "id" | "env" | "printenv" | "jq" | "true"
-        | "false" | "echo" | "printf" => {
+        | "type" | "uname" | "date" | "whoami" | "id" | "printenv" | "jq" | "true" | "false"
+        | "echo" | "printf" => {
             let (_, positionals) = split_flags_and_positionals(args, &[]);
             let path = positionals
                 .iter()
@@ -354,6 +570,15 @@ fn classify_tokens(tokens: &[String], cwd: Option<&str>, summary: &str) -> Class
             Classification::new(Effect::Read, prog, target, summary)
         }
         "rg" | "grep" | "egrep" | "fgrep" => {
+            // `rg --pre <cmd>` runs a program per file.
+            if args.iter().any(|a| a == "--pre" || a.starts_with("--pre=")) {
+                return Classification::new(
+                    Effect::Unknown,
+                    format!("{prog} --pre"),
+                    resolve_target_scope(None, cwd),
+                    summary,
+                );
+            }
             let (_, positionals) = split_flags_and_positionals(
                 args,
                 &[
@@ -492,7 +717,20 @@ fn classify_git(args: &[String], cwd: Option<&str>, summary: &str) -> Classifica
     let mut repo_cwd: Option<String> = cwd.map(str::to_string);
     while idx < args.len() {
         let tok = args[idx].as_str();
-        if tok == "-C" || tok == "-c" || tok == "--git-dir" || tok == "--work-tree" {
+        // A config override can run arbitrary programs (core.fsmonitor, alias.*, core.pager).
+        if tok == "-c"
+            || tok == "--config-env"
+            || tok.starts_with("--config-env=")
+            || tok == "--exec-path"
+        {
+            return Classification::new(
+                Effect::Unknown,
+                "git -c",
+                resolve_target_scope(None, repo_cwd.as_deref()),
+                summary,
+            );
+        }
+        if tok == "-C" || tok == "--git-dir" || tok == "--work-tree" {
             if tok == "-C" {
                 if let Some(dir) = args.get(idx + 1) {
                     repo_cwd = Some(dir.clone());
@@ -783,9 +1021,6 @@ fn parent_or_self(path: &str) -> &str {
             }
         }
     }
-    if path.starts_with("/tmp/omon-approval-spike/") {
-        return "/tmp/omon-approval-spike";
-    }
     path
 }
 
@@ -929,6 +1164,75 @@ fn basename(path: &str) -> &str {
 
 fn shell_join(argv: &[String]) -> String {
     argv.join(" ")
+}
+
+/// `$(..)`, backticks and `<(..)`/`>(..)` outside single quotes.
+fn has_unquoted_substitution(input: &str) -> bool {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut prev = '\0';
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if !in_single => {
+                chars.next();
+                prev = '\0';
+                continue;
+            }
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            '`' if !in_single => return true,
+            '$' if !in_single && chars.peek() == Some(&'(') => return true,
+            '(' if !in_single && !in_double && (prev == '<' || prev == '>') => return true,
+            _ => {}
+        }
+        prev = c;
+    }
+    false
+}
+
+/// Splits a command line on unquoted `;`, `&&`, `||`, `|`, `&` and newlines.
+fn split_shell_segments(input: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && !in_single {
+            current.push(c);
+            if let Some(n) = chars.next() {
+                current.push(n);
+            }
+            continue;
+        }
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+        } else if c == '"' && !in_single {
+            in_double = !in_double;
+        }
+        let split = !in_single && !in_double && matches!(c, ';' | '|' | '&' | '\n');
+        if split {
+            // `>&2` / `2>&1` / `&>` are redirections, not separators.
+            if c == '&' && (current.ends_with('>') || chars.peek() == Some(&'>')) {
+                current.push(c);
+                continue;
+            }
+            if matches!(c, '|' | '&') && chars.peek() == Some(&c) {
+                chars.next();
+            }
+            if !current.trim().is_empty() {
+                segments.push(current.trim().to_string());
+            }
+            current.clear();
+            continue;
+        }
+        current.push(c);
+    }
+    if !current.trim().is_empty() {
+        segments.push(current.trim().to_string());
+    }
+    segments
 }
 
 fn tokenize_shell(input: &str) -> Vec<String> {

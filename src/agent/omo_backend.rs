@@ -893,8 +893,15 @@ impl OmoBackend {
         briefings: Option<&crate::mirror::CronBriefings>,
     ) -> Result<()> {
         let mut user_prompt = render_user_prompt(&event);
+        // Other people's text in this turn (system deliveries such as the action loop, inbox and
+        // GitHub, a non-owner author, or thread lines in the context pack) taints its actions.
+        let owner_author = crate::context::owner_author_for(&event.session);
+        let mut turn_tainted = event.origin != crate::EventOrigin::User
+            || owner_author.is_none()
+            || event.author_id.as_deref() != owner_author.as_deref();
         if let Some(pool) = &self.pool {
             if let Some(pack) = crate::context::pack_for_turn(pool, &event).await {
+                turn_tainted |= crate::context::pack_has_foreign_text(&pack);
                 user_prompt = crate::context::wrap_prompt(&pack, &user_prompt);
             }
         }
@@ -1061,6 +1068,9 @@ impl OmoBackend {
         // Tool items started but not yet completed. A tool runs silently (a subagent task, a long
         // command), so a frame gap while one is open is work in progress, not a wedged server.
         let mut open_tool_ids: std::collections::HashSet<String> = Default::default();
+        // Code of the latest eval tool item: its bare approval frame names no command, so the
+        // ledger classifies the shell commands in the cell instead.
+        let mut last_eval_code: Option<String> = None;
         let mut approval_denials: u32 = 0;
         let mut messages_delivered: usize = 0;
         let mut last_relay_at: Option<tokio::time::Instant> = None;
@@ -1598,7 +1608,28 @@ impl OmoBackend {
                     }
 
                     if self.is_ledger_enabled() && !toolset_blocked {
-                        if !session.state.yolo && crate::autonomy::is_bare_eval_frame(&val) {
+                        let bare_eval = crate::autonomy::is_bare_eval_frame(&val);
+                        let eval_classification = if bare_eval {
+                            last_eval_code.as_deref().and_then(|code| {
+                                crate::autonomy::classify_eval_code(
+                                    code,
+                                    session
+                                        .state
+                                        .metadata
+                                        .get("workspace_cwd")
+                                        .and_then(Value::as_str),
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        // Only a cell whose code was seen and has no side effect runs unasked; a
+                        // bare eval frame without its code stays unknown and goes to the ledger.
+                        if !session.state.yolo
+                            && bare_eval
+                            && last_eval_code.is_some()
+                            && eval_classification.is_none()
+                        {
                             let _ = ws.send(approval_allow_response(req_id)).await;
                             continue;
                         }
@@ -1613,7 +1644,8 @@ impl OmoBackend {
                             .metadata
                             .get("workspace_cwd")
                             .and_then(Value::as_str);
-                        let classification = crate::autonomy::classify_frame(&val, ws_cwd);
+                        let classification = eval_classification
+                            .unwrap_or_else(|| crate::autonomy::classify_frame(&val, ws_cwd));
                         if let Some(pool) = &self.pool {
                             let lead_key = if is_lane {
                                 sqlx::query_scalar::<_, String>(
@@ -1637,7 +1669,7 @@ impl OmoBackend {
                                     lead_session_key: &lead_key,
                                     classification: &classification,
                                     payload_json: &payload_str,
-                                    tainted: false,
+                                    tainted: turn_tainted,
                                     yolo: session.state.yolo,
                                     always_mode,
                                     now: self.now_utc(),
@@ -1770,9 +1802,27 @@ impl OmoBackend {
                                     }
                                 }
                                 Err(error) => {
-                                    tracing::warn!(session = %session.key, %error, "action ledger pre-ask failed");
+                                    tracing::warn!(session = %session.key, %error, "action ledger pre-ask failed; declining");
+                                    let _ = ws
+                                        .send(approval_denial_with_reason(
+                                            req_id,
+                                            "the gateway could not record this action; retry it shortly",
+                                        ))
+                                        .await;
+                                    continue;
                                 }
                             }
+                        } else {
+                            // The ledger is on but this backend has no database: never fall back
+                            // to the legacy auto-approve.
+                            tracing::warn!(session = %session.key, "action ledger enabled without a database; declining");
+                            let _ = ws
+                                .send(approval_denial_with_reason(
+                                    req_id,
+                                    "the gateway cannot record actions for this session",
+                                ))
+                                .await;
+                            continue;
                         }
                     }
 
@@ -1937,6 +1987,12 @@ impl OmoBackend {
                     if is_started && !item_id.is_empty() && started_ids.insert(item_id.to_string())
                     {
                         let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+                        if item.get("tool").and_then(Value::as_str) == Some("eval") {
+                            last_eval_code = item
+                                .pointer("/arguments/code")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                        }
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
                             open_tool_ids.insert(item_id.to_string());
                             if let Some(active) =
@@ -2617,20 +2673,19 @@ impl AgentBackend for OmoBackend {
         result
     }
 
-    async fn steer(&self, session: &SessionContext, guidance: &str) -> Result<bool> {
-        if self.is_ledger_enabled() {
-            let guard = self.approval_requester.as_ref().map(|r| r.guard());
-            if let Ok(true) = crate::autonomy::try_resolve_short_reply(
-                self.pool.as_ref(),
-                guard,
-                &session.key,
-                guidance,
-            )
-            .await
-            {
-                return Ok(true);
-            }
+    async fn resolve_owner_reply(&self, session: &crate::SessionKey, text: &str) -> Result<bool> {
+        if !self.is_ledger_enabled() {
+            return Ok(false);
         }
+        let guard = self.approval_requester.as_ref().map(|r| r.guard());
+        Ok(
+            crate::autonomy::try_resolve_short_reply(self.pool.as_ref(), guard, session, text)
+                .await
+                .unwrap_or(false),
+        )
+    }
+
+    async fn steer(&self, session: &SessionContext, guidance: &str) -> Result<bool> {
         let storage_key = session.key.storage_key();
         let active = self.active_turns.lock().get(&storage_key).cloned();
         let Some(active) = active else {

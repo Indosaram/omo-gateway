@@ -10,18 +10,21 @@ port=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$tmp" >/dev/null 2>&1 &
 srv=$!
 for _ in $(seq 1 50); do curl -s -o /dev/null "http://127.0.0.1:$port/" && break; sleep 0.1; done
-mkdir -p "$tmp/chunks"; touch "$tmp/up"
+touch "$tmp/up"
 
 run() {
     WATCHDOG_STATE_DIR="$tmp/state" WATCHDOG_DRY_ALERT=1 WATCHDOG_FAIL_LIMIT=3 \
-    WATCHDOG_ALERT_COOLDOWN=1800 WATCHDOG_ENV_FILE=/dev/null \
+    WATCHDOG_ALERT_COOLDOWN=1800 WATCHDOG_SLACK_TOKEN_FILE=/dev/null \
     WATCHDOG_RESTART_CMD="echo RESTART >> $tmp/restarts" \
-    WATCHDOG_SENPI_CHUNKS="$tmp/chunks" "$@" bash "$WD"
+    WATCHDOG_OMO_RUNTIME="$tmp/runtime" "$@" bash "$WD"
 }
 fail() { echo "FAIL: $*"; exit 1; }
 
 # Healthy gateway: no restart, no alert.
-echo 'x._turnEngineSubscribed' > "$tmp/chunks/session-worker.js"
+# The runtime wrapper points at a preserved dist; the patch is checked there.
+mkdir -p "$tmp/rt/dist/modes/app-server/threads"
+printf 'exec bun %s "$@"\n' "$tmp/rt/dist/cli-main.js" > "$tmp/runtime"
+echo 'x._turnEngineSubscribed' > "$tmp/rt/dist/modes/app-server/threads/turns.js"
 out=$(run env WATCHDOG_GATEWAY_PATTERN="http.server $port" \
     WATCHDOG_DASHBOARD_URL="http://127.0.0.1:$port/up" WATCHDOG_APPSERVER_URL="http://127.0.0.1:$port/up")
 [[ ! -f "$tmp/restarts" && "$out" != *DRY_ALERT* ]] || fail "healthy run restarted or alerted: $out"
@@ -45,11 +48,17 @@ done
 [[ ! -f "$tmp/restarts" ]] || fail "app-server failure must not restart the gateway"
 grep -q 'DRY_ALERT appserver' "$tmp/alerts" || fail "expected app-server alert"
 
-# senpi patch wiped: alert.
-echo 'x.subscribedThreadIds' > "$tmp/chunks/session-worker.js"
+# Patch missing from the launched runtime: alert.
+echo 'x.subscribedThreadIds' > "$tmp/rt/dist/modes/app-server/threads/turns.js"
 out=$(run env WATCHDOG_GATEWAY_PATTERN="http.server $port" \
     WATCHDOG_DASHBOARD_URL="http://127.0.0.1:$port/up" WATCHDOG_APPSERVER_URL="http://127.0.0.1:$port/up")
 [[ "$out" == *"DRY_ALERT senpi_patch"* ]] || fail "expected senpi patch alert: $out"
+
+# No runtime wrapper (or no app-server in it): nothing to check, no alert.
+rm -rf "$tmp/state"
+out=$(run env WATCHDOG_OMO_RUNTIME="$tmp/no-runtime" WATCHDOG_GATEWAY_PATTERN="http.server $port" \
+    WATCHDOG_DASHBOARD_URL="http://127.0.0.1:$port/up" WATCHDOG_APPSERVER_URL="http://127.0.0.1:$port/up")
+[[ "$out" != *DRY_ALERT* ]] || fail "missing runtime must not alert: $out"
 
 # Default GATEWAY_PATTERN assertions: verify decoupled path and fallback behavior.
 default_pat="$(sed -n 's/^GATEWAY_PATTERN=.*\${WATCHDOG_GATEWAY_PATTERN:-\([^}]*\)}.*/\1/p' "$WD")"
