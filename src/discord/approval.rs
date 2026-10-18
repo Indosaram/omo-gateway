@@ -556,12 +556,41 @@ impl SmartApprovalGuard {
 
     pub async fn is_approved(&self, session: &SessionKey, pattern_key: &str) -> bool {
         if self.always_cache.read().await.contains(pattern_key) {
-            return true;
+            // `autonomy revoke` runs in another process, so the durable row is the truth: a
+            // revoked or deny precedent drops the cached grant.
+            if self.durable_allow_withdrawn(pattern_key).await {
+                self.always_cache.write().await.remove(pattern_key);
+            } else {
+                return true;
+            }
         }
         if let Some(session_patterns) = self.session_cache.read().await.get(session) {
             return session_patterns.contains(pattern_key);
         }
         false
+    }
+
+    /// True when an exact precedent row exists for the pattern but is revoked or denies it.
+    /// Grants with no row (e.g. `load_permanent`) stay valid; a DB error keeps the grant as-is.
+    async fn durable_allow_withdrawn(&self, pattern_key: &str) -> bool {
+        let pool = self.pool.read().await.clone();
+        let Some(pool) = pool else {
+            return false;
+        };
+        let row: Result<Option<(String, Option<String>)>, sqlx::Error> = sqlx::query_as(
+            "SELECT decision, revoked_at FROM action_precedents WHERE signature = ? AND scope = 'exact'",
+        )
+        .bind(pattern_key)
+        .fetch_optional(&pool)
+        .await;
+        match row {
+            Ok(Some((decision, revoked_at))) => decision != "allow" || revoked_at.is_some(),
+            Ok(None) => false,
+            Err(error) => {
+                tracing::warn!(%error, pattern_key, "precedent re-check failed; keeping cached grant");
+                false
+            }
+        }
     }
 
     /// Upper bounds for the in-memory approval caches. A long-running
@@ -602,12 +631,13 @@ impl SmartApprovalGuard {
     /// in-memory grant is published: persisting after would let a failed
     /// INSERT leave an active grant the user believes is permanent but that
     /// vanishes on restart. Returns Err only when persistence failed and no
-    /// grant was published.
+    /// grant was published. An active owner `deny` precedent for the same
+    /// signature is kept; the grant is then not published.
     pub async fn approve_always(&self, pattern_key: &str) -> Result<(), sqlx::Error> {
         let pool = self.pool.read().await.clone();
         if let Some(pool) = pool {
             let pattern = pattern_key.to_string();
-            sqlx::query(
+            let res = sqlx::query(
                 "INSERT INTO action_precedents
                     (signature, effect, target_scope, decision, scope, approvals, declines, origin, revoked_at)
                  VALUES (?, 'unknown', '', 'allow', 'exact', 1, 0, 'tool_approval', NULL)
@@ -615,11 +645,19 @@ impl SmartApprovalGuard {
                     decision = 'allow',
                     approvals = action_precedents.approvals + 1,
                     revoked_at = NULL,
-                    updated_at = CURRENT_TIMESTAMP",
+                    updated_at = CURRENT_TIMESTAMP
+                 WHERE NOT (action_precedents.decision = 'deny' AND action_precedents.revoked_at IS NULL)",
             )
             .bind(&pattern)
             .execute(&pool)
             .await?;
+            if res.rows_affected() == 0 {
+                tracing::warn!(
+                    pattern_key,
+                    "approve_always kept an existing deny precedent"
+                );
+                return Ok(());
+            }
         }
         self.always_cache
             .write()
@@ -1478,6 +1516,48 @@ mod tests {
             !failing.always_cache.read().await.contains("terminal:rm:*"),
             "a failed persistence attempt must not leave an active grant"
         );
+    }
+
+    #[tokio::test]
+    async fn revoked_precedent_drops_cached_grant_and_deny_is_not_overwritten() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let guard = SmartApprovalGuard::new().with_pool(pool.clone());
+        let session = SessionKey::new("discord", None::<String>, "42", None::<String>, "7");
+
+        let pattern = "terminal:git:push";
+        guard.approve_always(pattern).await.unwrap();
+        assert!(guard.is_approved(&session, pattern).await);
+        sqlx::query(
+            "UPDATE action_precedents SET revoked_at = CURRENT_TIMESTAMP WHERE signature = ?",
+        )
+        .bind(pattern)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !guard.is_approved(&session, pattern).await,
+            "a revoke from another process must invalidate the cached grant"
+        );
+        assert!(!guard.always_cache.read().await.contains(pattern));
+
+        let denied = "terminal:rm:rf";
+        sqlx::query(
+            "INSERT INTO action_precedents (signature, effect, target_scope, decision, scope, approvals, declines, origin)
+             VALUES (?, 'delete', '/repo', 'deny', 'exact', 0, 1, 'owner_decide')",
+        )
+        .bind(denied)
+        .execute(&pool)
+        .await
+        .unwrap();
+        guard.approve_always(denied).await.unwrap();
+        let decision: String =
+            sqlx::query_scalar("SELECT decision FROM action_precedents WHERE signature = ?")
+                .bind(denied)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(decision, "deny", "approve_always must keep an active deny");
+        assert!(!guard.is_approved(&session, denied).await);
     }
 
     #[tokio::test]

@@ -1615,7 +1615,18 @@ pub async fn steer_claimed_event(data: &PoiseData, event: &InboundEvent) -> Resu
         return Ok(true);
     }
 
-    match data.multiplexer.steer(&event.session, &event.content).await {
+    let answered = event.author_id.as_deref() == Some(crate::inbox::proposals::OWNER_ID)
+        && data
+            .multiplexer
+            .resolve_owner_reply(&event.session, &event.content)
+            .await
+            .unwrap_or(false);
+    let steered = if answered {
+        Ok(true)
+    } else {
+        data.multiplexer.steer(&event.session, &event.content).await
+    };
+    match steered {
         Ok(true) => {
             // The steer already landed: a ledger failure must not surface as an error, or the
             // caller re-enqueues the message and it is processed twice.

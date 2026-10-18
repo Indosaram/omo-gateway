@@ -298,10 +298,8 @@ async fn e_spawn_failure_gives_unmeasurable() {
 
     let claims = vec![ExtractedClaim {
         sentence: "파일을 읽었습니다".into(),
-        argv: vec![
-            "/nonexistent-dir-99999/cat".into(),
-            "/tmp/nonexistent".into(),
-        ],
+        // Only bare allowlisted program names run, so a failing run stands in for a spawn failure.
+        argv: vec!["cat".into(), "/nonexistent-dir-99999/file".into()],
         expect_regex: ".*".into(),
     }];
 
@@ -369,4 +367,52 @@ async fn f_restart_with_stale_pending_row_gives_unmeasurable() {
         strip_and_extract_claims("테스트 1건 통과 [[measure [\"ls\"] expect~\".*\"]] 완료");
     assert_eq!(stripped, "테스트 1건 통과  완료");
     assert_eq!(parsed.len(), 1);
+}
+
+#[tokio::test]
+async fn g_only_allowlisted_read_only_programs_are_remeasured() {
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    let disp = RecordingDispatcher::default();
+    let session = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");
+    let refused: Vec<Vec<&str>> = vec![
+        vec!["cat", "/Users/x/.ssh/id_rsa"],
+        vec!["head", ".env"],
+        vec!["tail", "config/api_token.txt"],
+        vec!["rg", "--pre", "sh", "x"],
+        vec!["git", "-c", "core.fsmonitor=rm -rf ~", "status"],
+        vec!["git", "status", "--config-env=x=y"],
+        vec!["git", "branch", "-D", "main"],
+        vec!["git", "push", "origin", "main"],
+        vec!["cargo", "test"],
+        vec!["/tmp/evil/cat", "file"],
+    ];
+    let claims: Vec<ExtractedClaim> = refused
+        .iter()
+        .map(|argv| ExtractedClaim {
+            sentence: "수치".into(),
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+            expect_regex: ".*".into(),
+        })
+        .collect();
+    let ids = record_and_schedule_claims(
+        pool.clone(),
+        Arc::new(disp.clone()),
+        session,
+        "1700000000.0007".into(),
+        claims,
+        PathBuf::from("."),
+        Duration::ZERO,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ids.len(), refused.len());
+    for (id, argv) in ids.iter().zip(&refused) {
+        let row: ReportClaimRow = sqlx::query_as("SELECT * FROM report_claims WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(row.state, "refused", "argv {argv:?} must be refused");
+    }
+    assert!(disp.sent.lock().is_empty());
 }

@@ -282,6 +282,20 @@ pub fn wrap_prompt(pack: &str, user_prompt: &str) -> String {
     format!("[CONTEXT]\n{pack}\n[/CONTEXT]\n{user_prompt}")
 }
 
+/// True when the pack's thread section carries a line written by someone other than the owner.
+pub fn pack_has_foreign_text(pack: &str) -> bool {
+    let Some(start) = pack.find(THREAD_HEADER) else {
+        return false;
+    };
+    let section = &pack[start + THREAD_HEADER.len()..];
+    let section = section.split(LANES_HEADER).next().unwrap_or(section);
+    section
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("- ") && *line != EMPTY_SECTION)
+        .any(|line| !line.starts_with("- owner:"))
+}
+
 /// Builds the context pack for an owner message, or `None` when the event is not an owner
 /// message in an owner conversation, the kill switch is off, or there is nothing to add.
 pub async fn build_pack(

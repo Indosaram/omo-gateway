@@ -6,7 +6,7 @@
 pub mod pack;
 
 pub use pack::{
-    build_pack, install, owner_author_for, pack_for_turn, wrap_prompt, ContextPackSettings,
-    ContextPacker, LedgerPrecedents, NoPrecedents, PrecedentSource, ThreadReader, ENABLED_ENV,
-    MAX_PACK_CHARS, MAX_PRECEDENTS, MAX_THREAD_MESSAGES,
+    build_pack, install, owner_author_for, pack_for_turn, pack_has_foreign_text, wrap_prompt,
+    ContextPackSettings, ContextPacker, LedgerPrecedents, NoPrecedents, PrecedentSource,
+    ThreadReader, ENABLED_ENV, MAX_PACK_CHARS, MAX_PRECEDENTS, MAX_THREAD_MESSAGES,
 };

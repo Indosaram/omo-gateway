@@ -1297,6 +1297,15 @@ impl LaneRunner {
     }
 
     pub fn from_env(pool: SqlitePool) -> Result<Self> {
+        Self::from_env_with_requester(pool, None)
+    }
+
+    /// Lane turns raise approval cards in the lead's conversation through the shared requester,
+    /// so a lane action that needs the owner is asked instead of silently declined.
+    pub fn from_env_with_requester(
+        pool: SqlitePool,
+        requester: Option<Arc<crate::DiscordApprovalRequester>>,
+    ) -> Result<Self> {
         let config = OmoBackendConfig::lane_from_env()?;
         if config.total_timeout.is_zero() {
             return Err(OmonError::Config(
@@ -1304,7 +1313,10 @@ impl LaneRunner {
             ));
         }
         let capture = Arc::new(CapturingDispatcher::new(pool.clone()));
-        let backend = OmoBackend::new(config, capture.clone()).with_pool(pool.clone());
+        let mut backend = OmoBackend::new(config, capture.clone()).with_pool(pool.clone());
+        if let Some(requester) = requester {
+            backend = backend.with_approval_requester(requester);
+        }
         let mut runner = Self::new(pool, Arc::new(backend));
         runner.posts_ready = capture.posts_ready.clone();
         runner.capture = Some(capture);

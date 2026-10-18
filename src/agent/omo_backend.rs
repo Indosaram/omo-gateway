@@ -875,8 +875,15 @@ impl OmoBackend {
         briefings: Option<&crate::mirror::CronBriefings>,
     ) -> Result<()> {
         let mut user_prompt = render_user_prompt(&event);
+        // Other people's text in this turn (system deliveries such as the action loop, inbox and
+        // GitHub, a non-owner author, or thread lines in the context pack) taints its actions.
+        let owner_author = crate::context::owner_author_for(&event.session);
+        let mut turn_tainted = event.origin != crate::EventOrigin::User
+            || owner_author.is_none()
+            || event.author_id.as_deref() != owner_author.as_deref();
         if let Some(pool) = &self.pool {
             if let Some(pack) = crate::context::pack_for_turn(pool, &event).await {
+                turn_tainted |= crate::context::pack_has_foreign_text(&pack);
                 user_prompt = crate::context::wrap_prompt(&pack, &user_prompt);
             }
         }
@@ -1579,7 +1586,8 @@ impl OmoBackend {
                     }
 
                     if self.is_ledger_enabled() && !toolset_blocked {
-                        let eval_classification = if crate::autonomy::is_bare_eval_frame(&val) {
+                        let bare_eval = crate::autonomy::is_bare_eval_frame(&val);
+                        let eval_classification = if bare_eval {
                             last_eval_code.as_deref().and_then(|code| {
                                 crate::autonomy::classify_eval_code(
                                     code,
@@ -1593,8 +1601,11 @@ impl OmoBackend {
                         } else {
                             None
                         };
+                        // Only a cell whose code was seen and has no side effect runs unasked; a
+                        // bare eval frame without its code stays unknown and goes to the ledger.
                         if !session.state.yolo
-                            && crate::autonomy::is_bare_eval_frame(&val)
+                            && bare_eval
+                            && last_eval_code.is_some()
                             && eval_classification.is_none()
                         {
                             let _ = ws.send(approval_allow_response(req_id)).await;
@@ -1636,7 +1647,7 @@ impl OmoBackend {
                                     lead_session_key: &lead_key,
                                     classification: &classification,
                                     payload_json: &payload_str,
-                                    tainted: false,
+                                    tainted: turn_tainted,
                                     yolo: session.state.yolo,
                                     always_mode,
                                     now: self.now_utc(),
@@ -1769,9 +1780,27 @@ impl OmoBackend {
                                     }
                                 }
                                 Err(error) => {
-                                    tracing::warn!(session = %session.key, %error, "action ledger pre-ask failed");
+                                    tracing::warn!(session = %session.key, %error, "action ledger pre-ask failed; declining");
+                                    let _ = ws
+                                        .send(approval_denial_with_reason(
+                                            req_id,
+                                            "the gateway could not record this action; retry it shortly",
+                                        ))
+                                        .await;
+                                    continue;
                                 }
                             }
+                        } else {
+                            // The ledger is on but this backend has no database: never fall back
+                            // to the legacy auto-approve.
+                            tracing::warn!(session = %session.key, "action ledger enabled without a database; declining");
+                            let _ = ws
+                                .send(approval_denial_with_reason(
+                                    req_id,
+                                    "the gateway cannot record actions for this session",
+                                ))
+                                .await;
+                            continue;
                         }
                     }
 
@@ -2619,20 +2648,19 @@ impl AgentBackend for OmoBackend {
         result
     }
 
-    async fn steer(&self, session: &SessionContext, guidance: &str) -> Result<bool> {
-        if self.is_ledger_enabled() {
-            let guard = self.approval_requester.as_ref().map(|r| r.guard());
-            if let Ok(true) = crate::autonomy::try_resolve_short_reply(
-                self.pool.as_ref(),
-                guard,
-                &session.key,
-                guidance,
-            )
-            .await
-            {
-                return Ok(true);
-            }
+    async fn resolve_owner_reply(&self, session: &crate::SessionKey, text: &str) -> Result<bool> {
+        if !self.is_ledger_enabled() {
+            return Ok(false);
         }
+        let guard = self.approval_requester.as_ref().map(|r| r.guard());
+        Ok(
+            crate::autonomy::try_resolve_short_reply(self.pool.as_ref(), guard, session, text)
+                .await
+                .unwrap_or(false),
+        )
+    }
+
+    async fn steer(&self, session: &SessionContext, guidance: &str) -> Result<bool> {
         let storage_key = session.key.storage_key();
         let active = self.active_turns.lock().get(&storage_key).cloned();
         let Some(active) = active else {

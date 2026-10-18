@@ -61,6 +61,13 @@ pub trait AgentBackend: Send + Sync + 'static {
         Ok(false)
     }
 
+    /// Resolves a pending approval for the session from a short owner reply ("응", "항상", ...).
+    /// Callers must have verified that the platform author is the owner; lane steers and system
+    /// text never reach this. Returns Ok(true) when a pending ask was answered.
+    async fn resolve_owner_reply(&self, _session: &crate::SessionKey, _text: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     /// Whether a tool item of the session's active turn is still running. `None` means the
     /// backend cannot tell; callers that must not interrupt a tool treat that as busy.
     async fn tool_in_flight(&self, _session: &SessionContext) -> Option<bool> {

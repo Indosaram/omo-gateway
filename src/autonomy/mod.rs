@@ -50,10 +50,16 @@ pub enum AutonomyCommand {
 }
 
 pub fn is_owner_invocation_env() -> bool {
+    // Every command an engine turn runs carries PI_SESSION_ID: a model may never decide or
+    // revoke its own proposals, whatever session it runs in. The owner decides in Slack,
+    // Discord, the dashboard or a plain terminal.
+    if std::env::var("PI_SESSION_ID").is_ok_and(|id| !id.trim().is_empty()) {
+        return false;
+    }
     if let Ok(origin) = std::env::var("OMON_AUTONOMY_CALLER_SESSION") {
         let trimmed = origin.trim();
         if trimmed.is_empty() {
-            return true;
+            return false;
         }
         if trimmed.starts_with("cron:") || trimmed.starts_with("lane:") {
             return false;

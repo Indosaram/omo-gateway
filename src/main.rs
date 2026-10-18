@@ -1188,7 +1188,7 @@ async fn run_gateway_with_dashboard(
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                 .map_err(|error| OmonError::Config(error.to_string()))?;
         let kibitzer = initialize_kibitzer(&pool).await?;
-        let mut lanes = spawn_lane_service(&pool, &shutdown, kibitzer)?;
+        let mut lanes = spawn_lane_service(&pool, &shutdown, kibitzer, None)?;
         scheduler.start().await;
         lanes.spawn(native_cron.serve(pool.clone(), scheduler.clone(), shutdown.clone()));
         let dispatcher = omon_gateway::lanes::dispatch::EventDispatcher::new(
@@ -1755,7 +1755,8 @@ async fn run_gateway_with_dashboard(
         Ok(count) => info!(count, "re-escalated stale cron remediations"),
         Err(error) => warn!(%error, "failed to sweep stale cron remediations"),
     }
-    let mut lane_tasks = spawn_lane_service(&pool, &lane_shutdown, kibitzer)?;
+    let mut lane_tasks =
+        spawn_lane_service(&pool, &lane_shutdown, kibitzer, Some(approval_requester.clone()))?;
     lane_tasks.spawn(omon_gateway::cron::report::serve_native(
         pool.clone(),
         scheduler.clone(),
@@ -2680,6 +2681,7 @@ fn spawn_lane_service(
     pool: &sqlx::SqlitePool,
     shutdown: &tokio_util::sync::CancellationToken,
     kibitzer: Option<omon_gateway::lanes::kibitzer::Kibitzer>,
+    approval_requester: Option<Arc<DiscordApprovalRequester>>,
 ) -> Result<tokio::task::JoinSet<Result<()>>> {
     let mut tasks = tokio::task::JoinSet::new();
     let mut wake_hint = spawn_kibitzer(&mut tasks, kibitzer, shutdown);
@@ -2693,7 +2695,10 @@ fn spawn_lane_service(
         wake_hint = Some(hint);
     }
     if parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
-        let mut runner = omon_gateway::lanes::runner::LaneRunner::from_env(pool.clone())?;
+        let mut runner = omon_gateway::lanes::runner::LaneRunner::from_env_with_requester(
+            pool.clone(),
+            approval_requester,
+        )?;
         if let Some(hint) = wake_hint {
             runner = runner.with_kibitzer_hint(hint);
         }
@@ -3454,7 +3459,8 @@ fn optional_env(name: &str) -> Option<String> {
 fn approval_timeout_secs_from(raw: Option<&str>) -> u64 {
     raw.and_then(|raw| raw.trim().parse::<u64>().ok())
         .filter(|secs| *secs > 0)
-        .unwrap_or(900)
+        // The durable ask waits 30 minutes for the owner before the action is declined.
+        .unwrap_or(1800)
 }
 
 /// Unrecognised tokens fall back to `default` instead of silently reading as
@@ -4822,12 +4828,12 @@ mod runner_tests {
     fn parses_approval_timeout_secs_from_env() {
         assert_eq!(approval_timeout_secs_from(Some("120")), 120);
         assert_eq!(approval_timeout_secs_from(Some(" 300 ")), 300);
-        assert_eq!(approval_timeout_secs_from(None), 900);
-        assert_eq!(approval_timeout_secs_from(Some("")), 900);
-        assert_eq!(approval_timeout_secs_from(Some("   ")), 900);
-        assert_eq!(approval_timeout_secs_from(Some("0")), 900);
-        assert_eq!(approval_timeout_secs_from(Some("-10")), 900);
-        assert_eq!(approval_timeout_secs_from(Some("invalid")), 900);
+        assert_eq!(approval_timeout_secs_from(None), 1800);
+        assert_eq!(approval_timeout_secs_from(Some("")), 1800);
+        assert_eq!(approval_timeout_secs_from(Some("   ")), 1800);
+        assert_eq!(approval_timeout_secs_from(Some("0")), 1800);
+        assert_eq!(approval_timeout_secs_from(Some("-10")), 1800);
+        assert_eq!(approval_timeout_secs_from(Some("invalid")), 1800);
     }
 
     #[test]

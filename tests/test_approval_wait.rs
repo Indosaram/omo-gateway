@@ -851,6 +851,26 @@ async fn g_restart_turns_pending_rows_into_expired_and_emits_one_loop_event() {
         .unwrap();
     }
 
+    let inbox_id = insert_proposal(
+        &pool,
+        &NewProposal {
+            origin: ProposalOrigin::Inbox,
+            session_key: "D0C9HNVUK5M".into(),
+            signature: "draft:inbox_draft:bob".into(),
+            effect: Effect::Draft,
+            target: "bob".into(),
+            summary: "reply draft for bob".into(),
+            payload_json: "{\"item_id\":\"i-1\"}".into(),
+            tainted: true,
+            state: ProposalState::Pending,
+            precedent_id: None,
+            owner_words: None,
+            platform_message_id: None,
+        },
+    )
+    .await
+    .unwrap();
+
     let count = recover_pending_proposals_on_startup(&pool, lead)
         .await
         .unwrap();
@@ -861,7 +881,12 @@ async fn g_restart_turns_pending_rows_into_expired_and_emits_one_loop_event() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(pending_left, 0);
+    assert_eq!(pending_left, 1, "only the inbox-origin row stays pending");
+    assert_eq!(
+        get_proposal(&pool, inbox_id).await.unwrap().unwrap().state,
+        "pending",
+        "restart recovery must never expire inbox-origin rows"
+    );
 
     let expired_count: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM action_proposals WHERE state = 'expired'")
@@ -877,6 +902,10 @@ async fn g_restart_turns_pending_rows_into_expired_and_emits_one_loop_event() {
     assert_eq!(events[0].kind, "action_loop");
     assert!(events[0].body.contains("[ACTION_LOOP]"));
     assert_eq!(events[0].lead_session_key, lead);
+    assert!(
+        !events[0].body.contains("reply draft for bob"),
+        "inbox rows must not be listed for re-issue"
+    );
 }
 
 #[tokio::test]

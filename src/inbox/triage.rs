@@ -441,7 +441,9 @@ impl Triage {
             if *shutdown.borrow() {
                 return;
             }
-            if enabled() {
+            // Auto-lookup fetches links from other people's messages; it only runs under the
+            // approval-ledger kill switch.
+            if enabled() && crate::agent::agent_workspace::approval_ledger_enabled() {
                 let result = async {
                     let proposals = super::proposals::Proposals::new(
                         self.pool.clone(),
@@ -450,18 +452,17 @@ impl Triage {
                     .await?;
                     let lead = crate::SessionKey::from_storage_key(&self.lead)?;
                     let pending = proposals.pending(&lead.channel_id).await?;
-                    if pending
-                        .iter()
-                        .any(|p| p.action_json == "{\"kind\":\"lookup\"}")
-                    {
+                    if !pending.is_empty() {
                         let actions =
                             super::proposals::GatewayActions::from_env(self.pool.clone())?;
+                        // Ledger routing: read lookups and exact-precedent drafts auto-run;
+                        // everything else stays pending for the owner's numbered reply.
                         for proposal in pending {
                             if let Err(error) = proposals
-                                .auto_lookup(proposal.number, true, &actions)
+                                .evaluate_with_ledger(proposal.number, &actions, None, None)
                                 .await
                             {
-                                tracing::warn!(%error, number = proposal.number, "inbox auto lookup proposal failed");
+                                tracing::warn!(%error, number = proposal.number, "inbox ledger proposal evaluation failed");
                             }
                         }
                     }

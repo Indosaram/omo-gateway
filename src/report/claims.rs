@@ -271,7 +271,7 @@ pub async fn record_and_schedule_claims(
     for claim in claims {
         let classification = classify_argv(&claim.argv, Some(&cwd_str));
         let argv_json = serde_json::to_string(&claim.argv).unwrap_or_else(|_| "[]".into());
-        if classification.effect != Effect::Read {
+        if classification.effect != Effect::Read || !remeasure_allowed(&claim.argv) {
             let res = sqlx::query(
                 "INSERT INTO report_claims
                     (session_key, platform_message_id, sentence, argv_json, expect_regex, state, checked_at)
@@ -349,7 +349,7 @@ pub async fn execute_pending_claim(
     };
 
     let classification = classify_argv(&argv, cwd.to_str());
-    if classification.effect != Effect::Read {
+    if classification.effect != Effect::Read || !remeasure_allowed(&argv) {
         mark_claim_state(pool, claim_id, "refused", None).await?;
         return Ok("refused".into());
     }
@@ -419,6 +419,63 @@ pub async fn execute_pending_claim(
             .await;
         mark_claim_state(pool, claim_id, "corrected", Some(&first_300)).await?;
         Ok("corrected".into())
+    }
+}
+
+/// Strict allowlist for claim re-measurement on top of the `read` classification: only a few
+/// read-only programs, invoked by bare name, and never on secret-looking paths. Output of a
+/// mismatch is posted back to the chat, so anything outside this list is refused.
+fn remeasure_allowed(argv: &[String]) -> bool {
+    let Some(program) = argv.first() else {
+        return false;
+    };
+    let args = &argv[1..];
+    let sensitive = |arg: &str| {
+        let lower = arg.to_ascii_lowercase();
+        let base = lower.rsplit('/').next().unwrap_or(&lower);
+        [".ssh", ".aws", ".gnupg", "key", "secret", "token"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+            || base.starts_with(".env")
+    };
+    match program.as_str() {
+        "echo" | "wc" | "ls" | "stat" | "test" => !args.iter().any(|a| sensitive(a)),
+        "date" => !args
+            .iter()
+            .any(|a| a == "-s" || a.starts_with("--set") || a.starts_with("-f")),
+        "cat" | "head" | "tail" => !args.iter().any(|a| sensitive(a)),
+        "git" => {
+            // The subcommand must come first: no global options such as -c/--config-env/-C.
+            let Some(sub) = args.first() else {
+                return false;
+            };
+            let rest = &args[1..];
+            let no_writes = !rest.iter().any(|a| {
+                a.starts_with("--output")
+                    || a.starts_with("--ext-diff")
+                    || a.starts_with("--config-env")
+                    || a == "-c"
+            });
+            match sub.as_str() {
+                "status" | "log" | "rev-parse" | "show" | "diff" => no_writes,
+                "branch" => rest.iter().all(|a| {
+                    matches!(
+                        a.as_str(),
+                        "-a" | "-r"
+                            | "-v"
+                            | "-vv"
+                            | "--all"
+                            | "--remotes"
+                            | "--list"
+                            | "--show-current"
+                            | "--merged"
+                            | "--no-merged"
+                    )
+                }),
+                _ => false,
+            }
+        }
+        _ => false,
     }
 }
 
