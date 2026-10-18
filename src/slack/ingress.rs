@@ -137,10 +137,15 @@ impl SlackIngress {
     }
 
     async fn known_thread(&self, event: &Value) -> Result<bool> {
-        match thread_candidate(&self.shared.bot_user_id, &self.team_id, event) {
-            Some(key) => session_exists(&self.shared.pool, &key).await,
-            None => Ok(false),
+        let Some(key) = thread_candidate(&self.shared.bot_user_id, &self.team_id, event) else {
+            return Ok(false);
+        };
+        // A thread rooted by the bot (a cron or lane report posted from the channel session)
+        // has no thread session yet, but a reply under it is addressed to the bot.
+        if rooted_by_bot(event, &self.shared.bot_user_id) {
+            return Ok(true);
         }
+        session_exists(&self.shared.pool, &key).await
     }
 
     pub async fn handle(&self, event: Value) -> Result<()> {
@@ -815,6 +820,10 @@ pub(crate) async fn session_exists(pool: &SqlitePool, key: &SessionKey) -> Resul
     Ok(row.is_some())
 }
 
+fn rooted_by_bot(event: &Value, bot_user_id: &str) -> bool {
+    reply_thread_ts(event).is_some() && str_field(event, "parent_user_id") == Some(bot_user_id)
+}
+
 fn thread_candidate(bot_user_id: &str, team_id: &str, event: &Value) -> Option<SessionKey> {
     let channel = str_field(event, "channel")?;
     if is_dm(event, channel) {
@@ -1285,6 +1294,20 @@ mod tests {
         let mut strict = config();
         strict.thread_require_mention = true;
         assert!(map(&strict, &reply, true).is_none());
+    }
+
+    #[test]
+    fn reply_under_a_bot_rooted_thread_counts_as_known() {
+        let mut reply = json!({
+            "type": "message", "channel": "C1", "channel_type": "channel", "user": OWNER,
+            "text": "make it a checklist", "ts": "1700000005.000000",
+            "thread_ts": "1700000000.000100", "parent_user_id": "UBOT",
+        });
+        assert!(rooted_by_bot(&reply, "UBOT"));
+        reply["parent_user_id"] = json!(OWNER);
+        assert!(!rooted_by_bot(&reply, "UBOT"));
+        let root = json!({ "type": "message", "channel": "C1", "user": "UBOT", "ts": "1.0", "thread_ts": "1.0", "parent_user_id": "UBOT" });
+        assert!(!rooted_by_bot(&root, "UBOT"));
     }
 
     #[test]
