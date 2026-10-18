@@ -646,6 +646,11 @@ fn f_eval_cell_shell_commands_are_classified_from_the_code() {
     let push = "const r=await Bun.$`cd /tmp/repo && git push origin lane/x 2>&1`.nothrow();print(r.exitCode)";
     let c = omon_gateway::autonomy::classify_eval_code(push, None).expect("push is a side effect");
     assert_eq!(c.effect, Effect::VcsRemote);
+    assert!(
+        c.target.contains("/tmp/repo"),
+        "the cd context scopes the push target: {}",
+        c.target
+    );
 
     let main = "await $`git push origin main`";
     assert_eq!(

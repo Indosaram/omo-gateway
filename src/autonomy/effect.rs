@@ -178,22 +178,27 @@ pub fn eval_shell_commands(code: &str) -> Vec<String> {
 /// The most consequential side-effecting shell command in an eval cell, or None when it runs
 /// only reads or no shell command at all.
 pub fn classify_eval_code(code: &str, cwd: Option<&str>) -> Option<Classification> {
-    let mut found = Vec::new();
+    let mut best: Option<Classification> = None;
     for cmd in eval_shell_commands(code) {
-        found.push(classify_command(&cmd, cwd));
-        // A fragment like a bare `cd` reads as unknown on its own; only known effects of the
-        // pieces of a compound command count.
+        // The whole command keeps its `cd` context (and so its target); a piece of a compound
+        // command replaces it only when strictly more consequential. A bare `cd` piece reads as
+        // unknown on its own, so only known piece effects count.
+        let mut cmd_best = classify_command(&cmd, cwd);
         for piece in cmd.split(['\n', ';']).flat_map(|s| s.split("&&")) {
             let c = classify_command(piece, cwd);
-            if c.effect != Effect::Unknown {
-                found.push(c);
+            if c.effect != Effect::Unknown && c.effect.rank() > cmd_best.effect.rank() {
+                cmd_best = c;
             }
         }
+        if cmd_best.effect != Effect::Read
+            && best
+                .as_ref()
+                .is_none_or(|b| cmd_best.effect.rank() > b.effect.rank())
+        {
+            best = Some(cmd_best);
+        }
     }
-    found
-        .into_iter()
-        .filter(|c| c.effect != Effect::Read)
-        .max_by_key(|c| c.effect.rank())
+    best
 }
 
 pub fn is_bare_eval_frame(frame: &Value) -> bool {
