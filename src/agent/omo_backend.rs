@@ -396,6 +396,28 @@ impl OmoBackend {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
         let is_lane = session.key.platform == "lane";
+        if !is_cron && !is_lane && self.config.per_agent_workspace {
+            // A resumed thread reloads project settings, so the preset must be in place before
+            // thread/resume as well as before thread/start.
+            if let Some(root) = &self.config.workspace_root {
+                let slug = agent_workspace_slug(
+                    &session.key.platform,
+                    &session.key.user_id,
+                    session.key.bot_id.as_deref(),
+                );
+                if slug.starts_with("bot-") {
+                    let omo_dir = resolve_workspace(root, &slug).cwd.join(".omo");
+                    if tokio::fs::create_dir_all(&omo_dir).await.is_ok() {
+                        crate::agent::agent_workspace::ensure_workspace_permission_preset(
+                            &omo_dir.join("settings.json"),
+                            crate::agent::agent_workspace::approval_ledger_enabled(),
+                            crate::agent::agent_workspace::WORKSPACE_PERMISSION_PRESET,
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
         if is_cron {
             session.state.metadata.remove("omo_thread_id");
             self.thread_ids.lock().remove(&storage_key);
