@@ -136,7 +136,23 @@ impl SlackIngress {
             .unwrap_or_default()
     }
 
+    /// Whether an unmentioned channel message is addressed to the bot: a reply in a thread the bot
+    /// owns or rooted, or a top-level message in a channel the bot itself reports into (it has a
+    /// channel-level session there, like #work for cron and lane reports).
     async fn known_thread(&self, event: &Value) -> Result<bool> {
+        if let Some(channel) = str_field(event, "channel") {
+            if reply_thread_ts(event).is_none() && !is_dm(event, channel) {
+                let key = SessionKey::new(
+                    PLATFORM,
+                    Some(self.team_id.as_str()),
+                    channel,
+                    None::<String>,
+                    "",
+                )
+                .with_bot_id(&self.shared.bot_user_id);
+                return session_exists(&self.shared.pool, &key).await;
+            }
+        }
         let Some(key) = thread_candidate(&self.shared.bot_user_id, &self.team_id, event) else {
             return Ok(false);
         };
@@ -1511,6 +1527,30 @@ mod tests {
             .iter()
             .map(|(method, _)| method.clone())
             .collect()
+    }
+
+    #[tokio::test]
+    async fn plain_message_in_a_channel_the_bot_reports_into_reaches_the_bot() {
+        let mut h = harness(config(), ok()).await;
+        let message = json!({
+            "type": "message", "channel": "CWORK", "channel_type": "channel", "user": OWNER,
+            "text": "what about the loan?", "ts": "1700000009.000100",
+        });
+        assert!(!h.ingress.known_thread(&message).await.unwrap());
+
+        let channel =
+            SessionKey::new(PLATFORM, Some(TEAM), "CWORK", None::<String>, "").with_bot_id(BOT);
+        sqlx::query("INSERT INTO sessions (session_key, platform, guild_id, channel_id, thread_id, user_id) VALUES (?, 'slack', ?, 'CWORK', NULL, '')")
+            .bind(channel.storage_key())
+            .bind(TEAM)
+            .execute(&h.pool)
+            .await
+            .unwrap();
+        assert!(h.ingress.known_thread(&message).await.unwrap());
+
+        h.ingress.handle(message).await.unwrap();
+        h.ingress.flush().await;
+        assert_eq!(next(&mut h.rx).await.content, "what about the loan?");
     }
 
     #[tokio::test]
