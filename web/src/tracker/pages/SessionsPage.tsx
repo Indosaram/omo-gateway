@@ -100,11 +100,21 @@ function basename(path: string | null): string {
 }
 
 function sessionTitle(session: OmoSession): string {
-  return session.name?.trim() || basename(session.cwd) || session.session_id.slice(0, 8)
+  const name = session.name?.trim()
+  // omo falls back to the transcript path when a session has no title; that is not a name.
+  const usable = name && !name.startsWith('/') ? name : ''
+  return usable || basename(session.cwd) || session.session_id.slice(0, 8)
 }
 
 function firstLine(text: string): string {
   return text.split('\n').find((line) => line.trim() !== '')?.trim() ?? ''
+}
+
+// The probe keeps only the tail of each message, so the first line usually starts mid-word;
+// the last complete line is the latest thing the session said.
+function lastLine(text: string): string {
+  const lines = text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+  return lines[lines.length - 1] ?? ''
 }
 
 function byRecent(a: OmoSession, b: OmoSession): number {
@@ -345,7 +355,7 @@ function SessionRow({
 }) {
   const key = sessionKey(session)
   const question = session.questions[0]?.questions[0]?.question
-  const preview = (session.state === 'question' && question ? firstLine(question) : '') || firstLine(session.last_assistant) || firstLine(session.last_user)
+  const preview = (session.state === 'question' && question ? firstLine(question) : '') || lastLine(session.last_assistant) || lastLine(session.last_user)
   return (
     <a
       href={hrefFor({ name: 'sessions', sessionKey: key })}
