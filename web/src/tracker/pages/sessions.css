@@ -318,7 +318,7 @@
   outline: none;
   transition: border-color var(--dur) var(--ease);
 }
-.lin .ss-textarea { resize: vertical; min-height: 72px; padding: 6px 8px; }
+.lin .ss-textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; min-height: 72px; padding: 6px 8px; }
 .lin .ss-input:focus,
 .lin .ss-textarea:focus { border-color: var(--accent); }
 .lin .ss-input::placeholder,
