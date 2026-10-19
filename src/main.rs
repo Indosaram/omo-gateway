@@ -1838,6 +1838,7 @@ async fn run_gateway_with_dashboard(
         info!(bot = %runtime.bot_user_id, team = %runtime.team_id, "omo-gateway listening on Slack");
         let backfill = runtime.clone();
         tokio::spawn(async move { backfill.backfill().await });
+        tokio::spawn(runtime.clone().reconcile(lane_shutdown.clone()));
         lane_tasks.spawn(omon_gateway::slack::runtime::supervise(
             runtime.clone(),
             lane_shutdown.clone(),

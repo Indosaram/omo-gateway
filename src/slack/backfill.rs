@@ -18,6 +18,15 @@ use crate::{Result, SessionKey};
 const PAGE_LIMIT: u32 = 200;
 
 pub async fn run(ingress: &SlackIngress) -> Result<usize> {
+    run_settled(ingress, None).await
+}
+
+/// Like [`run`], but leaves messages younger than `settle` to live ingress (still in its
+/// debouncer or being acknowledged), so a periodic pass never races a live delivery.
+pub async fn run_settled(
+    ingress: &SlackIngress,
+    settle: Option<std::time::Duration>,
+) -> Result<usize> {
     let pool = ingress.pool();
     let bot = ingress.bot_user_id().to_owned();
     let config = ingress.config();
@@ -67,7 +76,7 @@ pub async fn run(ingress: &SlackIngress) -> Result<usize> {
             None => read_cursor(pool, &bot, &channel, &thread_ts).await?,
         }
         .filter(|cursor| !cursor.trim().is_empty());
-        match backfill_target(ingress, &channel, &thread_ts, cursor).await {
+        match backfill_target(ingress, &channel, &thread_ts, cursor, settle).await {
             Ok(count) => routed += count,
             Err(error) => {
                 tracing::warn!(%error, channel, thread_ts, "slack backfill target failed");
@@ -82,7 +91,15 @@ async fn backfill_target(
     channel: &str,
     thread_ts: &str,
     cursor: Option<String>,
+    settle: Option<std::time::Duration>,
 ) -> Result<usize> {
+    let settled_before = settle.map(|settle| {
+        let cutoff = chrono::Utc::now() - chrono::Duration::from_std(settle).unwrap_or_default();
+        (
+            cutoff.timestamp().max(0) as u64,
+            cutoff.timestamp_subsec_micros(),
+        )
+    });
     let pool = ingress.pool();
     let bot = ingress.bot_user_id();
     let api = ingress.api();
@@ -124,6 +141,9 @@ async fn backfill_target(
     let mut routed = 0;
     for message in messages {
         let ts = message["ts"].as_str().unwrap_or_default().to_owned();
+        if settled_before.is_some_and(|cutoff| ts_key(&ts) > cutoff) {
+            break;
+        }
         let event = replay_event(message, channel, thread_ts, bot);
         let known_thread = ingress.is_known_thread(&event).await?;
         if let Some(inbound) = ingress.map_replayed(&event, known_thread) {
@@ -296,6 +316,65 @@ mod tests {
             Some("1701.000000")
         );
         assert_eq!(cursor(&pool, "D1", "").await.as_deref(), Some("50.000000"));
+    }
+
+    #[tokio::test]
+    async fn settled_pass_leaves_fresh_messages_to_live_ingress() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(Runner(tx)),
+            MultiplexerConfig::default(),
+        );
+        let base = fake().await;
+        let config = crate::slack::SlackConfig {
+            allowed_users: vec![OWNER.into()],
+            ..crate::slack::SlackConfig::test_default()
+        };
+        let ingress = SlackIngress::new(
+            Arc::new(config),
+            SlackApi::with_base_url("xoxb-test".into(), format!("{base}/api")),
+            multiplexer,
+            pool.clone(),
+            BOT.into(),
+            "T1".into(),
+        );
+        write_cursor(&pool, BOT, "C1", "1700.000000", "1700.500000")
+            .await
+            .unwrap();
+        let thread =
+            SessionKey::new(PLATFORM, Some("T1"), "C1", Some("1700.000000"), "").with_bot_id(BOT);
+        sqlx::query("INSERT INTO sessions (session_key, platform, guild_id, channel_id, thread_id, user_id) VALUES (?, 'slack', 'T1', 'C1', '1700.000000', '')")
+            .bind(thread.storage_key())
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // A settle window reaching back before the fake timestamps: nothing is old enough yet.
+        let far = std::time::Duration::from_secs(
+            u64::try_from(chrono::Utc::now().timestamp()).unwrap() - 1000,
+        );
+        assert_eq!(run_settled(&ingress, Some(far)).await.unwrap(), 0);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            cursor(&pool, "C1", "1700.000000").await.as_deref(),
+            Some("1700.500000")
+        );
+
+        // Once settled, the missed reply is routed and the cursor moves past it.
+        assert_eq!(
+            run_settled(&ingress, Some(std::time::Duration::from_secs(60)))
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(rx.try_recv().unwrap(), "thread reply");
+        assert_eq!(
+            cursor(&pool, "C1", "1700.000000").await.as_deref(),
+            Some("1701.000000")
+        );
     }
 
     #[test]

@@ -11,6 +11,10 @@ use super::socket::{SocketClient, SocketEvent};
 use super::SlackConfig;
 use crate::Result;
 
+const RECONCILE_INTERVAL: Duration = Duration::from_secs(120);
+/// Live ingress debounces split messages for a few seconds before routing them.
+const RECONCILE_SETTLE: Duration = Duration::from_secs(60);
+
 pub struct SlackRuntime {
     pub config: Arc<SlackConfig>,
     pub api: SlackApi,
@@ -77,6 +81,30 @@ impl SlackRuntime {
             Ok(0) => {}
             Ok(routed) => tracing::info!(routed, "slack missed-message backfill routed messages"),
             Err(error) => tracing::warn!(%error, "slack missed-message backfill failed"),
+        }
+    }
+
+    /// Re-runs the backfill every `RECONCILE_INTERVAL` while the gateway is up. Socket Mode can
+    /// keep an open, pinging connection that stops delivering events (incident 2026-10-19: two
+    /// owner replies at 11:50 never arrived and were only picked up by a restart), so the cursor
+    /// sweep is what guarantees every message is eventually answered.
+    pub async fn reconcile(self: Arc<Self>, shutdown: CancellationToken) {
+        if !self.config.missed_backfill {
+            return;
+        }
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => return,
+                _ = tokio::time::sleep(RECONCILE_INTERVAL) => {}
+            }
+            match super::backfill::run_settled(&self.ingress, Some(RECONCILE_SETTLE)).await {
+                Ok(0) => {}
+                Ok(routed) => tracing::warn!(
+                    routed,
+                    "slack reconcile routed messages the socket never delivered"
+                ),
+                Err(error) => tracing::warn!(%error, "slack reconcile failed"),
+            }
         }
     }
 
