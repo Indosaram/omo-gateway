@@ -20,6 +20,8 @@ import type {
   ProjectUpdate,
   Relation,
   RelationType,
+  SessionActionResult,
+  SessionsOverview,
   Team,
   User,
   View,
@@ -146,4 +148,14 @@ export const trackerApi = {
   readAllNotifications: () => post<{ updated: number }>('/notifications/read-all'),
 
   search: (q: string) => get<{ issues: Issue[]; projects: Project[] }>(`/search?q=${enc(q)}`),
+
+  sessions: {
+    list: (opts: { refresh?: boolean } = {}) => get<SessionsOverview>(opts.refresh ? '/sessions?refresh=1' : '/sessions'),
+    send: (machine: string, sessionId: string, text: string) =>
+      post<SessionActionResult>(`/sessions/${enc(machine)}/${enc(sessionId)}/send`, { text }),
+    interrupt: (machine: string, sessionId: string) =>
+      post<SessionActionResult>(`/sessions/${enc(machine)}/${enc(sessionId)}/interrupt`),
+    answer: (machine: string, sessionId: string, text: string, request?: string) =>
+      post<SessionActionResult>(`/sessions/${enc(machine)}/${enc(sessionId)}/answer`, request ? { text, request } : { text }),
+  },
 }
