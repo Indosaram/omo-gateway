@@ -1,0 +1,29 @@
+[
+ {
+  "name": "Huly",
+  "url": "https://huly.io",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Jira·Linear·Slack·Notion 대체 오픈소스 올인원 프로젝트 관리 플랫폼",
+  "mobile": "반응형 웹(네이티브 앱·PWA 없음)",
+  "pricing": "무료(OSS 셀프호스팅) / 공식 클라우드 종료",
+  "selfhost": "가능(Docker, 15개+ 컨테이너)",
+  "license": "EPL-2.0",
+  "agent": "MCP·CLI(Claude Code·Codex·Cursor 등), REST/WS API",
+  "status": "원 저장소 동결, 커뮤니티 포크 활발",
+  "pros": "Svelte 기반의 빠른 UI와 부드러운 칸반 정렬; 칸반·문서·채팅·화상·캘린더 통합; MCP·CLI 등 AI 에이전트 도구 풍부",
+  "cons": "공식 저장소·클라우드가 자금 문제로 종료; 15개+ 컨테이너의 복잡한 셀프호스팅; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://github.com/hcengineering/platform",
+   "https://github.com/Platform-Collective/platform",
+   "https://huly.io",
+   "https://huly.io/pricing",
+   "https://huly.io/download",
+   "https://docs.huly.io/getting-started/self-host",
+   "https://github.com/hcengineering/huly-selfhost",
+   "https://github.com/dearlordylord/huly-mcp",
+   "https://github.com/hcengineering/huly-examples"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,42 @@
+{
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binary_sha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+  "manifest_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/duplicate-final-20261011T184722Z-recovery-post-manifest.sha256",
+  "manifest_sha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+  "manifest_entries": 205,
+  "source_cmp": 0,
+  "fmt_exit": 0,
+  "clippy_exit": 0,
+  "completed_tests": {
+    "passed": 4,
+    "failed": 0,
+    "exit": 0
+  },
+  "delivery_test": {
+    "passed": 1,
+    "failed": 0,
+    "exit": 0
+  },
+  "headless_tests": {
+    "passed": 5,
+    "failed": 0,
+    "exit": 0
+  },
+  "events": {
+    "passed": 25,
+    "failed": 0,
+    "ignored": 1
+  },
+  "runner": {
+    "passed": 12,
+    "failed": 0,
+    "ignored": 1
+  },
+  "lanes_exit": 0,
+  "initial_build_exit": 101,
+  "initial_build_error": "harness removed TMPDIR before build; os error 2",
+  "recovery_build_exit": 0,
+  "cleanup": 0,
+  "scope": "requested duplicate-final gate only; prior backend timeout remains unverified",
+  "live_qa_run": false
+}

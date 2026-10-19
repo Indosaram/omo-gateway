@@ -1,0 +1,7 @@
+{
+  "status": "released",
+  "release_allowed": true,
+  "scope": "Owner-pinned LAST6 deliverable-only done_diff QA binary",
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/release-bins/d5d48e4d79d2a8a6239e4cb24ccdefa257537473d4052578b7d301b78a4d9b9b/omo-gateway",
+  "binary_sha256": "d5d48e4d79d2a8a6239e4cb24ccdefa257537473d4052578b7d301b78a4d9b9b"
+}

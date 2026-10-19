@@ -1,0 +1,40 @@
+[
+ {
+  "name": "Linear (Linear for Agents)",
+  "url": "https://linear.app",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "소프트웨어 개발용 이슈 트래커·칸반, 에이전트를 1급 참여자로 다루는 에이전트 플랫폼",
+  "mobile": "iOS·Android 네이티브 앱 + 반응형 웹",
+  "pricing": "무료 / Basic $10·Business $16/사용자/월(연간), 엔터프라이즈 별도",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 원격 MCP·GraphQL API·SDK·웹훅; Claude Code·Codex·Cursor·Devin 등",
+  "status": "활발(고객 4만+ , 2026 릴리스)",
+  "pros": "에이전트를 비과금 위임 대상으로 지원; 공식 원격 MCP 서버; 세션 상태·계획 실시간 스트리밍",
+  "cons": "클라우드 전용(셀프호스팅 불가); Loops·Coding Sessions는 유료·AI 크레딧 소모; 보드가 사이클/프로젝트 구조에 종속",
+  "sources": [
+   "https://linear.app",
+   "https://linear.app/pricing",
+   "https://linear.app/mobile",
+   "https://linear.app/docs/linear-agent",
+   "https://linear.app/docs/agent-platform",
+   "https://linear.app/docs/mcp",
+   "https://linear.app/docs/coding-sessions",
+   "https://linear.app/docs/loops",
+   "https://linear.app/developers/agents",
+   "https://linear.app/developers/agent-interaction",
+   "https://linear.app/developers/agent-best-practices",
+   "https://linear.app/integrations/cursor-mcp",
+   "https://linear.app/integrations/claude",
+   "https://linear.app/integrations/codex",
+   "https://linear.app/integrations/devin",
+   "https://linear.app/integrations/github-copilot",
+   "https://github.com/linear/linear",
+   "https://github.com/linear/claude-managed-agents-demo",
+   "https://linear.app/terms",
+   "https://linear.app/docs/security"
+  ],
+  "confidence": "높음"
+ }
+]

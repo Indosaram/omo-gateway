@@ -1,0 +1,127 @@
+#### unittests src/lib.rs (target/debug/deps/omon_gateway-e129d555675071bf)
+
+failures:
+---- tools::web::tests::read_bounded_text_invalid_byte_after_budget_does_not_underflow stdout ----
+thread 'tools::web::tests::read_bounded_text_invalid_byte_after_budget_does_not_underflow' (32484741) panicked at src/tools/web.rs:512:9:
+assertion `left == right` failed
+  left: "a�"
+ right: "a"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+#### tests/test_cron_boundary_parity.rs (target/debug/deps/test_cron_boundary_parity-ea4b7ec7fa13ee2b)
+
+failures:
+---- sync_isolates_bad_jobs_and_rearms_changed_once stdout ----
+thread 'sync_isolates_bad_jobs_and_rearms_changed_once' (32487623) panicked at tests/test_cron_boundary_parity.rs:538:5:
+valid-daily must be due at 09:00
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+#### tests/test_cron_egress_parity.rs (target/debug/deps/test_cron_egress_parity-bd0621b755befaa2)
+
+failures:
+---- reminder_retains_bot_and_thread stdout ----
+thread 'reminder_retains_bot_and_thread' (32488445) panicked at tests/test_cron_egress_parity.rs:137:5:
+assertion `left == right` failed: Reminder must retain channel and thread delivery coordinates (discord:42:43)
+  left: "origin"
+ right: "discord:42:43"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+#### tests/test_cron_executor_parity.rs (target/debug/deps/test_cron_executor_parity-482f3aef2d267450)
+
+failures:
+---- agent_result_uses_scheduler_delivery stdout ----
+thread 'agent_result_uses_scheduler_delivery' (32488809) panicked at tests/test_cron_executor_parity.rs:330:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+#### tests/test_lane_scrub.rs (target/debug/deps/test_lane_scrub-ec88cf04e41bcefd)
+
+failures:
+---- test_lane_scrub_credentials stdout ----
+thread 'test_lane_scrub_credentials' (32520326) panicked at tests/test_lane_scrub.rs:45:5:
+assertion `left == right` failed
+  left: "Authorization: <redacted>"
+ right: "Authorization: Bearer <redacted>"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+#### tests/test_omo_backend.rs (target/debug/deps/test_omo_backend-a074f7c420765738)
+
+failures:
+---- test_omo_backend_e2e_thread_lifecycle_and_streaming stdout ----
+thread 'test_omo_backend_e2e_thread_lifecycle_and_streaming' (32523914) panicked at tests/test_omo_backend.rs:2088:5:
+assertion `left == right` failed
+  left: Some(true)
+ right: Some(false)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+---- test_omo_backend_waits_for_final_message_after_tool_activity stdout ----
+thread 'test_omo_backend_waits_for_final_message_after_tool_activity' (32524045) panicked at tests/test_omo_backend.rs:1911:5:
+assertion failed: !dispatcher.stream_chunks().iter().any(|chunk| chunk.is_final)
+---- completed_item_finalizes_once_at_turn_terminal stdout ----
+TASK14_FRAME method=null item=null turn=null
+TASK14_FRAME method="item/started" item="tool-final" turn="t2"
+TASK14_FRAME method="item/completed" item="m-progress" turn="t2"
+TASK14_FRAME method="item/agentMessage/delta" item="m1" turn="t2"
+TASK14_FRAME method="item/completed" item="m1" turn="t2"
+TASK14_FRAME method="thread/status/changed" item=null turn="t2"
+TASK14_FRAME method="turn/completed" item=null turn="t2"
+thread 'completed_item_finalizes_once_at_turn_terminal' (32523815) panicked at tests/test_omo_backend.rs:108:9:
+assertion `left == right` failed
+  left: [("TASK14_PROGRESS",), ("TASK14_ACTUAL_REPLY",)]
+ right: [("TASK14_ACTUAL_REPLY",)]
+---- test_omo_backend_requires_turn_terminal_even_after_final_agent_message stdout ----
+thread 'test_omo_backend_requires_turn_terminal_even_after_final_agent_message' (32523984) panicked at tests/test_omo_backend.rs:1828:5:
+assertion failed: !chunks.iter().any(|chunk| chunk.is_final)
+---- test_omo_backend_aborts_turn_on_repeated_approval_denials stdout ----
+thread 'test_omo_backend_aborts_turn_on_repeated_approval_denials' (32523864) panicked at tests/test_omo_backend.rs:2891:5:
+unexpected error: LLM error: timeout during turn streaming: no activity from server
+---- rejected_model_settings_return_typed_error_without_starting_turn stdout ----
+thread 'rejected_model_settings_return_typed_error_without_starting_turn' (32523855) panicked at tests/test_omo_backend.rs:292:6:
+called `Result::unwrap()` on an `Err` value: Elapsed(())
+---- test_omo_backend_deadline_interrupts_looping_turn stdout ----
+thread 'test_omo_backend_deadline_interrupts_looping_turn' (32523880) panicked at tests/test_omo_backend.rs:2447:5:
+deadline must fire promptly, took 9.859494083s
+
+
+#### tests/test_profile_import.rs (target/debug/deps/test_profile_import-62a3ffc8ea682d86)
+
+failures:
+---- appends_once_and_is_idempotent_with_prompt_only_update stdout ----
+thread 'appends_once_and_is_idempotent_with_prompt_only_update' (32530208) panicked at tests/test_profile_import.rs:127:5:
+assertion `left == right` failed
+  left: "updated-byte"
+ right: "2026-10-13 02:26:18"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+---- replaces_only_marked_region_and_preserves_surrounding_text stdout ----
+thread 'replaces_only_marked_region_and_preserves_surrounding_text' (32530213) panicked at tests/test_profile_import.rs:155:5:
+assertion `left == right` failed
+  left: "updated-byte"
+ right: "2026-10-13 02:26:18"
+
+
+#### tests/test_review_dashboard.rs (target/debug/deps/test_review_dashboard-5f1ebd03f883865f)
+
+failures:
+---- r_dash_001::dash_001_chat_protocol_ingress_and_contract stdout ----
+handlerProbeSource stdout:
+DASH-001-ws-input GREEN
+DASH-001-http GREEN
+DASH-002 GREEN
+DASH-003 GREEN
+thread 'r_dash_001::dash_001_chat_protocol_ingress_and_contract' (32533951) panicked at tests/test_review_dashboard.rs:807:9:
+DASH-001-ws-final must be GREEN
+
+
+#### tests/test_wiring_e2e.rs (target/debug/deps/test_wiring_e2e-2ea02edc58a70ae6)
+
+failures:
+---- test_e2e_actor_omo_backend_persists_assistant_message stdout ----
+thread 'test_e2e_actor_omo_backend_persists_assistant_message' (32537111) panicked at tests/test_wiring_e2e.rs:302:5:
+Must emit stream chunks to dispatcher
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

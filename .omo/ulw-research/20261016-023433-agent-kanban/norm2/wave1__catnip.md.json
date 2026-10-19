@@ -1,0 +1,169 @@
+[
+ {
+  "name": "Catnip",
+  "url": "https://github.com/wandb/catnip",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "W&B가 만든 컨테이너 기반 하네스·대시보드로, Claude Code 다중 병렬 실행",
+  "mobile": "반응형 웹·iOS 앱(TestFlight)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 바이너리·Docker)",
+  "license": "Apache-2.0",
+  "agent": "CLI 기반, Claude Code 중심(Codex 등은 로드맵)",
+  "status": "원본 404, 미러 유지",
+  "pros": "Docker/Apple Container 샌드박스 격리; Git 워크트리 자동 생성·동기화; 포트 자동 감지 및 프리뷰",
+  "cons": "원본 저장소 404로 미러에 의존; Claude Code 외 에이전트 미지원; iOS 앱은 TestFlight 베타만 제공",
+  "sources": [
+   "https://github.com/wandb/catnip",
+   "https://github.com/HarleyCoops/catnip",
+   "https://github.com/barstoolbluz/agentic-development-with-flox",
+   "https://github.com/bradAGI/awesome-cli-coding-agents",
+   "https://github.com/gabrielmoreira/awesome-ai-rabbit-holes",
+   "https://catnip.run"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Vibe Kanban",
+  "url": "https://vibekanban.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "10종 이상의 코딩 에이전트를 Git 브랜치별로 조율하는 오픈소스 칸반",
+  "mobile": "반응형 웹(Tauri 모바일 실험적)",
+  "pricing": "무료(OSS), 클라우드 서비스 종료",
+  "selfhost": "가능(npx·Docker Compose)",
+  "license": "Apache-2.0",
+  "agent": "CLI, Claude Code·Codex·Gemini·Cursor 등 10종 이상",
+  "status": "활성(v0.1.45), 클라우드 종료",
+  "pros": "가장 폭넓은 에이전트 호환성; 브랜치 연동 칸반과 diff 뷰어; 28k+ 스타의 대규모 커뮤니티",
+  "cons": "호스팅 클라우드 종료; 네이티브 모바일 앱 없음; 네이티브 MCP 서버 부재",
+  "sources": [
+   "https://github.com/BloopAI/vibe-kanban",
+   "https://vibekanban.com",
+   "https://github.com/p-wegner/agentic-kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Kanban (saltbo)",
+  "url": "https://github.com/saltbo/agent-kanban",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트가 API로 작업을 클레임·수행하고 사람이 승인하는 에이전트 우선 보드",
+  "mobile": "반응형 웹(모바일 테스트 완료)",
+  "pricing": "무료(셀프호스트) / 클라우드 가격 미확인",
+  "selfhost": "가능(Cloudflare Workers·Node.js)",
+  "license": "FSL-1.1-ALv2",
+  "agent": "REST API(OpenAPI), 에이전트의 작업 클레임·리뷰 제출",
+  "status": "활성(2026년 10월 커밋)",
+  "pros": "에이전트를 일급 행위자로 설계; 자기 작업 승인 금지로 직무 분리; 서버리스 구조로 유휴 비용 0",
+  "cons": "Realmroot·Enbor 플랫폼에 강하게 결합; FSL은 OSI 오픈소스 아님; 네이티브 앱·컨테이너 런타임 없음",
+  "sources": [
+   "https://github.com/saltbo/agent-kanban",
+   "https://agent-kanban.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Automagik Forge",
+  "url": "https://forge.automag.ik",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반으로 작업을 구성해 Git 워크트리별로 다중 에이전트에 배분하는 플랫폼",
+  "mobile": "반응형 웹(Android 앱은 사양 단계)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(npx 로컬 실행)",
+  "license": "Apache-2.0",
+  "agent": "MCP 서버·CLI·REST, Claude Code·Gemini CLI·Genie",
+  "status": "활성(~92 stars)",
+  "pros": "네이티브 MCP로 에이전트가 작업을 직접 조작; 작업별 격리 워크트리; Genie 계획 보조 기능",
+  "cons": "커뮤니티 규모가 작음; 모바일 앱 미출시; Node.js/pnpm 툴체인 필요",
+  "sources": [
+   "https://github.com/automagik-dev/forge",
+   "https://forge.automag.ik"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "5dive",
+  "url": "https://5dive.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "systemd로 격리된 경량 멀티 에이전트 운영 플랫폼, 텔레그램으로 제어",
+  "mobile": "Telegram 봇·미니앱(iOS·Android)",
+  "pricing": "무료(OSS) / 관리형 VM 약 $15/월",
+  "selfhost": "가능(Linux systemd)",
+  "license": "MIT",
+  "agent": "CLI·MCP 플러그인, Claude Code·Codex 헤드리스 실행",
+  "status": "활성(매일 커밋)",
+  "pros": "Unix 네이티브의 가벼운 설계; 텔레그램 기반 탭 한 번 승인; 지출·파괴적 작업에 사람 승인 게이트",
+  "cons": "Linux·systemd 및 root 권한 필요; 웹 UI는 별도 플러그인으로 분리 중; 모바일 알림에 텔레그램 필수",
+  "sources": [
+   "https://github.com/5dive-ai/5dive",
+   "https://5dive.ai",
+   "https://t.me/FiveDiveBot"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Dashboard (dustinblack)",
+  "url": "https://github.com/dustinblack/agent-dashboard",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "여러 호스트의 컨테이너 기반 코딩 에이전트를 배포·모니터링하는 대시보드",
+  "mobile": "반응형 웹·SSH TUI",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Podman·Docker Compose)",
+  "license": "Apache-2.0",
+  "agent": "tmux·PTY 제어, OTLP 텔레메트리; Claude Code·Codex 등",
+  "status": "업데이트 중(~17 stars)",
+  "pros": "멀티 호스트 통합 제어; OTLP 기반 토큰·비용 추적; rootless 컨테이너 보안",
+  "cons": "구조화된 칸반 기능 약함; 네이티브 모바일 앱 없음; 각 노드에 데몬 배포 필요",
+  "sources": [
+   "https://github.com/dustinblack/agent-dashboard",
+   "https://github.com/dustinblack/agent-dashboard/blob/main/docs/agent-profiles.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Kanban PM (kronos3610)",
+  "url": "https://github.com/kronos3610/agent-kanban-pm",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "사람과 CLI 에이전트를 조율하는 로컬 우선 1인용 칸반 PM 서버",
+  "mobile": "반응형 웹(로컬 네트워크)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(pip·SQLite 로컬)",
+  "license": "MIT",
+  "agent": "MCP 서버·REST/WebSocket, Claude·Codex 오케스트레이터",
+  "status": "v0.8.0 릴리스(~8 stars)",
+  "pros": "MCP로 보드를 프로그래밍 방식으로 조작; SQLite 기반 로컬 프라이버시; 리소스 부담이 적음",
+  "cons": "1인 전용이라 공개 노출 위험; 컨테이너 샌드박스 없음; 모바일 앱·푸시 알림 없음",
+  "sources": [
+   "https://github.com/kronos3610/agent-kanban-pm",
+   "https://pypi.org/project/agent-kanban-pm/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Plane",
+  "url": "https://plane.so",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "오픈소스 엔터프라이즈 PM·이슈 트래커로 칸반·스프린트와 AI 연동 제공",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Pro $8·Ent $15/사용자/월",
+  "selfhost": "가능(Docker·K8s)",
+  "license": "AGPL-3.0",
+  "agent": "REST·GraphQL API, MCP 연동(Claude Code·Cursor)",
+  "status": "매우 활발(60.9k stars)",
+  "pros": "네이티브 iOS·Android 앱; 풍부한 API와 MCP 커넥터; 성숙한 엔터프라이즈 기능",
+  "cons": "에이전트 샌드박스·워크트리 미지원; 인프라 부담이 큼; AGPL 컴플라이언스 검토 필요",
+  "sources": [
+   "https://plane.so",
+   "https://github.com/makeplane/plane",
+   "https://plane.so/pricing"
+  ],
+  "confidence": "높음"
+ }
+]

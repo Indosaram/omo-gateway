@@ -1,0 +1,128 @@
+=== Step (a) Backup: mkdir -p ~/.omon/omomeow-backup-$(date +%F)/launchagents && cp -v ~/Library/LaunchAgents/ai.omomeow.herdr.plist ~/.omon/omomeow-backup-$(date +%F)/launchagents/ ===
+
+
+=== Step (b) Bootout and disable ===
+(no output)
+
+=== Step (c) Move plist ===
+/Users/indo/Library/LaunchAgents/ai.omomeow.herdr.plist -> /Users/indo/.omon/omomeow-backup-2026-10-11/launchagents/ai.omomeow.herdr.plist
+
+=== Step (d) Terminate listeners ===
+no-listeners-running
+
+=== Step (e) herdr agent list ===
+{"id":"cli:agent:list","error":{"code":"server_not_running","message":"no herdr server is running at /Users/indo/.config/herdr/herdr.sock; run `herdr` to start or attach it"}}
+
+=== Step (e) herdr server stop ===
+server is not running or cannot be reached at /Users/indo/.config/herdr/herdr.sock: No such file or directory (os error 2)
+pgrep check:
+no-herdr-server
+
+=== Step (f) Find re-enable paths ===
+--- rg launchctl omomeow ---
+/Users/indo/code/project/omon-gateway/docs/PHASE4_GOD_SESSION_RETIREMENT.md
+84:   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.omomeow.plist
+
+/Users/indo/.omon/omomeow/state/heimdal-connectors-final.md
+94:$ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/ai.omomeow.heimdal-imessage.plist
+102:`launchctl kickstart -k "gui/$(id -u)/ai.omomeow.heimdal-imessage"`.
+--- Session search 01a0f31c-bace-7f58-90c9-87da816f7762 ---
+(no output)
+--- Search in ~/.omon/omomeow ---
+/Users/indo/.omon/omomeow/jobs/maho-weekly.md
+4:- launchctl list에서 ai.maho.ops 데몬 상태를 확인한다.
+
+/Users/indo/.omon/omomeow/AGENTS.md
+7:- Herdr auto-starts at login and restarts if it dies (launchd `ai.omomeow.herdr` → `bin/herdr-boot.sh`), which also restarts the listener loop and resumes this session in its pane. On resume, re-arm the monitors below.
+
+/Users/indo/.omon/omomeow/legacy-crons.json
+122:    "prompt": "매주 월요일 오전 9시(KST) maho 프로젝트의 주간 종합 브리핑(운영 지표 + GTM 진행도 + 시장 동향)을 한국어로 작성하여 보고한다. 표는 쓰지 않고 가독성 높은 불릿 포인트로 작성한다.\n\n[1. maho-bot 서비스 운영 현황]\n- launchctl list에서 ai.maho.ops 데몬 상태를 확인한다.\n- /Users/indo/code/project/maho-workspace/tools/maho-ops/mapping.db 존재 여부를 확인하고, 존재하면 threads 테이블에서 최근 7일간 kind별 건수, issue_number/replied_at/issue_created_at 비NULL 수를 조회하여 보고한다.\n- bot.log 최근 30줄에서 확인되는 주요 오류나 재연결 로그만 보고한다.\n\n[2. maho GTM 마일스톤 진행도]\n- PLAN=/Users/indo/.omon/workspace/runtime/plans/2026-07-17_maho-gtm-plan.md 파일을 확인하고 TZ=Asia/Seoul date +%F로 현재 날짜를 확인한다.\n- 문서 작성일을 Day 1로 하여 현재 Day와 Week를 계산한다.\n- 현재 주차 섹션에서 [ ] 미완료 항목을 최대 5개 추출하고 주요 마일스톤 상태를 요약한다. 파일 읽기 실패 시 경로 오류만 명시한다.\n\n[3. 브라우저 시장 경쟁 신호]\n- 반드시 MCP 검색 도구 minpeter/opensearch를 사용해 최근 1주일간의 Arc Browser, Zen Browser, Dia/browser company, chromium fork 관련 신호를 검색한다.\n- 유의미한 신호만 선별하여 핵심 내용과 maho에 미치는 영향 1줄을 작성한다. 도구 실패 시 실패 사실만 명시한다."
+
+/Users/indo/.omon/omomeow/state/heimdal-connectors-final.md
+13:| **iMessage** | `heimdal-imessage` 0.1.0 (new, built here) | `ai.omomeow.heimdal-imessage` | 8795 | **200** | **연결됨** | **works — 250 rooms, messages read** (see FDA note) |
+32:- `~/Library/LaunchAgents/ai.omomeow.heimdal-imessage.plist` (0600) — `RunAtLoad` + `KeepAlive`, running `bun …/heimdal-imessage-adapter.ts`, log `state/heimdal-imessage.log`.
+66:$ launchctl bootstrap gui/501 /tmp/imsg-probe.plist   # runs `imsg chats --limit 2`
+94:$ launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/ai.omomeow.heimdal-imessage.plist
+95:$ launchctl print "gui/$(id -u)/ai.omomeow.heimdal-imessage" | head -3
+102:`launchctl kickstart -k "gui/$(id -u)/ai.omomeow.heimdal-imessage"`.
+109:$ launchctl bootout gui/501/com.heimdal.tsuba-discord-user
+165:| 7 | `launchctl bootstrap … /tmp/imsg-probe.plist` (FDA probe) | 0 (`authorization denied (code: 23)`) |
+179:launchctl bootout gui/$(id -u)/ai.omomeow.heimdal-imessage
+180:rm ~/Library/LaunchAgents/ai.omomeow.heimdal-imessage.plist
+
+/Users/indo/.omon/omomeow/state/memory-ontology-audit-result.md
+113:  그러나 `launchctl print gui/501/ai.indo.personal-assistant-sync` → **`Could not find service` (미등록/미로드)**
+146:4. **디스코드**: `omon-gateway`(Rust Discord 멀티플렉서, 별도 프로젝트)는 `launchctl` **미등록**, 로그 마지막 `2026-10-01 00:52:58 KST "omo-gateway stopped"`, DB `omon_gateway.db` mtime `2026-10-01 00:52`. 현재 Discord 연결은 OmOMeow의 `listen.ts` 자체 런타임이 맡고 있으며 **이것도 온톨로지와 무관**.
+
+/Users/indo/.omon/omomeow/state/scheduled-kakao-20261007-1005.md
+35:- Heimdal 등록 lease는 살아 있었다(`keepalive: register 200` 연속, `ai.omomeow.heimdal-piratetalk` 로드됨, `com.heimdal.saya-server`/`saya-site` 실행 중, 코어 `/health` 200) — 즉 **인증 실패가 아니라 카탈로그가 비었다**.
+
+/Users/indo/.omon/omomeow/state/memory-ontology-audit-progress.md
+52:- 런타임: `ai.indo.personal-assistant-sync` plist 실재하나 **launchctl 미등록·프로세스 없음·`/tmp` 로그 없음**.
+
+/Users/indo/.omon/omomeow/state/benchmark-pipelines-result.md
+75:No duplicates in code; `launchctl list` shows no separate job (only `ai.omomeow.herdr`).
+
+/Users/indo/.omon/omomeow/state/heimdal-install-result.md
+91:4. **LaunchAgent `ai.omomeow.heimdal-piratetalk`** (user agent, `~/Library/LaunchAgents`, 0600): `RunAtLoad` + `StartInterval=30`, log `state/heimdal-piratetalk-keepalive.log` (0600; audited: only `keepalive: register 200` lines, zero token-shaped strings). This is a user LaunchAgent like the machine's existing `ai.omomeow.herdr` — no sudo, no system/TCC permission change.
+135:launchctl bootout gui/$(id -u)/ai.omomeow.heimdal-piratetalk
+136:rm ~/Library/LaunchAgents/ai.omomeow.heimdal-piratetalk.plist
+
+=== Step (f) Findings Summary ===
+1. Command searches:
+   - rg -n "launchctl (enable|bootstrap|load|kickstart).*omomeow" returned only markdown documentation:
+     - docs/PHASE4_GOD_SESSION_RETIREMENT.md (com.omomeow.plist doc)
+     - ~/.omon/omomeow/state/heimdal-connectors-final.md (ai.omomeow.heimdal-imessage doc)
+   - Search in ~/.omon/omomeow returned only doc files (AGENTS.md, jobs/maho-weekly.md) and legacy-crons.json prompt string.
+   - crontab -l has no omomeow entries.
+   - LaunchAgents has no ai.omomeow.herdr.plist remaining (only heimdal-piratetalk and heimdal-imessage).
+2. Session search (01a0f31c-bace-7f58-90c9-87da816f7762):
+   - All launchctl occurrences in the session transcript were read-only inspection calls (launchctl list) or prompt texts.
+   - Zero occurrences attempting to bootstrap, load, enable, or kickstart ai.omomeow.herdr.
+3. Remediation action:
+   - No script files contain re-enable commands for ai.omomeow.herdr; no modifications needed.
+
+=== Acceptance Checks (Immediate) ===
+1. launchctl print-disabled gui/501 | grep omomeow.herdr:
+		"ai.omomeow.herdr" => disabled
+
+2. test ! -e ~/Library/LaunchAgents/ai.omomeow.herdr.plist && echo plist-gone:
+plist-gone
+
+3. pgrep -fl 'omomeow/bin/(listen|watch).ts' || echo no-listener:
+no-listener
+
+4. pgrep -fl 'herdr server' || echo no-herdr-server:
+no-herdr-server
+
+5. launchctl list | grep -E 'omomeow.herdr|omon.gateway':
+62514	0	ai.omon.gateway
+
+=== Acceptance Checks (10-minute respawn check) ===
+Timestamp: 2026-10-10T21:25:15Z
+1. launchctl print-disabled:
+		"ai.omomeow.herdr" => disabled
+2. plist existence:
+plist-gone
+3. listener processes:
+no-listener
+4. herdr server process:
+no-herdr-server
+5. launchctl list:
+62514	0	ai.omon.gateway
+
+=== Respawn re-check (10 min) ===
+1. launchctl print-disabled gui/501 | grep omomeow.herdr:
+		"ai.omomeow.herdr" => disabled
+
+2. test ! -e ~/Library/LaunchAgents/ai.omomeow.herdr.plist && echo plist-gone:
+plist-gone
+
+3. pgrep -fl 'omomeow/bin/(listen|watch).ts' || echo no-listener:
+no-listener
+
+4. pgrep -fl 'herdr server' || echo no-herdr-server:
+no-herdr-server
+
+5. launchctl list | grep -E 'omomeow.herdr|omon.gateway':
+62514	0	ai.omon.gateway

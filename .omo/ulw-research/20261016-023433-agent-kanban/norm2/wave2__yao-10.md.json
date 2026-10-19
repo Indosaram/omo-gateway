@@ -1,0 +1,80 @@
+[
+ {
+  "name": "Multica",
+  "url": "https://multica.ai/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "인간 엔지니어와 AI 코딩 에이전트를 Linear식 태스크 보드에서 팀원처럼 관리하는 오케스트레이션 플랫폼",
+  "mobile": "iOS 앱(소스 빌드 필요)·반응형 웹",
+  "pricing": "무료(셀프호스트) / 클라우드 유료(가격 미공개)",
+  "selfhost": "가능(Docker·단일 바이너리·Helm)",
+  "license": "Multica License(소스 공개)",
+  "agent": "에이전트 CLI 26종 자동 감지, REST API, CLI, WebSocket",
+  "status": "활발(v0.6.2, 2026-10-13)",
+  "pros": "Linear식 칸반 보드에 에이전트를 팀원처럼 배정; 에이전트 CLI 26종 자동 감지; 재사용 스킬 라이브러리와 실행 리플레이",
+  "cons": "iOS 앱은 Xcode로 직접 빌드해야 하고 Android 앱 없음; 소스 공개 라이선스라 제3자 대상 상용 호스팅 제한; 셀프호스팅에 PostgreSQL 17 등 인프라 필요",
+  "sources": [
+   "https://multica.ai/",
+   "https://yetanotherorchestrator.app/apps/multica/",
+   "https://multica.ai/licensing",
+   "https://multica.ai/docs/mobile-app",
+   "https://multica.ai/docs/desktop-app",
+   "https://multica.ai/docs/cli",
+   "https://multica.ai/docs/cloud-quickstart",
+   "https://github.com/multica-ai/multica",
+   "https://github.com/multica-ai/multica/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Sortie",
+  "url": "https://sortie-ai.com/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Linear·Jira·GitHub 등 이슈 트래커의 티켓을 받아 격리 워크스페이스에서 코딩 에이전트에 배분하는 데몬",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Go 바이너리·Docker·Helm)",
+  "license": "Apache-2.0",
+  "agent": "Claude Code·Codex·Gemini 등 어댑터(ACP), HTTP API, MCP 설정 주입",
+  "status": "활발(v1.27.0, 2026-10-11)",
+  "pros": "내장 SQLite를 쓰는 의존성 없는 단일 Go 바이너리; 기존 트래커와 동기화해 티켓 중복 없음; 티켓별 토큰 예산 상한과 비용 추정",
+  "cons": "자체 UI에 칸반 보드 없음(트래커에 위임); 네이티브 모바일 앱·PWA 없음; HTTP 서버에 기본 인증 없음",
+  "sources": [
+   "https://docs.sortie-ai.com/",
+   "https://yetanotherorchestrator.app/apps/sortie/",
+   "https://docs.sortie-ai.com/reference/dashboard/",
+   "https://docs.sortie-ai.com/reference/http-api/",
+   "https://docs.sortie-ai.com/guides/monitor-with-logs/",
+   "https://github.com/sortie-ai/sortie",
+   "https://github.com/sortie-ai/sortie/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent of Empires",
+  "url": "https://www.agent-of-empires.com/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "tmux 세션과 git 워크트리·컨테이너에서 여러 AI 코딩 에이전트를 병렬 실행하는 Rust 기반 세션 관리자",
+  "mobile": "PWA·반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 바이너리·CityHall 서버)",
+  "license": "MIT",
+  "agent": "tmux CLI로 Claude Code·Codex 등 12종 이상 지원, ACP, REST API, 웹훅",
+  "status": "활발(v1.20.0, 2026-10-15)",
+  "pros": "키보드 중심 Rust TUI로 리소스 사용량 매우 낮음; 설치형 PWA와 원격 터널로 모바일 지원; 워크트리·컨테이너로 작업 격리",
+  "cons": "드래그 앤 드롭 칸반 보드 없음; Windows는 WSL2에서만 지원; Jira·Linear 직접 연동과 자동 PR 생성 없음",
+  "sources": [
+   "https://www.agent-of-empires.com/",
+   "https://yetanotherorchestrator.app/apps/agent-of-empires/",
+   "https://www.agent-of-empires.com/docs/quick-start/",
+   "https://www.agent-of-empires.com/guides/web-dashboard/",
+   "https://www.agent-of-empires.com/guides/web/dashboard/",
+   "https://www.agent-of-empires.com/docs/api/",
+   "https://github.com/agent-of-empires/agent-of-empires",
+   "https://github.com/agent-of-empires/agent-of-empires/releases"
+  ],
+  "confidence": "높음"
+ }
+]

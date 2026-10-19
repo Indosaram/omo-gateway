@@ -1,0 +1,8 @@
+{
+  "status": "released",
+  "release_allowed": true,
+  "scope": "FINAL: all todos + owner 45 s watchdog WIP + zero-config lead default + digest home fix",
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/release-bins/5d1e25a4af283dde87a525a75f635cefe8ee44e1be7ea31e5df5fec0838067b6/omo-gateway",
+  "binary_sha256": "5d1e25a4af283dde87a525a75f635cefe8ee44e1be7ea31e5df5fec0838067b6",
+  "verification": "final-verify.json run 11 + final-verify-run11-addendum.md"
+}

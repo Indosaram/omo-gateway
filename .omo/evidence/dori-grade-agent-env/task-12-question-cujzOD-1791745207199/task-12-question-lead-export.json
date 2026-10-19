@@ -1,0 +1,43 @@
+{
+  "schema": "omon-task12-question-lead-export-v1",
+  "root": "/private/tmp/omon-lane-scratch-qa-cujzOD",
+  "readOnly": true,
+  "leadSessionKey": "4:lane|-|4:lead|-|9:lane:lead",
+  "questionEvents": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+      "kind": "question",
+      "body": "pick A or B",
+      "created_at": "2026-10-11T19:00:15.214552+00:00",
+      "delivered_at": "2026-10-11T19:00:47.322961+00:00",
+      "delivery_reason": "jev_skip"
+    },
+    {
+      "id": 2,
+      "lane_key": "qa-1",
+      "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+      "kind": "question",
+      "body": "A received; waiting for next instruction",
+      "created_at": "2026-10-11T19:02:10.621108+00:00",
+      "delivered_at": "2026-10-11T19:02:42.323144+00:00",
+      "delivery_reason": "jev_skip"
+    }
+  ],
+  "leadSessions": [],
+  "leadMessages": [],
+  "deliveryObligations": [],
+  "pragma": [
+    {
+      "seq": 0,
+      "name": "main",
+      "file": "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db"
+    }
+  ],
+  "sourceEvidence": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-cujzOD-1791745207199/task-12-question.json",
+    "sha256": "b9fbd6616b3bf3f89de523260a21d9188fc2ced24d018ff63409839783837e80"
+  },
+  "interpretation": "Both actual question events carry jev_skip. No configured lead session row, lead System/assistant message or delivery obligation exists for this lead key; event-to-lead-turn/reply integration is not proven."
+}

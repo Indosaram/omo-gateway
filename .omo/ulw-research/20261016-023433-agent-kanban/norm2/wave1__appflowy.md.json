@@ -1,0 +1,29 @@
+[
+ {
+  "name": "AppFlowy (Board View)",
+  "url": "https://appflowy.com",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "Flutter·Rust 기반 오픈소스 Notion/Trello 대안, 데이터베이스 보드(칸반) 뷰 제공",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Pro $12/멤버/월(연간), 셀프호스트 유료 티어",
+  "selfhost": "가능(Docker Compose, 다중 사용자는 상용)",
+  "license": "AGPL-3.0",
+  "agent": "REST OpenAPI(JWT); 상용 백엔드 내부 MCP, 공개 MCP 서버 없음",
+  "status": "활발(데스크톱 v0.14.8, 서버 v0.19.6)",
+  "pros": "로컬 우선·오프라인 지원; 전 플랫폼 네이티브 앱; OpenAPI 기반 REST API",
+  "cons": "셀프호스트 다중 사용자는 상용 라이선스 필요; 즉시 쓸 MCP 플러그인 없음; 셀프호스트에 컨테이너 7개 이상 필요",
+  "sources": [
+   "https://appflowy.com",
+   "https://appflowy.com/pricing",
+   "https://appflowy.com/blog/appflowy-kanban-in-project-management",
+   "https://docs.appflowy.io/docs/documentation/software-contributions/architecture/frontend/database-view/kanban-board",
+   "https://github.com/AppFlowy-IO/AppFlowy",
+   "https://github.com/AppFlowy-IO/AppFlowy/releases",
+   "https://github.com/AppFlowy-IO/AppFlowy-SelfHost-Commercial",
+   "https://raw.githubusercontent.com/AppFlowy-IO/AppFlowy-SelfHost-Commercial/main/docs/OPENAPI.md",
+   "https://raw.githubusercontent.com/AppFlowy-IO/AppFlowy-SelfHost-Commercial/main/docs/AUDIT.md"
+  ],
+  "confidence": "높음"
+ }
+]

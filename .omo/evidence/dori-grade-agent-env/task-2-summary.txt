@@ -1,0 +1,196 @@
+# Todo 2 Baseline Verification & Test Analysis Summary
+
+## 1. Baseline Environment & Metadata
+- **Repository Worktree:** `/Users/indo/code/project/omon-gateway-wt/dori-grade-agent-env`
+- **Baseline Git HEAD:** `245a587`
+- **Cargo Package:** `omo-gateway v0.1.0`
+- **Cargo Metadata Targets Count:** 26 total targets
+  - 1 library target: `omon_gateway` (`src/lib.rs`)
+  - 1 binary target: `omo-gateway` (`src/entry.rs`)
+  - 24 integration test targets in `tests/*.rs`
+
+---
+
+## 2. Gate Verification Overview
+
+| Gate | Command | Status | Exit Code | Details |
+|---|---|---|---|---|
+| **Gate 1: Format** | `cargo fmt --check` | **FAILED** | 1 | Diff at `src/agent/backend.rs:61` (unformatted trailing space/newline) |
+| **Gate 2: Clippy** | `cargo clippy --all-targets --all-features -- -D warnings` | **FAILED** | 101 | `clippy::overly_complex_bool_expr` at `src/agent/omo_backend.rs:1248:32` (`if false && !is_cron_session`) |
+| **Gate 3: Dashboard** | `cargo test --test test_review_dashboard` | **PASSED** | 0 | 59 passed; 0 failed; finished in 6.46s |
+| **Gate 4: Full Test Suite** | `cargo test --all-targets --all-features --no-fail-fast` | **FAILED** | 101 (reported pipeline exit 0 unverified in raw log; cargo exit 101 proven) | 26 targets run; 6 targets failed; 16 tests failed; 732 tests passed; 748 total top-level tests |
+
+---
+
+## 3. Exit Code & Pipeline Status Analysis
+- **Recorded Raw Evidence:** The log ends at line 1076 with explicit, proven failure status:
+  ```
+  error: 6 targets failed:
+      `--test test_cron_boundary_parity`
+      `--test test_cron_executor_parity`
+      `--test test_discord_adapter`
+      `--test test_migrate`
+      `--test test_omo_backend`
+      `--test test_wiring_e2e`
+  cargo_exit=101
+  ```
+  `cargo_exit=101` is directly proven at line 1076 of `task-2-baseline-full.log`.
+- **Pipeline Invocation & Historical Status:**
+  - Full invocation: `cargo test --all-targets --all-features --no-fail-fast 2>&1 | tee .omo/evidence/dori-grade-agent-env/task-2-baseline-full.log`
+  - Crucial role of `--no-fail-fast`: Prevented cargo from aborting after target 5 (`test_cron_boundary_parity`), allowing all 26 targets to run and record a complete baseline.
+  - The pipeline returning exit 0 (due to `tee` without `pipefail`) is a reported historical execution status from the run harness. However, that pipeline returncode is **reported-unverified** within the raw log artifact itself, whereas `cargo_exit=101` is mathematically and textually proven at line 1076.
+- **Guidance:** Automation must treat the baseline outcome as failed (`cargo_exit=101`) and must never rely on unverified shell pipeline exit codes without `set -o pipefail` or `PIPESTATUS[0]`.
+
+---
+
+## 4. Cargo Metadata Target Completeness Audit
+
+### Analysis of Target Counts: 26 Running Invocations vs 28 Result Lines
+- `cargo metadata --no-deps --format-version 1` confirms exactly **26 package targets** for `omo-gateway`.
+- In `task-2-baseline-full.log`, there are exactly **26 top-level "Running" invocations**, matching all 26 package targets 1:1.
+- In `task-2-baseline-full.log`, there are **28 lines matching "test result:"**.
+- **Accurate Provenance of the 2 Additional Result Lines:**
+  - The 2 extra result lines do NOT originate from cargo processes. They are produced by **native test executable re-executions** launched inside target 19 (`tests/test_review_agent.rs`).
+  - Specifically, `tests/test_review_agent.rs:695-699` invokes:
+    ```rust
+    let mut command = tokio::process::Command::new(
+        std::env::current_exe().expect("current native test executable"),
+    );
+    command.args([selector, "--exact", "--nocapture", "--test-threads=1"])
+    ```
+  - Both subprocesses re-execute the compiled test binary directly with inherited stdout/stderr. Because both execute concurrently, their outputs interleave (lines 895-900).
+  - The two interleaved child test executable results are emitted at:
+    - **Line 902:** `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s`
+    - **Line 906:** `test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.01s`
+    *(Note: Because stdout chunks interleave during concurrent execution, individual child summaries are not attributed to specific test selectors without distinct process PID tagging.)*
+  - Target 19's own aggregate test suite result line is emitted at:
+    - **Line 915:** `test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.46s`
+- **Completeness Verdict:** 100% target completeness (26/26). All top-level cargo package targets were executed to completion. Zero targets were skipped, missing, or killed.
+
+---
+
+## 5. All 26 Target Results Breakdown
+
+| # | Target Name | Kind | Status | Passed | Failed | Ignored | Filtered | Duration |
+|---|---|---|---|---|---|---|---|---|
+| 1 | `unittests src/lib.rs` | lib | **ok** | 413 | 0 | 0 | 0 | 20.18s |
+| 2 | `unittests src/entry.rs` | bin | **ok** | 55 | 0 | 0 | 0 | 5.34s |
+| 3 | `tests/test_agent_tools.rs` | test | **ok** | 7 | 0 | 0 | 0 | 3.37s |
+| 4 | `tests/test_cron_authority_upgrade.rs` | test | **ok** | 1 | 0 | 0 | 0 | 4.82s |
+| 5 | `tests/test_cron_boundary_parity.rs` | test | **FAILED** | 3 | 1 | 0 | 0 | 4.49s |
+| 6 | `tests/test_cron_delivery_parity.rs` | test | **ok** | 1 | 0 | 0 | 0 | 1.01s |
+| 7 | `tests/test_cron_egress_parity.rs` | test | **ok** | 3 | 0 | 0 | 0 | 5.12s |
+| 8 | `tests/test_cron_executor_parity.rs` | test | **FAILED** | 4 | 1 | 0 | 0 | 4.22s |
+| 9 | `tests/test_cron_schedule_parity.rs` | test | **ok** | 3 | 0 | 0 | 0 | 4.65s |
+| 10 | `tests/test_cron_tool_parity.rs` | test | **ok** | 2 | 0 | 0 | 0 | 4.46s |
+| 11 | `tests/test_discord_adapter.rs` | test | **FAILED** | 58 | 1 | 0 | 0 | 20.65s |
+| 12 | `tests/test_discord_thread_lifecycle.rs` | test | **ok** | 3 | 0 | 0 | 0 | 0.46s |
+| 13 | `tests/test_e2e_stress.rs` | test | **ok** | 3 | 0 | 0 | 0 | 2.14s |
+| 14 | `tests/test_message_context.rs` | test | **ok** | 9 | 0 | 0 | 0 | 0.80s |
+| 15 | `tests/test_migrate.rs` | test | **FAILED** | 8 | 2 | 0 | 0 | 5.55s |
+| 16 | `tests/test_multiplexer.rs` | test | **ok** | 19 | 0 | 0 | 0 | 2.22s |
+| 17 | `tests/test_omo_backend.rs` | test | **FAILED** | 31 | 10 | 0 | 0 | 1801.19s |
+| 18 | `tests/test_profile_routing.rs` | test | **ok** | 7 | 0 | 0 | 0 | 0.28s |
+| 19 | `tests/test_review_agent.rs` | test | **ok** | 6 | 0 | 0 | 0 | 5.46s |
+| 20 | `tests/test_review_dashboard.rs` | test | **ok** | 59 | 0 | 0 | 0 | 2.90s |
+| 21 | `tests/test_review_discord.rs` | test | **ok** | 5 | 0 | 0 | 0 | 0.42s |
+| 22 | `tests/test_review_security.rs` | test | **ok** | 8 | 0 | 0 | 0 | 0.59s |
+| 23 | `tests/test_voice_cron.rs` | test | **ok** | 13 | 0 | 0 | 0 | 1.59s |
+| 24 | `tests/test_voice_transcription.rs` | test | **ok** | 3 | 0 | 0 | 0 | 0.35s |
+| 25 | `tests/test_wiring_e2e.rs` | test | **FAILED** | 1 | 1 | 0 | 0 | 0.34s |
+| 26 | `tests/test_work_heartbeat.rs` | test | **ok** | 7 | 0 | 0 | 0 | 0.36s |
+
+- **Total Top-level Tests:** 748 (direct sum across all 26 top-level targets)
+- **Total Top-level Tests Passed:** 732
+- **Total Top-level Tests Failed:** 16 (across 6 targets)
+- **Total Tests Ignored:** 0
+- **Total Filtered Out:** 0 (excluding the 10 filtered subtests in native child executable runs)
+
+---
+
+## 6. Comprehensive True Failures Details (16 tests across 6 targets)
+
+### Target 1: `tests/test_cron_boundary_parity.rs` (1 failure)
+1. **`sync_isolates_bad_jobs_and_rearms_changed_once`**
+   - **Panic location:** `tests/test_cron_boundary_parity.rs:538:5`
+   - **Message:** `valid-daily must be due at 09:00`
+   - **Root cause:** Pre-existing cron boundary synchronization timing/timezone assertion expectation.
+
+### Target 2: `tests/test_cron_executor_parity.rs` (1 failure)
+2. **`agent_result_uses_scheduler_delivery`**
+   - **Panic location:** `tests/test_cron_executor_parity.rs:330:5`
+   - **Message:** `assertion left == right failed (left: 0, right: 1)`
+   - **Root cause:** Pre-existing scheduler delivery queue counter mismatch in mock runner.
+
+### Target 3: `tests/test_discord_adapter.rs` (1 failure)
+3. **`final_output_filters_controls`**
+   - **Panic location:** `tests/test_discord_adapter.rs:3037:43`
+   - **Message:** `called Result::unwrap() on an Err value: Llm("omo turn ended with no content (likely upstream LLM failure)")`
+   - **Root cause:** Pre-existing mock/LLM turn completion handling in Discord message filter test.
+
+### Target 4: `tests/test_migrate.rs` (2 failures)
+4. **`cutover_second_store_failure_preserves_bytes_and_receipt`**
+   - **Panic location:** `tests/test_migrate.rs:861:5`
+   - **Message:** `assertion left == right failed: both due jobs claimed after cutover committed (left: 0, right: 2)`
+   - **Root cause:** Migration cutover rollback test expecting 2 claimed jobs, received 0.
+5. **`cutover_survives_startup_sync`**
+   - **Panic location:** `tests/test_migrate.rs:489:5`
+   - **Message:** `assertion left == right failed: due cutover owned job must be claimed by scheduler (left: 0, right: 1)`
+   - **Root cause:** Migration cutover startup synchronization job claim expectation.
+
+### Target 5: `tests/test_omo_backend.rs` (10 failures)
+6. **`test_omo_backend_accepts_received_completion_at_deadline_edge`**
+   - **Panic location:** `tests/test_omo_backend.rs:1587:5`
+   - **Message:** `deadline-edge completion failed: Err(Llm("omo turn ended with no content (likely upstream LLM failure)"))`
+7. **`test_omo_backend_emits_hermes_activity_lines`**
+   - **Panic location:** `tests/test_omo_backend.rs:1858:5`
+   - **Message:** `assertion left == right failed: final chunk layout mismatch: left: "✅ Done.", right: "OMOACT-OK"`
+8. **`test_omo_backend_omits_workspace_when_per_agent_disabled`**
+   - **Panic location:** `tests/test_omo_backend.rs:2164:5`
+   - **Message:** `backend.run must succeed: Some(Llm("omo turn ended with no content (likely upstream LLM failure)"))`
+9. **`test_omo_backend_provisions_agent_workspace_and_passes_to_thread_start`**
+   - **Panic location:** `tests/test_omo_backend.rs:2089:5`
+   - **Message:** `backend.run must succeed: Some(Llm("omo turn ended with no content (likely upstream LLM failure)"))`
+10. **`test_omo_backend_waits_for_final_message_after_tool_activity`**
+    - **Panic location:** `tests/test_omo_backend.rs:1516:5`
+    - **Message:** `assertion failed: !dispatcher.stream_chunks().iter().any(|chunk| chunk.is_final)`
+11. **`test_omo_backend_requires_turn_terminal_even_after_final_agent_message`**
+    - **Panic location:** `tests/test_omo_backend.rs:1433:5`
+    - **Message:** `assertion failed: !chunks.iter().any(|chunk| chunk.is_final)`
+12. **`test_omo_backend_aborts_turn_on_repeated_approval_denials`**
+    - **Panic location:** `tests/test_omo_backend.rs:2496:5`
+    - **Message:** `unexpected error: LLM error: timeout during turn streaming: no activity from server`
+13. **`test_omo_backend_deadline_interrupts_looping_turn`**
+    - **Panic location:** `tests/test_omo_backend.rs:2052:5`
+    - **Message:** `deadline must fire promptly, took 10.137300542s`
+14. **`test_omo_backend_e2e_thread_lifecycle_and_streaming`**
+    - **Panic location:** `tests/test_omo_backend.rs:1650:5`
+    - **Message:** `First turn failed: Some(Llm("model update timed out"))`
+15. **`test_omo_backend_retries_once_after_connection_drop`**
+    - **Panic location:** `tests/test_omo_backend.rs:2005:5`
+    - **Message:** `turn must succeed via the one-shot transport retry: Some(Llm("model update timed out"))`
+
+*Note on test_omo_backend duration:* Finished in 1801.19s due to timeout/deadline boundary tests. All 41 tests executed (31 passed, 10 failed, 0 killed).
+
+### Target 6: `tests/test_wiring_e2e.rs` (1 failure)
+16. **`test_e2e_actor_omo_backend_persists_assistant_message`**
+    - **Panic location:** `tests/test_wiring_e2e.rs:304:5`
+    - **Message:** `assertion failed: final_chunk.is_final`
+    - **Root cause:** Pre-existing stream termination assertion in e2e actor wiring test.
+
+---
+
+## 7. Evidence File Preservation & Invariant Confirmation
+All raw log artifacts have been preserved without modification:
+- `task-2-baseline.log` (40,537 bytes)
+- `task-2-recovered-run.log` (54,066 bytes)
+- `task-2-baseline-full.log` (69,493 bytes)
+- `task-2-fmt.log` (146 bytes)
+- `task-2-clippy.log` (12,325 bytes)
+- `task-2-dashboard.log` (4,995 bytes)
+
+The following derived evidence files have been regenerated:
+- `task-2-failing.txt` (exact 16 failing tests across 6 targets)
+- `task-2-summary.txt` (this document)
+
+No code modifications, git commits, or service state changes were made.

@@ -1,0 +1,36 @@
+[
+ {
+  "name": "Conductor",
+  "url": "https://conductor.build",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "격리된 Git 워크트리·클라우드 샌드박스에서 병렬 코딩 에이전트를 실행·관리하는 플랫폼",
+  "mobile": "iOS 앱(유료), 웹 앱; Android 없음",
+  "pricing": "무료(로컬 Mac) / Pro $50·Teams $60/사용자/월",
+  "selfhost": "로컬 전용(클라우드 자체호스팅은 미공개)",
+  "license": "상용",
+  "agent": "MCP·REST API·CLI·웹훅; Claude Code·Codex·Cursor·OpenCode",
+  "status": "활발(v0.91.0, 2026년 10월)",
+  "pros": "Git 워크트리 격리로 에이전트 간 충돌 방지; 주요 코딩 에이전트 기본 지원; 데스크톱·iOS·웹·MCP로 상태 모니터링",
+  "cons": "로컬 실행은 macOS 전용; 클라우드·API·모바일은 유료($50+/월); 비공개 소스",
+  "sources": [
+   "https://conductor.build",
+   "https://conductor.build/docs",
+   "https://conductor.build/pricing",
+   "https://conductor.build/changelog",
+   "https://conductor.build/docs/api",
+   "https://conductor.build/docs/api/mcp",
+   "https://conductor.build/docs/concepts/workspaces-and-branches",
+   "https://conductor.build/docs/concepts/parallel-agents",
+   "https://conductor.build/docs/concepts/workflow",
+   "https://conductor.build/docs/concepts/git-worktrees",
+   "https://conductor.build/docs/cloud",
+   "https://conductor.build/terms",
+   "https://conductor.build/privacy",
+   "https://conductor.build/docs/reference/privacy",
+   "https://apps.apple.com/us/app/conductor-build/id6791228564",
+   "https://conductor.build/blog"
+  ],
+  "confidence": "높음"
+ }
+]

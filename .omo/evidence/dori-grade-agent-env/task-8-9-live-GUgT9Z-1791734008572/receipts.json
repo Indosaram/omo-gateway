@@ -1,0 +1,77 @@
+[
+  {
+    "kind": "provenance",
+    "mode": "execute-8-9",
+    "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+    "sha256": "dbde346e2f7be84327a919e9242cba2a999a2d23ad417819e960fde1230d8a7e",
+    "releaseReceipt": "/private/tmp/omon-lane-scratch-qa-GUgT9Z/release.json",
+    "scratch": "/private/tmp/omon-lane-scratch-qa-GUgT9Z",
+    "envNames": [
+      "DASHBOARD_ENABLED",
+      "DATABASE_URL",
+      "HOME",
+      "LOGNAME",
+      "NO_COLOR",
+      "OMON_DISCORD_ENABLED",
+      "OMON_INBOX_KAKAO_ROOMS",
+      "OMON_KIBITZER_ENABLED",
+      "OMON_LANES_ENABLED",
+      "OMON_LANE_KEYWORDS",
+      "OMON_OMO_APPSERVER_AUTH_TOKEN",
+      "OMON_OMO_APPSERVER_URL",
+      "OMON_PIRATETALK_URL",
+      "OMON_WORKSPACE_ROOT",
+      "PATH",
+      "RUST_LOG",
+      "TMPDIR",
+      "TYPESAFE_API_KEY",
+      "TYPESAFE_MODEL",
+      "TYPESAFE_URL",
+      "USER",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME"
+    ],
+    "at": "2026-10-11T15:53:28.575Z"
+  },
+  {
+    "id": "command-1",
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-GUgT9Z",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "stdoutBytes": 91,
+    "stderrBytes": 0,
+    "at": "2026-10-11T15:53:29.633Z"
+  },
+  {
+    "id": "command-2",
+    "argv": [
+      "/usr/bin/curl",
+      "-i",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "stdoutBytes": 175,
+    "stderrBytes": 317,
+    "at": "2026-10-11T15:53:29.661Z"
+  },
+  {
+    "kind": "failure",
+    "message": "opened scratch database and lane service ready: deadline exceeded",
+    "at": "2026-10-11T15:53:59.666Z"
+  },
+  {
+    "kind": "cleanup",
+    "retainedScratch": "/private/tmp/omon-lane-scratch-qa-GUgT9Z",
+    "sharedDaemonUntouched": true,
+    "at": "2026-10-11T15:53:59.666Z"
+  }
+]

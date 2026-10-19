@@ -1,0 +1,126 @@
+{
+  "task": 8,
+  "status": "ready_for_independent_review_with_blockers",
+  "changed_files": [
+    "src/lanes/runner.rs",
+    "src/lanes/cli.rs",
+    "src/lanes/mod.rs",
+    "src/entry.rs",
+    "src/main.rs",
+    "tests/test_lane_runner.rs",
+    "tests/test_lane_cli.rs",
+    "migrations/0033_lane_inbox.sql",
+    "Cargo.toml"
+  ],
+  "source_sha256": {
+    "src/lanes/runner.rs": "aa57291ed63e2d0aff8728e05af6c1c6f62ea286a22d9cdbfa090646d8f72f2c",
+    "src/lanes/cli.rs": "e1e767e2c4ce686dfa1b4cbd033eca815a2e8f693c8d44351032b78a5419c88c",
+    "src/lanes/mod.rs": "61d2372a708d7419506f5d7f9b661add6c7c208f15574e265e07377358f02fcc",
+    "src/entry.rs": "4dcc57e21cb313c536b8d883c7f70f10cc597b94cce2ea88f859ce15f8d57c74",
+    "src/main.rs": "e9a928637ec92c1b2d3ac323815300c2702560cc1fba5c718418b8b443e00cde",
+    "tests/test_lane_runner.rs": "fce5d60c3679821da3e88c387c9861ad47f3b4576e9d156bf2f2d90cd1759fcb",
+    "tests/test_lane_cli.rs": "e01e27c4e749211cb7bf8cdd528daa59aa8d3c2c5f7be115aa9b3616e17b79cc",
+    "migrations/0033_lane_inbox.sql": "23b2da40d3e21b685dbeb3da929fba00a137738cbdec47ee2d917a1b5bc19791",
+    "Cargo.toml": "3d1db0fd55b2ab51eeecd957d762253543445a43cc24f83da9ea00ed4ae190a2"
+  },
+  "tests": [
+    {
+      "cmd": "CARGO_TARGET_DIR=target-w4 CARGO_BUILD_JOBS=2 cargo test --test test_lane_runner --test test_lane_cli",
+      "result": "exit 0; 3 CLI + 11 runner passed; 1 live harness ignored in ordinary run",
+      "provenance": "bash_8 final source"
+    },
+    {
+      "cmd": "CARGO_TARGET_DIR=target-w4 CARGO_BUILD_JOBS=2 cargo clippy --all-targets --all-features -- -D warnings",
+      "result": "exit 0; Finished dev profile in 1m 17s",
+      "provenance": "bash_12 final source"
+    },
+    {
+      "cmd": "rustfmt --edition 2021 --check --config skip_children=true (seven owned Rust files)",
+      "result": "exit 0"
+    },
+    {
+      "cmd": "cargo fmt --check",
+      "result": "exit 1; pre-existing src/agent/backend.rs:61 extra blank line only"
+    }
+  ],
+  "manual_qa": [
+    {
+      "path": ".omo/evidence/dori-grade-agent-env/task-8.json",
+      "result": "Real OmoBackend turn on disposable 29748; turns_run=1; completed; persisted thread 01a129c1-f616-7b69-81d1-39fd8efa683e; milestone captured; done.txt=qa complete; done_claimed; actual CLI log exit 0"
+    },
+    {
+      "path": ".omo/evidence/dori-grade-agent-env/task-8-fail.txt",
+      "result": "Final binary with explicit Bun.spawn env against scratch DB: invalid command [true] exit 2"
+    }
+  ],
+  "cleanup": [
+    {
+      "action": "actual CLI close qa-1 --force --note forced: task8 QA cleanup",
+      "result": {
+        "stdout": "{\"key\":\"qa-1\",\"status\":\"closed\"}\n",
+        "stderr": "",
+        "exit": 0
+      }
+    },
+    {
+      "action": "SIGTERM QA runner PID 1475",
+      "result": "TODO8_QA_RUNNER_CLEAN_EXIT; bash_9 exit 0; PID absent"
+    },
+    {
+      "action": "kill owned engine session bash_7",
+      "result": "PIDs 81208 and 81211 absent; port 29748 no listener"
+    },
+    {
+      "action": "remove scratch /tmp/omon-task8-z4iBTA and released socket/lock",
+      "result": "all absent by fs.access"
+    }
+  ],
+  "adversarial": [
+    {
+      "class": "malformed input",
+      "result": "invalid_done_exits_two_without_a_lane passed; actual CLI exit 2"
+    },
+    {
+      "class": "prompt injection",
+      "result": "chains_until_claim_and_captures_without_discord passed; literal $(touch SHOULD_NOT_EXIST) never executed by runner"
+    },
+    {
+      "class": "cancel/resume",
+      "result": "repeated_cancellation_keeps_lane_resumable and service_recovers_file_database_and_shutdown_releases_socket passed"
+    },
+    {
+      "class": "stale state",
+      "result": "stale_lane_binding_prefers_durable_session_binding passed"
+    },
+    {
+      "class": "dirty worktree",
+      "result": "dirty_worktree_is_preserved_by_claim passed; claim cannot verify or clean files"
+    },
+    {
+      "class": "hung commands",
+      "result": "fake backend blocked on zero-permit semaphore cancelled under bounded timeout; repeated_cancellation_keeps_lane_resumable passed"
+    },
+    {
+      "class": "flaky tests",
+      "result": "14 final-source tests pass in one run, semaphore/channel handshakes with bounded timeouts; no test sleeps/polls"
+    },
+    {
+      "class": "misleading success output",
+      "result": "misleading_success_output_never_verifies_or_closes_lane passed"
+    },
+    {
+      "class": "repeated interruptions",
+      "result": "three repeated cancellations retain working status and thread binding; test passed"
+    }
+  ],
+  "blockers": [
+    "Named live endpoint 19742 unavailable; exact full debug gateway QA cannot run without Discord credentials. Authorized disposable engine and production runner harness used instead.",
+    "Earlier Bun.$ shell-prefix DATABASE_URL assignment failed to override inherited live DB URL. CLI reported insertion of qa-1 at 2026-10-11T06:52:53.346587Z into the inherited target, while scratch remained empty. Treat as unintended live DB write (including migration application); no unauthorized live cleanup attempted. Subsequent read-only system SQLite check failed unable to open database file (14). Owner/coordinator must inspect and authorize cleanup of exact qa-1 row and assess migrations.",
+    "Independent review not performed because delegation forbidden. Full suite/dashboard remain parent-coordinated."
+  ],
+  "risks": [
+    "Forced close traverses legal state transitions atomically; full thread/worktree lifecycle belongs to later todos.",
+    "Capturing dispatcher currently stores streaming snapshots as transcript entries, observed 136 transcript rows for one QA turn.",
+    "State-changing CLI operations using Database::connect apply migrations, making explicit environment isolation essential."
+  ]
+}

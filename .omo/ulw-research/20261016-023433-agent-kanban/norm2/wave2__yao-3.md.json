@@ -1,0 +1,81 @@
+[
+ {
+  "name": "cmux",
+  "url": "https://cmux.com/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "여러 AI 코딩 에이전트를 병렬로 실행하는 GPU 가속 macOS 네이티브 터미널",
+  "mobile": "iOS 앱(TestFlight 베타)",
+  "pricing": "무료(OSS) / Founder's Edition $100 일회성",
+  "selfhost": "가능(로컬 macOS 앱)",
+  "license": "GPL-3.0-or-later",
+  "agent": "소켓 API·CLI·Claude Code 훅·tmux 심, 다수 에이전트 스킬",
+  "status": "활발(스타 2.8만, 일일 빌드)",
+  "pros": "Swift 네이티브 고성능; Claude Code Teams용 tmux 심; 세션 복원·에이전트용 브라우저",
+  "cons": "macOS 전용; 칸반 보드 없음; 릴레이 서버 상용 운영 시 BUSL 라이선스 필요",
+  "sources": [
+   "https://cmux.com/",
+   "https://yetanotherorchestrator.app/apps/cmux/",
+   "https://github.com/manaflow-ai/cmux",
+   "https://raw.githubusercontent.com/manaflow-ai/cmux/main/LICENSE",
+   "https://cmux.com/docs/api",
+   "https://cmux.com/docs/notifications",
+   "https://cmux.com/docs/ios",
+   "https://cmux.com/docs/skills",
+   "https://cmux.com/docs/agent-integrations/claude-code-teams"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "CNVS",
+  "url": "https://cnvs.dev/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "AI 코딩 에이전트 다수를 감독하는 macOS 공간 캔버스 앱(음성 제어)",
+  "mobile": "iOS 앱(CNVS Pocket)",
+  "pricing": "유료 일회성 $99→$129→$169(구독 없음)",
+  "selfhost": "로컬 전용",
+  "license": "상용",
+  "agent": "CLI 서브프로세스 제어·트랜스크립트 파싱, 8종 에이전트",
+  "status": "활발(v1.5.2, 2026-09)",
+  "pros": "캔버스 기반 시각적 정리; 음성 제어; 일회성 결제",
+  "cons": "macOS 전용; 비공개 소스; 칸반 보드 없음",
+  "sources": [
+   "https://cnvs.dev/",
+   "https://yetanotherorchestrator.app/apps/cnvs/",
+   "https://cnvs.dev/release/",
+   "https://cnvs.dev/release/1-5-2-distraction-guard/",
+   "https://cnvs.dev/release/1-4-0-shorthand/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "CodeLayer",
+  "url": "https://humanlayer.dev/code",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "워크트리 기반 병렬 에이전트 세션과 리뷰를 지원하는 멀티플레이어 코딩 IDE",
+  "mobile": "반응형 웹",
+  "pricing": "무료(3인까지) / Pro $100/사용자/월 / 엔터프라이즈 별도",
+  "selfhost": "로컬 데몬 가능; 클라우드는 엔터프라이즈만",
+  "license": "상용",
+  "agent": "MCP 서버·CLI·API, Claude Code·Codex·Copilot·pi",
+  "status": "활발(주간 릴리스, v0.183.0)",
+  "pros": "RPI 단계별 칸반 보드; 작업별 git 워크트리 격리; Linear·GitHub·Jira 연동",
+  "cons": "Pro 가격 높음; 구성 요소가 복잡함; 클라우드 백엔드 비공개",
+  "sources": [
+   "https://humanlayer.dev/code",
+   "https://humanlayer.dev/",
+   "https://yetanotherorchestrator.app/apps/codelayer/",
+   "https://docs.humanlayer.com/",
+   "https://docs.humanlayer.com/release-notes.html",
+   "https://docs.humanlayer.com/explanation/tasks",
+   "https://docs.humanlayer.com/guide/automation-sessions",
+   "https://docs.humanlayer.com/reference/skills-workflows",
+   "https://docs.humanlayer.com/guide/linear-integration",
+   "https://docs.humanlayer.com/explanation/remote-daemons",
+   "https://github.com/humanlayer/homebrew-humanlayer"
+  ],
+  "confidence": "높음"
+ }
+]

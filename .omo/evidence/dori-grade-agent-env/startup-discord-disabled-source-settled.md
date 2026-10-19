@@ -1,0 +1,19 @@
+# Discord-disabled lane startup repair
+
+Source hashes: src/lanes/runner.rs 9e9925c96befc31db85ed6df60cdf577ce86c904f2ce584eb3e30fe8c4a8b592; tests/test_lane_runner.rs 7d87ac1e2de4b1d63108d299a289c8d3a8b46f8acc2a630332f767895ecd240d. Unchanged main.rs fa983673a42e48fdf254fd2768d9193252b09eb10bee9d1500c6162687de1650. Retained failed gateway log ea76e930973f10de78c6f8114f8e36c811994fe87425f282cd9012e9b6186471; failed receipts 4cf1f8b1e6468d7fcf428a86c427ffef0b39654ca9c85d143a62340c3645337b. Fresh LSP diagnostics timed out for runner and test, not clean results.
+
+Coordinator update: scrub96 source-settled (scoped fmt0/LSP0, tests unrun); eventual grouped focused batch must include lib creation_metadata regression and test_lane_events alongside test_lane_runner startup regression. Registry workerbaa still pending. This track executes no Cargo until parent grouped release.
+
+Owned edit paths: src/lanes/runner.rs, tests/test_lane_runner.rs. Read main.rs disabled startup and spawn_lane_service; no main change needed. No discord_threads.rs, test_lane_events.rs, sessions, CLI, model, .env or service edits.
+
+Exact failed live evidence retained at task-8-9-live-GUgT9Z-1791734008572/gateway.private.log and receipts.json: 2026-10-11T15:53:29.842123Z gateway opened /private/tmp/omon-lane-scratch-qa-GUgT9Z/qa.db, then Error: Config("missing required environment variable DISCORD_BOT_TOKEN"). Receipt records startup-ready deadline exceeded at 15:53:59.666Z, no lane commands, sharedDaemonUntouched true. Root is consumed, preserved, no retry.
+
+Root cause: main run_gateway already uses OMON_DISCORD_ENABLED=false to select lane-only startup, but LaneRunner::from_env unconditionally constructed DiscordThreads from environment after configuring backend/capture/storage. DiscordThreads requires a token. Existing post_sink is Option and all drain sites already guard Some; backend/storage/capture are independent.
+
+Fix: runner uses existing main boolean semantics (trim/lowercase truthy 1/true/yes/on, absent true) for OMON_DISCORD_ENABLED. Only enabled/default startup constructs transport, retaining required-token errors without fallback; disabled leaves None. Backend, storage, capture and lane service remain configured. No fake token or swallowed enabled transport failure. Explicit with_post_sink remains available for caller-injected transport.
+
+Regression startup_discord_flag_controls_token_requirement in existing test_lane_runner target: child test executable re-exec with exact test selector and env_clear, isolated HOME/TMPDIR/cwd, no credentials or global environment mutation. Disabled false constructs runner without token, serves pre-cancelled runner against memory SQLite (no lanes/backend calls/network), verifies storage lanes count zero. Enabled true and absent/default must return Config missing token. Child completion sentinel prevents zero-test false pass. Bounded wait, kill/reap timeout path; no sleeps or polling. No service/runtime QA started here.
+
+Source-settled only, tests UNRUN. Cargo/build/fmt/clippy held until all three source tracks settle and parent releases one grouped diagnostics/focused/build batch: this startup track, scrub96 discord_threads.rs/test_lane_events.rs, workerbaa sessions/registry/CLI contract paths/tests. No per-worker global compile, full suite replay, daemon/probe operation, or consumed-root reuse. Fresh LSP diagnostics may time out and are not a verification claim.
+
+Post-sink contract change means Discord-disabled runtime does not install automatic Discord transport, even if token happens to be present. Prior scratch QA prose claiming disabled mode auto-initializes the sink is stale under this authorized contract; any future Discord delivery scope must explicitly enable/provide transport rather than infer it from the disabled flag. No harness edit was made in this track.

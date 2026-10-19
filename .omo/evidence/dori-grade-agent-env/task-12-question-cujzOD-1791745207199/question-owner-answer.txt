@@ -1,0 +1,1 @@
+A. Emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn. Do not use tools or claim.

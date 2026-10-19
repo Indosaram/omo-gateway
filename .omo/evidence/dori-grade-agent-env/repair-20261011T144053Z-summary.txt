@@ -1,0 +1,2 @@
+source_manifest_cmp_exit=0
+original_evidence_cmp_exit=0

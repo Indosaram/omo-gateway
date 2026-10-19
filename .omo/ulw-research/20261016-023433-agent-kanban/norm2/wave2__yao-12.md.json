@@ -1,0 +1,76 @@
+[
+ {
+  "name": "Herdr",
+  "url": "https://herdr.dev/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Rust 기반 에이전트 전용 터미널 런타임·멀티플렉서 데몬(지속 세션 관리)",
+  "mobile": "없음(SSH 터미널 클라이언트로만 접근)",
+  "pricing": "무료(OSS) / Herdr Cloud 대기자 명단(가격 미공개)",
+  "selfhost": "로컬 전용(단일 바이너리, SSH 원격 연결)",
+  "license": "Apache-2.0",
+  "agent": "소켓 JSON API·CLI·스킬; Claude Code·Codex 등 22+ 에이전트",
+  "status": "활발(v0.9.5, 2026-10)",
+  "pros": "클라이언트 분리 후에도 세션 유지; 화면 분석으로 상태 자동 추론; SSH 기반 다중 머신 연동",
+  "cons": "칸반/보드 UI 없음; GUI·모바일 앱 없음; 휴리스틱 상태 감지 오분류 가능",
+  "sources": [
+   "https://herdr.dev/",
+   "https://herdr.dev/docs/",
+   "https://herdr.dev/docs/agents/",
+   "https://herdr.dev/docs/socket-api/",
+   "https://herdr.dev/docs/connecting-machines/",
+   "https://herdr.dev/blog/herdr-raised-a-seed/",
+   "https://herdr.dev/compare/",
+   "https://github.com/herdrdev/herdr",
+   "https://github.com/herdrdev/herdr/releases",
+   "https://yetanotherorchestrator.app/apps/herdr/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "OpenKanban",
+  "url": "https://github.com/TechDufus/openkanban",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 코딩 에이전트 병렬 오케스트레이션용 TUI 칸반 보드",
+  "mobile": "없음(SSH 터미널로만 접근)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Go 바이너리)",
+  "license": "AGPL-3.0",
+  "agent": "티켓별 CLI 에이전트 실행; OpenCode·Claude Code 상태 연동",
+  "status": "활발(v0.1.1, 2026 초)",
+  "pros": "에이전트 작업 전용 칸반 보드; 티켓별 git worktree 자동 격리; 내장 터미널로 즉시 접속",
+  "cons": "모바일·웹 대시보드 없음; 외부 REST/MCP API 없음; 팀 협업 제한적",
+  "sources": [
+   "https://github.com/TechDufus/openkanban",
+   "https://github.com/TechDufus/openkanban/blob/main/README.md",
+   "https://github.com/TechDufus/openkanban/blob/main/docs/CONFIGURATION.md",
+   "https://github.com/TechDufus/openkanban/blob/main/LICENSE",
+   "https://github.com/TechDufus/openkanban/releases",
+   "https://yetanotherorchestrator.app/apps/openkanban/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Ralph TUI",
+  "url": "https://ralph-tui.com/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "백로그 완료까지 에이전트를 반복 실행하는 Ralph 루프 TUI 오케스트레이터",
+  "mobile": "없음(터미널 UI 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬/헤드리스 원격 모드)",
+  "license": "MIT",
+  "agent": "CLI 러너(Claude Code·Codex 등), Linear·Jira 트래커, WebSocket",
+  "status": "매우 활발(v0.12.0, 2026-05)",
+  "pros": "완료 감지 포함 자율 실행 루프; Beads·Linear·Jira 등 트래커 호환; 병렬 worktree·AI 충돌 해결",
+  "cons": "칸반 카드/열 보드 없음; PRD·Beads 학습 곡선 가파름; Node/Bun 의존 스택",
+  "sources": [
+   "https://ralph-tui.com/",
+   "https://github.com/subsy/ralph-tui",
+   "https://github.com/subsy/ralph-tui/releases",
+   "https://yetanotherorchestrator.app/apps/ralph-tui/"
+  ],
+  "confidence": "높음"
+ }
+]

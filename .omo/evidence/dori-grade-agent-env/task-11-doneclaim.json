@@ -1,0 +1,41 @@
+{
+  "task": 11,
+  "status": "ready_for_independent_review_global_gates_pending",
+  "changed_files": [
+    "bin/omomeow-delegate",
+    "tests/test_omomeow_delegate.sh"
+  ],
+  "evidence": ".omo/evidence/dori-grade-agent-env/task-11.log",
+  "focused_test": {
+    "command": "bash tests/test_omomeow_delegate.sh",
+    "runs": 1,
+    "result": "exit 0; all focused integration checks passed"
+  },
+  "manual_probe": {
+    "input": "documented inline brief invocation under isolated HOME with OMO_GATEWAY_BIN=/usr/bin/true",
+    "result": "exit 0; persisted bytes exactly match inline instructions"
+  },
+  "assertions": [
+    "Shell-looking brief text remains literal; injection sentinel absent",
+    "Gateway stub receives --db value as DATABASE_URL despite conflicting parent DATABASE_URL",
+    "Existing argv flags, default done warning, and no database write checks pass",
+    "Wrapper executable mode remains 100755"
+  ],
+  "adversarial_classes": [
+    "Malformed input",
+    "Prompt injection",
+    "Cancel/resume",
+    "Stale state",
+    "Dirty worktree",
+    "Hung commands",
+    "Flaky tests",
+    "Misleading success output",
+    "Repeated interruptions"
+  ],
+  "global_gates": "pending; not run",
+  "limitations": [
+    "Independent reviewer recheck pending",
+    "Global fmt/clippy/all-target tests and combined Wave 2 gates not run"
+  ],
+  "safety": "No live DB, Discord, service, commit, .env, or other product files touched"
+}

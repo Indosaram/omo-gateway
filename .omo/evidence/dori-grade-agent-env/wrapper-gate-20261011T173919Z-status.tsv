@@ -1,0 +1,3 @@
+fmt	0	cargo fmt --check
+clippy	0	cargo clippy --offline -j2 --all-targets --all-features -- -D warnings
+build	0	cargo build --offline -j2 --bin omo-gateway

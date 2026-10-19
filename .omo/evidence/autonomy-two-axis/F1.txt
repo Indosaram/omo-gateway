@@ -1,0 +1,46 @@
+$ for f in src/context/pack.rs src/report/claims.rs src/autonomy/mod.rs src/autonomy/ledger.rs src/autonomy/effect.rs src/autonomy/loop.rs src/inbox/sources/github.rs tests/test_context_pack.rs tests/test_report_claims.rs tests/test_status_message.rs tests/test_lane_control.rs tests/test_lane_worktree_auto.rs tests/test_action_ledger.rs tests/test_approval_wait.rs tests/test_profile_blocks.rs tests/test_action_loop.rs tests/test_inbox_ledger.rs tests/test_github_source.rs tests/test_source_health.rs bot_profiles/blocks/autonomy.md; do [ -e $f ] && echo "OK $f" || echo "MISSING $f"; done
+echo "--- migrations"; ls migrations | grep -E '^00(4[6-9]|5[0-2])_'; ls migrations | cut -c1-4 | sort | uniq -d | sed 's/^/DUP /'
+echo "--- kill switches"; for k in OMON_CONTEXT_PACK_ENABLED OMON_REPORT_CLAIMS_ENABLED OMON_STATUS_MESSAGE_ENABLED OMON_LANE_CONTROL_ENABLED OMON_LANE_AUTO_WORKTREE OMON_APPROVAL_LEDGER_ENABLED OMON_ACTION_LOOP_ENABLED OMON_GITHUB_SOURCE_ENABLED; do echo "$k $(grep -rn "$k" src | wc -l)"; done
+echo "--- allowlist runtime hits"; grep -rn 'FROM approval_allowlist\|INTO approval_allowlist' src | grep -v '#\[cfg(test)\]' ; echo "--- global settings"; git diff f7e6c41..HEAD --stat | grep -c settings.json
+[exit 1]
+OK src/context/pack.rs
+OK src/report/claims.rs
+OK src/autonomy/mod.rs
+OK src/autonomy/ledger.rs
+OK src/autonomy/effect.rs
+OK src/autonomy/loop.rs
+OK src/inbox/sources/github.rs
+OK tests/test_context_pack.rs
+OK tests/test_report_claims.rs
+OK tests/test_status_message.rs
+OK tests/test_lane_control.rs
+OK tests/test_lane_worktree_auto.rs
+OK tests/test_action_ledger.rs
+OK tests/test_approval_wait.rs
+OK tests/test_profile_blocks.rs
+OK tests/test_action_loop.rs
+OK tests/test_inbox_ledger.rs
+OK tests/test_github_source.rs
+OK tests/test_source_health.rs
+OK bot_profiles/blocks/autonomy.md
+--- migrations
+0046_report_claims.sql
+0047_turn_status_messages.sql
+0048_lane_pauses.sql
+0049_action_ledger.sql
+0050_action_loop_state.sql
+0051_inbox_github.sql
+0052_source_health.sql
+--- kill switches
+OMON_CONTEXT_PACK_ENABLED        1
+OMON_REPORT_CLAIMS_ENABLED        1
+OMON_STATUS_MESSAGE_ENABLED        2
+OMON_LANE_CONTROL_ENABLED        3
+OMON_LANE_AUTO_WORKTREE        2
+OMON_APPROVAL_LEDGER_ENABLED        2
+OMON_ACTION_LOOP_ENABLED        1
+OMON_GITHUB_SOURCE_ENABLED        1
+--- allowlist runtime hits
+--- global settings
+0
+

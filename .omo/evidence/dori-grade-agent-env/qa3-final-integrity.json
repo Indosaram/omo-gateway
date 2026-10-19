@@ -1,0 +1,308 @@
+{
+  "before": {
+    "binary": "d162a234313e3329d40724eb083458b1ae18fb7795ef37e5c16184eaafbe278f",
+    "manifest": "8f08a9546538d4ff7af0b8d4641eecbcd8153dbb0d25b8b5bb10807298c67028"
+  },
+  "after": {
+    "binary": "15140a535c76633a893ddf239ad1c86b3901c6c056e79c57e5e99d3dd7b5c74d",
+    "manifest": "8f08a9546538d4ff7af0b8d4641eecbcd8153dbb0d25b8b5bb10807298c67028"
+  },
+  "binaryMatches": false,
+  "manifestMatches": true,
+  "scenarioCount": 12,
+  "checks": [
+    {
+      "root": "/private/tmp/omon-task15-qa3-q25GW1",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56793,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task15-qa3-p3NFr0",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56800,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task18-qa3-3Kr90t",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56804,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task18-qa3-ZZDZwF",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56797,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task24-qa3-LRy2gn",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56807,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task25-qa3-O06dJV",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56813,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task16-qa3-ICrEM3",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56803,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task20-qa3-Bg8qIM",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56808,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        },
+        {
+          "pid": 57217,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task35-qa3-6s6dvB",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56821,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task35-qa3-v5b6tM",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56825,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task26-qa3-fhq8vX",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56820,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    },
+    {
+      "root": "/private/tmp/omon-task16-qa3-aMsHYZ",
+      "dbRetained": true,
+      "gateway": [
+        {
+          "pid": 56795,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "finalPidAbsent": true
+        }
+      ],
+      "socketAbsent": true,
+      "appserverPidAbsent": true,
+      "remainingGroupPids": []
+    }
+  ],
+  "ownedRpcCleanup": [
+    {
+      "pgid": 57696,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 57799,
+          "ppid": 57696,
+          "pgid": 57696,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa3-6s6dvB/senpi-rpc-host-internal-611dca4a/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "pgid": 57713,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 57830,
+          "ppid": 57713,
+          "pgid": 57713,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa3-v5b6tM/senpi-rpc-host-internal-e93f7291/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "pgid": 57729,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 57838,
+          "ppid": 57729,
+          "pgid": 57729,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task20-qa3-Bg8qIM/senpi-rpc-host-internal-b8db3583/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "pgid": 58113,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 58181,
+          "ppid": 58113,
+          "pgid": 58113,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa3-6s6dvB/senpi-rpc-host-internal-40e2d8a8/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "pgid": 58127,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 58184,
+          "ppid": 58127,
+          "pgid": 58127,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa3-v5b6tM/senpi-rpc-host-internal-4550fb7f/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "pgid": 57936,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 57984,
+          "ppid": 57936,
+          "pgid": 57936,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-qa3-fhq8vX/senpi-rpc-host-internal-f9805dd8/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    },
+    {
+      "pgid": 58438,
+      "signal": "SIGKILL",
+      "ownershipProof": [
+        {
+          "pid": 58525,
+          "ppid": 58438,
+          "pgid": 58438,
+          "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-qa3-fhq8vX/senpi-rpc-host-internal-ba65f32c/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+        }
+      ],
+      "remaining": []
+    }
+  ],
+  "remainingScratchProcesses": []
+}

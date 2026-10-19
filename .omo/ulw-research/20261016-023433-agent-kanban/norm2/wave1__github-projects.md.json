@@ -1,0 +1,30 @@
+[
+ {
+  "name": "GitHub Projects (v2)",
+  "url": "https://github.com/features/issues",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "GitHub 내장 이슈·프로젝트 관리(칸반·테이블·로드맵, 코드/PR 연동)",
+  "mobile": "iOS·Android 앱(GitHub Mobile)",
+  "pricing": "무료 / Team $4/사용자/월 / Ent $21/사용자/월",
+  "selfhost": "엔터프라이즈만(GHES)",
+  "license": "상용",
+  "agent": "공식·커뮤니티 MCP, GraphQL API, gh CLI, 웹훅; Claude Code·Codex 등",
+  "status": "활발(GitHub/MS 핵심 SaaS)",
+  "pros": "GitHub 저장소·PR과 긴밀 통합; gh CLI·GraphQL로 에이전트 자동화 용이; 모바일 앱·넉넉한 무료 티어",
+  "cons": "셀프호스팅은 무거운 GHES 필요; GraphQL 필수·노드 ID 조회로 컨텍스트 부담; 웹훅 동기화 지연 가능",
+  "sources": [
+   "https://github.com/features/issues",
+   "https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects",
+   "https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/best-practices-for-projects",
+   "https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-items-in-your-project/adding-items-to-your-project",
+   "https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects",
+   "https://cli.github.com/manual/gh_project",
+   "https://github.blog/changelog/2023-03-14-projects-on-github-mobile-is-now-generally-available",
+   "https://github.com/mobile",
+   "https://github.com/arclio/github-projects-mcp",
+   "https://github.com/pricing"
+  ],
+  "confidence": "높음"
+ }
+]

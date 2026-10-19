@@ -1,0 +1,84 @@
+{
+  "nodes": [
+    [
+      "discord-adapter",
+      "src/discord/adapter.rs",
+      "discord-adapter-a, discord-adapter-b. Also from agent-backend: make mid-turn status VISIBLE: when the backend dispatches a non-final StreamChunk that the backend counted as a delivered mid-turn message, the adapter currently drops non-final chunks (completed_stream_content). Coordinate by contract: the omo-backend node will emit mid-turn status as OutboundAction::SendMessage (a normal message) instead of a non-final chunk, so you need no special handling; just make sure SendMessage MEDIA/table handling never aborts the text (non-fatal media)."
+    ],
+    [
+      "discord-ui",
+      "src/discord/commands.rs, src/discord/buttons.rs, src/discord/approval.rs, src/discord/pairing.rs, src/discord/attachments.rs, src/discord/throttler.rs, src/discord/table_render/mod.rs",
+      "discord-commands, discord-auth. For the always-mode 3-token approval key (derive_pattern_key lives in src/security/dangerous.rs, owned by the security node): coordinate - security node will change derive_pattern_key; you only adjust approval.rs callers if needed."
+    ],
+    [
+      "main-entry",
+      "src/main.rs, src/entry.rs, src/drain_control.rs, src/readiness.rs",
+      "main-runtime-a, main-runtime-b (incl. acquiring RuntimeOwnershipLock in production with a per-DB lock name in a per-user dir; drain select arm must loop until drain is true; recovery reuse message id/delivery id)."
+    ],
+    [
+      "dashboard",
+      "src/dashboard.rs, src/dashboard_runtime.rs, web/src/**",
+      "dashboard lane (cron PUT merge, readiness uses OMON_OMO_APPSERVER_URL, claim_token hidden, SIGTERM in standalone, etc.) and web-deploy's web/src item (no auto-load of remote images)."
+    ],
+    [
+      "multiplexer",
+      "src/multiplexer/*.rs",
+      "multiplexer lane (replay dedup must not treat a failed/unfinished turn as processed; mark_in_flight_resume_pending only for sessions with active/queued turns; set_model/set_yolo/reset must retry on Retiring like route/stop; rollback must not delete steered user rows; gc error continue)."
+    ],
+    [
+      "agent",
+      "src/agent/*.rs",
+      "agent-backend, agent-runtime. Decisions: (1) only Text frames that are real progress for this thread/turn renew last_activity_at/deadline; steer acks (ids >= 9000) and unrelated frames must not. (2) mid-turn status: deliver as OutboundAction::SendMessage (visible normal message, NOT persisted as the final assistant reply, NOT a final StreamChunk) and count messages_delivered only on dispatch success. Existing tests in tests/test_omo_backend.rs and tests/test_wiring_e2e.rs assert no is_final chunk mid-turn and that progress text is not persisted as the reply - keep those true (SendMessage is not a StreamChunk). You may edit those two test files ONLY where an assertion counted dispatcher actions in a way the new SendMessage breaks, and say so explicitly in the report. (3) cron briefings: take once in run() and pass to both attempts; mark consumed only after turn/start ack. (4) daemon supervisor must not give up permanently: keep retrying with capped exponential backoff."
+    ],
+    [
+      "cron-scheduler",
+      "src/cron/scheduler.rs, src/mirror.rs, src/storage/db.rs",
+      "cron-scheduler lane; storage-ledger items that live in mirror.rs and db.rs (find_last_unfinished_user_turn must skip mirror rows; take_pending_cron_briefings: json_valid guard, mark only rendered rows; fetch_resume_pending raw key; is_session_suspended fail closed; atomic json_set for suspended; in-memory pool lifetime)."
+    ],
+    [
+      "cron-exec",
+      "src/cron/store.rs, src/cron/executor.rs, src/cron/remediate.rs, src/cron/report.rs, src/cron/health.rs, src/cron/ack.rs, src/cron/guard.rs, src/ledger/service.rs, src/memory/store.rs",
+      "cron-store-exec lane (owner approval must require an owner-only token not reachable by agents; stale remediating sweep; normalized bounded signature), and storage-ledger items in ledger/service.rs and memory/store.rs."
+    ],
+    [
+      "tools",
+      "src/tools/*.rs, src/storage/message_search.rs, src/storage/messenger_policy.rs",
+      "tools-exec, tools-context (web_search DuckDuckGo parsing on 'result__body' substring with result__a title and uddg-decoded href; FileTool write approval enabled by default with a constructor flag the runtime can keep; terminal must keep draining past the output cap instead of killing; browser final-URL check must poll until settled and fail closed; CronTool must apply the terminal approval policy/deny globs to script/ack_command; thread-scoped search). main.rs constructs FileTool - if enabling write approval needs a main.rs change, make the DEFAULT secure so main.rs needs no change."
+    ],
+    [
+      "security",
+      "src/security/*.rs",
+      "security lane (EMPTY_QUOTES_RE must strip \"\" (verify by reasoning about the raw string); always include the unblanked normalized command as a variant; verification-artifact exemption hardening; do not run shell/SQL patterns over natural-language cron prompts (scan.rs); kill -1 <pid>; derive_pattern_key: for non-dangerous commands key on the full normalized command (hash) so 'Always' never covers a different command; neutralizer tag chars; ZWNJ)."
+    ],
+    [
+      "lanes",
+      "src/lanes/*.rs, src/storage/lanes.rs",
+      "lanes-surface, lanes-signals, lanes-runner (rename/edit timeouts; done_diff continue past oversize; kibitzer DMs first within 4000 chars; etc.)."
+    ],
+    [
+      "sessions-judge",
+      "src/sessions/*.rs, src/judge/mod.rs",
+      "sessions-judge lane."
+    ],
+    [
+      "inbox-migrate",
+      "src/inbox/**/*.rs, src/migrate/*.rs, src/voice/*.rs, src/voice_transcription.rs, src/profiles/*.rs, src/usage.rs, src/work_heartbeat.rs, migrations/ (new files only, next number 0042), scripts/*",
+      "inbox-migrate-voice lane, plus web-deploy's script and migration items (fix or delete the one-shot cutover scripts' destructive behaviors; add a forward migration for message_search_documents delete-on-session-delete if appropriate)."
+    ]
+  ],
+  "tasks": [
+    "discord-adapter: st_01a13516",
+    "discord-ui: st_01a13519",
+    "main-entry: st_01a13518",
+    "dashboard: st_01a13517",
+    "multiplexer: st_01a1351a",
+    "agent: st_01a1351b",
+    "cron-scheduler: st_01a1351c",
+    "cron-exec: st_01a1351d",
+    "tools: st_01a1351e",
+    "security: st_01a1351f",
+    "lanes: st_01a13520",
+    "sessions-judge: st_01a13521",
+    "inbox-migrate: st_01a13522"
+  ]
+}

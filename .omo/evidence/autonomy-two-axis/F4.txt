@@ -1,0 +1,19 @@
+F4 ideal-state fidelity: IS row -> evidence file existence
+IS-1 task-1.log OK
+IS-1 task-9.txt OK
+IS-2 task-3.txt OK
+IS-3 task-2.txt OK
+IS-4 task-4.log OK
+IS-5 task-5.txt OK
+IS-6 task-10.txt OK
+IS-6 task-12.json OK
+IS-6 task-13.txt OK
+IS-7 task-0.md OK
+IS-7 task-7.json OK
+IS-7 task-8.txt OK
+IS-8 task-9.txt OK
+IS-8 task-8.txt OK
+IS-9 task-7.json OK
+IS-9 task-14.md OK
+MISSING=0
+Notes: IS-2 live post not observed (task-3.txt [~], unit 3/3 ok). IS-6 mail-health happy path not reproducible while zele healthy (task-13 [~]).

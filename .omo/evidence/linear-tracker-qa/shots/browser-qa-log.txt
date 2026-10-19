@@ -1,0 +1,43 @@
+2026-10-16T15:02:05.278Z PASS B1 shell renders (sidebar Inbox/My issues) 
+2026-10-16T15:02:05.405Z PASS B1 home redirects to team issues #/tracker/team/OMO/active
+2026-10-16T15:02:05.619Z shot /tmp/tracker-qa/shots/B1-team-active-desktop-dark.png
+2026-10-16T15:02:05.938Z PASS B2 C opens create modal 
+2026-10-16T15:02:06.572Z shot /tmp/tracker-qa/shots/B2-create-modal-desktop-dark.png
+2026-10-16T15:02:06.747Z PASS B2 issue created and listed 
+2026-10-16T15:02:07.194Z shot /tmp/tracker-qa/shots/B2-after-create-desktop-dark.png
+2026-10-16T15:02:08.146Z shot /tmp/tracker-qa/shots/B3-board-desktop-dark.png
+2026-10-16T15:02:08.161Z PASS B3 board layout has columns columns=3
+2026-10-16T15:02:10.082Z shot /tmp/tracker-qa/shots/B3-board-dragging.png
+2026-10-16T15:02:10.217Z PASS B3 drag Todo→In Progress persisted 
+2026-10-16T15:02:10.322Z PASS B4 F opens filter menu 
+2026-10-16T15:02:10.758Z shot /tmp/tracker-qa/shots/B4-filter-menu.png
+2026-10-16T15:02:10.843Z PASS S6/B search page shows result OMO-4
+2026-10-16T15:02:11.129Z shot /tmp/tracker-qa/shots/B-search-desktop-dark.png
+2026-10-16T15:02:11.146Z PASS B5 issue page renders 
+2026-10-16T15:02:11.925Z shot /tmp/tracker-qa/shots/B5-issue-page-desktop-dark.png
+2026-10-16T15:02:11.934Z PASS B5 S opens status picker 
+2026-10-16T15:02:12.225Z shot /tmp/tracker-qa/shots/B5-status-picker.png
+2026-10-16T15:02:12.891Z PASS B5 comment posted 
+2026-10-16T15:02:13.207Z shot /tmp/tracker-qa/shots/B5-comment.png
+2026-10-16T15:02:13.233Z PASS B7 ⌘K opens command palette 
+2026-10-16T15:02:13.626Z shot /tmp/tracker-qa/shots/B7-command-palette.png
+2026-10-16T15:02:13.876Z PASS B7 palette navigates to Projects 
+2026-10-16T15:02:14.205Z shot /tmp/tracker-qa/shots/B7-projects-desktop-dark.png
+2026-10-16T15:02:14.764Z shot /tmp/tracker-qa/shots/B8-inbox-desktop-dark.png
+2026-10-16T15:02:14.765Z PASS B8 inbox renders 
+2026-10-16T15:02:14.982Z shot /tmp/tracker-qa/shots/B-my-issues-desktop-dark.png
+2026-10-16T15:02:15.423Z shot /tmp/tracker-qa/shots/B8-cycles-desktop-dark.png
+2026-10-16T15:02:15.479Z PASS B agent lanes visible as AGT issues 
+2026-10-16T15:02:15.847Z shot /tmp/tracker-qa/shots/B-agents-team-desktop-dark.png
+2026-10-16T15:02:16.069Z PASS B9 X multi-select shows bulk bar 
+2026-10-16T15:02:16.712Z shot /tmp/tracker-qa/shots/B9-bulk-bar.png
+2026-10-16T15:02:37.254Z shot /tmp/tracker-qa/shots/B10-team-desktop-light.png
+2026-10-16T15:02:38.211Z shot /tmp/tracker-qa/shots/B10-issue-desktop-light.png
+2026-10-16T15:02:40.286Z shot /tmp/tracker-qa/shots/B10-team-mobile-dark.png
+2026-10-16T15:02:40.290Z PASS B10 mobile dark no horizontal page scroll 
+2026-10-16T15:03:01.822Z shot /tmp/tracker-qa/shots/B10-issue-mobile-dark.png
+2026-10-16T15:03:03.698Z shot /tmp/tracker-qa/shots/B10-team-mobile-light.png
+2026-10-16T15:03:03.938Z PASS B10 mobile light no horizontal page scroll 
+2026-10-16T15:03:25.288Z shot /tmp/tracker-qa/shots/B10-issue-mobile-light.png
+2026-10-16T15:03:26.816Z shot /tmp/tracker-qa/shots/B10-mobile-drawer-dark.png
+2026-10-16T15:03:26.817Z PASS B10 mobile drawer toggle exists 

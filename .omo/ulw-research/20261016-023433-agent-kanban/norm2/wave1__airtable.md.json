@@ -1,0 +1,27 @@
+[
+ {
+  "name": "Airtable (Kanban view + AI + MCP)",
+  "url": "https://www.airtable.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "클라우드 관계형 DB·앱 빌더, 칸반 등 다중 뷰와 내장 AI 제공",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Team $20/사용자/월(연간) / Business $45",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 원격 MCP·CLI·REST API; Claude Code·Codex·Cursor",
+  "status": "활발한 상용 SaaS(2026)",
+  "pros": "공식 MCP 서버·스킬 플러그인 제공; 유연한 스키마와 상태 컬럼; 칸반 지원 네이티브 모바일 앱",
+  "cons": "셀프호스팅·오프라인 불가; API 속도 제한(베이스당 초당 5회); 좌석당 요금 부담",
+  "sources": [
+   "https://www.airtable.com",
+   "https://www.airtable.com/pricing",
+   "https://github.com/Airtable/airtable-mcp-cli",
+   "https://github.com/Airtable/skills",
+   "https://github.com/domdomegg/airtable-mcp-server",
+   "https://apps.apple.com/us/app/airtable/id914172636",
+   "https://play.google.com/store/apps/details?id=com.formagrid.airtable&hl=en"
+  ],
+  "confidence": "높음"
+ }
+]

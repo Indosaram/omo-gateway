@@ -1,0 +1,76 @@
+[
+ {
+  "name": "Nimbalyst",
+  "url": "https://nimbalyst.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "병렬 git 워크트리에서 AI 코딩 에이전트를 조율하는 시각적 데스크톱·모바일 워크스페이스",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료(OSS) / Teams $20/사용자/월(베타 중 무료)",
+  "selfhost": "가능(로컬 우선, 협업은 Cloudflare)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex 네이티브, OpenCode·Copilot·Gemini 알파, MCP",
+  "status": "활발(v0.81.6, 2026-10)",
+  "pros": "세션·태스크 칸반 보드 제공; WYSIWYG 마크다운·다이어그램 편집기; iOS 앱으로 이동 중 승인·diff 검토",
+  "cons": "Claude Code·Codex 중심(기타는 알파); API 키·구독 직접 관리 필요; 팀 협업 서버는 Cloudflare 의존",
+  "sources": [
+   "https://yetanotherorchestrator.app/apps/nimbalyst/",
+   "https://nimbalyst.com/",
+   "https://nimbalyst.com/open-source/",
+   "https://nimbalyst.com/features/session-management/",
+   "https://nimbalyst.com/features/task-management/",
+   "https://nimbalyst.com/teams/",
+   "https://github.com/Nimbalyst/nimbalyst",
+   "https://github.com/Nimbalyst/nimbalyst/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Parallel Code",
+  "url": "https://parallelcode.app/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "작업별 git 브랜치·워크트리로 여러 AI 코딩 에이전트를 병렬 실행하는 무료 데스크톱 앱",
+  "mobile": "Android 앱, PWA(iOS 푸시 지원)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(선택적 Docker 샌드박스)",
+  "license": "MIT",
+  "agent": "내장 MCP 서버; Claude Code·Codex·Gemini·Copilot CLI 등",
+  "status": "활발(v4.0.0, 2026)",
+  "pros": "완전 무료·텔레메트리 없음; 풍부한 내장 MCP 서버; Android 앱·PWA 모바일 페어링",
+  "cons": "칸반 보드 없음(타일 레이아웃); Windows 미지원; 다수 에이전트 시 로컬 자원 부담",
+  "sources": [
+   "https://yetanotherorchestrator.app/apps/parallel-code/",
+   "https://parallelcode.app/",
+   "https://github.com/johannesjo/parallel-code",
+   "https://github.com/johannesjo/parallel-code/releases",
+   "https://raw.githubusercontent.com/johannesjo/parallel-code/main/electron/mcp/server.ts",
+   "https://raw.githubusercontent.com/johannesjo/parallel-code/main/src/components/TilingLayout.tsx"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Proliferate",
+  "url": "https://proliferate.com/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "로컬·클라우드 샌드박스에서 병렬 코딩 에이전트를 관리하는 오픈소스 에이전트 IDE·컨트롤 플레인",
+  "mobile": "Expo 앱 스캐폴드, 반응형 웹",
+  "pricing": "무료(OSS) / 클라우드 좌석제 유료(가격 미확인)",
+  "selfhost": "가능(Docker Compose, AWS)",
+  "license": "AGPL-3.0",
+  "agent": "AnyHarness SDK·MCP; Claude Code·Codex·OpenCode·Cursor·Grok",
+  "status": "활발(v0.4.29, 2026-08)",
+  "pros": "Docker·AWS 원클릭 셀프호스팅; LiteLLM 게이트웨이로 비용 관리; 예약·이벤트 기반 자동 워크플로",
+  "cons": "AGPL 카피레프트 제약; 칸반 보드 없음; 셀프호스팅 인프라 부담 큼",
+  "sources": [
+   "https://yetanotherorchestrator.app/apps/proliferate/",
+   "https://proliferate.com/",
+   "https://github.com/proliferate-ai/proliferate",
+   "https://github.com/proliferate-ai/proliferate/releases",
+   "https://raw.githubusercontent.com/proliferate-ai/proliferate/main/guides/deploying/self-hosted-deploy.md",
+   "https://raw.githubusercontent.com/proliferate-ai/proliferate/main/apps/packages/product-client/src/pages/WorkspacesPage.tsx"
+  ],
+  "confidence": "높음"
+ }
+]

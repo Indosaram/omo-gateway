@@ -1,0 +1,72 @@
+[
+ {
+  "name": "Agent Kanban",
+  "url": "https://agent-kanban.dev/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "자율 코딩 에이전트용 칸반·미션컨트롤, 사람 검토 게이트 포함",
+  "mobile": "반응형 웹",
+  "pricing": "무료(소스 공개, 유료 플랜 없음)",
+  "selfhost": "가능(Cloudflare Workers+D1)",
+  "license": "FSL-1.1-ALv2",
+  "agent": "CLI·REST API; Claude Code·Codex 등 ACP 에이전트",
+  "status": "GitHub 492★, 2026-09 커밋",
+  "pros": "에이전트 우선 설계·실행 출처 추적; 본인 승인 불가한 사람 검토 게이트; 의존성 인식 계획",
+  "cons": "Realmroot·Enbor 생태계에 강결합; FSL로 2년간 경쟁 상업 이용 제한; 설정 복잡",
+  "sources": [
+   "https://agent-kanban.dev/",
+   "https://yetanotherorchestrator.app/apps/agent-kanban/",
+   "https://github.com/saltbo/agent-kanban",
+   "https://raw.githubusercontent.com/saltbo/agent-kanban/main/README.md",
+   "https://raw.githubusercontent.com/saltbo/agent-kanban/main/LICENSE",
+   "https://raw.githubusercontent.com/saltbo/agent-kanban/main/docs/architecture/system-overview.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "AI Maestro",
+  "url": "https://ai-maestro.23blocks.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "여러 머신의 터미널 코딩 에이전트 군단 오케스트레이션 OS, 칸반 포함",
+  "mobile": "반응형 웹(Tailscale 경유 접속)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node.js·Docker·AWS Terraform)",
+  "license": "MIT",
+  "agent": "CLI·AMP 등 프로토콜; Claude Code·Codex·Aider·Cursor",
+  "status": "GitHub 822★, v0.81.6, 2026-10 활동",
+  "pros": "MIT 완전 무료·텔레메트리 없음; 중앙 서버 없는 다중 머신 메시; 영구 메모리·코드 그래프",
+  "cons": "네이티브 모바일 앱 없음; Node.js 18+·tmux 3.0+ 필요; 멀티머신·클라우드 설정 복잡",
+  "sources": [
+   "https://ai-maestro.23blocks.com/",
+   "https://yetanotherorchestrator.app/apps/ai-maestro/",
+   "https://github.com/23blocks-OS/ai-maestro",
+   "https://ai-maestro.23blocks.com/mobile.html"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "amux",
+  "url": "https://amux.io/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "병렬 AI 코딩 에이전트 세션 멀티플렉서·대시보드, 원자적 작업 할당 칸반",
+  "mobile": "iOS 앱·PWA",
+  "pricing": "무료(OSS) / Cloud $20/사용자/월",
+  "selfhost": "가능(단일 Rust 바이너리)",
+  "license": "MIT + Commons Clause",
+  "agent": "REST API·CLI; Claude Code·Codex·Gemini CLI·OpenCode",
+  "status": "GitHub 534★, 2026-10 활동",
+  "pros": "외부 의존 없는 경량 Rust 바이너리; iOS 앱·PWA로 모바일 제어; 원자적 작업 클레임으로 경합 방지",
+  "cons": "Commons Clause로 상업 재판매 제한; Android 네이티브 앱 없음; macOS/Linux·tmux 3.2+ 필요",
+  "sources": [
+   "https://amux.io/",
+   "https://yetanotherorchestrator.app/apps/amux/",
+   "https://github.com/mixpeek/amux",
+   "https://amux.io/pricing/",
+   "https://raw.githubusercontent.com/mixpeek/amux/main/LICENSE",
+   "https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435"
+  ],
+  "confidence": "높음"
+ }
+]

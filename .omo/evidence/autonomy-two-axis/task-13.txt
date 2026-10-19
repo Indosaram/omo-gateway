@@ -1,0 +1,28 @@
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select * from source_health; select count(*) from lane_events where kind='source_health' and created_at > date('now')"
+[exit 0]
+0
+
+
+$ sed 's/\x1b\[[0-9;]*m//g' /Users/indo/.omon/gateway.log | awk -v s="$(date -u -v-1H +%Y-%m-%dT%H:%M)" '$1 >= s' | grep -c 'inbox watcher stopped; restarting after backoff watcher="mail"'
+[exit 0]
+2
+
+
+$ sed 's/\x1b\[[0-9;]*m//g' /Users/indo/.omon/gateway.log | grep -E 'watcher="mail"|zele|source_health' | tail -8
+[exit 0]
+    at async authenticateAccount (file:///Users/indo/.bun/install/global/node_modules/zele/dist/auth.js:485:33)
+    at async file:///Users/indo/.bun/install/global/node_modules/zele/dist/auth.js:526:22
+    at async getClients (file:///Users/indo/.bun/install/global/node_modules/zele/dist/auth.js:512:21)
+    at async command:mail watch (file:///Users/indo/.bun/install/global/node_modules/zele/dist/commands/watch.js:42:25)
+Run "zele mail watch --help" for usage information.
+2026-10-18T11:23:34.127555Z  WARN omo_gateway::legacy: inbox watcher stopped; restarting after backoff watcher="mail" retry_in_secs=160
+2026-10-18T13:52:50.039234Z  WARN omo_gateway::legacy: inbox watcher stopped; restarting after backoff watcher="mail" retry_in_secs=5
+2026-10-18T14:17:07.024580Z  WARN omo_gateway::legacy: inbox watcher stopped; restarting after backoff watcher="mail" retry_in_secs=5
+
+
+$ zele whoami 2>&1 | head -3 || true
+[exit 0]
+summary: 1 account(s)
+items:
+  - email: freedomzero91@gmail.com
+

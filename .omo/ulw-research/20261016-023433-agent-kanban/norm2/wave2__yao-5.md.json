@@ -1,0 +1,75 @@
+[
+ {
+  "name": "Dorothy",
+  "url": "https://dorothyai.app/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "10개 이상의 AI 코딩 에이전트를 병렬 조율하는 오픈소스 데스크톱 오케스트레이터",
+  "mobile": "없음(데스크톱 전용, Telegram·Slack 원격)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Gemini CLI 등, MCP(칸반 등), REST API",
+  "status": "최종 릴리스 1.2.9(2026-07)",
+  "pros": "칸반 전용 MCP 서버(8개 도구); 스킬 기반 자동 작업 할당; Telegram·Slack 원격 제어",
+  "cons": "macOS 빌드 위주(Linux는 소스 빌드); 웹·모바일 보드 없음; 2026-07 이후 업데이트 없음",
+  "sources": [
+   "https://dorothyai.app/",
+   "https://yetanotherorchestrator.app/apps/dorothy/",
+   "https://github.com/Charlie85270/Dorothy",
+   "https://raw.githubusercontent.com/Charlie85270/Dorothy/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Granular",
+  "url": "https://granular.build/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "비개발자용 로컬 우선 데스크톱 워크스페이스로 AI 에이전트 팀을 운영하는 도구",
+  "mobile": "없음(데스크톱 전용, Telegram 알림)",
+  "pricing": "무료 / Pro $12.99/사용자/월, 평생 $259",
+  "selfhost": "로컬 전용",
+  "license": "상용",
+  "agent": "Claude Code·Codex·Gemini CLI, MCP 커넥터 1,400+, roadmap.md",
+  "status": "상용 활동 중(v0.3.30)",
+  "pros": "roadmap.md 기반 칸반 양방향 동기화; git worktree 병렬 세션; BYO 키·로그인 지원",
+  "cons": "비공개 소스 유료 라이선스; 모바일·웹 보드 없음; Windows 베타",
+  "sources": [
+   "https://granular.build/",
+   "https://yetanotherorchestrator.app/apps/granular/",
+   "https://granular.build/pricing/",
+   "https://granular.build/deal/",
+   "https://granular.build/download/",
+   "https://granular.build/docs/",
+   "https://granular.build/docs/how-the-roadmap-board-works/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Jean",
+  "url": "https://jean.build/",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "git worktree별로 여러 코딩 에이전트를 병렬 실행하는 오픈소스 개발 환경",
+  "mobile": "반응형 웹(Web Access)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker·헤드리스 서버)",
+  "license": "Apache-2.0",
+  "agent": "Claude·Codex·Cursor 등 CLI, MCP, REST/WebSocket API",
+  "status": "매우 활발(v1.0.11, 2026-10)",
+  "pros": "완전 무료·기능 제한 없음; 헤드리스 서버·Docker로 원격 웹 접근; GitHub·Linear 이슈 연동",
+  "cons": "전통적 다열 칸반 아님(Project Canvas); Windows·Linux 빌드 테스트 부족; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://jean.build/",
+   "https://yetanotherorchestrator.app/apps/jean/",
+   "https://github.com/coollabsio/jean",
+   "https://raw.githubusercontent.com/coollabsio/jean/main/README.md",
+   "https://jean.build/docs",
+   "https://jean.build/docs/workflows/project-canvas-and-chat",
+   "https://jean.build/docs/core-concepts/projects-worktrees-and-sessions",
+   "https://jean.build/docs/manage/web-access-and-headless"
+  ],
+  "confidence": "높음"
+ }
+]

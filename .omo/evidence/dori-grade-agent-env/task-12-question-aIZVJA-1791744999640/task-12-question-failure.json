@@ -1,0 +1,50 @@
+{
+  "schema": "omon-task12-question-failure-v1",
+  "result": "harness_failure",
+  "helperExit": 1,
+  "root": "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+  "archive": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-aIZVJA-1791744999640",
+  "binarySha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+  "manifestSha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+  "error": "undefined is not an object (evaluating 'state?.row.omo_thread_id')",
+  "cause": "settled(1) returns false before blocked state; optional chaining guards nullish state but not false.row",
+  "observed": {
+    "prepareExit": 0,
+    "localPreflightExit": 0,
+    "validateExit": 0,
+    "laneStartExit": 0,
+    "databaseDescriptorVerified": true,
+    "pragmaMain": "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "postCleanupStatus": "closed",
+    "turnsRun": 0,
+    "threadId": null,
+    "questionEvents": 0,
+    "ownerAnswerSent": false,
+    "gatewayPid": 28015,
+    "gatewayExit": 0,
+    "gatewayAbsent": true,
+    "sharedDaemonUntouched": true
+  },
+  "evidence": [
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-aIZVJA-1791744999640/question-receipts.json",
+      "sha256": "5f6d012a49fcf5ccdefc5fd2f1a148221a40da480f5f6f9296b703da44824d35"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-aIZVJA-1791744999640/question-postcleanup-db.json",
+      "sha256": "cc93e8ccfe5f9704afbe472456d140fcd4359ccdb34bc363a9436646edf0b842"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-aIZVJA-1791744999640/question-gateway.private.log",
+      "sha256": "052668c21ddd9d110b5f51149b1c712345e748dcd97b0f1a6ddefe93748dcfde"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-aIZVJA-1791744999640/local-preflight.json",
+      "sha256": "b319221c4360380f1167a9a9594772f37a3f34a2b535945861a0652d5f0ac0dc"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-12-question-aIZVJA-1791744999640/release.json",
+      "sha256": "60bb894a42a33736f57613f40345af65a7ce16486e802de0c76c67917122088b"
+    }
+  ]
+}

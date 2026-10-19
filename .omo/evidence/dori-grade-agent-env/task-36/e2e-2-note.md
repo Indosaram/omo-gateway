@@ -1,0 +1,1 @@
+e2e-2 brief was self-contradictory ("Create result.txt ... Do not create result.txt"); the lane created result.txt, so done_claimed -> verified_done -> closed is correct behavior, not the rejection scenario. The rejection scenario is rerun as e2e-3 (done signal file proof.txt that the brief forbids creating).

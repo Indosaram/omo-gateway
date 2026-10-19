@@ -1,0 +1,4 @@
+fmt	1	cargo fmt --check
+clippy	101	cargo clippy -j 2 --all-targets --all-features -- -D warnings
+full	101	cargo test -j 2 --all-targets --all-features --no-fail-fast
+dashboard	101	cargo test -j 2 --test test_review_dashboard

@@ -1,0 +1,152 @@
+{
+  "at": "2026-10-12T00:22:06.225Z",
+  "signal": "SIGKILL",
+  "reason": "RPC supervisors detached into separate groups and outlived completed scenarios; groups identified by owned scratch socket paths",
+  "groups": [
+    36593,
+    36621,
+    36590,
+    36626,
+    36656,
+    36670,
+    36694,
+    37413,
+    37473,
+    42401,
+    44525
+  ],
+  "membersBefore": [
+    {
+      "pid": 36590,
+      "ppid": 1,
+      "pgid": 36590,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-c8305fe5045a98b5.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36593,
+      "ppid": 1,
+      "pgid": 36593,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-abd003fb89a95939.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36621,
+      "ppid": 1,
+      "pgid": 36621,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-c0003f6677680c93.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36626,
+      "ppid": 1,
+      "pgid": 36626,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-3bda00d10166e7de.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36656,
+      "ppid": 1,
+      "pgid": 36656,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-e6d2052236a46dba.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36670,
+      "ppid": 1,
+      "pgid": 36670,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-a728ba0f75f29d51.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36694,
+      "ppid": 1,
+      "pgid": 36694,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-aab71e9ed0dc06c4.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36721,
+      "ppid": 36593,
+      "pgid": 36593,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task15-qa2-CK16AC/senpi-rpc-host-internal-53eef390/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36723,
+      "ppid": 36621,
+      "pgid": 36621,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task18-qa2-IllvXn/senpi-rpc-host-internal-43cb99ac/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36735,
+      "ppid": 36590,
+      "pgid": 36590,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task20-qa2-VvXove/senpi-rpc-host-internal-bfc4efa7/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36740,
+      "ppid": 36626,
+      "pgid": 36626,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa2-X9CZFj/senpi-rpc-host-internal-dac3cb0c/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36745,
+      "ppid": 36656,
+      "pgid": 36656,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task15-qa2-AX05TM/senpi-rpc-host-internal-b5b3dcfd/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36748,
+      "ppid": 36670,
+      "pgid": 36670,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task18-qa2-pXeG9j/senpi-rpc-host-internal-121ab8c8/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 36757,
+      "ppid": 36694,
+      "pgid": 36694,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa2-cKSB2N/senpi-rpc-host-internal-6615bb63/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 37413,
+      "ppid": 1,
+      "pgid": 37413,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-169783ba058a79be.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 37451,
+      "ppid": 37413,
+      "pgid": 37413,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa2-X9CZFj/senpi-rpc-host-internal-28229455/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 37473,
+      "ppid": 1,
+      "pgid": 37473,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-fdfd47e650968005.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 37495,
+      "ppid": 37473,
+      "pgid": 37473,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa2-cKSB2N/senpi-rpc-host-internal-4db17611/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 42401,
+      "ppid": 1,
+      "pgid": 42401,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-c86c1f7d6a970485.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 42448,
+      "ppid": 42401,
+      "pgid": 42401,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa2-X9CZFj/senpi-rpc-host-internal-b233c44f/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 44525,
+      "ppid": 1,
+      "pgid": 44525,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-04976b7308149ace.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    },
+    {
+      "pid": 44600,
+      "ppid": 44525,
+      "pgid": 44525,
+      "command": "/Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task35-qa2-cKSB2N/senpi-rpc-host-internal-df24ea27/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+    }
+  ]
+}

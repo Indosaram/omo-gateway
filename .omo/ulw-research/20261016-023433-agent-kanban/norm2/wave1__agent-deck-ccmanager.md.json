@@ -1,0 +1,87 @@
+[
+ {
+  "name": "Agent Deck",
+  "url": "https://github.com/asheshgoplani/agent-deck",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Go(Bubble Tea+tmux) 기반 다중 AI 코딩 에이전트 세션 관리 TUI·제어 플레인",
+  "mobile": "반응형 웹(agent-deck web)·Telegram/Slack 연동",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(웹 데몬 선택)",
+  "license": "MIT",
+  "agent": "CLI로 Claude Code·Codex·OpenCode·Gemini 등 관리, MCP 관리자",
+  "status": "활발(v1.9.73, 2026-10)",
+  "pros": "풍부한 TUI·빠른 세션 전환; Git worktree 네이티브 지원; Conductor 자율 감독·모바일 알림",
+  "cons": "tmux 필수; 원격 웹 접근 시 수동 설정 필요; 고급 기능 설정 난이도 높음",
+  "sources": [
+   "https://github.com/asheshgoplani/agent-deck",
+   "https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "CCManager",
+  "url": "https://github.com/kbwo/ccmanager",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "tmux 없이 병렬 AI 코딩 에이전트를 worktree별로 관리하는 경량 TUI",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "CLI로 Claude Code·Gemini·Codex·Cursor 등 8종 지원, 상태 훅",
+  "status": "매우 활발(v4.4.7, 2026-10)",
+  "pros": "tmux 의존성 없음; 8종 이상 에이전트 상태 감지; 상태 변경 훅으로 확장 용이",
+  "cons": "웹·원격 인터페이스 없음; 모바일 미지원; MCP 관리 계층 없음",
+  "sources": [
+   "https://github.com/kbwo/ccmanager",
+   "https://raw.githubusercontent.com/kbwo/ccmanager/main/README.md",
+   "https://raw.githubusercontent.com/kbwo/ccmanager/main/docs/status-hooks.md",
+   "https://raw.githubusercontent.com/kbwo/ccmanager/main/package.json"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Container-use",
+  "url": "https://github.com/dagger/container-use",
+  "category": "MCP 서버",
+  "kanban": "아니오",
+  "what": "Dagger 기반으로 에이전트별 컨테이너 샌드박스·Git 브랜치를 제공하는 MCP 서버/CLI",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker/Dagger 로컬)",
+  "license": "Apache-2.0",
+  "agent": "MCP 서버로 Claude Code·Cursor·Goose·VS Code 등 연동",
+  "status": "활발(v0.4.2, 2026-10)",
+  "pros": "강력한 컨테이너 격리; MCP 네이티브 구조; Git 브랜치로 결과 확인·폐기 용이",
+  "cons": "칸반 등 시각적 대시보드 없음; 컨테이너 런타임 자원 부담; 환경 시작 지연",
+  "sources": [
+   "https://github.com/dagger/container-use",
+   "https://raw.githubusercontent.com/dagger/container-use/main/README.md",
+   "https://raw.githubusercontent.com/dagger/container-use/main/rules/agent.md",
+   "https://container-use.com"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Uzi",
+  "url": "https://github.com/devflowinc/uzi",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Git worktree·tmux로 다수 AI 코딩 에이전트를 병렬 실행하는 CLI",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "CLI로 Claude·Codex·Aider·Cursor·커스텀 에이전트 병렬 실행",
+  "status": "정체/유지보수(v0.0.2)",
+  "pros": "한 명령으로 다중 에이전트 생성; 에이전트별 개발 서버 포트 할당; 자동 승인·체크포인트 병합",
+  "cons": "tmux 필수; 표 형태 목록만 제공(칸반·GUI 없음); 개발 활동 둔화",
+  "sources": [
+   "https://github.com/devflowinc/uzi",
+   "https://raw.githubusercontent.com/devflowinc/uzi/main/README.md",
+   "https://www.uzi.sh"
+  ],
+  "confidence": "높음"
+ }
+]

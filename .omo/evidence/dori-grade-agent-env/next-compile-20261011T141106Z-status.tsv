@@ -1,0 +1,1 @@
+compile	0	cargo test -j 2 --all-targets --all-features --no-run

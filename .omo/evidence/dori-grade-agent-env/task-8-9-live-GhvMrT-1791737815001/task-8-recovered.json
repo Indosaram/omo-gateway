@@ -1,0 +1,154 @@
+{
+  "row": {
+    "key": "qa-1",
+    "status": "closed",
+    "turns_run": 1,
+    "omo_thread_id": "01a12bdb-1fe5-7345-ae81-738e3573330f",
+    "model": "inferhub/cb/deepseek-v4.1-flash",
+    "last_turn_outcome": "completed",
+    "thread_channel_id": null,
+    "parent_channel_id": null
+  },
+  "history": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:34.005432+00:00",
+      "from_status": "working",
+      "to_status": "done_claimed",
+      "reason": "done.txt contains qa complete; live file signal checked"
+    },
+    {
+      "id": 2,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:55:41.403346+00:00",
+      "from_status": "done_claimed",
+      "to_status": "not_done",
+      "reason": "forced: qa cleanup"
+    },
+    {
+      "id": 3,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:55:41.403444+00:00",
+      "from_status": "not_done",
+      "to_status": "working",
+      "reason": "forced: qa cleanup"
+    },
+    {
+      "id": 4,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:55:41.403490+00:00",
+      "from_status": "working",
+      "to_status": "closed",
+      "reason": "forced: qa cleanup"
+    }
+  ],
+  "reports": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:45:43.264466+00:00",
+      "role": "user",
+      "text": "\n\nIsolated QA only: no delegation, persistent goals, commits, network writes, source edits or work outside this QA repo. Do not inspect credentials/home config.\nCreate done.txt containing qa complete and a newline. Emit [REPORT] qa-1 | milestone | done.txt created. Use eval to invoke this explicit control child, not shell env prefixes or inherited DB settings: const child=Bun.spawn([\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",\"lane\",\"claim-done\",\"qa-1\",\"--evidence\",\"done.txt contains qa complete; live file signal checked\"],{cwd:\"/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo\",env:{...process.env,DATABASE_URL:\"sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db\"},stdout:'pipe',stderr:'pipe'}); const result=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]); print(JSON.stringify({controlExecutable:\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",databaseUrlEqual:true,exitCode:result[2],stdout:result[0],stderr:result[1]})); End the turn after exit. Do not override model configuration.\n\n\nLane key: qa-1\nDone = file done.txt\n[REPORT] qa-1 | milestone|blocker|question|done | <text>\nClaim command: omo-gateway lane claim-done qa-1 --evidence \"<evidence>\"\n\nLane done protocol\nWhen every Done signal is live and every change is pushed, run the claim command from your own session. For local or QA-only work the signals can be a command, file or URL. Run them yourself first: the watcher re-runs every signal and never takes your word for it. The lane key above is required.\nAfter claiming, stay idle and start no new work. The lead receives a done_claimed event. A claim starts a five-minute objection window. Before closing, the watcher reads every signal live and refuses uncommitted tracked changes or commits on no remote. Closing marks the thread done and removes lane-owned worktrees.\nIf the lead objects or a check fails, you receive [LEAD] not done: <reasons>; keep working, claim again when fixed. Fix every reason, then claim again for a fresh five-minute window.\nControl executable (one argv element): \"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\"\nControl DATABASE_URL: \"sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db\"\nUse this DATABASE_URL explicitly for every lane command; do not use another gateway database.\n"
+    },
+    {
+      "id": 2,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:45:49.060417+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_0faffde1218e4db3016acbbd384cdc8191a87f69d21cf6f72b:0"
+    },
+    {
+      "id": 3,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:45:49.063907+00:00",
+      "role": "agent",
+      "text": "I read this as isolated QA execution - create the file, check its live contents, and run the explicit lane claim. I'll stop right away when the control child exits.\n"
+    },
+    {
+      "id": 4,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:45:58.860251+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_042ae016fada40f6016acbbd3ed2688191b6f1ad6917ccbc9a:0"
+    },
+    {
+      "id": 5,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:45:58.860578+00:00",
+      "role": "agent",
+      "text": "The QA steps are tracked toward creating and claiming `done.txt`. You need: 0/3 done. Now: Create done file with required newline content. Next: Check live file contents and emit milestone.\n"
+    },
+    {
+      "id": 6,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:25.284918+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0"
+    },
+    {
+      "id": 7,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:25.284918+00:00",
+      "role": "thread_post",
+      "text": "{\"source\":\"0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0:1\",\"thread\":null,\"body\":\"done.txt created.\",\"nonce\":\"9d9244ed93e5490f92e77aef6\",\"state\":\"pending\",\"message_id\":null,\"error\":null}"
+    },
+    {
+      "id": 8,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:25.303987+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | milestone | done.txt created.\n"
+    },
+    {
+      "id": 9,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:29.503548+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_0a32f0665f6ab397016acbbd62099887d0b2e034c3b04fbd17:0"
+    },
+    {
+      "id": 10,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:29.507392+00:00",
+      "role": "agent",
+      "text": "`done.txt` is created and its exact contents, including the newline, passed the live check. You need: 2/3 done. Now: Run explicit control child and report exit. Next: none.\n"
+    },
+    {
+      "id": 11,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:37.111567+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_06e9cbf592c538d2016acbbd6a6be88191a8fdb4d74be763c8:0"
+    },
+    {
+      "id": 12,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:37.112181+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | done | done.txt contains exactly `qa complete\\n`; live file check passed. Explicit control child exited 0 with status `done_claimed` and no stderr. Staying idle."
+    },
+    {
+      "id": 13,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:39.633773+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_047db788a24c1f06016acbbd6d9ce88191ac92071aa959246f:0"
+    },
+    {
+      "id": 14,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:39.636228+00:00",
+      "role": "agent",
+      "text": "Staying idle."
+    },
+    {
+      "id": 15,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:39.642068+00:00",
+      "role": "outcome",
+      "text": "completed"
+    }
+  ],
+  "status": "real claim persisted; original observer timeout preserved"
+}

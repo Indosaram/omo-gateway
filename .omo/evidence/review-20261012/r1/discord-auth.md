@@ -1,0 +1,19 @@
+# discord-auth review
+
+### [P2] One wrong pairing code raises the attempt counter on every user's pending code
+- Location: src/discord/pairing.rs:461
+- Trigger: An operator runs `/pair` with a mistyped code (`commands.rs` `/pair` handler -> `PairingStore::approve_code` -> `approve_code_at`). The not-found branch runs `UPDATE pairing_codes SET attempts = attempts + 1 WHERE attempts < ?` with no `code`/`user_id` filter, so every pending code gets +1. The platform-wide counter resets on any successful pairing (the `pairing_platform_lockout` upsert later in `approve_code_at`), but the per-code counters do not. Example: 3 typos, then a successful pairing for user X, then 2 more typos. User Y's valid code now has attempts=5 while the platform is not locked.
+- Impact: When the operator enters user Y's correct code, line 469 (`if row.attempts >= MAX_FAILED_ATTEMPTS`) returns `PairingOutcome::LockedOut`, so the operator is told "Pairing locked out" even though the platform is not locked. Y's code is dead until Y DMs again after the 10-minute notification rate limit, which deletes the row and issues a new code.
+- Fix: Count failed attempts only at the platform level (`record_failed_attempt_tx`) and drop the global `UPDATE pairing_codes SET attempts = attempts + 1` statement. If per-code counting is wanted, it can only apply to a code that matched, so this branch should not touch other rows.
+
+### [P2] The attachment cache directory is never pruned, so disk use grows without limit
+- Location: src/discord/attachments.rs:382
+- Trigger: Every routed Discord message with attachments goes through `route_claimed_event` / `route_claimed_event_awaiting_turn` (`adapter.rs`) -> `AttachmentDownloader::hydrate` -> `download`. Each file is renamed into `<workspace>/.discord-attachments/{id}-{filename}`, up to 25 MB each. Files are only ever removed in two cases: a failed `.part` download or a size-mismatched cache entry. Nothing in the repo deletes cached attachments (grep for `attachment_root` / `.discord-attachments` finds no other users).
+- Impact: A long-running gateway keeps every attachment users have ever sent, until the workspace disk fills. After that, downloads and other workspace writes start failing.
+- Fix: Evict entries after `hydrate`'s consumers finish, or add a size/age bound (for example, prune files older than N hours or beyond a byte budget) before writing a new entry in `download`.
+
+### [P2] Table rasterization has no size limit, so a large table in model output can use gigabytes of memory on the async runtime
+- Location: src/discord/table_render/mod.rs:313
+- Trigger: A final stream chunk (`DiscordAdapter::stream`, `adapter.rs` ~3090, and the send path ~3220) calls `transform_markdown_tables_to_images` on the agent's full reply before chunking. Canvas width is the sum of per-column widths, each clamped to between 160 and 480 px; height is about 44 px per row. Both are then doubled by `svg_to_png(&svg, 2.0)`, and `Pixmap::new` allocates width*height*4 bytes with no cap. Example: a reply with a 10-column, 500-row markdown table (about 20k chars, which models produce plausibly for a data dump) needs roughly 3200-9600 px by 44000 px, which is 0.5-1.7 GB. The allocation, plus loading system fonts and rendering, all happen synchronously inside the async task.
+- Impact: Large memory spikes or an OOM abort take down the gateway, and the runtime worker is blocked during rendering. Separately, if the resulting PNG is too large to upload, the text has already had the table replaced by a placeholder, so the table content is lost from the reply.
+- Fix: Before rendering, cap rows, columns and pixel area (for example, max rows or `width*height*scale^2` under a fixed budget). When the cap is exceeded, keep the raw table text instead of rendering. Run rendering in `spawn_blocking`.

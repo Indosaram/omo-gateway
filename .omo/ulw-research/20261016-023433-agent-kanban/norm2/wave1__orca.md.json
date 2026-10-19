@@ -1,0 +1,31 @@
+[
+ {
+  "name": "Orca",
+  "url": "https://www.onorca.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "격리된 git 워크트리에서 병렬 AI 코딩 에이전트를 오케스트레이션하는 오픈소스 ADE",
+  "mobile": "iOS 앱·Android APK(네이티브 컴패니언)",
+  "pricing": "무료(OSS, MIT), BYOK",
+  "selfhost": "가능(로컬 데스크톱, 릴레이 Docker 자가호스팅)",
+  "license": "MIT",
+  "agent": "CLI·MCP/스킬·JSON-RPC, Claude Code·Codex 등 35+종",
+  "status": "활발(일일 릴리스, ★93.6k)",
+  "pros": "워크트리 격리로 병렬 에이전트 충돌 방지; 에이전트 대시보드 칸반(실험적)과 모바일 앱 푸시 알림; 무료 MIT, 에이전트 종속 없음",
+  "cons": "로컬 데스크톱/SSH 호스트가 계속 실행돼야 함; 자체 릴레이는 별도 서비스 운영 필요; 잦은 릴리스로 UI/CLI 플래그 변경 잦음",
+  "sources": [
+   "https://www.onorca.dev",
+   "https://github.com/stablyai/orca",
+   "https://apps.apple.com/us/app/orca-ide/id6766130217",
+   "https://www.onorca.dev/docs/model/agents-sessions",
+   "https://www.onorca.dev/docs/model/worktrees",
+   "https://www.onorca.dev/docs/cli/overview",
+   "https://www.onorca.dev/docs/cli/orchestration",
+   "https://www.onorca.dev/docs/mobile",
+   "https://www.onorca.dev/docs/agents/supported",
+   "https://raw.githubusercontent.com/stablyai/orca/main/cloud/README.md",
+   "https://raw.githubusercontent.com/stablyai/orca/main/LICENSE"
+  ],
+  "confidence": "높음"
+ }
+]

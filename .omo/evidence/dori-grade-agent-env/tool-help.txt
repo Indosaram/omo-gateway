@@ -1,0 +1,93 @@
+=== zele mail list --help ===
+zele/0.8.0
+
+Usage:
+  $ zele mail list
+
+Options:
+  --folder [folder]    Folder to list (inbox, sent, trash, spam, starred, drafts, archive, all) (default: inbox)
+  --limit [limit]      Max threads to show (default: 20)
+  --page <page>        Pagination token (requires --account, only works for a single account)
+  --label <label>      Filter by label name
+  --filter <filter>    Gmail search filter (e.g. "is:unread", "from:github", "has:attachment")
+  --account [account]  Filter by email account (repeatable)
+  -h, --help           Display this message
+
+Description:
+  List email threads
+
+=== imsg chats --help ===
+imsg chats
+List recent conversations
+
+Usage:
+  imsg chats [options]
+
+Options:
+  --db <value>	Path to chat.db (defaults to ~/Library/Messages/chat.db)
+  --limit <value>	Number of chats to list
+  --log-level, --logLevel <value>	Set log level (trace|verbose|debug|info|warning|error|critical)
+  --unread-only	Return only chats with unread inbound messages
+  -v, --verbose	Enable verbose logging
+  --json, -j, --json-output, --jsonOutput	Emit machine-readable JSON output
+
+Examples:
+  imsg chats --limit 5
+  imsg chats --limit 5 --json
+  imsg chats --unread-only --json
+
+=== imsg history --help ===
+imsg history
+Show recent messages for a chat
+
+Usage:
+  imsg history [options]
+
+Options:
+  --db <value>	Path to chat.db (defaults to ~/Library/Messages/chat.db)
+  --chat-id <value>	chat rowid from 'imsg chats'
+  --limit <value>	Number of messages to show
+  --participants <value>	filter by participant handles
+  --start <value>	ISO8601 start (inclusive)
+  --end <value>	ISO8601 end (exclusive)
+  --log-level, --logLevel <value>	Set log level (trace|verbose|debug|info|warning|error|critical)
+  --attachments	include attachment metadata
+  --convert-attachments	convert CAF/GIF attachments to model-compatible cached files
+  -v, --verbose	Enable verbose logging
+  --json, -j, --json-output, --jsonOutput	Emit machine-readable JSON output
+
+Examples:
+  imsg history --chat-id 1 --limit 10 --attachments
+  imsg history --chat-id 1 --start 2025-01-01T00:00:00Z --json
+
+=== Verified Empty & Populated Response Shapes ===
+1. zele mail list with no matching threads:
+```yaml
+summary: No threads found
+items: []
+```
+Structure: Object with string "summary" and array "items" (empty). Handled by `MailSource::parse` requiring `items` array.
+
+2. imsg history with no messages for chat:
+Stdout: "" (0 bytes), exit code 0.
+Structure: Empty output. Handled by `run_json` converting empty/whitespace stdout to `Value::Array([])`.
+
+3. imsg history with messages:
+Single message (--limit 1):
+```json
+{"id":812345,"created_at":"2026-10-11T08:14:10.830Z","is_from_me":false,"sender":"+8216603112","text":"sample message","chat_id":4653}
+```
+Multiple messages (--limit N):
+NDJSON (Newline-Delimited JSON, one object per line):
+```json
+{"id":812345,"created_at":"2026-10-11T08:14:10.830Z","is_from_me":false,"sender":"+8216603112","text":"first message","chat_id":4653}
+{"id":812346,"created_at":"2026-10-11T08:15:10.830Z","is_from_me":false,"sender":"+8216603112","text":"second message","chat_id":4653}
+```
+Structure: Decoded by `decode_structured_output`, which parses single JSON values or line-by-line NDJSON into `Value::Array`, exercised on `tests/fixtures/inbox/imessage-history.ndjson`. Handled by `objects()` accepting both single objects and arrays.
+
+4. PirateTalk GET /api/rooms/:id/messages initial call:
+URL: `GET /api/rooms/:id/messages` (omits `before_id` completely; guessing `before_id=0` or empty returns HTTP 400).
+Response shape: array of message objects with `id`, `logId`, `authorId`, `type`, `real_type`, `createdAt`, `text`. Handled by `KakaoSource::parse_messages`.
+Paging: subsequent calls send `GET /api/rooms/:id/messages?before_id=<oldest_log_id>`, paging backward until `oldest >= before` (guarded error) or `floor` cursor reached.
+
+

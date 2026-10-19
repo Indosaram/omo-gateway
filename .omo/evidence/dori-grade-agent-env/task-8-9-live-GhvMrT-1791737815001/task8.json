@@ -1,0 +1,54 @@
+{
+  "schema": "omon-task8-observed-v1",
+  "status": "observed",
+  "root": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+  "threadId": "01a12bdb-1fe5-7345-ae81-738e3573330f",
+  "claimAt": "2026-10-11T16:46:34.005432+00:00",
+  "claimTool": {
+    "turnId": "e983ce62-dbff-4095-977d-558557c8599c",
+    "turnStatus": "completed",
+    "item": {
+      "type": "dynamicToolCall",
+      "id": "call_u7YDFpxyDyLgiDjcRVpIuk1a",
+      "namespace": null,
+      "tool": "eval",
+      "arguments": {
+        "language": "js",
+        "code": "const child=Bun.spawn([\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",\"lane\",\"claim-done\",\"qa-1\",\"--evidence\",\"done.txt contains qa complete; live file signal checked\"],{cwd:\"/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo\",env:{...process.env,DATABASE_URL:\"sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db\"},stdout:'pipe',stderr:'pipe'}); const result=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]); print(JSON.stringify({controlExecutable:\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",databaseUrlEqual:true,exitCode:result[2],stdout:result[0],stderr:result[1]}));",
+        "summary": "Run the specified QA lane claim with the explicit control executable and database."
+      },
+      "status": "completed",
+      "contentItems": [
+        {
+          "type": "inputText",
+          "text": "{\"controlExecutable\":\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",\"databaseUrlEqual\":true,\"exitCode\":0,\"stdout\":\"{\\\"key\\\":\\\"qa-1\\\",\\\"status\\\":\\\"done_claimed\\\"}\\n\",\"stderr\":\"\"}"
+        }
+      ],
+      "success": true,
+      "durationMs": null
+    }
+  },
+  "report": [
+    {
+      "id": 8,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:46:25.303987+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | milestone | done.txt created.\n"
+    }
+  ],
+  "fileBefore": "qa complete\n",
+  "invalidDone": [
+    {
+      "scenario": "8-invalid",
+      "exit": 2,
+      "rows": 0,
+      "at": "2026-10-11T16:56:55.125Z"
+    }
+  ],
+  "originalObserverFailure": {
+    "receiptPath": "/private/tmp/omon-lane-scratch-qa-GhvMrT/receipts.json",
+    "receiptSha256": "b2e483d8d511809deb97d0f48f48c2eeb28ae9ac0025ff94e9aa24af778f78e9",
+    "classification": "observer timeout, not backend failure"
+  }
+}

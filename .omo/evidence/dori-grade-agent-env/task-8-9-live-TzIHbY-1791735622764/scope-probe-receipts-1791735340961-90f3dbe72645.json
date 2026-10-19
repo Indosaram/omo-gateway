@@ -1,0 +1,133 @@
+{
+  "schema": "omon-lane-qa-scope-receipts-v1",
+  "preparedSha256": "4ae06ac9950ffd644d10ca0b573228e9a45447b4c619c5aedddef4a1193bad78",
+  "receipts": [
+    {
+      "kind": "connection_attempt",
+      "stage": "websocket_construct",
+      "endpoint": "ws://127.0.0.1:19742",
+      "authPresent": true
+    },
+    {
+      "kind": "websocket_open",
+      "stage": "websocket_open"
+    },
+    {
+      "kind": "rpc",
+      "id": 1,
+      "method": "initialize"
+    },
+    {
+      "kind": "rpc",
+      "id": 2,
+      "method": "thread/start"
+    },
+    {
+      "kind": "thread_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo",
+      "runtimeWorkspaceRoots": [
+        "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "id": 3,
+      "method": "turn/start"
+    },
+    {
+      "kind": "turn_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "36675ecf-891a-41ed-bbce-d76ca6d98cd2",
+      "type": "userMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "chatcmpl-resp_0fdcb18923f6fbc4016acbb62e878c8191ae1d571a10f1db47:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "call_055e260a46284f8abb9d4f4081c39d5c",
+      "type": "dynamicToolCall",
+      "tool": "todo"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "call_055e260a46284f8abb9d4f4081c39d5c",
+      "tool": "todo",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "chatcmpl-resp_048aa8e91cee9154016acbb633456081918be52c8464fd90f5:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "call_0594924b72304168ac88874d988d397b",
+      "type": "dynamicToolCall",
+      "tool": "read"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "call_0594924b72304168ac88874d988d397b",
+      "tool": "read",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "itemId": "call_096178ebf3074775a6d7785b3641a826",
+      "type": "dynamicToolCall",
+      "tool": "eval"
+    },
+    {
+      "kind": "failure",
+      "stage": "turn_observations",
+      "error": {
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "message": "Exact serialized eval wrapper required\n\u001b[32mactual\u001b[39m \u001b[31mexpected\u001b[39m\n\n\u001b[39m`\u001b[39m\u001b[39mc\u001b[39m\u001b[39mo\u001b[39m\u001b[39mn\u001b[39m\u001b[39ms\u001b[39m\u001b[39mt\u001b[39m\u001b[39m \u001b[39m\u001b[39mr\u001b[39m\u001b[39me\u001b[39m\u001b[39ms\u001b[39m\u001b[39mu\u001b[39m\u001b[39ml\u001b[39m\u001b[39mt\u001b[39m\u001b[39m \u001b[39m\u001b[39m=\u001b[39m\u001b[39m \u001b[39m\u001b[39ma\u001b[39m\u001b[39mw\u001b[39m\u001b[39ma\u001b[39m\u001b[39mi\u001b[39m\u001b[39mt\u001b[39m\u001b[39m \u001b[39m\u001b[39mt\u001b[39m\u001b[39mo\u001b[39m\u001b[39mo\u001b[39m\u001b[39ml\u001b[39m\u001b[39m.\u001b[39m\u001b[39mb\u001b[39m\u001b[39ma\u001b[39m\u001b[39ms\u001b[39m\u001b[39mh\u001b[39m\u001b[39m(\u001b[39m\u001b[39m{\u001b[39m\u001b[39m\"\u001b[39m\u001b[39mc\u001b[39m\u001b[39mo\u001b[39m\u001b[39mm\u001b[39m\u001b[39mm\u001b[39m\u001b[39ma\u001b[39m\u001b[39mn\u001b[39m\u001b[39md\u001b[39m\u001b[39m\"\u001b[39m\u001b[39m:\u001b[39m\u001b[39m\"\u001b[39m\u001b[39m/\u001b[39m\u001b[39mU\u001b[39m\u001b[39ms\u001b[39m\u001b[39me\u001b[39m\u001b[39mr\u001b[39m\u001b[39ms\u001b[39m\u001b[39m/\u001b[39m\u001b[39mi\u001b[39m\u001b[39mn\u001b[39m\u001b[39md\u001b[39m\u001b[39mo\u001b[39m\u001b[39m/\u001b[39m\u001b[39m.\u001b[39m\u001b[39mb\u001b[39m\u001b[39mu\u001b[39m\u001b[39mn\u001b[39m\u001b[39m/\u001b[39m\u001b[39mb\u001b[39m\u001b[39mi\u001b[39m\u001b[39mn\u001b[39m\u001b[39m/\u001b[39m\u001b[39mb\u001b[39m\u001b[39mu\u001b[39m\u001b[39mn\u001b[39m\u001b[39m \u001b[39m\u001b[39m-\u001b[39m\u001b[39m-\u001b[39m\u001b[39mn\u001b[39m\u001b[39mo\u001b[39m\u001b[39m-\u001b[39m\u001b[39me\u001b[39m\u001b[39mn\u001b[39m\u001b[39mv\u001b[39m\u001b[39m-\u001b[39m\u001b[39mf\u001b[39m\u001b[39mi\u001b[39m\u001b[39ml\u001b[39m\u001b[39me\u001b[39m\u001b[39m \u001b[39m\u001b[39m-\u001b[39m"
+      }
+    },
+    {
+      "kind": "rpc",
+      "id": 4,
+      "method": "turn/interrupt"
+    },
+    {
+      "kind": "owned_turn_interrupt",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "status": "interrupted"
+    },
+    {
+      "kind": "result",
+      "stage": "turn_observations",
+      "status": "failed",
+      "threadId": "01a12bbf-9fa3-794b-af68-6903804b07cd",
+      "turnId": "e1a56188-6f6e-4b68-bffc-ffe21f6070fa",
+      "sharedDaemonUntouched": true
+    }
+  ]
+}

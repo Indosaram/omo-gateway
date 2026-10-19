@@ -1,0 +1,47 @@
+[
+ {
+  "name": "Taskmaster AI (eyaltoledano/claude-task-master)",
+  "url": "https://github.com/eyaltoledano/claude-task-master",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "AI 코딩 에이전트용 CLI·MCP 작업관리: PRD를 작업으로 분해, 복잡도·의존성 관리",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS) / Hamster Team $40/크리에이터/월",
+  "selfhost": "가능(로컬 파일·Docker)",
+  "license": "MIT + Commons Clause",
+  "agent": "MCP·CLI·JSON 파일; Claude Code·Cursor·Codex 등 13종+",
+  "status": "활발(~28k 스타, v0.43.1)",
+  "pros": "13개+ IDE·에이전트 MCP 지원; PRD 파서·의존성·복잡도 점수; 파일 잠금으로 다중 에이전트 안전",
+  "cons": "Commons Clause로 상용 재호스팅 금지; 칸반은 VS Code 확장·유료 클라우드 의존; 모바일 앱 없음",
+  "sources": [
+   "https://github.com/eyaltoledano/claude-task-master",
+   "https://tryhamster.com/pricing",
+   "https://tryhamster.com/product/taskmaster",
+   "https://tryhamster.com/product/studio",
+   "https://raw.githubusercontent.com/eyaltoledano/claude-task-master/main/LICENSE",
+   "https://marketplace.visualstudio.com/items?itemName=Hamster.task-master-hamster",
+   "https://api.github.com/repos/eyaltoledano/claude-task-master"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Taskmaster Kanban VS Code Extension (Hamster.task-master-hamster)",
+  "url": "https://marketplace.visualstudio.com/items?itemName=Hamster.task-master-hamster",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "VS Code·Cursor에서 .taskmaster 작업을 드래그앤드롭 칸반으로 표시, MCP 실시간 동기화",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "로컬 task-master-ai MCP(stdio); Claude Code·Cursor·Codex",
+  "status": "활발(v1.x+, 공식)",
+  "pros": "IDE 내 드래그앤드롭 칸반; 에이전트 작업과 실시간 동기화; 하위작업·의존성 UI",
+  "cons": "VS Code·Cursor 생태계 한정; 모바일 접근 불가; 로컬 Node.js 필요",
+  "sources": [
+   "https://marketplace.visualstudio.com/items?itemName=Hamster.task-master-hamster",
+   "https://github.com/eyaltoledano/claude-task-master"
+  ],
+  "confidence": "높음"
+ }
+]

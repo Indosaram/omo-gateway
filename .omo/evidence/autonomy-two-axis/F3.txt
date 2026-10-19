@@ -1,0 +1,13 @@
+F3 real manual QA on deployed binary rev 4e9c65c (Developer ID 5DUM8WPB4C), prod DB read-only checks
+- push8 (DM) -> action_proposals #6 signature vcs_remote:git push:/tmp/qa-approval state=pending (repo-scoped target after 4e9c65c)
+- omo-gateway autonomy decide 6 always -> #6 approved, precedent #8
+- push9 (DM) -> #7 state=auto_allowed precedent_id=8; remote branch lane/qa-approval9 created
+- states seen in prod DB: pending -> approved -> auto_allowed
+- revoke cycle already proven in task-8.txt (#5 pending after revoke); QA precedents #6 and #8 revoked after QA
+3|vcs_remote:git push:|approved|6|2026-10-18 15:23:15
+4|vcs_remote:git push:|auto_allowed|6|2026-10-18 15:28:13
+5|vcs_remote:git push:|declined|6|2026-10-18 15:28:53
+6|vcs_remote:git push:/tmp/qa-approval|approved|8|2026-10-18 15:36:44
+7|vcs_remote:git push:/tmp/qa-approval|auto_allowed|8|2026-10-18 15:37:08
+6|vcs_remote:git push:|deny|2026-10-18 15:33:31
+8|vcs_remote:git push:/tmp/qa-approval|allow|2026-10-18 15:37:33

@@ -1,0 +1,300 @@
+{
+  "capturedAt": "2026-10-11T16:17:18.572Z",
+  "status": "four-source-capture-mail-completed-empty",
+  "mailCompletionArtifact": "mail-lineage.json",
+  "historicalMailBlockerSuperseded": true,
+  "notHarnessExecution": true,
+  "noProductOrTestEdits": true,
+  "receipts": [
+    {
+      "source": "discord",
+      "operation": "consistent-backup-and-verification",
+      "argv": [
+        "/usr/bin/sqlite3",
+        "-readonly",
+        "file:/Users/indo/code/project/omon-gateway/omon_gateway.db?mode=ro",
+        ".backup '/tmp/task23-discord-6joAvb/snapshot.db'"
+      ],
+      "exit": 0,
+      "verifyArgv": [
+        "/usr/bin/sqlite3",
+        "-readonly",
+        "-json",
+        "file:/tmp/task23-discord-6joAvb/snapshot.db?mode=ro",
+        "PRAGMA query_only=ON; PRAGMA quick_check; SELECT name FROM sqlite_master WHERE type='table' AND name IN ('messages','message_search_documents');"
+      ],
+      "verifyExit": 1,
+      "verified": false,
+      "copyPath": "/tmp/task23-discord-6joAvb/snapshot.db",
+      "copySha256": "8b768f856d9aefd8346ff59cd6f444b980ecaa2f489a2f36ee225341096743f6",
+      "sourceConnection": "sqlite3 -readonly + mode=ro; Bun initial schema open readonly:true/create:false/query_only",
+      "builtinCopyError": "unable to open database file",
+      "capturedAt": "2026-10-11T16:14:31.729Z"
+    },
+    {
+      "source": "discord",
+      "operation": "standalone-immutable-copy-verification",
+      "argv": [
+        "/usr/bin/sqlite3",
+        "-readonly",
+        "-json",
+        "file:/tmp/task23-discord-6joAvb/snapshot.db?mode=ro&immutable=1",
+        "PRAGMA query_only=ON; PRAGMA quick_check; SELECT name FROM sqlite_master WHERE type='table' AND name IN ('messages','message_search_documents');"
+      ],
+      "exit": 0,
+      "verified": true,
+      "copySha256": "8b768f856d9aefd8346ff59cd6f444b980ecaa2f489a2f36ee225341096743f6",
+      "reason": "consistent .backup produced standalone copy with no WAL/SHM; ordinary mode=ro failed trying to open WAL-mode snapshot; immutable applies only to owned snapshot, never live source",
+      "capturedAt": "2026-10-11T16:14:43.598Z"
+    },
+    {
+      "source": "mail",
+      "status": "blocked-not-invoked",
+      "argv": [
+        "zele",
+        "mail",
+        "list",
+        "--folder",
+        "inbox",
+        "--account",
+        "freedomzero91@gmail.com",
+        "--filter",
+        "is:unread -category:promotions -category:social -category:updates",
+        "--limit",
+        "100"
+      ],
+      "exit": null,
+      "reason": "Installed auth.js authenticateAccount refreshes expired tokens and saves them; db.js getDb opens writable auth DB and applies migrations. No supported no-refresh read-only invocation established. Readonly auth metadata open failed: unable to open database file. CLI not run to preserve no autonomous auth changes.",
+      "exactLocalError": "unable to open database file",
+      "capturedAt": "2026-10-11T16:15:00.999Z"
+    },
+    {
+      "source": "imessage",
+      "operation": "chats",
+      "argv": [
+        "/opt/homebrew/bin/imsg",
+        "chats",
+        "--limit",
+        "50",
+        "--json"
+      ],
+      "capturedAt": "2026-10-11T16:15:19.207Z",
+      "exit": 0,
+      "rawSha256": "882cd109e4c449b2419b2695ded44200c4e50d8831059822bcec3635043f9885",
+      "count": 50,
+      "error": null,
+      "schema": {
+        "last_message_at": "string",
+        "participants": "array",
+        "last_addressed_handle": "string",
+        "account_id": "string",
+        "identifier": "string",
+        "is_group": "boolean",
+        "display_name": "string",
+        "id": "number",
+        "unread_count": "number",
+        "account_login": "string",
+        "guid": "string",
+        "name": "string",
+        "service": "string"
+      }
+    },
+    {
+      "source": "imessage",
+      "operation": "history",
+      "argv": [
+        "/opt/homebrew/bin/imsg",
+        "history",
+        "--chat-id",
+        "[SELECTED CHAT ID]",
+        "--limit",
+        "50",
+        "--json"
+      ],
+      "selectedIdSha256": "1158e7e12c5e7362318e5e3c2e1f2f1ab49578ab1d1691e9818a7c3f6b30b528",
+      "capturedAt": "2026-10-11T16:15:39.163Z",
+      "exit": 0,
+      "rawSha256": "3f7f4ca1563759cc8d108a4f11f67d79bfea29fc8a8cb5804781da50d2b2e243",
+      "count": 5,
+      "error": null,
+      "schema": {
+        "destination_caller_id": "string",
+        "guid": "string",
+        "reply_to_text": "string",
+        "id": "number",
+        "chat_name": "string",
+        "chat_id": "number",
+        "text": "string",
+        "is_read": "boolean",
+        "attachments": "array",
+        "reply_to_sender": "string",
+        "reply_to_guid": "string",
+        "is_from_me": "boolean",
+        "reactions": "array",
+        "chat_identifier": "string",
+        "date_read": "string",
+        "chat_guid": "string",
+        "participants": "array",
+        "is_group": "boolean",
+        "sender": "string",
+        "created_at": "string"
+      }
+    },
+    {
+      "source": "kakao",
+      "operation": "rooms",
+      "method": "GET",
+      "url": "https://indo.taila0cef2.ts.net/api/rooms",
+      "capturedAt": "2026-10-11T16:15:52.115Z",
+      "httpStatus": 200,
+      "rawSha256": "86c436b0bdc962a99949a76146e1624a225ea93c1aafdbb7c24bc8c15e398215",
+      "count": 263,
+      "error": null,
+      "schema": {
+        "chatId": "string",
+        "type": "string",
+        "title": "string",
+        "members": "number",
+        "unreadCount": "number",
+        "roomImageUrl": "string",
+        "lastMessage": "string",
+        "lastMessageTime": "number",
+        "lastLogId": "string"
+      }
+    },
+    {
+      "source": "kakao",
+      "operation": "messages",
+      "method": "GET",
+      "url": "https://indo.taila0cef2.ts.net/api/rooms/[SELECTED ROOM ID]/messages",
+      "initialBeforeId": "omitted",
+      "selectedIdSha256": "a7bf5b0c7d719dbaaa11bf03ee435835dbac7442aea9b821a1ba0b4d7bfefd5b",
+      "capturedAt": "2026-10-11T16:16:13.813Z",
+      "httpStatus": 200,
+      "rawSha256": "f3285534c6b83bdf0831d22fa804694244341e14bca3f22d28983f3b3f884f1a",
+      "count": 50,
+      "error": null,
+      "schema": {
+        "attachment": "string",
+        "attachment_parsed": "object",
+        "authorId": "string",
+        "authorName": "string",
+        "authorProfileUrl": "string",
+        "deleted": "number",
+        "feedType": "object",
+        "id": "string",
+        "isFeed": "boolean",
+        "isMe": "boolean",
+        "is_deleted": "boolean",
+        "is_edited": "boolean",
+        "is_restored": "boolean",
+        "is_safebot": "boolean",
+        "logId": "string",
+        "message": "string",
+        "previous_message": "object",
+        "reactions": "array",
+        "real_type": "number",
+        "reply": "object",
+        "revision": "number",
+        "revisions": "array",
+        "sendAt": "number",
+        "text": "string",
+        "thread": "object",
+        "threadReplyCount": "number",
+        "time": "number",
+        "type": "number",
+        "unreadCount": "number"
+      }
+    },
+    {
+      "source": "discord",
+      "operation": "indexed-row-select",
+      "argv": [
+        "/usr/bin/sqlite3",
+        "-readonly",
+        "-json",
+        "file:/tmp/task23-discord-6joAvb/snapshot.db?mode=ro&immutable=1",
+        "PRAGMA query_only=ON; SELECT d.platform,d.guild_id,d.channel_id,d.thread_id,d.message_id,d.author_id,d.author_name,d.content,d.timestamp,d.metadata_json FROM message_search_documents d WHERE d.platform='discord' AND d.author_id<>'414011632306618368' AND ((d.guild_id IS NULL OR d.guild_id='') OR instr(d.content,'<@414011632306618368>')>0 OR instr(d.content,'<@!414011632306618368>')>0 OR EXISTS(SELECT 1 FROM message_search_documents parent WHERE parent.platform='discord' AND parent.channel_id=d.channel_id AND parent.message_id=json_extract(d.metadata_json,'$.referenced_message_id') AND parent.author_id='414011632306618368')) ORDER BY d.timestamp DESC,d.message_id DESC LIMIT 1"
+      ],
+      "capturedAt": "2026-10-11T16:16:35.872Z",
+      "exit": 0,
+      "rawSha256": "607a586b57e92010f3f34984c2d2785df7be0c9bf2f60b8b689478cf79302eee",
+      "count": 1,
+      "error": null,
+      "copySha256": "8b768f856d9aefd8346ff59cd6f444b980ecaa2f489a2f36ee225341096743f6",
+      "botIdFilter": "not configured; optional bot-id exclusion not applied, owner exclusion applied",
+      "schema": {
+        "platform": "string",
+        "guild_id": "null",
+        "channel_id": "string",
+        "thread_id": "null",
+        "message_id": "string",
+        "author_id": "string",
+        "author_name": "string",
+        "content": "string",
+        "timestamp": "string",
+        "metadata_json": "string"
+      }
+    }
+  ],
+  "fixtures": [
+    {
+      "file": "imessage-chats.json",
+      "source": "imessage",
+      "operation": "chats",
+      "mapping": "One selected returned chat; ID remapped to 4653 preserving numeric/string type; personal fields replaced; timestamp/service/unread/is_group retained",
+      "sanitizedSha256": "0b5fe088186e5ac0e9335ffac8409d77af6483b069b40c189ddacb3fc1017464",
+      "consumer": "IMessageSource::parse; history normalized to array"
+    },
+    {
+      "file": "imessage-history.json",
+      "source": "imessage",
+      "operation": "history",
+      "mapping": "At most two observed messages, ids sequentially remapped; selected chat id consistently remapped; timestamps/from-me retained; sender/text placeholders; JSON array staging normalized from original NDJSON",
+      "sanitizedSha256": "314eddaa6fdaa8dc423f9465c48d5607ec49b182bb0b96b1bee0df05b421a65a",
+      "consumer": "IMessageSource::parse; history normalized to array"
+    },
+    {
+      "file": "kakao-rooms.json",
+      "source": "kakao",
+      "operation": "rooms",
+      "mapping": "One observed eligible room; chatId/lastLogId consistently substituted; title/name redacted; type/unreadCount retained",
+      "sanitizedSha256": "014f2f102ac0c0dc5d48deddf3cbe4a22a7bb75d31cdefc42896208cfd9878e0",
+      "consumer": "KakaoSource::parse_messages; rooms future HTTP fixture wiring"
+    },
+    {
+      "file": "kakao-messages.json",
+      "source": "kakao",
+      "operation": "messages",
+      "mapping": "At most two observed page entries; ordered IDs remapped consistently with room lastLogId; author remapped; text/author names redacted; types/timestamp retained",
+      "sanitizedSha256": "a3dd82c0089dce6a628ff1f4b111ccf135b326f697900f10c14cc0bf73588e4f",
+      "consumer": "KakaoSource::parse_messages; rooms future HTTP fixture wiring"
+    },
+    {
+      "file": "discord.json",
+      "source": "discord",
+      "operation": "indexed-row-select",
+      "mapping": "One eligible actual indexed row; personal text/author placeholders; snowflake ids consistently substituted; timestamp/platform/null-DM distinctions retained; metadata projected to optional redacted parent reference. Mention text redacted, so fixture alone no longer preserves guild eligibility; tests must explicitly inject synthetic mentions later.",
+      "sanitizedSha256": "a24c33f29caca7b54381acfb24b03094b9abe8f4bf22c4e8ae475130b4d358cf",
+      "consumer": "DiscordSource SQL seed/index regression; not runtime producer conversion"
+    }
+  ],
+  "rawRetention": "Original response bytes held only in memory, hashed before projection, then cleared. Digest alone is not independently replayable.",
+  "snapshot": {
+    "path": "/tmp/task23-discord-6joAvb/snapshot.db",
+    "sha256": "8b768f856d9aefd8346ff59cd6f444b980ecaa2f489a2f36ee225341096743f6",
+    "verified": true,
+    "readOnlyUri": "file:/tmp/task23-discord-6joAvb/snapshot.db?mode=ro&immutable=1",
+    "source": "/Users/indo/code/project/omon-gateway/omon_gateway.db",
+    "status": "owned private scratch retained for post-freeze QA; contains personal source data, not staged in repository"
+  },
+  "limitations": [
+    "Mail CLI not invoked because autonomous token refresh/auth DB writes cannot be excluded.",
+    "No actual adapter ignored harness or Cargo executed.",
+    "Discord optional bot-id exclusion unavailable; owner exclusion and eligibility SQL applied.",
+    "Only selected rows staged; raw digest covers entire actual command/HTTP response before projection.",
+    "Kakao remapped lastLogId is placeholder; original equality against selected page top not separately asserted.",
+    "JSON fixture staging preserves field types but history framing normalized from raw NDJSON; no synthetic extra NDJSON fixture created."
+  ]
+}
+

@@ -1,0 +1,224 @@
+{
+  "schema": "omon-task8-observed-v1",
+  "root": "/private/tmp/omon-lane-scratch-qa-aJ4w9r",
+  "status": "observed-real-claim; harness observer timeout separately recorded",
+  "rowAfterCleanup": {
+    "key": "qa-1",
+    "title": "QA lane",
+    "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+    "thread_channel_id": null,
+    "parent_channel_id": null,
+    "status_message_id": null,
+    "cwd": "/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa-repo",
+    "brief_path": "/private/tmp/omon-lane-scratch-qa-aJ4w9r/brief8.md",
+    "session_key": "4:lane|-|4:qa-1|-|9:lane:qa-1",
+    "omo_thread_id": "01a12bcf-ff7f-7204-a64f-5c7e00ecf4c3",
+    "model": "inferhub/cb/deepseek-v4.1-flash",
+    "status": "closed",
+    "done_signals": "file done.txt",
+    "claim_evidence": "done.txt contains qa complete; live file signal checked",
+    "claim_at": "2026-10-11T16:34:12.843490+00:00",
+    "objection": null,
+    "turns_run": 1,
+    "last_turn_outcome": "completed",
+    "last_report": "[REPORT] qa-1 | done | done.txt contains exactly qa complete and a newline; live file signal checked. The explicit control child exited 0 and returned status done_claimed.",
+    "last_activity_at": "2026-10-11T16:34:18.933327+00:00",
+    "stale_posted_at": null,
+    "created_at": "2026-10-11T16:33:34.074841+00:00",
+    "updated_at": "2026-10-11T16:43:33.212316+00:00"
+  },
+  "claimTransitions": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:12.843490+00:00",
+      "from_status": "working",
+      "to_status": "done_claimed",
+      "reason": "done.txt contains qa complete; live file signal checked"
+    }
+  ],
+  "events": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+      "kind": "done_claimed",
+      "body": "done.txt contains qa complete; live file signal checked",
+      "created_at": "2026-10-11T16:34:12.843490+00:00",
+      "delivered_at": null
+    }
+  ],
+  "transcript": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:33:34.077080+00:00",
+      "role": "user",
+      "text": "\n\nIsolated QA only: no delegation, persistent goals, commits, network writes, source edits or work outside this QA repo. Do not inspect credentials/home config.\nCreate done.txt containing qa complete and a newline. Emit [REPORT] qa-1 | milestone | done.txt created. Use eval to invoke this explicit control child, not shell env prefixes or inherited DB settings: const child=Bun.spawn([\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",\"lane\",\"claim-done\",\"qa-1\",\"--evidence\",\"done.txt contains qa complete; live file signal checked\"],{cwd:\"/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa-repo\",env:{...process.env,DATABASE_URL:\"sqlite:///private/tmp/omon-lane-scratch-qa-aJ4w9r/qa.db\"},stdout:'pipe',stderr:'pipe'}); const result=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]); print(JSON.stringify({controlExecutable:\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",databaseUrlEqual:true,exitCode:result[2],stdout:result[0],stderr:result[1]})); End the turn after exit. Do not override model configuration.\n\n\nLane key: qa-1\nDone = file done.txt\n[REPORT] qa-1 | milestone|blocker|question|done | <text>\nClaim command: omo-gateway lane claim-done qa-1 --evidence \"<evidence>\"\n\nLane done protocol\nWhen every Done signal is live and every change is pushed, run the claim command from your own session. For local or QA-only work the signals can be a command, file or URL. Run them yourself first: the watcher re-runs every signal and never takes your word for it. The lane key above is required.\nAfter claiming, stay idle and start no new work. The lead receives a done_claimed event. A claim starts a five-minute objection window. Before closing, the watcher reads every signal live and refuses uncommitted tracked changes or commits on no remote. Closing marks the thread done and removes lane-owned worktrees.\nIf the lead objects or a check fails, you receive [LEAD] not done: <reasons>; keep working, claim again when fixed. Fix every reason, then claim again for a fresh five-minute window.\nControl executable (one argv element): \"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\"\nControl DATABASE_URL: \"sqlite:///private/tmp/omon-lane-scratch-qa-aJ4w9r/qa.db\"\nUse this DATABASE_URL explicitly for every lane command; do not use another gateway database.\n"
+    },
+    {
+      "id": 2,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:33:37.227175+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_0d546cb1ced8b9b3016acbba5eca0881919278c88cf0e5a252:0"
+    },
+    {
+      "id": 3,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:33:37.229062+00:00",
+      "role": "agent",
+      "text": "I read this as isolated QA - create and check `done.txt`, then run the exact control child. I'll stop right away when that child exits.\n"
+    },
+    {
+      "id": 4,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:33:44.352933+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_0b8b7ba4da47ab2e016acbba633b9887d0ba37ba18b3fb6557:0"
+    },
+    {
+      "id": 5,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:33:44.356301+00:00",
+      "role": "agent",
+      "text": "The QA plan is set for creating the live done signal and claiming `qa-1`. You need: 0/3 tasks done, with no blockers. Now: Create done file with exact required contents. Next: Check live file and emit milestone report.\n"
+    },
+    {
+      "id": 6,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:01.442434+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_0438a948b39c4340016acbba75811887d097a6831cf56e702a:0"
+    },
+    {
+      "id": 7,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:01.442434+00:00",
+      "role": "thread_post",
+      "text": "{\"source\":\"0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_0438a948b39c4340016acbba75811887d097a6831cf56e702a:0:1\",\"thread\":null,\"body\":\"done.txt created\",\"nonce\":\"fa3e286733fd4491b9403471f\",\"state\":\"pending\",\"message_id\":null,\"error\":null}"
+    },
+    {
+      "id": 8,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:01.463296+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | milestone | done.txt created\n"
+    },
+    {
+      "id": 9,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:08.040755+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_07472f68c28ce5bb016acbba7a3b1087d082d1e87ae8430fdf:0"
+    },
+    {
+      "id": 10,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:08.041087+00:00",
+      "role": "agent",
+      "text": "`done.txt` is created and its live contents match `qa complete\\n`. You need: 2/3 tasks done; the milestone report is emitted. Now: Invoke explicit control child and report exit. Next: none.\n"
+    },
+    {
+      "id": 11,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:16.582620+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_0cf8bf490051052c016acbba857d888191954f1e75edb3f78a:0"
+    },
+    {
+      "id": 12,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:16.583538+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | done | done.txt contains exactly qa complete and a newline; live file signal checked. The explicit control child exited 0 and returned status done_claimed."
+    },
+    {
+      "id": 13,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:18.933327+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:71300122-f6c4-4137-a3fe-b85e0ee7ccf0:chatcmpl-resp_0ff0acff7461b9fc016acbba8904808191afa2b8572b36322b:0"
+    },
+    {
+      "id": 14,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:18.937430+00:00",
+      "role": "agent",
+      "text": "Staying idle."
+    },
+    {
+      "id": 15,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T16:34:18.946780+00:00",
+      "role": "outcome",
+      "text": "completed"
+    }
+  ],
+  "doneFile": {
+    "text": "qa complete\n",
+    "sha256": "e5d6649d63c2bfabb8dfbdaa23e0e71e04f1564312dc94208af0bba7073e3b86"
+  },
+  "startReceipt": [
+    {
+      "kind": "process_exit",
+      "pid": 71143,
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "lane",
+        "start",
+        "qa-1",
+        "--title",
+        "QA lane",
+        "--brief",
+        "/private/tmp/omon-lane-scratch-qa-aJ4w9r/brief8.md",
+        "--done",
+        "file done.txt",
+        "--cwd",
+        "/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa-repo",
+        "--lead",
+        "4:lane|-|4:lead|-|9:lane:lead"
+      ],
+      "code": 0,
+      "at": "2026-10-11T16:33:34.076Z"
+    },
+    {
+      "id": "command-9",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "lane",
+        "start",
+        "qa-1",
+        "--title",
+        "QA lane",
+        "--brief",
+        "/private/tmp/omon-lane-scratch-qa-aJ4w9r/brief8.md",
+        "--done",
+        "file done.txt",
+        "--cwd",
+        "/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa-repo",
+        "--lead",
+        "4:lane|-|4:lead|-|9:lane:lead"
+      ],
+      "code": 0,
+      "stdoutBytes": 734,
+      "stderrBytes": 0,
+      "at": "2026-10-11T16:33:34.076Z"
+    }
+  ],
+  "provenance": {
+    "receiptPath": "/private/tmp/omon-lane-scratch-qa-aJ4w9r/receipts.json",
+    "receiptSha256": "601ba506347701660a179c74254b513fcaad1843a8271bd2afc972de7ffea112",
+    "databasePath": "/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa.db",
+    "readOnly": true
+  },
+  "cleanup": [
+    {
+      "kind": "gateway_final_exit",
+      "pid": 71136,
+      "code": 0,
+      "absent": true,
+      "at": "2026-10-11T16:43:33.215Z"
+    }
+  ]
+}

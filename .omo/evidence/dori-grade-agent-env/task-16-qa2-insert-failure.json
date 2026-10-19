@@ -1,0 +1,55 @@
+{
+  "scenario": "inbox-insert-real-kibitzer",
+  "root": "/private/tmp/omon-task16-qa2-Cnugr8",
+  "error": "Error: single real kibitzer decision deadline; final authoritative query failed\n    at <anonymous> (/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/qa2-common.mjs:39:71)",
+  "state": {
+    "generation": 1,
+    "consumed": 0,
+    "admitted_ms": null,
+    "usage": 0,
+    "events": 0,
+    "judge": 0
+  },
+  "cleanup": [
+    {
+      "pid": 35716,
+      "code": 0,
+      "pidAbsent": true,
+      "socketRemoved": true
+    }
+  ],
+  "appserver": {
+    "startedAt": "2026-10-12T00:17:17.838Z",
+    "argv": [
+      "omo",
+      "app-server",
+      "--listen",
+      "ws://127.0.0.1:55577",
+      "--ws-auth",
+      "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-YFjxF2/ws-token"
+    ],
+    "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+    "home": "/Users/indo",
+    "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+    "url": "ws://127.0.0.1:55577",
+    "port": 55577,
+    "timingsMs": {
+      "ready": 1219,
+      "cleanup": 58,
+      "total": 182902
+    },
+    "pid": 35653,
+    "membersBeforeShutdown": [
+      35653
+    ],
+    "remainingGroupPids": [],
+    "pidAbsent": true,
+    "childExit": {
+      "code": 0,
+      "signal": null
+    },
+    "portRebindSucceeded": true,
+    "privateScratchRemoved": true,
+    "finishedAt": "2026-10-12T00:20:20.673Z"
+  }
+}

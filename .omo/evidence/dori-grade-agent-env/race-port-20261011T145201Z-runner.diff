@@ -1,0 +1,48 @@
+--- .omo/evidence/dori-grade-agent-env/race-port-20261011T145201Z-before-runner.rs.txt	2026-10-11 23:52:57
++++ src/lanes/runner.rs	2026-10-11 23:53:17
+@@ -543,7 +543,7 @@
+             let backend = self.backend.clone();
+             let cancellation = turn_cancel.clone();
+             let _cancel_on_exit = turn_cancel.clone().drop_guard();
+-            turn_tasks.spawn(async move {
++            let turn_task = turn_tasks.spawn(async move {
+                 CAPTURE_GENERATION
+                     .scope(generation, async move {
+                         let outcome = backend
+@@ -556,6 +556,7 @@
+             let outcome = {
+                 loop {
+                     tokio::select! {
++                        biased;
+                         result = turn_tasks.join_next() => {
+                             let (returned_session, outcome) = result
+                                 .ok_or_else(|| OmonError::Multiplexer("lane turn task missing".into()))?
+@@ -575,16 +576,20 @@
+                             }
+                             self.posts_ready.notify_one();
+                         }
+-                        _ = notify.notified() => {
++                        _ = notify.notified(), if !turn_cancel.is_cancelled() => {
+                             let current = self.lane(key).await?;
+                             let current_generation = reopen_generation(&self.pool, key).await?;
+-                            if current_generation != generation || !matches!(current.status.as_str(), "working" | "not_done") {
++                            if current_generation != generation || !matches!(current.status.as_str(), "working" | "not_done" | "done_claimed") {
+                                 turn_cancel.cancel();
+                                 continue;
+                             }
+                             for (id, text) in self.pending(key).await? {
+                                 if inbox.iter().any(|(sent, _)| *sent == id) { continue; }
+-                                if reopen_generation(&self.pool, key).await? != generation { break; }
++                                if reopen_generation(&self.pool, key).await? != generation {
++                                    turn_cancel.cancel();
++                                    break;
++                                }
++                                if turn_task.is_finished() || turn_cancel.is_cancelled() { break; }
+                                 match self.backend.steer(&steering_session, &text).await {
+                                     Ok(true) if reopen_generation(&self.pool, key).await? == generation => {
+                                         sqlx::query("UPDATE lane_inbox SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+@@ -897,4 +902,3 @@
+         );
+     }
+ }
+-

@@ -1,0 +1,71 @@
+[
+ {
+  "name": "ZenHub",
+  "url": "https://www.zenhub.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "GitHub 네이티브 애자일 칸반·스프린트·로드맵·자동 리포팅 플랫폼",
+  "mobile": "반응형 웹(네이티브 앱 단종)",
+  "pricing": "무료(50명) / Teams $8.33~12.50/사용자/월",
+  "selfhost": "엔터프라이즈만",
+  "license": "상용",
+  "agent": "GraphQL API·웹훅·커뮤니티 MCP/CLI(Claude Code·Cursor·Codex)",
+  "status": "활발(상용 SaaS)",
+  "pros": "GitHub 이슈·PR 양방향 동기화; 5단계 계층과 AI 스프린트 플래닝; 커뮤니티 MCP·CLI 지원",
+  "cons": "네이티브 모바일 앱 없음; 셀프호스팅은 고가 엔터프라이즈 전용; GitHub 인증·토큰 의존",
+  "sources": [
+   "https://www.zenhub.com",
+   "https://www.zenhub.com/pricing",
+   "https://developers.zenhub.com",
+   "https://developers.zenhub.com/graphql-api-docs/getting-started",
+   "https://github.com/ZenHubIO/API",
+   "https://www.zenhub.com/terms-of-service",
+   "https://github.com/daniel-pittman/zenhub-cli",
+   "https://github.com/derekbar90/zenhub-mcp"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "zenhub-cli (`zh`) & Bundled MCP Server",
+  "url": "https://github.com/daniel-pittman/zenhub-cli",
+  "category": "MCP 서버",
+  "kanban": "아니오",
+  "what": "AI 코딩 에이전트용 ZenHub 보드·스프린트·하위이슈 관리 CLI 겸 MCP 서버",
+  "mobile": "없음(터미널 CLI)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "FastMCP 약 68개 도구(stdio)·Claude Code 에이전트·CLI",
+  "status": "활발(v2.4.0, 2026-08)",
+  "pros": "에이전트용 68개 MCP 도구; 임베딩 기반 중복 티켓 방지; 닫힌 상위 이슈 고아화 방지 안전장치",
+  "cons": "ZenHub 전용 카드 미지원; gh CLI와 GraphQL·REST 토큰 필요; 임베딩 모델 약 500MB·Python 3.10+ 필요",
+  "sources": [
+   "https://github.com/daniel-pittman/zenhub-cli",
+   "https://raw.githubusercontent.com/daniel-pittman/zenhub-cli/develop/README.md",
+   "https://raw.githubusercontent.com/daniel-pittman/zenhub-cli/develop/CLAUDE.md",
+   "https://api.github.com/repos/daniel-pittman/zenhub-cli/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "zenhub-mcp (TypeScript)",
+  "url": "https://github.com/derekbar90/zenhub-mcp",
+  "category": "MCP 서버",
+  "kanban": "아니오",
+  "what": "ZenHub GraphQL API를 MCP로 제공하는 TypeScript 서버",
+  "mobile": "없음(로컬 Node.js)",
+  "pricing": "무료($0)",
+  "selfhost": "로컬 전용",
+  "license": "미명시(라이선스 파일 없음)",
+  "agent": "MCP 54개 도구(stdio)·Claude Desktop·Cursor",
+  "status": "정체(마지막 푸시 2025-07)",
+  "pros": "GraphQL 작업 54개 기본 지원; npx·Claude Desktop 간편 설정; 임의 GraphQL 쿼리 도구 제공",
+  "cons": "오픈소스 라이선스 미선언; 중복 감지·안전장치 없음; 유지보수 정체",
+  "sources": [
+   "https://github.com/derekbar90/zenhub-mcp",
+   "https://raw.githubusercontent.com/derekbar90/zenhub-mcp/main/README.md",
+   "https://api.github.com/repos/derekbar90/zenhub-mcp"
+  ],
+  "confidence": "높음"
+ }
+]

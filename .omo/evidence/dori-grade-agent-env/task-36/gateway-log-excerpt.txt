@@ -1,0 +1,58 @@
+[2m2026-10-12T07:18:55.843626Z[0m [32m INFO[0m [2momon_gateway::lanes::runner[0m[2m:[0m gateway lane service ready [3msocket[0m[2m=[0m/tmp/omon-lanes-90ddeae22659111d9b5ae11c.sock
+[2m2026-10-12T07:18:56.837580Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:19:30.736878Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread created [3mthread_id[0m[2m=[0m1559103200898842695 [3mparent_id[0m[2m=[0mSome(ChannelId(1529738911377657967)) [3mthrea
+[2m2026-10-12T07:19:31.968568Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread created [3mthread_id[0m[2m=[0m1559103207316398081 [3mparent_id[0m[2m=[0mSome(ChannelId(1529738911377657967)) [3mthrea
+[2m2026-10-12T07:20:05.844675Z[0m [32m INFO[0m [2momon_gateway::lanes::dispatch[0m[2m:[0m lane event admitted to lead turn [3mlead_session_key[0m[2m=[0m7:discord|-|19:1474231559895646240|-|18:414011632306618368|19:14656313838621
+[2m2026-10-12T07:21:50.845796Z[0m [32m INFO[0m [2momon_gateway::lanes::dispatch[0m[2m:[0m lane event admitted to lead turn [3mlead_session_key[0m[2m=[0m7:discord|-|19:1474231559895646240|-|18:414011632306618368|19:14656313838621
+[2m2026-10-12T07:25:27.358886Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread updated [3mthread_id[0m[2m=[0m1559103207316398081 [3mis_archived[0m[2m=[0mfalse
+[2m2026-10-12T07:25:27.658483Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread updated [3mthread_id[0m[2m=[0m1559103207316398081 [3mis_archived[0m[2m=[0mtrue
+[2m2026-10-12T07:25:36.637717Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:25:46.621458Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:26:07.096470Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:26:39.785288Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:27:12.177030Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:27:43.100150Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:28:07.326432Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:28:37.040361Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:29:07.877654Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:30:01.096058Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:30:12.105859Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:30:42.411570Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:31:15.591895Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:31:45.897805Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:32:17.573138Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:32:37.496038Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:33:08.398019Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:33:51.150449Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:34:11.008446Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:34:43.180220Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:35:15.513488Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:35:45.669161Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:36:17.422335Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:36:37.621514Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:37:08.975815Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:37:43.124264Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:38:21.881143Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:38:42.719051Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:39:15.868853Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:39:37.317755Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:40:07.848986Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:40:40.567617Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:41:00.070553Z[0m [32m INFO[0m [2momon_gateway::lanes::runner[0m[2m:[0m gateway lane service ready [3msocket[0m[2m=[0m/tmp/omon-lanes-90ddeae22659111d9b5ae11c.sock
+[2m2026-10-12T07:41:13.905274Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:41:45.326981Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:42:06.524041Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:42:38.963373Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:43:07.193977Z[0m [32m INFO[0m [2momon_gateway::lanes::runner[0m[2m:[0m gateway lane service ready [3msocket[0m[2m=[0m/tmp/omon-lanes-90ddeae22659111d9b5ae11c.sock
+[2m2026-10-12T07:43:09.073703Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:47:26.445023Z[0m [32m INFO[0m [2momon_gateway::lanes::runner[0m[2m:[0m gateway lane service ready [3msocket[0m[2m=[0m/tmp/omon-lanes-90ddeae22659111d9b5ae11c.sock
+[2m2026-10-12T07:47:27.637517Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:48:05.348680Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread created [3mthread_id[0m[2m=[0m1559110393392013343 [3mparent_id[0m[2m=[0mSome(ChannelId(1529738911377657967)) [3mthrea
+[2m2026-10-12T07:48:31.446886Z[0m [32m INFO[0m [2momon_gateway::lanes::dispatch[0m[2m:[0m lane event admitted to lead turn [3mlead_session_key[0m[2m=[0m7:discord|-|19:1474231559895646240|-|18:414011632306618368|19:14656313838621
+[2m2026-10-12T07:53:56.907341Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread updated [3mthread_id[0m[2m=[0m1559110393392013343 [3mis_archived[0m[2m=[0mfalse
+[2m2026-10-12T07:53:57.845985Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord thread updated [3mthread_id[0m[2m=[0m1559110393392013343 [3mis_archived[0m[2m=[0mfalse
+[2m2026-10-12T07:54:31.447053Z[0m [32m INFO[0m [2momon_gateway::lanes::dispatch[0m[2m:[0m lane event admitted to lead turn [3mlead_session_key[0m[2m=[0m7:discord|-|19:1474231559895646240|-|18:414011632306618368|19:14656313838621
+[2m2026-10-12T07:56:55.787231Z[0m [32m INFO[0m [2momon_gateway::lanes::runner[0m[2m:[0m gateway lane service ready [3msocket[0m[2m=[0m/tmp/omon-lanes-90ddeae22659111d9b5ae11c.sock
+[2m2026-10-12T07:56:57.325376Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451
+[2m2026-10-12T07:58:46.878925Z[0m [32m INFO[0m [2momon_gateway::lanes::runner[0m[2m:[0m gateway lane service ready [3msocket[0m[2m=[0m/tmp/omon-lanes-90ddeae22659111d9b5ae11c.sock
+[2m2026-10-12T07:58:48.020833Z[0m [32m INFO[0m [2momon_gateway::discord::adapter[0m[2m:[0m Discord client ready [3mbot_name[0m[2m=[0mOmOMeow [3mbot_id[0m[2m=[0m1465631383862120451

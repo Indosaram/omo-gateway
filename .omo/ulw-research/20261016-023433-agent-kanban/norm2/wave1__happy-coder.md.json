@@ -1,0 +1,38 @@
+[
+ {
+  "name": "Happy (formerly Happy Coder / slopus/happy)",
+  "url": "https://happy.engineering",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code·Codex·Grok를 모바일에서 원격 제어·승인하는 E2E 암호화 OSS 하네스",
+  "mobile": "iOS·Android 앱 + 반응형 웹",
+  "pricing": "무료(OSS) / 음성 Plus $19.99/월(선택)",
+  "selfhost": "가능(Docker 릴레이·헤드리스 데몬)",
+  "license": "MIT",
+  "agent": "CLI 래퍼·데몬, ACP·MCP; Claude Code·Codex·Grok",
+  "status": "매우 활발(★24k, 2026-10 푸시)",
+  "pros": "E2E 암호화(제로지식 릴레이); 기존 구독 재사용(추가 과금 없음); 네이티브 모바일 앱·알림·diff 리뷰",
+  "cons": "칸반 보드 아님(세션 목록 방식); CLI 설치·QR 페어링 필요; 음성 기능 유료 제한",
+  "sources": [
+   "https://happy.engineering",
+   "https://happy.engineering/welcome/",
+   "https://happy.engineering/how-it-works/",
+   "https://happy.engineering/mobile/",
+   "https://happy.engineering/voice/",
+   "https://happy.engineering/multiplayer/",
+   "https://happy.engineering/docs/",
+   "https://happy.engineering/docs/security/",
+   "https://happy.engineering/guides/remote-server/",
+   "https://github.com/slopus/happy",
+   "https://github.com/slopus/happy/blob/main/packages/happy-cli/README.md",
+   "https://github.com/slopus/happy/blob/main/packages/happy-server/README.md",
+   "https://api.github.com/repos/slopus/happy",
+   "https://api.github.com/repos/slopus/happy-desktop",
+   "https://api.github.com/repos/slopus/happy-agent",
+   "https://api.github.com/repos/slopus/happy/releases/latest",
+   "https://apps.apple.com/us/app/happy-codex-claude-code-app/id6748571505",
+   "https://play.google.com/store/apps/details?id=com.ex3ndr.happy"
+  ],
+  "confidence": "높음"
+ }
+]

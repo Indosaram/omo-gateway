@@ -1,0 +1,113 @@
+[
+ {
+  "name": "Notion Boards & Databases",
+  "url": "https://www.notion.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "칸반·테이블·캘린더·타임라인 뷰를 갖춘 유연한 워크스페이스·DB, 작업/에이전트 실행 추적",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료 / Plus $10/사용자/월 / Business $20–25",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "REST API·원격 MCP·CLI(ntn)·웹훅; Claude Code·Cursor·Codex 등",
+  "status": "활발(상용 SaaS)",
+  "pros": "칸반 뷰 커스터마이즈 자유도 높음; 카드에 마크다운 실행 로그 기록 가능; 공식 MCP·웹훅·API 생태계 성숙",
+  "cons": "셀프호스팅 불가; API 속도 제한(평균 3회/초)이 잦은 상태 갱신에 병목; 블록 JSON 스키마 복잡",
+  "sources": [
+   "https://www.notion.com/pricing",
+   "https://www.notion.com/mobile",
+   "https://developers.notion.com/reference/intro",
+   "https://developers.notion.com/guides/get-started/overview.md",
+   "https://github.com/makenotion/notion-sdk-js"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Notion AI & Custom Agents",
+  "url": "https://www.notion.com/product/ai",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Notion 내장 AI 에이전트; 스케줄·웹훅 트리거로 DB 다단계 워크플로 자동화",
+  "mobile": "iOS·Android 앱(Notion 내), 모바일 웹",
+  "pricing": "Business 이상 포함 / Custom Agents $10/1,000 크레딧",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "Agent REST API·Workers(베타)·Agent Skills API·원격 MCP",
+  "status": "활발(2026 베타/상용)",
+  "pros": "Notion 칸반·DB에서 직접 동작; 트리거·cron으로 무인 자율 실행; 크레딧 한도·제로 데이터 보존 등 거버넌스",
+  "cons": "2026년 5월부터 유료 크레딧 필요; 로컬 오픈웨이트 모델 실행 불가; Notion 워크스페이스에 종속",
+  "sources": [
+   "https://www.notion.com/product/ai",
+   "https://www.notion.com/pricing",
+   "https://developers.notion.com/guides/notion-agent-apis/overview.md",
+   "https://developers.notion.com/guides/notion-agent-apis/quickstart.md",
+   "https://developers.notion.com/guides/agent-skills/overview.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Notion MCP (Official Remote Server)",
+  "url": "https://developers.notion.com/guides/mcp/overview.md",
+  "category": "MCP 서버",
+  "kanban": "아니오",
+  "what": "Notion 공식 호스팅 MCP 서버; 검색·마크다운 페이지 편집·SQL 쿼리·에이전트 세션 관리",
+  "mobile": "클라이언트 의존(Notion 앱으로 확인)",
+  "pricing": "워크스페이스 포함(고급 기능 Business 이상)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용(호스팅 서비스)",
+  "agent": "MCP(Streamable HTTP/SSE); Claude Code·Cursor·Codex·Copilot 등",
+  "status": "활발(운영 서비스)",
+  "pros": "로컬 인프라 불필요; 토큰 효율적 마크다운 편집; 칸반 DB 대상 SQL 쿼리 지원",
+  "cons": "셀프호스팅·에어갭 불가; Bearer 토큰·다중 DB SQL은 Business 이상; 클라우드 지연·속도 제한",
+  "sources": [
+   "https://developers.notion.com/guides/mcp/overview.md",
+   "https://developers.notion.com/guides/mcp/get-started-with-mcp.md",
+   "https://developers.notion.com/guides/mcp/mcp-supported-tools.md",
+   "https://developers.notion.com/guides/mcp/hosting-open-source-mcp.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "notion-mcp-server (Official Open-Source Local Server)",
+  "url": "https://github.com/makenotion/notion-mcp-server",
+  "category": "MCP 서버",
+  "kanban": "아니오",
+  "what": "Notion 공식 오픈소스 로컬 MCP 서버(npm·Docker), 통합 토큰으로 DB·페이지 조작",
+  "mobile": "없음(로컬 서버)",
+  "pricing": "무료(OSS), Notion 계정 필요",
+  "selfhost": "가능(npx·Docker)",
+  "license": "MIT",
+  "agent": "MCP(stdio/HTTP); Claude Desktop·Cursor·Zed·Copilot CLI",
+  "status": "지원 중단(유지보수 없음)",
+  "pros": "로컬·Docker 셀프호스팅 가능; OAuth 없이 토큰으로 헤드리스 실행; 22개 도구·마크다운 읽기/수정",
+  "cons": "공식 지원 중단; 시맨틱 AI 검색 없음; JSON 응답이 컨텍스트 토큰 많이 소모",
+  "sources": [
+   "https://github.com/makenotion/notion-mcp-server",
+   "https://github.com/makenotion/notion-mcp-server/blob/main/README.md",
+   "https://developers.notion.com/guides/mcp/hosting-open-source-mcp.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "@suekou/mcp-notion-server (Community MCP Server)",
+  "url": "https://github.com/suekou/mcp-notion-server",
+  "category": "MCP 서버",
+  "kanban": "아니오",
+  "what": "AI 친화 커뮤니티 Notion MCP 서버; 스키마 인식 고수준 도구로 DB·칸반 조회/편집",
+  "mobile": "없음(로컬 프로세스)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(npx·로컬 빌드)",
+  "license": "MIT",
+  "agent": "MCP(stdio); Claude Desktop·Cursor·Windsurf 등",
+  "status": "활발(v2.0.2, 2026-06)",
+  "pros": "값 기반 고수준 도구로 복잡한 JSON 불필요; select/status 스키마 검증으로 잘못된 쓰기 방지; 컴팩트 응답·인터랙티브 MCP Apps",
+  "cons": "커뮤니티 유지, 공식 지원 없음; 통합 토큰 수동 설정 필요; 기본 stdio 전용(원격 HTTP 없음)",
+  "sources": [
+   "https://github.com/suekou/mcp-notion-server",
+   "https://raw.githubusercontent.com/suekou/mcp-notion-server/main/README.md",
+   "https://raw.githubusercontent.com/suekou/mcp-notion-server/main/docs/tools.md",
+   "https://api.github.com/repos/suekou/mcp-notion-server/releases"
+  ],
+  "confidence": "높음"
+ }
+]

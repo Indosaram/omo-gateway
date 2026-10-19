@@ -1,0 +1,92 @@
+[
+ {
+  "name": "Businessmap (formerly Kanbanize)",
+  "url": "https://businessmap.io",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "전략과 일상 실행을 연결하는 엔터프라이즈 린 포트폴리오·다단계 칸반 플랫폼",
+  "mobile": "iOS·Android 앱",
+  "pricing": "유료 $10.60/사용자/월(연간), 최소 15석; 무료 없음",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 MCP 서버·REST API v2·웹훅; Claude Code·Cursor 연동",
+  "status": "활발(상용 SaaS, 2026)",
+  "pros": "공식 1st-party MCP 지원; 다단계 스윔레인·포트폴리오 계층; 강력한 린/애자일 분석(CFD, 몬테카를로)",
+  "cons": "최소 15석($190/월) 진입장벽; 영구 무료 플랜 없음; 셀프호스팅 불가",
+  "sources": [
+   "https://businessmap.io",
+   "https://businessmap.io/plans-pricing",
+   "https://businessmap.io/about/pricing-parameters",
+   "https://businessmap.io/api",
+   "https://apps.apple.com/us/app/kanbanize/id563967812",
+   "https://play.google.com/store/apps/details?id=com.kanbanize.android"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kaiten",
+  "url": "https://kaiten.ru",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "여러 보드를 한 화면에 보여주는 러시아산 칸반·프로젝트 관리 플랫폼(AI 어시스턴트 내장)",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(5명까지) / Start 185₽/사용자/월부터",
+  "selfhost": "엔터프라이즈만(Docker, 300명+)",
+  "license": "상용",
+  "agent": "REST API·웹훅·텔레그램 봇; 공식 MCP/Skills 출시 예정",
+  "status": "활발(상용, 2026 업데이트)",
+  "pros": "다중 보드 동시 보기; 엔터프라이즈용 Docker 온프레미스; 넉넉한 무료 플랜(5명)",
+  "cons": "러시아/CIS 중심(문서·서버); 셀프호스팅은 300명+ 계약만; MCP는 아직 출시 예정",
+  "sources": [
+   "https://kaiten.ru",
+   "https://kaiten.ru/tariffs",
+   "https://apps.apple.com/us/app/kaiten/id6739029367",
+   "https://play.google.com/store/apps/details?id=ru.kaiten.app"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "KanbanFlow",
+  "url": "https://kanbanflow.com",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "WIP 제한·뽀모도로·시간 추적을 갖춘 경량 린 칸반 보드",
+  "mobile": "PWA(모바일 웹, 네이티브 앱 없음)",
+  "pricing": "무료 / Premium $5/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "REST API·웹훅(Premium 전용), Zapier; HTTP 호출로 에이전트 연동",
+  "status": "안정 운영(상용 SaaS)",
+  "pros": "깔끔하고 빠른 UI; 내장 뽀모도로/시간 추적; 저렴한 가격($5)과 견고한 REST API",
+  "cons": "네이티브 모바일 앱 없음; API·웹훅은 유료 플랜 전용; 셀프호스팅 불가",
+  "sources": [
+   "https://kanbanflow.com",
+   "https://kanbanflow.com/pricing",
+   "https://kanbanflow.com/mobile-app",
+   "https://kanbanflow.com/api-docs"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kanban Tool",
+  "url": "https://kanbantool.com",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "실시간 칸반 보드·스윔레인·시간 추적·Power-Up을 제공하는 워크플로 관리 플랫폼",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(2명) / Team $6, Enterprise $11/사용자/월",
+  "selfhost": "엔터프라이즈만(VM 어플라이언스, 10명+)",
+  "license": "상용",
+  "agent": "REST API v1/v3·JS SDK·웹훅; MCP 서버 없음",
+  "status": "활발(상용, 고객 25,000+)",
+  "pros": "VirtualBox/VMware/KVM 셀프호스팅 어플라이언스; 모바일 앱이 셀프호스팅 인스턴스 연결 지원; 2인 무료 플랜",
+  "cons": "UI가 다소 구식; 온사이트는 연간·최소 10명 필요; 기본 MCP 서버 없음(REST API 직접 사용)",
+  "sources": [
+   "https://kanbantool.com",
+   "https://kanbantool.com/pricing",
+   "https://kanbantool.com/kanban-tool-on-site",
+   "https://kanbantool.com/developer/"
+  ],
+  "confidence": "높음"
+ }
+]

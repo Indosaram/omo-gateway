@@ -1,0 +1,253 @@
+[
+  {
+    "kind": "provenance",
+    "mode": "execute-9-recovery",
+    "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+    "sha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+    "releaseReceipt": "/private/tmp/omon-lane-scratch-qa-GhvMrT/release.json",
+    "scratch": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+    "envNames": [
+      "DASHBOARD_ENABLED",
+      "DATABASE_URL",
+      "HOME",
+      "LOGNAME",
+      "NO_COLOR",
+      "OMON_DISCORD_ENABLED",
+      "OMON_INBOX_KAKAO_ROOMS",
+      "OMON_KIBITZER_ENABLED",
+      "OMON_LANES_ENABLED",
+      "OMON_LANE_KEYWORDS",
+      "OMON_OMO_APPSERVER_AUTH_TOKEN",
+      "OMON_OMO_APPSERVER_URL",
+      "OMON_PIRATETALK_URL",
+      "OMON_WORKSPACE_ROOT",
+      "PATH",
+      "RUST_LOG",
+      "TMPDIR",
+      "TYPESAFE_API_KEY",
+      "TYPESAFE_MODEL",
+      "TYPESAFE_URL",
+      "USER",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME"
+    ],
+    "at": "2026-10-11T16:56:55.005Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 59207,
+    "argv": [
+      "/usr/bin/curl",
+      "-i",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:56:55.017Z"
+  },
+  {
+    "id": "command-2",
+    "argv": [
+      "/usr/bin/curl",
+      "-i",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "stdoutBytes": 175,
+    "stderrBytes": 317,
+    "at": "2026-10-11T16:56:55.017Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 59211,
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "59208",
+      "-Fn"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:56:55.109Z"
+  },
+  {
+    "id": "command-4",
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "59208",
+      "-Fn"
+    ],
+    "code": 0,
+    "stdoutBytes": 697,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:56:55.110Z"
+  },
+  {
+    "kind": "database_verified",
+    "pid": 59208,
+    "path": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+    "pragma": [
+      {
+        "seq": 0,
+        "name": "main",
+        "file": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db"
+      }
+    ],
+    "descriptorSha256": "248b82a27ddf17404c6b5cc1df6ad3046f965f3a6ce9be8e4e421cf2c8616c33",
+    "at": "2026-10-11T16:56:55.111Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 59215,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-2",
+      "--title",
+      "QA lane",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/brief8.md",
+      "--done",
+      "command [\"true\"]",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 2,
+    "at": "2026-10-11T16:56:55.125Z"
+  },
+  {
+    "id": "command-7",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-2",
+      "--title",
+      "QA lane",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/brief8.md",
+      "--done",
+      "command [\"true\"]",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 2,
+    "stdoutBytes": 97,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:56:55.125Z"
+  },
+  {
+    "scenario": "8-invalid",
+    "exit": 2,
+    "rows": 0,
+    "at": "2026-10-11T16:56:55.125Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 59216,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "reopen",
+      "qa-1",
+      "--text",
+      "add a line to done.txt, preserving existing content. Then claim again. Use eval to invoke this explicit control child, not shell env prefixes or inherited DB settings: const child=Bun.spawn([\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",\"lane\",\"claim-done\",\"qa-1\",\"--evidence\",\"done.txt contains qa complete; live file signal checked\"],{cwd:\"/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo\",env:{...process.env,DATABASE_URL:\"sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db\"},stdout:'pipe',stderr:'pipe'}); const result=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]); print(JSON.stringify({controlExecutable:\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",databaseUrlEqual:true,exitCode:result[2],stdout:result[0],stderr:result[1]})); End the turn after exit. Do not override model configuration."
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:56:55.136Z"
+  },
+  {
+    "id": "command-10",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "reopen",
+      "qa-1",
+      "--text",
+      "add a line to done.txt, preserving existing content. Then claim again. Use eval to invoke this explicit control child, not shell env prefixes or inherited DB settings: const child=Bun.spawn([\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",\"lane\",\"claim-done\",\"qa-1\",\"--evidence\",\"done.txt contains qa complete; live file signal checked\"],{cwd:\"/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo\",env:{...process.env,DATABASE_URL:\"sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db\"},stdout:'pipe',stderr:'pipe'}); const result=await Promise.all([new Response(child.stdout).text(),new Response(child.stderr).text(),child.exited]); print(JSON.stringify({controlExecutable:\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\",databaseUrlEqual:true,exitCode:result[2],stdout:result[0],stderr:result[1]})); End the turn after exit. Do not override model configuration."
+    ],
+    "code": 0,
+    "stdoutBytes": 34,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:56:55.136Z"
+  },
+  {
+    "kind": "failure",
+    "message": "9 same thread append: deadline exceeded",
+    "at": "2026-10-11T17:06:55.132Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 86721,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: qa cleanup"
+    ],
+    "code": 0,
+    "at": "2026-10-11T17:06:55.152Z"
+  },
+  {
+    "id": "command-13",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: qa cleanup"
+    ],
+    "code": 0,
+    "stdoutBytes": 33,
+    "stderrBytes": 0,
+    "at": "2026-10-11T17:06:55.152Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 59208,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "run"
+    ],
+    "code": 0,
+    "at": "2026-10-11T17:06:55.154Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 59208,
+    "exit": 0,
+    "absent": true,
+    "at": "2026-10-11T17:06:55.154Z"
+  },
+  {
+    "kind": "gateway_final_exit",
+    "pid": 59208,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T17:06:55.154Z"
+  },
+  {
+    "kind": "cleanup",
+    "retainedScratch": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+    "sharedDaemonUntouched": true,
+    "at": "2026-10-11T17:06:55.154Z"
+  }
+]

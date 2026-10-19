@@ -1,0 +1,52 @@
+{
+  "schema": "omon-lane-qa-scope-probe-v1",
+  "scope": {
+    "status": "verified",
+    "endpoint": "ws://127.0.0.1:19742",
+    "root": "/private/tmp/omon-lane-scratch-qa-TzIHbY",
+    "dbPath": "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa.db",
+    "cwd": "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo"
+    ],
+    "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+    "observedAt": "2026-10-11T16:19:09.117Z",
+    "inheritedDatabaseUrlEqual": false,
+    "controlChild": {
+      "executable": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo",
+      "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-TzIHbY/qa.db",
+      "databaseUrlEqual": true,
+      "envOverride": true,
+      "exitCode": 0,
+      "sha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "--help"
+      ],
+      "stdoutBytes": 447,
+      "stderrBytes": 0
+    }
+  },
+  "preparedSha256": "4ae06ac9950ffd644d10ca0b573228e9a45447b4c619c5aedddef4a1193bad78",
+  "helper": {
+    "path": "/private/tmp/omon-lane-scratch-qa-TzIHbY/scope-check.mjs",
+    "sha256": "51e525a1a84707fc2ae95d2560b95c2658c75a8d2e50de4ed47482cab35790a6"
+  },
+  "provenance": {
+    "itemId": "call_c1b4e26e812943498756b9dab0a2dc5f",
+    "itemStatus": "completed",
+    "itemSuccess": true,
+    "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+    "turnStatus": "interrupted",
+    "fullOutput": {
+      "path": "/Users/indo/.omo/agent/sessions/--private-tmp-omon-lane-scratch-qa-TzIHbY-qa-repo--/2026-10-11T16-18-57-662Z_01a12bc2-9ffe-724a-8c25-1d5a2c30bca9-artifacts/eval-e8726b77-52db-4b9b-94bb-5cd83a511377.log",
+      "sha256": "ac515526aaea43d13023df4c289ee9aac2d067512d23e766cca2c35b51f73e7e"
+    },
+    "receipt": {
+      "path": "/private/tmp/omon-lane-scratch-qa-TzIHbY/scope-probe-receipts-1791735537660-3ffc709b30f2.json",
+      "sha256": "87a02907229d5ff8c05a510546f13abbe17238ace3184c3d8aefa692d2929187"
+    },
+    "outerCommandExitCode": null
+  }
+}

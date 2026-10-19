@@ -1,0 +1,1551 @@
+{
+ "Agent Dashboard (dustinblack)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "반응형(데스크톱 우선)·SSH TUI(실험적) 명시. podman-compose 확인, Docker 직접 언급은 없음",
+  "gh": "Apache-2.0\t17\t2026-09-29\tfalse",
+  "url": "https://github.com/dustinblack/agent-dashboard"
+ },
+ "5dive": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Telegram 접속·GitHub 셀프호스트·MIT 확인. $15/월 가격과 systemd는 근거 없음, 3일 무료체험만 명시",
+  "gh": "MIT\t71\t2026-10-16\tfalse",
+  "url": "https://5dive.ai"
+ },
+ "Agent Deck": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·로컬설치·웹UI(127.0.0.1) 확인, 폰 제어 conductor 언급되나 Telegram/Slack·반응형 근거 없음",
+  "gh": "MIT\t1092\t2026-10-14\tfalse",
+  "url": "https://github.com/asheshgoplani/agent-deck"
+ },
+ "Agent Kanban (saltbo)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "README에 Workers+D1 배포와 Node.js 로컬 실행 명시, Realmroot·Enbor 필요. 라이선스 NOASSERTION",
+  "gh": "NOASSERTION\t492\t2026-10-02\tfalse",
+  "url": "https://github.com/saltbo/agent-kanban"
+ },
+ "Agent Teams AI": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  " note": "macOS·Windows·Linux 데스크톱 다운로드만 제공, 무료 OSS, 로컬 실행, GitHub AGPL-3.0",
+  "gh": "AGPL-3.0\t2265\t2026-10-16\tfalse",
+  "url": "https://agentteams.live"
+ },
+ "AI Agent Board (DanWahlin)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  " note": "MIT OSS, Node.js 22+로 로컬 실행. Docker는 PostgreSQL용만 확인, 반응형 언급 없음",
+  "gh": "MIT\t65\t2026-09-19\tfalse",
+  "url": "https://github.com/DanWahlin/ai-agent-board"
+ },
+ "AIF Handoff": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub MIT 확인, MIT 오픈소스 명시. 반응형·SQLite·Docker 언급 없음(AI Factory 메인 페이지)",
+  "gh": "MIT\t308\t2026-10-15\tfalse",
+  "url": "https://aif.cutcode.dev"
+ },
+ "amux": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "iOS앱·PWA·단일 Rust 바이너리 확인. 공식페이지는 MIT만 표기, Commons Clause 언급 없음(GitHub NOASSERTION)",
+  "gh": "NOASSERTION\t534\t2026-10-16\tfalse",
+  "url": "https://amux.io"
+ },
+ "Atlassian Rovo Agents & Rovo Dev / Coding Agent": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "모바일 제공·클라우드 전용 확인. 플랜별 크레딧 포함은 맞으나 $0.01 초과요금 미기재, 8/31 가격 개편",
+  "gh": "",
+  "url": "https://www.atlassian.com/software/rovo"
+ },
+ "Catnip": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 저장소 404(삭제·비공개·이전 가능성), GitHub API 오류로 모든 주장 검증 불가",
+  "gh": "gh_err",
+  "url": "https://github.com/wandb/catnip"
+ },
+ "Automagik Forge": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API상 Apache-2.0 확인. 공식 도메인 DNS 실패, 마지막 푸시 2025-12로 약 10개월 정체",
+  "gh": "Apache-2.0\t92\t2025-12-19\tfalse",
+  "url": "https://forge.automag.ik"
+ },
+ "Claude Code on the web": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "상충",
+  "license": "근거없음",
+  "note": "모바일 앱 Code 탭·웹 지원. Enterprise는 프리미엄 좌석 필요. 조직 자체 호스팅 환경 라우팅 가능",
+  "gh": "",
+  "url": "https://code.claude.com/docs/en/claude-code-on-the-web"
+ },
+ "CCManager": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 공개 저장소, npm으로 로컬 설치하는 CLI임. 모바일 지원 여부는 언급 없음",
+  "gh": "MIT\t1264\t2026-10-15\tfalse",
+  "url": "https://github.com/kbwo/ccmanager"
+ },
+ "Claude Code Agent Monitor (CCAM)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·로컬 서버(4820)·데스크톱 앱 확인. 반응형/LAN·Tailscale 언급 없음",
+  "gh": "MIT\t1080\t2026-10-11\tfalse",
+  "url": "https://hoangsonww.github.io/Claude-Code-Agent-Monitor/"
+ },
+ "Claude Code UI (CloudCLI)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "PWA·npx·€7~39·AGPL-3 확인. 네이티브 앱·Docker·PM2·or-later는 근거 없음",
+  "gh": "AGPL-3.0\t14110\t2026-10-15\tfalse",
+  "url": "https://cloudcli.ai"
+ },
+ "Claude Task Viewer": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, npx로 localhost:3456 실행·로컬 ~/.claude 읽음. 반응형/모바일 언급 없음",
+  "gh": "MIT\t765\t2026-02-14\tfalse",
+  "url": "https://github.com/L1AD/claude-task-viewer"
+ },
+ "Claude Squad": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "AGPL-3.0 OSS, brew/스크립트 로컬 설치(tmux 필요). 모바일 언급 없음",
+  "gh": "AGPL-3.0\t8609\t2026-08-20\tfalse",
+  "url": "https://smtg-ai.github.io/claude-squad"
+ },
+ "Coder Agents (formerly Coder Tasks)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "완전 자체호스팅 명시(K8s 등 방식은 미기재), AGPL-3.0 확인, 상용확장·가격·모바일은 근거없음",
+  "gh": "AGPL-3.0\t17038\t2026-10-16\tfalse",
+  "url": "https://coder.com/docs/ai-coder/agents"
+ },
+ "CodeAgentSwarm": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "macOS/Win/Linux 데스크톱 앱만 제공, 베타 중 Pro 무료. 라이선스 정보 없음",
+  "gh": "",
+  "url": "https://www.codeagentswarm.com"
+ },
+ "Collattice (MrBildo)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t8\t2026-10-01\tfalse",
+  "url": "https://github.com/MrBildo/collattice"
+ },
+ "Coder Mux (Xum)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Mux→Xum 개명(coder/xum). 서버 모드 반응형 UI, AGPL-3.0, 데스크톱·서버 모드 확인",
+  "gh": "AGPL-3.0\t2055\t2026-10-16\tfalse",
+  "url": "https://github.com/coder/mux"
+ },
+ "Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 페이지가 Cloudflare 차단(JS/쿠키 요구)으로 내용 미확보, GitHub 정보도 없음",
+  "gh": "",
+  "url": "https://cursor.com/agents"
+ },
+ "Crystal (stravu/crystal) / Nimbalyst": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "gh": "MIT\t3132\t2026-02-26\tfalse",
+  "url": "https://nimbalyst.com/"
+ },
+ "Dev Boards (Agent Relay)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, Docker/npm 자체호스팅 확인. 호스팅 SaaS는 별도 제품이나 베타 여부와 반응형 언급 없음",
+  "gh": "MIT\t38\t2026-10-16\tfalse",
+  "url": "https://github.com/GumbyEnder/agent-relay"
+ },
+ "Emdash": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "Apache-2.0\t5994\t2026-10-14\tfalse",
+  "url": "https://emdash.sh"
+ },
+ "Devin (Cognition) Sessions Dashboard": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 페이지는 제목만 노출됨. MIT 저장소(73스타)는 Devin 본체로 보기 어려워 상용 라이선스 판단 불가",
+  "gh": "MIT\t73\t2026-07-19\tfalse",
+  "url": "https://app.devin.ai"
+ },
+ "Factory.ai Droids (Software Factory & Missions)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "데스크톱·터미널·웹·CLI만 언급. 가격·에어갭 정보 없음. 영업문의·All rights reserved로 상용",
+  "gh": "56\t2026-10-16\tfalse",
+  "url": "https://factory.ai"
+ },
+ "GitHub Copilot Agents Panel / Agent HQ (Mission Control)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 페이지가 로그인 화면만 반환, GitHub API 오류로 모든 주장 검증 불가",
+  "gh": "gh_err",
+  "url": "https://github.com/copilot/agents"
+ },
+ "Gas Town": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, Go·Docker 설치 경로 명시. 모바일 언급 없음. 저장소가 gastownhall/gastown으로 이전됨",
+  "gh": "MIT\t18383\t2026-10-15\tfalse",
+  "url": "https://github.com/steveyegge/gastown"
+ },
+ "GitHub Copilot Coding Agent (Cloud Agent)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "가격 미표기(무료 시작·Actions분+AI크레딧 과금), 모바일앱·셀프호스팅 언급 없음, 상용 플랜만 확인",
+  "gh": "gh_err",
+  "url": "https://github.com/features/copilot/agents"
+ },
+ "Hamloy": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "'1개 프로젝트 무료·카드 불필요'만 확인. Pro €8 가격, PWA, 셀프호스팅, 라이선스는 언급 없음",
+  "gh": "",
+  "url": "https://hamloy.com"
+ },
+ "Height": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 사이트 인증서 오류로 접근 불가. GitHub는 라이선스 미표기·스타 0으로 판단 근거 부족",
+  "gh": "0\t2026-10-15\tfalse",
+  "url": "https://height.app"
+ },
+ "Google Jules": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "Pro/Ultra 등급은 있으나 가격 미표기. Cloud VM 실행으로 SaaS 확인. 모바일·라이선스 언급 없음",
+  "gh": "3185\t2026-06-30\tfalse",
+  "url": "https://jules.google"
+ },
+ "hubd": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API상 MIT 라이선스 확인(OSS). 공식 페이지 인증서 오류로 모바일·셀프호스트는 확인 불가",
+  "gh": "MIT\t1\t2026-10-14\tfalse",
+  "url": "https://hubd.net"
+ },
+ "It's a Plan (itsaplan)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "AGPL-3.0\t983\t2026-10-15\tfalse",
+  "url": "https://itsaplan.dev/"
+ },
+ "Kanban Pro (Good Guy Apps)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "macOS·Windows·Linux만 명시, 가입·구독 없는 무료, 로컬 파일시스템 전용. 라이선스 언급 없음",
+  "gh": "",
+  "url": "https://goodguyapps.com"
+ },
+ "KaibanJS (Kaiban Board)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS·플레이그라운드 확인, npm/Node 로컬·자체서버 배포 명시, Docker·반응형 언급 없음",
+  "gh": "MIT\t1480\t2026-05-15\tfalse",
+  "url": "https://www.kaibanjs.com/"
+ },
+ "kanban-mcp (multidimensionalcats)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t83\t2026-03-17\tfalse",
+  "url": "https://github.com/multidimensionalcats/kanban-mcp"
+ },
+ "Kanban-md": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "macOS/Linux/Windows용 CLI·TUI 단일 바이너리, 로컬 실행·SaaS 없음, MIT. SSH 언급은 없음",
+  "gh": "MIT\t224\t2026-10-05\tfalse",
+  "url": "https://github.com/antopolskiy/kanban-md"
+ },
+ "Kander": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "gh": "MIT\t148\t2026-10-16\tfalse",
+  "url": "https://dualface.dev/projects/"
+ },
+ "Kandev": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "오픈소스·AGPL 확인. npx/brew/Docker 설치 명시, Go 바이너리·모바일·터널 언급 없음",
+  "gh": "AGPL-3.0\t954\t2026-10-16\tfalse",
+  "url": "https://kandev.ai"
+ },
+ "Kanbots": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "OSS 데스크톱은 무료·MIT·로컬 SQLite. 별도 Cloud $19/석 존재, 모바일·Node 언급 없음",
+  "gh": "MIT\t615\t2026-05-25\tfalse",
+  "url": "https://kanbots.dev"
+ },
+ "Kiro (AWS)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식페이지엔 크레딧제만 언급, 티어가격·모바일 없음. GitHub MIT(★2)는 본체 아닌 듯",
+  "gh": "MIT\t2\t2026-02-20\tfalse",
+  "url": "https://kiro.dev"
+ },
+ "mngr (by Imbue)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식 FAQ에 무료·MIT 명시. GitHub API는 NOASSERTION. 모바일 관련 언급 없음",
+  "gh": "NOASSERTION\t423\t2026-10-15\tfalse",
+  "url": "https://imbue.com/product/mngr"
+ },
+ "Moo Tasks (dizlexic)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t45\t2026-06-21\tfalse",
+  "url": "https://github.com/dizlexic/moo-tasks"
+ },
+ "multidimensionalcats/kanban-mcp": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "웹UI는 localhost:5000만 명시, 반응형·모바일 언급 없음. 설치는 npx 아닌 pipx/pip·Docker",
+  "gh": "MIT\t83\t2026-03-17\tfalse",
+  "url": "https://github.com/multidimensionalcats/kanban-mcp"
+ },
+ "Nodiom Cloud": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 오픈소스 엔진은 확인됨. Pro 가격·쓰기 한도와 Slack/Discord 알림은 언급 없음",
+  "gh": "",
+  "url": "https://nodiom.md"
+ },
+ "opcode (formerly Claudia, getAsterisk, Gooey)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Tauri 데스크톱 앱이며 모바일 언급은 없음. web_server.design.md만 존재하고 릴리스 바이너리는 미배포.",
+  "gh": "AGPL-3.0\t22417\t2026-09-18\tfalse",
+  "url": "https://github.com/winfunc/opcode"
+ },
+ "OpenClaw Nerve": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "반응형 UI·MIT 확인. 셀프호스팅은 install.sh·npm 방식만 확인되고 Docker 언급은 없음",
+  "gh": "MIT\t867\t2026-10-06\tfalse",
+  "url": "https://github.com/daggerhashimoto/openclaw-nerve"
+ },
+ "OpenAI Codex Cloud Tasks Dashboard": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식페이지 JS차단으로 내용 없음. GitHub Apache-2.0은 CLI 저장소로 Cloud 대시보드 라이선스 판단 불가",
+  "gh": "Apache-2.0\t129423\t2026-10-16\tfalse",
+  "url": "https://chatgpt.com/codex"
+ },
+ "OpenHands Agent Canvas (All-Hands-AI)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT는 API로 확인. 무료 다운로드·엔터프라이즈 영업 문의, 로컬·VPC 배포 확인. 모바일·npm/Helm 근거없음",
+  "gh": "MIT\t91014\t2026-10-16\tfalse",
+  "url": "https://www.openhands.dev"
+ },
+ "OverClick": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 오픈소스이며 docker compose 셀프호스팅 확인. 반응형/모바일 지원 언급 없음",
+  "gh": "MIT\t119\t2026-09-24\tfalse",
+  "url": "https://github.com/ustoppble/overclick"
+ },
+ "OpenTerra (KaiStephens/OpenTerra)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "오픈소스 표방, 소스 클론 후 실행. LICENSE 파일·API 라이선스 없음. API 키 비용 별도",
+  "gh": "5\t2025-07-17\tfalse",
+  "url": "https://github.com/KaiStephens/OpenTerra"
+ },
+ "Paca": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "무료·셀프호스팅·OSS 명시, Apache-2.0 확인. Docker/K8s 배포 방식과 PWA는 직접 근거 없음",
+  "gh": "Apache-2.0\t1928\t2026-10-15\tfalse",
+  "url": "https://paca-ai.org"
+ },
+ "Paperclip": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·웨이트리스트·로컬설치 확인. Node.js/Docker 세부 및 모바일 근거 없음",
+  "gh": "MIT\t102786\t2026-10-16\tfalse",
+  "url": "https://paperclip.ing"
+ },
+ "Platypus": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, 모델·키는 사용자 부담. Docker Compose 셀프호스팅 명시. 모바일·반응형 언급 없음",
+  "gh": "MIT\t120\t2026-10-16\tfalse",
+  "url": "https://platypus.chat"
+ },
+ "Pane (RunPane)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "상충",
+  "license": "상충",
+  "note": "폰 브라우저 앱으로 원격 제어, VM/원격 호스트 실행 지원, 공식 페이지에 AGPL-3.0 표기",
+  "gh": "NOASSERTION\t547\t2026-10-15\tfalse",
+  "url": "https://runpane.com"
+ },
+ "Roadmap Skill": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, 로컬 우선(클라우드·계정 없음) 확인. localhost 웹UI는 있으나 반응형·모바일 언급 없음",
+  "gh": "MIT\t81\t2026-03-18\tfalse",
+  "url": "https://github.com/shiquda/roadmap-skill"
+ },
+ "Saga MCP": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API상 MIT 라이선스 OSS 확인. npm 페이지 로딩 실패로 모바일·SQLite 근거 없음",
+  "gh": "MIT\t40\t2026-10-07\tfalse",
+  "url": "https://www.npmjs.com/package/saga-mcp"
+ },
+ "Routa": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, 셀프호스팅 웹·데스크톱 확인. Docker·Tauri·반응형 모바일 언급은 없음",
+  "gh": "MIT\t1828\t2026-10-14\tfalse",
+  "url": "https://phodal.github.io/routa/"
+ },
+ "Taskade AI Agents": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "gh": "",
+  "url": "https://www.taskade.com"
+ },
+ "Sculptor (by Imbue)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "로컬 실행은 확인되나 Docker·원격 백엔드 언급 없음. 무료지만 Claude 유료 플랜 필요",
+  "gh": "MIT\t239\t2026-10-15\tfalse",
+  "url": "https://imbue.com/product/sculptor"
+ },
+ "Superset": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "공식 페이지에 ELv2 명시. 폰 실행은 언급되나 iOS·Pro·Android 세부 및 가격·도커 근거 없음",
+  "gh": "NOASSERTION\t15241\t2026-10-16\tfalse",
+  "url": "https://superset.sh"
+ },
+ "Taskboard (tcarac)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT OSS, Go 단일 바이너리·Homebrew 설치 명시. 웹 UI는 있으나 반응형/모바일 언급 없음",
+  "gh": "MIT\t37\t2026-02-16\tfalse",
+  "url": "https://github.com/tcarac/taskboard"
+ },
+ "Taskmaster AI (eyaltoledano/claude-task-master)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "npx 로컬 실행은 확인됨. Docker·$40 가격·라이선스 본문은 미확인(API는 NOASSERTION)",
+  "gh": "NOASSERTION\t28230\t2026-04-28\tfalse",
+  "url": "https://github.com/eyaltoledano/claude-task-master"
+ },
+ "Terragon (Terragon Labs)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "공식 페이지는 서비스 종료만 표기. GitHub API로 Apache-2.0 확인(2026-02 마지막 푸시)",
+  "gh": "Apache-2.0\t261\t2026-02-10\tfalse",
+  "url": "https://www.terragonlabs.com/"
+ },
+ "Taskmaster Kanban VS Code Extension (Hamster.task-master-hamster)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "마켓플레이스 Free 표기, 로컬 MCP 서버 구동. GitHub 라이선스 NOASSERTION이라 MIT 미확인",
+  "gh": "NOASSERTION\t28230\t2026-04-28\tfalse",
+  "url": "https://marketplace.visualstudio.com/items?itemName=Hamster.task-master-hamster"
+ },
+ "Tasklix": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식페이지는 사용량 기반 과금만 언급, 요금 티어·모바일·셀프호스팅·라이선스 명시 없음",
+  "gh": "",
+  "url": "https://tasklix.dev"
+ },
+ "Tirith": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·Rust 단일 바이너리, 데스크톱 OS만 지원. 로컬 웹 대시보드 있음, 버전 표기 0.1.x/1.2.1 혼재",
+  "gh": "MIT\t4\t2026-10-10\tfalse",
+  "url": "https://eabz.github.io/tirith/"
+ },
+ "Uzi": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "tmux·Go 기반 로컬 CLI, MIT 오픈소스. 마지막 푸시 2025-06로 1년 넘게 업데이트 없음",
+  "gh": "MIT\t582\t2025-06-04\tfalse",
+  "url": "https://github.com/devflowinc/uzi"
+ },
+ "Vibeyard": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "macOS·Linux·Windows용 Electron 데스크톱 앱, MIT 오픈소스. 모바일 언급 없음",
+  "gh": "MIT\t1387\t2026-09-03\tfalse",
+  "url": "https://github.com/elirantutia/vibeyard"
+ },
+ "Agent 007": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "폰 브라우저 접속·음성 통화, MIT, Node 20.12+ 서비스 설치 확인. Python 데몬은 근거 없음",
+  "gh": "MIT\t5\t2026-10-11\tfalse",
+  "url": "https://github.com/bill10/agent-007"
+ },
+ "Agent Orchestrator (Orchestrator.inc)": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "Apache-2.0\t13217\t2026-10-16\tfalse",
+  "url": "https://ao-agents.com/"
+ },
+ "Agent Kanban PM (kronos3610)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "README: MIT·무료, pip 로컬 설치 명시. SQLite는 미명시. 모바일·반응형 언급 없음(adaptive-ui 태그만)",
+  "gh": "MIT\t8\t2026-09-29\tfalse",
+  "url": "https://github.com/kronos3610/agent-kanban-pm"
+ },
+ "Agent4Discord": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "README에 MIT 및 PC 자가호스팅(Node.js≥20) 명시. 모바일은 Discord 경유로 추정. API 라이선스 필드 비어 있음",
+  "gh": "2\t2026-10-01\tfalse",
+  "url": "https://github.com/raravel/Agent4Discord"
+ },
+ "AgentsMesh": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "실시간 조회 불가. 제공된 페이지 제목과 GitHub NOASSERTION만으로는 BSL 등 주장 확인 불가",
+  "gh": "NOASSERTION\t2361\t2026-09-23\tfalse",
+  "url": "https://agentsmesh.ai"
+ },
+ "Agetor": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t89\t2026-10-15\tfalse",
+  "url": "https://agetor.dev"
+ },
+ "AgentRQ": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "GitHub는 AGPL-3.0, 공식페이지 푸터는 Apache-2.0으로 상이. Docker 배포 명시 없음, 베타 중 무료",
+  "gh": "AGPL-3.0\t1158\t2026-10-16\tfalse",
+  "url": "https://agentrq.com"
+ },
+ "AgentKanban": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "gh": "NOASSERTION\t60\t2026-05-12\tfalse",
+  "url": "https://agentkanban.io"
+ },
+ "AGINEAR": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t1\t2026-02-25\tfalse",
+  "url": "https://github.com/Legorobotdude/AGINEAR"
+ },
+ "Cairn": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API로 MIT만 확인. 공식 도메인 DNS 실패, 마지막 푸시 2025-07로 활동 정체 의심",
+  "gh": "MIT\t220\t2025-07-02\tfalse",
+  "url": "https://try-cairn.com"
+ },
+ "Agno AgentOS UI": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Docker·Railway·AWS 자체 배포 명시, Apache-2.0 확인. 반응형 및 클라우드 무료 티어 언급 없음",
+  "gh": "Apache-2.0\t42760\t2026-10-16\tfalse",
+  "url": "https://agno.com"
+ },
+ "AutoGen Studio": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "상충",
+  "note": "API 라이선스 CC-BY-4.0(문서용, 코드 MIT는 미확인). DB 종류는 페이지에 없음. 모바일 언급 없음",
+  "gh": "CC-BY-4.0\t61434\t2026-04-15\tfalse",
+  "url": "https://microsoft.github.io/autogen/stable/user-guide/autogenstudio-user-guide/index.html"
+ },
+ "cc-haha": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "GitHub 라이선스 NOASSERTION(비표준), CSL 1.0 미확인. 공식 페이지는 슬로건뿐",
+  "gh": "NOASSERTION\t15025\t2026-10-15\tfalse",
+  "url": "https://cchaha.ai"
+ },
+ "cc-connect": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "README에 Telegram·Discord·Slack 연동, Go 로컬 실행 확인. API 라이선스 필드 비어 MIT 확인 불가",
+  "gh": "15960\t2026-10-14\tfalse",
+  "url": "https://github.com/chenhg5/cc-connect"
+ },
+ "ccpoke": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Telegram·Discord·Slack 봇 연동, npx/npm 로컬 실행, MIT. 마지막 푸시 2026-03",
+  "gh": "MIT\t103\t2026-03-18\tfalse",
+  "url": "https://kaida-palooza.github.io/ccpoke/"
+ },
+ "Asana AI Studio & AI Teammates": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "유료 플랜(Starter 이상) 필요·Basic/Plus/Pro는 확인, 요청당 $0.50~0.60 근거 없음",
+  "gh": "",
+  "url": "https://asana.com/product/ai/ai-studio"
+ },
+ "ChatDev 2.0 (DevAll)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API로 Apache-2.0만 확인. 공식 페이지 내용이 비어 있어 나머지 주장은 근거 없음",
+  "gh": "Apache-2.0\t34527\t2026-07-24\tfalse",
+  "url": "https://chatdev.modelbest.cn"
+ },
+ "Chorus": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "AGPL-3.0 OSS와 Docker 셀프호스팅은 확인됨. Compose 명시와 모바일 대응 근거는 없음",
+  "gh": "AGPL-3.0\t1199\t2026-10-15\tfalse",
+  "url": "https://doc.chorus-ai.dev"
+ },
+ "Claude Code Agent Monitor": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t1080\t2026-10-11\tfalse",
+  "url": "https://hoangsonww.github.io/Claude-Code-Agent-Monitor/"
+ },
+ "Claude Remote Runner": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API MIT 확인(무료 OSS 근거). 공식 페이지 DNS 실패로 PWA·Docker 근거 없음",
+  "gh": "MIT\t11\t2026-04-30\tfalse",
+  "url": "https://remote-claude.shaniai.tech"
+ },
+ "Claude Code Telegram Bot (overwirehq/claude-code-telegram)": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "API 라이선스 필드 비어있고 파일목록에 LICENSE 없음. MIT 근거 없음. pip/uv 설치는 README로 확인",
+  "gh": "2815\t2026-10-01\tfalse",
+  "url": "https://github.com/overwirehq/claude-code-telegram"
+ },
+ "ClawBridge": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식페이지 배포중단(결제필요)으로 확인불가, GitHub API 라이선스 필드 비어있음",
+  "gh": "231\t2026-03-18\tfalse",
+  "url": "https://clawbridge.app/"
+ },
+ "Claw-Kanban": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Apache-2.0, Node.js 22+ 자체 실행 확인. Docker와 반응형 UI는 근거 없음(모바일은 텔레그램 연동만)",
+  "gh": "Apache-2.0\t72\t2026-02-15\tfalse",
+  "url": "https://github.com/GreenSheep01201/Claw-Kanban"
+ },
+ "CodeNomad": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "README: OpenTunnel로 폰 원격 페어링, 데스크톱 앱과 npx 서버 제공, MIT 라이선스. '반응형' 명시는 없음",
+  "gh": "MIT\t2626\t2026-10-16\tfalse",
+  "url": "https://github.com/NeuralNomadsAI/CodeNomad"
+ },
+ "Cline Kanban": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  " note": "로컬 웹앱·Apache-2.0·계정 불필요는 확인됨. 모바일 반응형이나 LAN 접속에 대한 언급은 없음",
+  "gh": "Apache-2.0\t1360\t2026-10-09\tfalse",
+  "url": "https://github.com/cline/kanban"
+ },
+ "CrewAI AMP & Studio": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub MIT 확인. AMP 페이지엔 무료티어·온프레미스·모바일 언급 없음. 'any deployment mode'만 표기",
+  "gh": "MIT\t59750\t2026-10-16\tfalse",
+  "url": "https://crewai.com/amp"
+ },
+ "Dev 3.0": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "dev3 remote로 LAN·SSH·Cloudflare 경유 폰 접속, tmux·worktree 로컬 실행, Apache-2.0",
+  "gh": "Apache-2.0\t312\t2026-10-15\tfalse",
+  "url": "https://github.com/h0x91b/dev-3.0"
+ },
+ "Dify": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "상충",
+  "note": "공식: Docker 셀프호스팅 확인. 라이선스는 Apache-2.0 파생(source-available), GitHub NOASSERTION. 가격·모바일 언급 없음",
+  "gh": "NOASSERTION\t158596\t2026-10-16\tfalse",
+  "url": "https://dify.ai"
+ },
+ "Dispatch Board": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "출시 소식 등록·데모만 있음. 가격·무료베타·모바일·셀프호스팅·라이선스 언급 없음",
+  "gh": "",
+  "url": "https://www.dispatchboard.ai"
+ },
+ "Ductor": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "README상 Telegram·Matrix·Slack 지원, pipx/pip 로컬 실행, MIT. Docker는 샌드박스용(선택)",
+  "gh": "MIT\t460\t2026-07-23\tfalse",
+  "url": "https://ductor.dev"
+ },
+ "Gander": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  " note": "phone/Telegram 알림 확인, PWA·/phone 경로는 미확인; MIT OSS, nodejs·install.js 로컬설치",
+  "gh": "MIT\t10\t2026-10-14\tfalse",
+  "url": "https://github.com/weellio/gander"
+ },
+ "Flux (sirsjg)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 오픈소스, Docker·Bun 실행과 git 동기화 확인. 모바일·반응형 언급 없음, Node는 npm CLI로만 확인",
+  "gh": "MIT\t104\t2026-09-09\tfalse",
+  "url": "https://github.com/sirsjg/flux"
+ },
+ "GitHub Mobile (Copilot Workspace / Agent PRs)": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 페이지는 iOS 다운로드만 표기, Android 언급 없음. 가격·GHES·라이선스 정보 없음, API 오류",
+  "gh": "gh_err",
+  "url": "https://github.com/mobile"
+ },
+ "Herdr Connect": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "iOS TestFlight 공개 베타, Apache-2.0 OSS, LAN/Tailscale 직접 연결로 클라우드 없음",
+  "gh": "Apache-2.0\t19\t2026-10-15\tfalse",
+  "url": "https://github.com/Tomyail/herdr-connect"
+ },
+ "Herdr Mobile Relay": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "PWA·Herdr 플러그인 자체 릴레이 확인. 가격 명시 없음, 라이선스 API NOASSERTION",
+  "gh": "NOASSERTION\t297\t2026-10-16\tfalse",
+  "url": "https://github.com/0cv/herdr-mobile-relay"
+ },
+ "Hermes KanbanWebUI": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "README에 반응형 보드와 로컬 Python 서버(127.0.0.1:8790) 명시, Apache-2.0 OSS. Node 언급 없음",
+  "gh": "Apache-2.0\t39\t2026-05-08\tfalse",
+  "url": "https://github.com/PriuS2/HermesKanban"
+ },
+ "Hermes Agent Kanban (NousResearch)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT(GitHub API) 확인. ~/.hermes/kanban.db SQLite 로컬 확인, 커뮤니티 WebUI·Python 언급 없음",
+  "gh": "MIT\t254156\t2026-10-16\tfalse",
+  "url": "https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban"
+ },
+ "KaibanJS": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t1480\t2026-05-15\tfalse",
+  "url": "https://www.kaibanjs.com/"
+ },
+ "Kaiban Board (KaibanJS)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 오픈소스, npm 설치와 로컬·자체서버 배포 확인. Docker와 반응형 언급은 없음",
+  "gh": "MIT\t1480\t2026-05-15\tfalse",
+  "url": "https://www.kaibanjs.com"
+ },
+ "is.team": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "요금 Free 3석·Starter $8~Max $39 얼리어답터 확인, 모바일·셀프호스팅 언급 없음, ©All rights reserved",
+  "gh": "",
+  "url": "https://is.team"
+ },
+ "kanban-md": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t224\t2026-10-05\tfalse",
+  "url": "https://github.com/antopolskiy/kanban-md"
+ },
+ "LangGraph Studio & LangSmith": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API로 LangGraph MIT 라이선스 확인. 공식 페이지 내용이 없어 LangSmith 상용·가격·자체호스팅·모바일은 확인 불가",
+  "gh": "MIT\t43332\t2026-10-15\tfalse",
+  "url": "https://smith.langchain.com"
+ },
+ "KanBots": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "데스크톱(mac/Linux/Win)만 명시, 모바일 언급 없음. OSS $0, 클라우드 $19/석/월 확인. MIT",
+  "gh": "MIT\t615\t2026-05-25\tfalse",
+  "url": "https://kanbots.dev"
+ },
+ "Maestro": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "로컬 실행은 확인. 릴레이는 Maestro 운영이며 자체호스팅 언급 없음. 라이선스 NOASSERTION, 소스 공개",
+  "gh": "NOASSERTION\t3\t2026-10-12\tfalse",
+  "url": "https://maestro-build.com"
+ },
+ "KanVibe": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "상충",
+  "license": "확인",
+  "gh": "AGPL-3.0\t147\t2026-10-16\tfalse",
+  "url": "https://github.com/rookedsysc/kanvibe"
+ },
+ "MetaGPT & MGX": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MGX는 Atoms로 리브랜딩, 크레딧·연/월 요금제 확인. 생성 코드만 내보내 자체 호스팅 가능, 모바일 언급 없음",
+  "gh": "MIT\t70873\t2026-01-21\tfalse",
+  "url": "https://mgx.dev"
+ },
+ "MindFlock": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "Apache-2.0\t15\t2026-10-15\tfalse",
+  "url": "https://mindflock.ai"
+ },
+ "Moo Tasks": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API로 MIT 확인. 공식 페이지는 로그인 화면뿐이라 모바일·가격·Docker 근거 없음",
+  "gh": "MIT\t45\t2026-06-21\tfalse",
+  "url": "https://mootasks.dev"
+ },
+ "Nerve (OpenClaw Nerve)": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·셀프호스팅·원라인 설치(macOS/Linux) 확인. Node.js 요구, 반응형·PWA는 언급 없음",
+  "gh": "MIT\t867\t2026-10-06\tfalse",
+  "url": "https://nerve.zone"
+ },
+ "Multica": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "모바일앱 언급 없음(데스크톱만). 셀프호스팅 무료·Docker/K8s 확인, Helm 미명시. Apache 기반 여부 미확인",
+  "gh": "NOASSERTION\t52949\t2026-10-15\tfalse",
+  "url": "https://multica.ai"
+ },
+ "Nimbalyst": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "상충",
+  "license": "확인",
+  "gh": "MIT\t1908\t2026-10-15\tfalse",
+  "url": "https://nimbalyst.com/"
+ },
+ "Notion AI & Custom Agents": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "Business·Enterprise 포함, Agents $10/1,000크레딧 명시. 모바일·셀프호스팅 언급 없음",
+  "gh": "",
+  "url": "https://www.notion.com/product/ai"
+ },
+ "OpenAI Agents SDK Tracing": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API로 SDK MIT 확인. 공식 페이지는 목차뿐이며 트레이싱 과금·호스팅·모바일 관련 서술 없음",
+  "gh": "MIT\t30063\t2026-10-15\tfalse",
+  "url": "https://platform.openai.com/docs/guides/agents"
+ },
+ "OpenKanban": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "README: TUI 칸반, brew/go install 로컬 실행, AGPL-3.0 OSS. 모바일 언급 없음(TUI로 추론)",
+  "gh": "AGPL-3.0\t151\t2026-06-12\tfalse",
+  "url": "https://github.com/TechDufus/openkanban"
+ },
+ "Offrun": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "gh": "",
+  "url": "https://offrun.dev/"
+ },
+ "Ouijit": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "macOS/Linux 데스크톱 다운로드만 제공, 무료 OSS·계정 불필요, GitHub API상 AGPL-3.0",
+  "gh": "AGPL-3.0\t176\t2026-10-15\tfalse",
+  "url": "https://ouijit.com"
+ },
+ "OpenHands": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Slack 연동·로컬/VPC 배포·MIT 확인. 반응형 웹·Cloud 사용량 과금·Docker/Helm은 근거 없음",
+  "gh": "MIT\t91014\t2026-10-16\tfalse",
+  "url": "https://openhands.dev"
+ },
+ "PlateSpinner": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 공개 저장소, Node.js 18+ 로컬 실행 명시. 반응형/모바일 지원 언급 없음",
+  "gh": "MIT\t13\t2026-04-20\tfalse",
+  "url": "https://github.com/moridinamael/platespinner"
+ },
+ "Relayd": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 페이지에 'relayd' 텍스트만 있고 GitHub 데이터도 없어 모든 주장을 검증할 수 없음",
+  "gh": "",
+  "url": "https://relayd.dev"
+ },
+ "PocketShell": {
+  "mobile": "확인",
+  "pricing": "상충",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식 페이지 Pro는 $4.99, 단일 기기 무료 근거 없음. 호스트는 Apache-2.0이나 GitHub API는 NOASSERTION",
+  "gh": "NOASSERTION\t10\t2026-07-03\tfalse",
+  "url": "https://pocketshell.app"
+ },
+ "Replit Agent (Replit Mobile)": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "공식 페이지에 Android·iOS 앱 및 저작권 명시. 요금·셀프호스팅 정보는 없음",
+  "gh": "",
+  "url": "https://replit.com/mobile"
+ },
+ "QodFlow": {
+  "mobile": "근거없음",
+  "pricing": "상충",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "무료 3명·10작업 확인. Premium $19·Diamond $49/월 공개됨. 모바일·셀프호스팅 언급 없음",
+  "gh": "",
+  "url": "https://www.qodflow.com"
+ },
+ "Roamgate": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "PWA·반응형 및 MIT 오픈소스는 확인. 자체 실행(독립 바이너리)은 맞으나 Docker 언급 없음",
+  "gh": "MIT\t298\t2026-10-16\tfalse",
+  "url": "https://roamgate.dev/"
+ },
+ "Sortie": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "Apache-2.0\t203\t2026-10-15\tfalse",
+  "url": "https://sortie-ai.com/"
+ },
+ "Shrimp Task Manager": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "GitHub MIT 라이선스, git clone 후 로컬 node 실행. 반응형 웹 GUI 언급 없음",
+  "gh": "MIT\t2146\t2025-08-21\tfalse",
+  "url": "https://cjo4m06.github.io/mcp-shrimp-task-manager"
+ },
+ "Star-Office-UI": {
+  "mobile": "상충",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "모바일 대응은 맞으나 README상 데스크톱 펫은 Tauri가 아닌 Electron. 코드는 MIT, 아트는 비상업용",
+  "gh": "NOASSERTION\t7522\t2026-03-11\tfalse",
+  "url": "https://github.com/ringhyacinth/Star-Office-UI"
+ },
+ "Traycer AI": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "모바일 앱 제공은 확인했으나 iOS·Android 명시는 없음. 가격·셀프호스팅·라이선스 정보는 본문에 없음",
+  "gh": "",
+  "url": "https://traycer.ai"
+ },
+ "Veritas Kanban": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT 오픈소스, 로컬 우선과 Dockerfile/compose 확인. 반응형·모바일 언급은 없음",
+  "gh": "MIT\t841\t2026-10-14\tfalse",
+  "url": "https://github.com/BradGroux/veritas-kanban"
+ },
+ "VS Code Agent Kanban / AgentKanban.io": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "gh": "NOASSERTION\t60\t2026-05-12\tfalse",
+  "url": "https://agentkanban.io"
+ },
+ "WorkBuddy Board": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "Win10/11 단일 exe, 백엔드 내장, 로컬 저장. MIT. 가격 명시는 없음. 코드서명 없음, 스타 1",
+  "gh": "MIT\t1\t2026-10-08\tfalse",
+  "url": "https://board-widget-download.app.workbuddy.host/"
+ },
+ "Yao Agents": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "셀프호스팅·단일 바이너리 명시. 모바일 앱·가격 언급 없음, 라이선스는 NOASSERTION",
+  "gh": "NOASSERTION\t8130\t2026-10-15\tfalse",
+  "url": "https://yaoagents.com"
+ },
+ "Agent of Empires": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식페이지: PWA 모바일 설치·무료 OSS·CityHall 셀프호스팅·MIT 명시. 디렉터리 mobile=0은 불일치",
+  "gh": "MIT\t3356\t2026-10-15\tfalse",
+  "url": "https://www.agent-of-empires.com/"
+ },
+ "AI Maestro": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식페이지에 Tailscale 모바일 접속, MIT·무료, Node.js·Docker·cloud-aws 확인. Terraform 명시 없음",
+  "gh": "MIT\t822\t2026-10-16\tfalse",
+  "url": "https://ai-maestro.23blocks.com/"
+ },
+ "Agent Teams": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식 페이지에 모바일 언급 없음(디렉터리 mobile=0). 데스크톱 로컬 실행은 확인, Docker 근거 없음",
+  "gh": "AGPL-3.0\t2265\t2026-10-16\tfalse",
+  "url": "https://agentteams.live"
+ },
+ "1Code": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "2026-07-07 저장소 아카이브됨. Pro 구독 언급만 있고 $20 가격·SQLite는 명시 없음",
+  "gh": "Apache-2.0\t5574\t2026-03-06\ttrue",
+  "url": "https://1code.dev"
+ },
+ "Aizen": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "공식: macOS(Apple Silicon) 전용, Pro $5.99/월·$59/년, 평생 $179, GPL-3.0. 로컬 전용 명시 없음",
+  "gh": "GPL-3.0\t308\t2026-08-01\tfalse",
+  "url": "https://aizen.win/"
+ },
+ "Atrium": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "gh": "",
+  "url": "https://getatrium.dev/"
+ },
+ "Aperant": {
+  "mobile": "상충",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "gh": "AGPL-3.0\t14576\t2026-06-14\tfalse",
+  "url": "https://aperant.com/"
+ },
+ "Automaker": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "상충",
+  "note": "공식페이지 '완전 무료·로컬(Electron)' 확인, Docker·PWA 언급 없음. GitHub 라이선스 NOASSERTION으로 MIT 아님",
+  "gh": "NOASSERTION\t3230\t2026-05-22\tfalse",
+  "url": "https://automaker.app/"
+ },
+ "Caudex": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  " note": "공식 페이지에 iPhone/iPad 원격 접속은 명시됐으나 PWA·터널 방식은 언급 없음. Free Download, All rights reserved 확인",
+  "gh": "",
+  "url": "https://caudex.sh/"
+ },
+ "Clave": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "macOS·Windows(초기) 데스크톱 전용, 클라우드 백엔드 없음(SSH 원격 지원), MIT. 저장소 codika-io→antasphere",
+  "gh": "MIT\t51\t2026-10-15\tfalse",
+  "url": "https://github.com/antasphere/clave"
+ },
+ "cmux": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "iOS TestFlight 베타·무료 확인. $100 가격 미확인, GPL 버전 불명(API NOASSERTION)",
+  "gh": "NOASSERTION\t28199\t2026-10-16\tfalse",
+  "url": "https://cmux.com/"
+ },
+ "CodeAgent Mobile": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "gh": "",
+  "url": "https://www.codeagent-mobile.com"
+ },
+ "CNVS": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "gh": "",
+  "url": "https://cnvs.dev/"
+ },
+ "CodeLayer": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "상충",
+  "note": "웹·폰 동일 UI 명시, 가격 미기재, 클라우드 엔터프라이즈 한정 근거 없음, 레포는 Apache-2.0",
+  "gh": "Apache-2.0\t31\t2026-10-15\tfalse",
+  "url": "https://humanlayer.dev/code"
+ },
+ "Codex Monitor": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식 페이지는 macOS/Win/Linux 데스크톱만 명시, iOS·웹 언급 없음; 헤드리스 데몬 미확인",
+  "gh": "MIT\t4343\t2026-03-26\tfalse",
+  "url": "https://www.codexmonitor.app/"
+ },
+ "Constellagent": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식 페이지는 무료·오픈소스만 명시. GitHub API 라이선스 필드 공란. macOS·모바일 여부는 디렉터리만 언급",
+  "gh": "217\t2026-05-05\tfalse",
+  "url": "https://constellagent.vercel.app/"
+ },
+ "Dorothy": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식: macOS 다운로드·무료·오픈소스·계정 불필요, Telegram/Slack 봇; GitHub MIT",
+  "gh": "MIT\t351\t2026-07-07\tfalse",
+  "url": "https://dorothyai.app/"
+ },
+ "Granular": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "Mac/Win 데스크톱·Telegram 알림, 로컬 우선은 확인. 무료만 확인되고 Pro/평생 가격과 라이선스는 근거 없음",
+  "gh": "",
+  "url": "https://granular.build/"
+ },
+ "Jean": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "브라우저 접속은 확인되나 모바일·반응형 언급 없음. Docker 언급 없고 헤드리스 서버만 확인",
+  "gh": "Apache-2.0\t1333\t2026-10-15\tfalse",
+  "url": "https://jean.build/"
+ },
+ "Herdr": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식: Apache 2.0, 단일 바이너리·SSH 머신 추가, Cloud 대기자(가격 없음). 모바일 언급 없음",
+  "gh": "Apache-2.0\t44233\t2026-10-15\tfalse",
+  "url": "https://herdr.dev/"
+ },
+ "Maude": {
+  "mobile": "확인",
+  "pricing": "상충",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "iPhone·iPad·Android 지원. 주 $2.99·연 $29.99 무료체험 확인, 평생 플랜은 없음. 자체 서버+릴레이 구조",
+  "gh": "",
+  "url": "https://maude.pilotdev.fr"
+ },
+ "monday AI Agents (Platform Agents)": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "근거없음",
+  "note": "공식문서는 AI 크레딧 소모만 언급, 가격·모바일·자체호스팅 언급 없음. MIT는 부속 저장소로 추정",
+  "gh": "MIT\t4\t2026-06-07\tfalse",
+  "url": "https://developer.monday.com/api-reference/docs/build-on-monday-with-ai.md"
+ },
+ "Proliferate": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "GitHub API로 AGPL-3.0 확인. 공식 페이지는 소개 문구뿐이며 모바일·가격·셀프호스트 근거 없음",
+  "gh": "AGPL-3.0\t516\t2026-10-15\tfalse",
+  "url": "https://proliferate.com/"
+ },
+ "Ralph TUI": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·오픈소스·로컬설치 확인. 모바일 미언급, 헤드리스 원격 모드는 공식 근거 없음",
+  "gh": "MIT\t2458\t2026-09-04\tfalse",
+  "url": "https://ralph-tui.com/"
+ },
+ "Parallel Code": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "폰 접속(Wi-Fi/Tailscale)만 언급, Android앱·iOS푸시·Docker 샌드박스 근거 없음",
+  "gh": "MIT\t1051\t2026-10-15\tfalse",
+  "url": "https://parallelcode.app/"
+ },
+ "Supacode": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "macOS 26 전용, 무료체험 5회·$99/$129 영구 확인. SSH 지원은 있으나 베타 여부 미확인. 라이선스명 미명시",
+  "gh": "NOASSERTION\t2393\t2026-10-15\tfalse",
+  "url": "https://supacode.sh/"
+ },
+ "Synara": {
+  "mobile": "상충",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "GitHub MIT·무료 확인. 로컬 서버 언급 있음. 디렉토리 mobile=0, 사용자 글은 폰앱 미출시를 암시",
+  "gh": "MIT\t2106\t2026-10-16\tfalse",
+  "url": "https://www.trysynara.com/"
+ },
+ "Unpeel": {
+  "mobile": "확인",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "확인",
+  " note": "iOS 폰 리모트와 Mac/Linux/VPS 서버(unpeel serve)는 확인. TestFlight·가격·$59 근거 없음. 디렉터리는 paid로 표기",
+  "gh": "MIT\t141\t2026-10-14\tfalse",
+  "url": "https://unpeel.com/"
+ },
+ "AgentBox": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "gh": "MIT\t539\t2026-10-07\tfalse",
+  "url": "https://agent-box.sh/"
+ },
+ "CliDeck": {
+  "mobile": "확인",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "공식: 브라우저 모바일 원격·E2E 릴레이, localhost 실행. PWA 명시 없음. GitHub MIT. 디렉토리 mobile=0은 상충",
+  "gh": "MIT\t159\t2026-10-06\tfalse",
+  "url": "https://clideck.dev/"
+ },
+ "Fusion": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "확인",
+  "license": "확인",
+  "note": "MIT·OSS·npm/brew 확인. Docker 언급 없음. 앱·PWA 근거 없음(폰 노드만 언급)",
+  "gh": "MIT\t1275\t2026-10-15\tfalse",
+  "url": "https://runfusion.ai/"
+ },
+ "dmux": {
+  "mobile": "근거없음",
+  "pricing": "확인",
+  "selfhost": "근거없음",
+  "license": "확인",
+  "note": "공식 페이지·GitHub에서 MIT 확인. 모바일 미지원·npm 설치 명시는 1차 자료에 없음",
+  "gh": "MIT\t1803\t2026-08-16\tfalse",
+  "url": "https://dmux.ai/"
+ },
+ "jat": {
+  "mobile": "근거없음",
+  "pricing": "근거없음",
+  "selfhost": "확인",
+  "license": "근거없음",
+  "note": "공식페이지에 자체호스팅(tailnet) 명시. 모바일·가격·MIT 언급 없음. GitHub API 실패로 라이선스 미확인",
+  "gh": "gh_err",
+  "url": "https://jat.tools/"
+ }
+}

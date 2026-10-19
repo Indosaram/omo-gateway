@@ -1,0 +1,417 @@
+{
+  "schema": "omon-scratch-cleanup-inventory-v1",
+  "root": "/private/tmp/omon-lane-scratch-qa-GUgT9Z",
+  "observedAt": "2026-10-11T15:59:11.255Z",
+  "disposition": "retained; no deletion authorized or performed",
+  "historicalGatewayExit": null,
+  "historicalGatewayExitReason": "not captured by previous harness",
+  "sharedDaemon": {
+    "pid": 57142,
+    "disposition": "untouched; never targeted for cleanup"
+  },
+  "ownedRegression": {
+    "pid": 41306,
+    "exitCode": 23,
+    "stderr": "immediate_failure",
+    "liveChildRegistryEmpty": true
+  },
+  "historicalPreserved": [
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/scope-probe-receipts-1791733278305-56f817967f47.json",
+      "sha256": "9511793a24b592b0ccbf50f674c30844de9f5a074f0a9c2e8f0dc6559ec7f8bd"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/execution-started.json",
+      "sha256": "ed840167d87fe823562aa97dda0e137fabe14c55f471e57cc56998a52abf0bfa"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/scope-probe-receipts-1791733564339-14e37c2428b5.json",
+      "sha256": "a226d37ab6b10ee03f407f2c05245cb53df0972539d27980134ce18bee8b76ff"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/command-2.stdout",
+      "sha256": "534fbff691251f9bd45b7da07274b5723fddaaec96931e372daaa7d0772df6a3"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/prepared.json",
+      "sha256": "b970264d8ddb528c5fe01712971e800eabb7afc7175da39a59ea85cce2ac032c"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/command-2.stderr",
+      "sha256": "4d3db7fb33aa22a50e00f97f56d91aba034e13ec19e6f5ed51dd524dea8c0a33"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/gateway.private.log",
+      "sha256": "ea76e930973f10de78c6f8114f8e36c811994fe87425f282cd9012e9b6186471"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/receipts.json",
+      "sha256": "4cf1f8b1e6468d7fcf428a86c427ffef0b39654ca9c85d143a62340c3645337b"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/source-manifest.sha256",
+      "sha256": "59beefea246726d79453775c2a62a6e149d21519302b695864bf2d70faa302db"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/command-1.stdout",
+      "sha256": "958b71c2a9df57bd870efb479cc67ed01e7c30dafe517813a86a9a967cc1c3e9"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/release.json",
+      "sha256": "e1e1fdb4e1b67b301bb57e1a6cae8877c8daece6697321e02f220f20697c812e"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/.env",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/scope-probe.json",
+      "sha256": "e28ebcd5dc9ffb3485f19648bc5cb574793181c912104815e21178c283ca5320"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/scope-probe-receipts-1791733112903-16a13146949c.json",
+      "sha256": "4ab4aa8368e55cbc5bafd3ddf00de76ee4d50c016f4295215ef1a2d6874d2378"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/scope-probe-receipts-1791733408530-6240cbed52f6.json",
+      "sha256": "856a274aa6d64181d508fc36a10aced4cdedefc4954ab9f17476084bb5b6434d"
+    },
+    {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task-8-9-live-GUgT9Z-1791734008572/command-1.stderr",
+      "sha256": "0d7fa1070c8244c45713f52789bcaaa9dd48055b793d654d3f7ceb4d5199ef79"
+    }
+  ],
+  "resources": [
+    {
+      "path": "scope-probe-receipts-1791733278305-56f817967f47.json",
+      "type": "file",
+      "bytes": 2404,
+      "sha256": "9511793a24b592b0ccbf50f674c30844de9f5a074f0a9c2e8f0dc6559ec7f8bd",
+      "action": "retained"
+    },
+    {
+      "path": "home",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "execution-started.json",
+      "type": "file",
+      "bytes": 116,
+      "sha256": "ed840167d87fe823562aa97dda0e137fabe14c55f471e57cc56998a52abf0bfa",
+      "action": "retained"
+    },
+    {
+      "path": "scope-probe-receipts-1791733564339-14e37c2428b5.json",
+      "type": "file",
+      "bytes": 3908,
+      "sha256": "a226d37ab6b10ee03f407f2c05245cb53df0972539d27980134ce18bee8b76ff",
+      "action": "retained"
+    },
+    {
+      "path": "command-2.stdout",
+      "type": "file",
+      "bytes": 175,
+      "sha256": "534fbff691251f9bd45b7da07274b5723fddaaec96931e372daaa7d0772df6a3",
+      "action": "retained"
+    },
+    {
+      "path": "bin",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "bin/typesafe-judge",
+      "type": "symlink",
+      "target": "/Users/indo/.cargo/bin/typesafe-judge",
+      "action": "retained; target not followed"
+    },
+    {
+      "path": "bin/omo-gateway",
+      "type": "symlink",
+      "target": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "action": "retained; target not followed"
+    },
+    {
+      "path": "prepared.json",
+      "type": "file",
+      "bytes": 1944,
+      "sha256": "b970264d8ddb528c5fe01712971e800eabb7afc7175da39a59ea85cce2ac032c",
+      "action": "retained"
+    },
+    {
+      "path": "qa.db",
+      "type": "file",
+      "bytes": 4096,
+      "sha256": "1fe8f6113488865c546d2faa55b21482662ce4be19d4f505eeefa09bc3131489",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/config",
+      "type": "file",
+      "bytes": 137,
+      "sha256": "cae33efdb02cf774435c1ff9cb16bcc1014606908530c6e1dc727615fe3e8cda",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/objects",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/objects/pack",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/objects/info",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/HEAD",
+      "type": "file",
+      "bytes": 21,
+      "sha256": "28d25bf82af4c0e2b72f50959b2beb859e3e60b9630a5e8c603dad4ddb2b6e80",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/info",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/info/exclude",
+      "type": "file",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/description",
+      "type": "file",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/commit-msg.sample",
+      "type": "file",
+      "bytes": 1972,
+      "sha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/pre-rebase.sample",
+      "type": "file",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/sendemail-validate.sample",
+      "type": "file",
+      "bytes": 2308,
+      "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/pre-commit.sample",
+      "type": "file",
+      "bytes": 1649,
+      "sha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/applypatch-msg.sample",
+      "type": "file",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/fsmonitor-watchman.sample",
+      "type": "file",
+      "bytes": 4611,
+      "sha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/pre-receive.sample",
+      "type": "file",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/prepare-commit-msg.sample",
+      "type": "file",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/post-update.sample",
+      "type": "file",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/pre-merge-commit.sample",
+      "type": "file",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/pre-applypatch.sample",
+      "type": "file",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/pre-push.sample",
+      "type": "file",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/update.sample",
+      "type": "file",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/hooks/push-to-checkout.sample",
+      "type": "file",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/refs",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/refs/heads",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "qa-repo/.git/refs/tags",
+      "type": "directory",
+      "action": "retained"
+    },
+    {
+      "path": "command-2.stderr",
+      "type": "file",
+      "bytes": 317,
+      "sha256": "4d3db7fb33aa22a50e00f97f56d91aba034e13ec19e6f5ed51dd524dea8c0a33",
+      "action": "retained"
+    },
+    {
+      "path": "gateway.private.log",
+      "type": "file",
+      "bytes": 259,
+      "sha256": "ea76e930973f10de78c6f8114f8e36c811994fe87425f282cd9012e9b6186471",
+      "action": "retained"
+    },
+    {
+      "path": "receipts.json",
+      "type": "file",
+      "bytes": 1885,
+      "sha256": "4cf1f8b1e6468d7fcf428a86c427ffef0b39654ca9c85d143a62340c3645337b",
+      "action": "retained"
+    },
+    {
+      "path": "source-manifest.sha256",
+      "type": "file",
+      "bytes": 17697,
+      "sha256": "59beefea246726d79453775c2a62a6e149d21519302b695864bf2d70faa302db",
+      "action": "retained"
+    },
+    {
+      "path": "command-1.stdout",
+      "type": "file",
+      "bytes": 91,
+      "sha256": "958b71c2a9df57bd870efb479cc67ed01e7c30dafe517813a86a9a967cc1c3e9",
+      "action": "retained"
+    },
+    {
+      "path": "release.json",
+      "type": "file",
+      "bytes": 2482,
+      "sha256": "e1e1fdb4e1b67b301bb57e1a6cae8877c8daece6697321e02f220f20697c812e",
+      "action": "retained"
+    },
+    {
+      "path": ".env",
+      "type": "file",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "action": "retained"
+    },
+    {
+      "path": "scope-probe.json",
+      "type": "file",
+      "bytes": 2339,
+      "sha256": "e28ebcd5dc9ffb3485f19648bc5cb574793181c912104815e21178c283ca5320",
+      "action": "retained"
+    },
+    {
+      "path": "scope-probe-receipts-1791733112903-16a13146949c.json",
+      "type": "file",
+      "bytes": 2475,
+      "sha256": "4ab4aa8368e55cbc5bafd3ddf00de76ee4d50c016f4295215ef1a2d6874d2378",
+      "action": "retained"
+    },
+    {
+      "path": "qa.db-shm",
+      "type": "file",
+      "bytes": 32768,
+      "sha256": "1846b27d47a8a99edf4c35f2cae416556fef1d84146b306c5cac4898e3f6c481",
+      "action": "retained"
+    },
+    {
+      "path": "qa.db-wal",
+      "type": "file",
+      "bytes": 1339032,
+      "sha256": "76208cf9b59b97ccaf547f7cd8ffd5a5fb3e6eab81e120c32678e12372efe00e",
+      "action": "retained"
+    },
+    {
+      "path": "scope-probe-receipts-1791733408530-6240cbed52f6.json",
+      "type": "file",
+      "bytes": 4176,
+      "sha256": "856a274aa6d64181d508fc36a10aced4cdedefc4954ab9f17476084bb5b6434d",
+      "action": "retained"
+    },
+    {
+      "path": "command-1.stderr",
+      "type": "file",
+      "bytes": 8,
+      "sha256": "0d7fa1070c8244c45713f52789bcaaa9dd48055b793d654d3f7ceb4d5199ef79",
+      "action": "retained"
+    }
+  ]
+}

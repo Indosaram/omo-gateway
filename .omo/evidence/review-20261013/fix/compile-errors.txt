@@ -1,0 +1,6 @@
+src/cron/health.rs:44:11: error: called `Iterator::last` on a `DoubleEndedIterator`; this will needlessly iterate the entire iterator
+src/discord/adapter.rs:2593:14: error: very complex type used. Consider factoring parts into `type` definitions
+src/discord/adapter.rs:5927:12: error: method `all_text` is never used
+src/discord/approval.rs:409:9: error: you seem to be trying to use `match` for destructuring a single pattern. Consider using `if let`: help: try: `if let Ok(Err(error)) = tokio::time::timeout(Duration::from_secs(2), delivery).await { tracing::warn!(%error, "approval delivery task failed") }`
+src/discord/table_render/mod.rs:28:22: error: manual implementation of `.is_multiple_of()`: help: replace with: `inner.matches('`').count().is_multiple_of(2)`
+src/tools/cron.rs:30:9: error: field `claim_token` is never read

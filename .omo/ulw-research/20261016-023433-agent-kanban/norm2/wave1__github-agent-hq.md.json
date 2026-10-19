@@ -1,0 +1,74 @@
+[
+ {
+  "name": "GitHub Copilot Coding Agent (Cloud Agent)",
+  "url": "https://github.com/features/copilot/agents",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "GitHub Actions 임시 환경에서 코드 작성·테스트 후 PR을 여는 클라우드 코딩 에이전트",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "유료 Copilot 포함: Pro $10/월~, Business $19/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "MCP·REST/GraphQL API·gh CLI; Claude·Codex 위임(프리뷰)",
+  "status": "활발(상용, 잦은 업데이트)",
+  "pros": "GitHub 네이티브 PR·브랜치 자동화; 보안 스캔·테스트 자동 검증; Claude·Codex 위임 지원",
+  "cons": "셀프호스팅 불가; AI 크레딧·Actions 분 과금; 서드파티 에이전트 조정 미지원",
+  "sources": [
+   "https://github.com/features/copilot/agents",
+   "https://github.com/features/copilot/plans",
+   "https://docs.github.com/en/copilot/concepts/agents/cloud-agent",
+   "https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/kick-off-a-task",
+   "https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents",
+   "https://apps.apple.com/us/app/github/id1477376905"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "GitHub Copilot Agents Panel / Agent HQ (Mission Control)",
+  "url": "https://github.com/copilot/agents",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "여러 저장소의 비동기 에이전트 세션을 시작·관찰·조정하는 중앙 대시보드",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "Copilot 유료 플랜 포함; 세션·조정은 AI 크레딧 차감",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "웹 UI·MCP(assign_copilot_to_issue)·REST/GraphQL API",
+  "status": "활발(2026년 10월 업데이트)",
+  "pros": "저장소 전반 세션 통합 가시성; 실시간 로그·진행 중 조정; 세션-커밋 감사 추적",
+  "cons": "세션 기록 영구 삭제 불가; 네이티브 칸반 컬럼 없음; 조정 메시지 추가 과금",
+  "sources": [
+   "https://github.com/features/copilot/agents",
+   "https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents",
+   "https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/kick-off-a-task",
+   "https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/overview",
+   "https://apps.apple.com/us/app/github/id1477376905"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "GitHub Projects (Projects v2) Boards",
+  "url": "https://github.com/features/issues",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "이슈·PR과 연동된 칸반·테이블·로드맵 뷰 기반 계획·이슈 추적 도구",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료 / Team $4/사용자/월, Enterprise $21/사용자/월",
+  "selfhost": "가능(GHES)",
+  "license": "상용",
+  "agent": "MCP projects 툴셋·GraphQL/REST API·gh CLI; Claude Code·Cursor 등",
+  "status": "매우 활발(MCP v2.0.2, 2026년 10월)",
+  "pros": "드래그앤드롭 칸반·스프린트 관리; MCP로 에이전트가 컬럼 조작; 넉넉한 무료 티어",
+  "cons": "에이전트 전용 시각화 아님; 실시간 텔레메트리 없음; GraphQL 복잡·API 속도 제한",
+  "sources": [
+   "https://github.com/features/issues",
+   "https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects",
+   "https://docs.github.com/en/rest/projects/projects",
+   "https://github.com/github/github-mcp-server",
+   "https://raw.githubusercontent.com/github/github-mcp-server/main/pkg/github/projects.go",
+   "https://github.com/github/github-mcp-server/releases",
+   "https://apps.apple.com/us/app/github/id1477376905"
+  ],
+  "confidence": "높음"
+ }
+]

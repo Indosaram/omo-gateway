@@ -1,0 +1,15 @@
+*** Begin Patch
+*** Update File: src/lanes/runner.rs
+@@
+             })
+             .unwrap_or(true);
+-        if discord_enabled {
++        if let Some(transport) = super::discord_threads::DiscordThreads::loopback_from_env()? {
++            let transport = Arc::new(transport);
++            runner.post_sink = Some(transport.clone());
++            runner.lifecycle = Some(transport);
++        } else if discord_enabled {
+             let transport = Arc::new(
+                 super::discord_threads::DiscordThreads::from_env()
+                     .map_err(|error| OmonError::Config(error.to_string()))?,
+*** End Patch

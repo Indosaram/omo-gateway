@@ -1,0 +1,33 @@
+{
+  "todo": 16,
+  "scenario": "idle-ten-minutes",
+  "root": "/private/tmp/omon-task16-qa2-eMULg7",
+  "dbPath": "/private/tmp/omon-task16-qa2-eMULg7/qa.db",
+  "status": "blocked",
+  "exitCode": 1,
+  "error": "Execution monitor timed_out before required 600000 ms idle measurement; runner disappeared and no final helper receipt was emitted. No rerun authorized.",
+  "cleanup": [
+    {
+      "pid": 35709,
+      "code": null,
+      "pidAbsent": true,
+      "socketRemoved": true
+    }
+  ],
+  "state": {
+    "rows": [
+      {
+        "lead": "7:discord|-|19:1474231559895646240|-|18:414011632306618368|19:1465631383862120451",
+        "generation": 0,
+        "consumed": 0,
+        "admitted_ms": null
+      }
+    ],
+    "usage": [],
+    "judges": [],
+    "events": []
+  },
+  "scratchRetained": true,
+  "binarySha256": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97",
+  "limits": "Numeric gateway exit unavailable after monitor tree termination; ten-minute idle PASS cannot be established."
+}

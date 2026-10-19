@@ -1,0 +1,21 @@
+{
+  "status": "source-boundary-correction-pending-coordinated-tests-independent-review-and-qa",
+  "scope": "standalone profile export/apply-block API and focused scratch-database tests",
+  "implemented": [
+    "transactional prompt-only block application",
+    "extract only the marked region from incoming block files; append or replace only that region while preserving prompt prefix/suffix bytes and repeat-apply idempotence with terminal newlines",
+    "persona brief includes literal report grammar, lane object response path, and explicit per-integration read-only consent wording",
+    "typed unknown-bot result exposing CLI exit code 2",
+    "before/after prompt character counts matching SQLite length(system_prompt) and SHA-256 digests over UTF-8 prompt bytes",
+    "complete profile export serialization"
+  ],
+  "pending": [
+    "src/entry.rs CLI wiring for profile export and apply-block",
+    "src/lib.rs module registration/re-exports",
+    "focused executable reproduction of newline idempotence, exterior framing, and owner-prefix/suffix preservation after coordinator registers the test target",
+    "independent source re-review after this marker-boundary correction",
+    "coordinated scratch gateway QA and owner-run live backup/apply"
+  ],
+  "live_database_accessed": false,
+  "live_profile_exported": false
+}

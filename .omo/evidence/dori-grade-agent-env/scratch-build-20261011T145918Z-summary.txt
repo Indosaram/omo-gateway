@@ -1,0 +1,3 @@
+source_manifest_cmp_exit=0
+prepared_root=/private/tmp/omon-lane-scratch-qa-pibpnv
+runtime_released=false

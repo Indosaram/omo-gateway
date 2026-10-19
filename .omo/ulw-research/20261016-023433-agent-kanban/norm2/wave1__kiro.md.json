@@ -1,0 +1,29 @@
+[
+ {
+  "name": "Kiro (AWS)",
+  "url": "https://kiro.dev",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "AWS의 AI 코딩 IDE·에이전트 환경, 명세 기반 개발과 에이전트 훅 제공",
+  "mobile": "iOS 앱(TestFlight 프리뷰); Android는 웹",
+  "pricing": "무료 50크레딧 / Pro $20/월 ~ Power $200/월",
+  "selfhost": "불가(SaaS, 클라이언트만 로컬)",
+  "license": "상용",
+  "agent": "MCP·ACP·CLI·REST/GraphQL; Claude Code·Codex·Cursor 연동",
+  "status": "활발(CLI V3.x 릴리스 중)",
+  "pros": "명세 기반 태스크 진행률 추적; 이벤트 기반 에이전트 훅; ACP·MCP 양방향 지원",
+  "cons": "AWS 클라우드 종속으로 자체 호스팅 불가; 크레딧 소모 빠르고 과금 예측 어려움; 전통적 칸반 보드 아님(확장 필요)",
+  "sources": [
+   "https://kiro.dev",
+   "https://kiro.dev/pricing/",
+   "https://kiro.dev/mobile/",
+   "https://kiro.dev/docs/specs/",
+   "https://kiro.dev/docs/hooks/",
+   "https://kiro.dev/docs/hooks/types/",
+   "https://kiro.dev/docs/acp/",
+   "https://kiro.dev/license/",
+   "https://github.com/grg-lab/kiro-specs-dashboard"
+  ],
+  "confidence": "높음"
+ }
+]

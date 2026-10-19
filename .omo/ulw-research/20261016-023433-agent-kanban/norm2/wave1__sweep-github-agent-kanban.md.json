@@ -1,0 +1,327 @@
+[
+ {
+  "name": "Nimbalyst",
+  "url": "https://nimbalyst.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex·OpenCode 오케스트레이션용 시각적 워크스페이스·세션 칸반",
+  "mobile": "iOS 앱(Android 예정)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(데스크톱 앱)",
+  "license": "MIT",
+  "agent": "CLI: Claude Code·Codex·OpenCode·Copilot·Gemini; MCP 클라이언트/서버",
+  "status": "활발(v0.80.6, 2026-10)",
+  "pros": "iOS 앱으로 푸시·diff 승인; git worktree 격리; 로컬 우선 텍스트 저장",
+  "cons": "초기 단계(v0.80.x); Android 앱 미출시; 확장 SDK 생태계 미성숙",
+  "sources": [
+   "https://github.com/nimbalyst/nimbalyst",
+   "https://nimbalyst.com/",
+   "https://docs.nimbalyst.com/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Teams AI",
+  "url": "https://agentteams.live",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반에서 AI 팀을 지휘, 에이전트가 자율 협업·코드 리뷰하는 멀티에이전트 플랫폼",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS), 자체 API 키/CLI 인증",
+  "selfhost": "가능(데스크톱 앱·로컬 웹서버)",
+  "license": "AGPL-3.0",
+  "agent": "CLI/API: Claude Code·Codex·Cursor·Copilot 등; MCP; 에이전트 간 메시징",
+  "status": "매우 활발(v2.17.10, 2026-10)",
+  "pros": "에이전트 간 대화·리뷰로 높은 자율성; 300+ 모델 지원; 음성 명령",
+  "cons": "AGPL 카피레프트; 자율 루프 토큰 과다 소비; 모바일은 수동 네트워크/터널 필요",
+  "sources": [
+   "https://github.com/777genius/agent-teams-ai",
+   "https://agentteams.live/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Routa",
+  "url": "https://phodal.github.io/routa/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "공유 스펙·칸반 오케스트레이션·리뷰 게이트를 갖춘 멀티에이전트 협업 플랫폼",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker·웹·Tauri 데스크톱)",
+  "license": "MIT",
+  "agent": "MCP·ACP·A2A·REST API; Claude Code·Cursor·Codex",
+  "status": "활발(v0.19.0, 2026-06)",
+  "pros": "로컬 앱/다중 사용자 웹 이중 런타임; MCP·ACP·A2A 폭넓은 지원; 카드 종료 전 자동 검증 게이트",
+  "cons": "Rust/Next.js 이중 백엔드로 설정 복잡; 모바일은 브라우저만·오프라인 미지원; 문서 영/중 혼재",
+  "sources": [
+   "https://github.com/phodal/routa",
+   "https://phodal.github.io/routa/",
+   "https://www.npmjs.com/package/routa-cli"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Claude Code Agent Monitor (CCAM)",
+  "url": "https://hoangsonww.github.io/Claude-Code-Agent-Monitor/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex·Cursor 세션 실시간 모니터링 및 칸반 상태 보드",
+  "mobile": "반응형 웹(LAN/Tailscale)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Electron 앱·로컬 서버)",
+  "license": "MIT",
+  "agent": "Claude Code 훅, Cursor·Codex 세션 감지, MCP 상태 모니터링, REST/WS API",
+  "status": "매우 활발(v2.3.0, 2026-10)",
+  "pros": "세션 자동 감지로 설정 간편; 실시간 칸반+토큰/비용 분석; 서브에이전트 계층 시각화",
+  "cons": "작업 할당보다 관찰 중심; Electron으로 용량 큼; 모바일 푸시 알림 없음",
+  "sources": [
+   "https://github.com/hoangsonww/Claude-Code-Agent-Monitor",
+   "https://hoangsonww.github.io/Claude-Code-Agent-Monitor/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kandev",
+  "url": "https://kandev.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "격리된 worktree에서 다수 코딩 에이전트 CLI를 병렬 실행하는 AI 칸반·개발 환경",
+  "mobile": "반응형 웹(터널 원격 접속)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Go 바이너리·Docker·Homebrew)",
+  "license": "AGPL-3.0",
+  "agent": "CLI 20+종(Claude Code·Codex·Copilot·Gemini 등); MCP 서버/HTTP API",
+  "status": "매우 활발(v0.97.0, 2026-10)",
+  "pros": "단일 Go 바이너리로 셀프호스팅 쉬움; 20+ 에이전트·다단계 파이프라인; diff·터미널·미리보기 통합 리뷰",
+  "cons": "AGPL로 폐쇄 재배포 제한; UI 복잡도 높음; 모바일은 터널 경유 웹만",
+  "sources": [
+   "https://github.com/kdlbs/kandev",
+   "https://kandev.ai",
+   "https://github.com/kdlbs/kandev/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Veritas Kanban",
+  "url": "https://sstb.ai",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "로컬 우선 칸반에 42개 도구 MCP 서버·멀티에이전트 거버넌스를 더한 작업 관리",
+  "mobile": "PWA",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Homebrew·Node·Docker)",
+  "license": "MIT",
+  "agent": "MCP 서버(42개 도구)·CLI·REST·웹훅; Claude Code·Codex·Copilot CLI 등",
+  "status": "성숙·활발(v6.2.1, 2026-09)",
+  "pros": "MCP 도구 42개로 강력한 연동; 순수 칸반부터 단계적 확장; PWA 오프라인 동기화 설계",
+  "cons": "거버넌스 개념 많아 학습 곡선 높음; pnpm·환경 설정 필요; 문서 구조 복잡",
+  "sources": [
+   "https://github.com/BradGroux/veritas-kanban",
+   "https://sstb.ai",
+   "https://github.com/BradGroux/veritas-kanban/blob/main/CHANGELOG.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Claude Task Viewer",
+  "url": "https://github.com/L1AD/claude-task-viewer",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code 작업을 실시간 관찰하는 경량 웹 칸반 보드",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "~/.claude 세션 파일 직접 모니터링(읽기 전용); Claude Code 전용",
+  "status": "베타, 2026-02 이후 정체",
+  "pros": "설정 없이 즉시 사용; 의존성·블로커 시각화; 완료 알림음·브라우저 알림",
+  "cons": "관찰 위주로 세션 실행 불가; Claude Code 전용; 2026년 초 이후 개발 둔화",
+  "sources": [
+   "https://github.com/L1AD/claude-task-viewer"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kanbots",
+  "url": "https://kanbots.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "카드마다 격리된 git worktree에서 AI 에이전트가 실행되는 로컬 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Node+SQLite)",
+  "license": "MIT",
+  "agent": "CLI 11종(Claude Code·Codex·Gemini 등)+ACP; kanbots-mcp-server",
+  "status": "안정(v1.2.0, 2026-05)",
+  "pros": "11종+ACP 폭넓은 CLI 지원; 오토파일럿 하위작업 분할·병렬 실행; 카드별 브랜치 미리보기",
+  "cons": "병렬 실행 시 CPU·디스크 부담; CLI 사전 설치·인증 필요; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://github.com/leodavinci1/kanbots",
+   "https://kanbots.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "KaibanJS (Kaiban Board)",
+  "url": "https://www.kaibanjs.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반 방법론 기반 JS/TS 멀티에이전트 프레임워크와 Kaiban Board UI",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS), 호스팅 플레이그라운드",
+  "selfhost": "가능(npm·Node·Docker)",
+  "license": "MIT",
+  "agent": "JS/TS API·LangChain; Claude Code·OpenCode·Codex 어댑터; MCP",
+  "status": "활발(v0.24.1, 2026-05)",
+  "pros": "칸반 모델 기반 멀티에이전트 프레임워크; React 컴포넌트로 앱에 임베드; 문서·플레이그라운드 우수",
+  "cons": "코드 작성 필요한 개발자 프레임워크; 비개발자용 대시보드 아님; CLI 연동은 비교적 신규",
+  "sources": [
+   "https://github.com/kaiban-ai/KaibanJS",
+   "https://www.kaibanjs.com/",
+   "https://docs.kaibanjs.com/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Kanban (saltbo)",
+  "url": "https://agent-kanban.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 에이전트를 1급 주체로 다루고 실행 출처를 검증하는 에이전트 우선 작업 보드",
+  "mobile": "반응형 웹",
+  "pricing": "무료(소스 공개, FSL)",
+  "selfhost": "가능(Node·Cloudflare Workers/D1)",
+  "license": "FSL-1.1-ALv2",
+  "agent": "REST API·CLI 훅·스킬 러너; Claude Code·Codex·커스텀 에이전트",
+  "status": "활발(v1.13.4, 2026-05)",
+  "pros": "에이전트 중심 데이터 모델; 검증 가능한 실행 출처 기록; Cloudflare 엣지로 가벼움",
+  "cons": "FSL 라이선스(비표준 허용형); Node 24+·Wrangler 필요; 커뮤니티 작음",
+  "sources": [
+   "https://github.com/saltbo/agent-kanban",
+   "https://agent-kanban.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "dev-3.0",
+  "url": "https://dev3.h0x91b.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "카드마다 worktree·터미널에서 AI 에이전트가 돌아가는 1인 스튜디오용 칸반",
+  "mobile": "반응형 웹(QR 원격 접속)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(바이너리)",
+  "license": "Apache-2.0",
+  "agent": "CLI·tmux 오케스트레이션: Claude Code·Codex·Gemini·Cursor·OpenCode; AI 리뷰어",
+  "status": "매우 활발(v1.58.0, 2026-10)",
+  "pros": "dev3 remote QR로 간편 모바일 접속; 질문·AI 리뷰 전용 컬럼; diff 코멘트를 프롬프트로 전환",
+  "cons": "신생 도구·빠른 버전 변경; tmux 필요; Windows는 WSL 권장",
+  "sources": [
+   "https://github.com/h0x91b/dev-3.0",
+   "https://dev3.h0x91b.com/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "AIF Handoff",
+  "url": "https://aif.cutcode.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트가 계획·구현·리뷰를 자율 수행하고 필요 시 사람에게 넘기는 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node·SQLite·Docker)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex 런타임 어댑터; WebSocket; REST API",
+  "status": "활발 개발 중",
+  "pros": "리뷰 루프 수렴 감지 후 사람 에스컬레이션; 명확한 파이프라인 단계; 로컬 SQLite로 종속 없음",
+  "cons": "better-sqlite3 Node 버전 맞춤 필요; 단일 바이너리 배포 없음; 모바일 앱·푸시 없음",
+  "sources": [
+   "https://github.com/lee-to/aif-handoff",
+   "https://aif.cutcode.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "AI Agent Board (DanWahlin)",
+  "url": "https://github.com/DanWahlin/ai-agent-board",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "드래그앤드롭으로 코딩 에이전트 CLI에 작업을 위임하는 오픈소스 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node·Docker)",
+  "license": "MIT",
+  "agent": "CLI 어댑터: Copilot CLI·Claude Code·Codex·OpenCode·Hermes·OpenClaw",
+  "status": "활발(2026-09 푸시)",
+  "pros": "설치된 에이전트 자동 감지; Task Groups 일괄 생성; worktree 격리·PR 자동 생성",
+  "cons": "신생·소규모 커뮤니티; 모바일 앱·PWA 없음; 수동 할당 방식",
+  "sources": [
+   "https://github.com/DanWahlin/ai-agent-board"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agetor",
+  "url": "https://agetor.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "여러 코딩 에이전트를 worktree에서 병렬 실행하는 로컬 오케스트레이터·칸반",
+  "mobile": "반응형 웹(주로 macOS 데스크톱)",
+  "pricing": "무료(OSS), GitHub Sponsors",
+  "selfhost": "로컬 전용(macOS 바이너리)",
+  "license": "MIT",
+  "agent": "CLI: Claude Code·Codex·Cursor·Gemini CLI·Antigravity; 훅 비침투",
+  "status": "활발(v1.0.2, 2026-10)",
+  "pros": "설정 주입 없는 비침투 실행; tmux로 재시작 안전; 캔버스 파이프라인과 카드 연동",
+  "cons": "macOS Apple Silicon 중심; 단일 사용자·팀 협업 없음; 모바일 푸시 없음",
+  "sources": [
+   "https://github.com/alamops/agetor",
+   "https://agetor.dev",
+   "https://github.com/alamops/agetor/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kander",
+  "url": "https://dualface.dev/projects/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "규칙 기반 게이트·독립 리뷰어로 회귀를 막는 멀티에이전트 칸반 TUI",
+  "mobile": "QuickTUI 앱(iOS·Android)",
+  "pricing": "무료(OSS), QuickTUI 무료",
+  "selfhost": "로컬 전용(Homebrew·바이너리)",
+  "license": "MIT",
+  "agent": "CLI: Codex·Claude Code·Grok·Cursor·Pi; 리뷰어 에이전트 자동 배정",
+  "status": "활발(v0.9.7, 2026-10)",
+  "pros": "1,700+ 실작업 검증; 리뷰로 49% 결함 포착; QuickTUI로 모바일 조작",
+  "cons": "GUI 아닌 터미널 UI; 모바일은 외부 QuickTUI 의존; git worktree 숙련 필요",
+  "sources": [
+   "https://github.com/dualface/kander",
+   "https://dualface.dev/projects/",
+   "https://quicktui.ai/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "OverClick",
+  "url": "https://github.com/ustoppble/overclick",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트가 MCP로 카드를 실행·보고하는 프라이버시 우선 셀프호스트 작업 보드",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker Compose)",
+  "license": "MIT",
+  "agent": "MCP 서버(Claude Code·Codex·Gemini CLI 등); REST API",
+  "status": "베타(v0.4.0, 2026-09)",
+  "pros": "MCP 에이전트가 카드 자율 수령; 모델별 실측 토큰 추적; 텔레메트리 전무",
+  "cons": "초기 단계(v0.4.0); 모바일 앱·푸시 없음; Docker·AUTH_SECRET 설정 필요",
+  "sources": [
+   "https://github.com/ustoppble/overclick",
+   "https://github.com/ustoppble/overclick/releases"
+  ],
+  "confidence": "높음"
+ }
+]

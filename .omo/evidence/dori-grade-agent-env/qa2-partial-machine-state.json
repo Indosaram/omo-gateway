@@ -1,0 +1,137 @@
+{
+  "states": {
+    "15": [
+      {
+        "root": "/private/tmp/omon-task15-qa2-AX05TM",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 0
+        },
+        "decisions": [],
+        "nativeDigest": {
+          "n": 0
+        }
+      },
+      {
+        "root": "/private/tmp/omon-task15-qa2-CK16AC",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 0
+        },
+        "decisions": [],
+        "nativeDigest": {
+          "n": 0
+        }
+      }
+    ],
+    "18": [
+      {
+        "root": "/private/tmp/omon-task18-qa2-IllvXn",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 0
+        },
+        "decisions": [],
+        "nativeDigest": {
+          "n": 0
+        }
+      },
+      {
+        "root": "/private/tmp/omon-task18-qa2-pXeG9j",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 0
+        },
+        "decisions": [],
+        "nativeDigest": {
+          "n": 0
+        }
+      }
+    ],
+    "24": [
+      {
+        "root": "/private/tmp/omon-task24-qa2-MAzxre",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 0
+        },
+        "decisions": [],
+        "nativeDigest": {
+          "n": 0
+        }
+      }
+    ],
+    "25": [
+      {
+        "root": "/private/tmp/omon-task25-qa2-JK9aEf",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 2
+        },
+        "decisions": [
+          {
+            "class": "bot",
+            "status": "open",
+            "n": 1
+          },
+          {
+            "class": "owner",
+            "status": "open",
+            "n": 1
+          }
+        ],
+        "nativeDigest": {
+          "n": 0
+        }
+      }
+    ],
+    "26": [
+      {
+        "root": "/private/tmp/omon-task26-qa2-0PK82X",
+        "lanes": [],
+        "usage": [],
+        "items": {
+          "n": 1
+        },
+        "decisions": [
+          {
+            "class": "bot",
+            "status": "open",
+            "n": 1
+          }
+        ],
+        "nativeDigest": {
+          "n": 0
+        }
+      }
+    ]
+  },
+  "sinkProof": [
+    {
+      "todo": 15,
+      "root": "/private/tmp/omon-task15-qa2-AX05TM",
+      "requests": 0
+    },
+    {
+      "todo": 15,
+      "root": "/private/tmp/omon-task15-qa2-CK16AC",
+      "requests": 0
+    },
+    {
+      "todo": 18,
+      "root": "/private/tmp/omon-task18-qa2-IllvXn",
+      "requests": 0
+    },
+    {
+      "todo": 18,
+      "root": "/private/tmp/omon-task18-qa2-pXeG9j",
+      "requests": 0
+    }
+  ]
+}

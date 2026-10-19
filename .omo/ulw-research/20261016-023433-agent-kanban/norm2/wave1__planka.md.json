@@ -1,0 +1,37 @@
+[
+ {
+  "name": "Planka",
+  "url": "https://planka.app",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "React/Node.js 기반 실시간 협업 칸반 보드(커스텀 필드·시간 추적)",
+  "mobile": "반응형 웹·PWA(공식 네이티브 앱 없음)",
+  "pricing": "Community 무료 / Pro €7.20~/사용자/월",
+  "selfhost": "가능(Docker·Helm·수동 설치)",
+  "license": "PLANKA Community License",
+  "agent": "REST API·웹훅·CLI(plnk)·커뮤니티 MCP; Claude Code·Cursor 등",
+  "status": "활발(v2.2.1, 2026-08)",
+  "pros": "실시간 동기화되는 경량 Trello 대안; OpenAPI REST API·MCP 서버·CLI 생태계; 자체 호스팅 내부 사용 무료",
+  "cons": "비OSI 라이선스로 상업 호스팅 제한; SSO·태블릿 최적화 등 Pro 유료화; 공식 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://github.com/plankanban/planka",
+   "https://planka.app/pricing",
+   "https://planka.app/pro",
+   "https://docs.planka.cloud/docs/welcome/",
+   "https://docs.planka.cloud/docs/community-or-pro",
+   "https://docs.planka.cloud/docs/community/projects",
+   "https://docs.planka.cloud/docs/api-reference/python",
+   "https://plankanban.github.io/planka/swagger-ui/swagger.json",
+   "https://raw.githubusercontent.com/plankanban/planka/master/LICENSES/PLANKA%20Community%20License%20EN.md",
+   "https://raw.githubusercontent.com/plankanban/planka/master/LICENSES/PLANKA%20Commercial%20License%20EN.md",
+   "https://raw.githubusercontent.com/plankanban/planka/master/LICENSES/PLANKA%20License%20Guide%20EN.md",
+   "https://github.com/plankanban/planka/releases",
+   "https://github.com/gogogadgetbytes/planka-mcp",
+   "https://github.com/HexiDev/planka-mcp-kanban",
+   "https://github.com/bradrisse/kanban-mcp",
+   "https://github.com/plattnum/planka-cli",
+   "https://github.com/LouisHDev/planka_app"
+  ],
+  "confidence": "높음"
+ }
+]

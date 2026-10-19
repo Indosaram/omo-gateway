@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "active_work_id": null,
+  "active_work_id": "autonomy-two-axis",
   "works": {
     "daemon-multiplexer-agent-workspaces": {
       "work_id": "daemon-multiplexer-agent-workspaces",
@@ -21,9 +21,142 @@
       ],
       "status": "completed",
       "worktree_path": "/Users/indo/code/project/omon-gateway-wt/omomeow-migration-w1"
+    },
+    "dori-grade-agent-env": {
+      "work_id": "dori-grade-agent-env",
+      "active_plan": ".omo/plans/dori-grade-agent-env.md",
+      "plan_name": "dori-grade-agent-env",
+      "session_ids": [
+        "senpi:01a123f9-7fea-7e15-b769-45ce3aae26aa"
+      ],
+      "status": "completed",
+      "worktree_path": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+      "baseline_worktree": "/Users/indo/code/project/omon-gateway-wt/dori-grade-agent-env",
+      "completed_tasks": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "16",
+        "17",
+        "18",
+        "19",
+        "21",
+        "22",
+        "23",
+        "24",
+        "27",
+        "30",
+        "31",
+        "33",
+        "34",
+        "35",
+        "20",
+        "32",
+        "15",
+        "25",
+        "26",
+        "28",
+        "29",
+        "36",
+        "37",
+        "F1",
+        "F2",
+        "F3",
+        "F4"
+      ],
+      "in_progress_tasks": [],
+      "progress": "41/41",
+      "last_task_completed": {
+        "task": "36,37,F1-F4",
+        "reviewer": "gate reviewer + production e2e",
+        "verdict": "confirmed"
+      },
+      "completed_at": "2026-10-12T08:00:26.233Z"
+    },
+    "autonomy-two-axis": {
+      "work_id": "autonomy-two-axis",
+      "active_plan": ".omo/plans/autonomy-two-axis.md",
+      "plan_name": "autonomy-two-axis",
+      "session_ids": [
+        "senpi:01a146f5-dd65-753d-afad-c9c0f0dd88f9"
+      ],
+      "status": "completed",
+      "worktree_path": "/Users/indo/code/project/omon-gateway-wt/autonomy",
+      "base": "slack-channel@e87390e + f7e6c41 WIP snapshot"
     }
   },
-  "active_work": null,
-  "status": "completed",
-  "completed_at": "2026-10-07T17:03:00.982Z"
+  "active_work": {
+    "work_id": "dori-grade-agent-env",
+    "active_plan": ".omo/plans/dori-grade-agent-env.md",
+    "plan_name": "dori-grade-agent-env",
+    "session_ids": [
+      "senpi:01a123f9-7fea-7e15-b769-45ce3aae26aa"
+    ],
+    "status": "completed",
+    "worktree_path": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+    "baseline_worktree": "/Users/indo/code/project/omon-gateway-wt/dori-grade-agent-env",
+    "completed_tasks": [
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+      "8",
+      "9",
+      "10",
+      "11",
+      "12",
+      "13",
+      "14",
+      "16",
+      "17",
+      "18",
+      "19",
+      "21",
+      "22",
+      "23",
+      "24",
+      "27",
+      "30",
+      "31",
+      "33",
+      "34",
+      "35",
+      "20",
+      "32",
+      "15",
+      "25",
+      "26",
+      "28",
+      "29",
+      "36",
+      "37",
+      "F1",
+      "F2",
+      "F3",
+      "F4"
+    ],
+    "in_progress_tasks": [],
+    "progress": "41/41",
+    "last_task_completed": {
+      "task": "36,37,F1-F4",
+      "reviewer": "gate reviewer + production e2e",
+      "verdict": "confirmed"
+    },
+    "completed_at": "2026-10-12T08:00:26.233Z"
+  },
+  "status": "completed"
 }

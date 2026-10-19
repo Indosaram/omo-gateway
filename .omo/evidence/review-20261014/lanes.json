@@ -1,0 +1,105 @@
+{
+  "lanes": [
+    [
+      "discord-adapter-a",
+      "src/discord/adapter.rs (lines 1-2800)"
+    ],
+    [
+      "discord-adapter-b",
+      "src/discord/adapter.rs (lines 2800-end)"
+    ],
+    [
+      "discord-commands",
+      "src/discord/commands.rs, src/discord/buttons.rs"
+    ],
+    [
+      "discord-auth",
+      "src/discord/approval.rs, src/discord/pairing.rs, src/discord/attachments.rs, src/discord/throttler.rs, src/discord/table_render/mod.rs, src/discord/mod.rs"
+    ],
+    [
+      "main-runtime-a",
+      "src/main.rs (lines 1-2600)"
+    ],
+    [
+      "main-runtime-b",
+      "src/main.rs (lines 2600-end), src/entry.rs, src/drain_control.rs, src/readiness.rs"
+    ],
+    [
+      "dashboard",
+      "src/dashboard.rs, src/dashboard_runtime.rs"
+    ],
+    [
+      "multiplexer",
+      "src/multiplexer/*.rs"
+    ],
+    [
+      "agent-backend",
+      "src/agent/omo_backend.rs, src/agent/omo_protocol.rs, src/agent/omo_activity.rs, src/agent/backend.rs"
+    ],
+    [
+      "agent-runtime",
+      "src/agent/omo_daemon.rs, src/agent/omo_config.rs, src/agent/llm.rs, src/agent/agent_workspace.rs, src/agent/workspace_migration.rs, src/agent/mod.rs"
+    ],
+    [
+      "cron-scheduler",
+      "src/cron/scheduler.rs"
+    ],
+    [
+      "cron-store-exec",
+      "src/cron/store.rs, src/cron/executor.rs, src/cron/remediate.rs, src/cron/report.rs, src/cron/health.rs, src/cron/ack.rs, src/cron/guard.rs, src/cron/mod.rs"
+    ],
+    [
+      "tools-exec",
+      "src/tools/terminal.rs, src/tools/file.rs, src/tools/browser.rs, src/tools/web.rs, src/tools/mcp.rs"
+    ],
+    [
+      "tools-context",
+      "src/tools/cron.rs, src/tools/message_context.rs, src/tools/message_context_lazy.rs, src/tools/skills.rs, src/tools/mod.rs"
+    ],
+    [
+      "security",
+      "src/security/*.rs"
+    ],
+    [
+      "lanes-runner",
+      "src/lanes/runner.rs, src/lanes/state.rs, src/lanes/dispatch.rs, src/lanes/activity.rs, src/lanes/discord_threads.rs, src/lanes/mod.rs"
+    ],
+    [
+      "lanes-signals",
+      "src/lanes/signals.rs, src/lanes/settle.rs, src/lanes/kibitzer.rs, src/lanes/scrub.rs"
+    ],
+    [
+      "lanes-surface",
+      "src/lanes/cli.rs, src/lanes/guard.rs, src/lanes/posts.rs, src/storage/lanes.rs"
+    ],
+    [
+      "sessions-judge",
+      "src/sessions/*.rs, src/judge/mod.rs"
+    ],
+    [
+      "storage-ledger",
+      "src/storage/db.rs, src/storage/message_search.rs, src/storage/messenger_policy.rs, src/ledger/service.rs, src/memory/store.rs, src/mirror.rs, src/models/*.rs, src/storage/mod.rs, src/ledger/mod.rs, src/memory/mod.rs, src/lib.rs, src/error.rs"
+    ],
+    [
+      "inbox-migrate-voice",
+      "src/inbox/**/*.rs, src/migrate/*.rs, src/voice/*.rs, src/voice_transcription.rs, src/profiles/*.rs, src/usage.rs, src/work_heartbeat.rs"
+    ],
+    [
+      "web-deploy",
+      "web/src/**, migrations/*.sql, scripts/*, Dockerfile, docker-compose*.yml / compose*.yml, Cargo.toml"
+    ]
+  ],
+  "opus": [
+    "discord-adapter-a",
+    "discord-adapter-b",
+    "main-runtime-a",
+    "agent-backend",
+    "agent-runtime",
+    "cron-scheduler",
+    "multiplexer",
+    "security",
+    "lanes-runner",
+    "lanes-signals",
+    "tools-exec"
+  ]
+}

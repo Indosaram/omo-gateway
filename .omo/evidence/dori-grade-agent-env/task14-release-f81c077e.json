@@ -1,0 +1,10 @@
+{
+  "status": "released",
+  "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binarySha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+  "manifest": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/duplicate-final-20261011T184722Z-recovery-post-manifest.sha256",
+  "manifestSha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+  "parentReceipt": "duplicate-final-20261011T184722Z-release.json",
+  "authorization": "One unchanged task14 helper actual QA authorized by parent user",
+  "limitations": "Initial build101 due to removed TMPDIR, recovery build0; prior backend timeout remains unverified, historical baseline limitations retained"
+}

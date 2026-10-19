@@ -1,0 +1,53 @@
+[
+ {
+  "name": "Jira Boards",
+  "url": "https://www.atlassian.com/software/jira",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "WIP 제한·자동화 지원 칸반/스크럼 보드, 보드에 AI 에이전트 협업 내장",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료(10명) / Standard $8.48·Premium $15.56/사용자/월",
+  "selfhost": "일부(Data Center, Rovo 미포함)",
+  "license": "상용",
+  "agent": "Rovo MCP·twg-cli·REST API; Claude Code·Cursor·Copilot·Codex",
+  "status": "활발(주간 릴리스)",
+  "pros": "업계 표준 칸반·커스텀 워크플로; 컬럼 이동 시 에이전트 트리거; Agent Sessions 추적 뷰",
+  "cons": "복잡한 설정·높은 학습 곡선; AI 기능은 유료·기업 이메일 필요; 크레딧 초과 과금",
+  "sources": [
+   "https://www.atlassian.com/software/jira",
+   "https://www.atlassian.com/software/jira/pricing",
+   "https://www.atlassian.com/agile/kanban/boards",
+   "https://www.atlassian.com/software/jira/mobile-app",
+   "https://apps.apple.com/us/app/jira-cloud-by-atlassian/id1006972087",
+   "https://play.google.com/store/apps/details?id=com.atlassian.android.jira.core",
+   "https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Atlassian Rovo Agents & Rovo Dev / Coding Agent",
+  "url": "https://www.atlassian.com/software/rovo",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Teamwork Graph 기반 엔터프라이즈 AI 에이전트 플랫폼, Jira 코딩 에이전트 포함",
+  "mobile": "Jira Cloud iOS·Android 앱, 반응형 웹",
+  "pricing": "유료 Jira 플랜 크레딧 포함, 초과 $0.01/크레딧",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "원격 MCP(양방향)·twg CLI·REST; Copilot·Claude Code·Cursor",
+  "status": "활발(빠른 확장)",
+  "pros": "Jira·Confluence·30+ 커넥터 통합; 컬럼 진입·@멘션 등 다양한 트리거; 양방향 MCP 지원",
+  "cons": "클라우드 종속; 종량제 크레딧으로 비용 예측 어려움; Rovo Studio는 Premium 이상",
+  "sources": [
+   "https://www.atlassian.com/software/rovo",
+   "https://support.atlassian.com/rovo/docs/rovo-usage-limits/",
+   "https://support.atlassian.com/atlassian-ai-gateway/docs/use-atlassian-rovo-mcp-server/",
+   "https://support.atlassian.com/jira-software-cloud/docs/collaborate-on-work-items-with-ai-agents/",
+   "https://support.atlassian.com/jira-software-cloud/docs/what-is-the-jira-coding-agent/",
+   "https://support.atlassian.com/organization-administration/docs/add-an-external-mcp-server-from-atlassian-administration/",
+   "https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/",
+   "https://support.atlassian.com/atlassian-ai-gateway/docs/set-up-clients/"
+  ],
+  "confidence": "높음"
+ }
+]

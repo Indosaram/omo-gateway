@@ -1,0 +1,72 @@
+[
+ {
+  "name": "Aizen",
+  "url": "https://aizen.win/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "브랜치별 격리 환경에서 AI 코딩 에이전트를 병렬 실행하는 네이티브 macOS 작업공간",
+  "mobile": "없음(macOS 전용)",
+  "pricing": "무료(GPL) / Pro $5.99/월·$59/년 / 평생 $179",
+  "selfhost": "로컬 전용",
+  "license": "GPL-3.0",
+  "agent": "ACP·MCP 마켓·CLI; Claude Code·Codex·OpenCode·Gemini CLI",
+  "status": "v1.0.83 최종, 2.0 개발 중",
+  "pros": "libghostty 기반 고성능 네이티브 터미널; ACP로 임의 에이전트·MCP 연결; git worktree 병렬 환경·tmux 세션 유지",
+  "cons": "칸반·작업 보드 없음; Apple Silicon macOS 전용; 2.0 구조 개편 중·팀 동기화 없음",
+  "sources": [
+   "https://aizen.win/",
+   "https://yetanotherorchestrator.app/apps/aizen",
+   "https://github.com/vivy-company/aizen",
+   "https://github.com/vivy-company/aizen/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Aperant",
+  "url": "https://aperant.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "계획·구현·테스트·QA를 자동 수행하는 멀티 에이전트 코딩 프레임워크(구 Auto Claude)",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS) / 클라우드 v3.0 가격 미정",
+  "selfhost": "로컬 전용",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code CLI·멀티모델 API·MCP 클라이언트; Linear·GitHub·GitLab",
+  "status": "v2.7.6 안정판, v3.0 재작성 중",
+  "pros": "병렬 에이전트용 칸반 보드; 계획→AI QA→사람 검토 자동화; 작업별 worktree 격리·토큰 관리",
+  "cons": "웹·모바일 없음; v3.0 재작성으로 PR 중단; Electron 리소스 부담·Claude Code 편중",
+  "sources": [
+   "https://aperant.com/",
+   "https://yetanotherorchestrator.app/apps/aperant",
+   "https://github.com/AndyMik90/Aperant",
+   "https://github.com/AndyMik90/Aperant/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Atrium",
+  "url": "https://getatrium.dev/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "최대 49개 AI 코딩 에이전트를 병렬 실행하는 로컬 우선 작업공간·멀티플렉서",
+  "mobile": "iOS·iPadOS 앱(TestFlight 베타)",
+  "pricing": "무료(얼리 액세스) / 유료 가격 미공개",
+  "selfhost": "로컬 전용(Linux 헤드리스 데몬)",
+  "license": "상용(어댑터는 오픈소스)",
+  "agent": "CLI·훅·MCP(하네스 경유); Claude Code·Codex·OpenCode 등 12+",
+  "status": "v0.345.0, 수일 간격 업데이트",
+  "pros": "카드 내 실시간 에이전트 채팅 칸반; 가장 폭넓은 CLI 에이전트 지원; iOS 앱·스크립트형 JSON CLI",
+  "cons": "코어 클라이언트 비공개; GUI는 macOS·Windows만; 모바일은 iOS 비공개 베타·학습 곡선 가파름",
+  "sources": [
+   "https://getatrium.dev/",
+   "https://yetanotherorchestrator.app/apps/atrium",
+   "https://getatrium.dev/docs",
+   "https://getatrium.dev/docs/panes/tasks",
+   "https://getatrium.dev/docs/concepts/tasks",
+   "https://getatrium.dev/docs/reference/cli",
+   "https://getatrium.dev/docs/mobile",
+   "https://getatrium.dev/docs/adapters"
+  ],
+  "confidence": "높음"
+ }
+]

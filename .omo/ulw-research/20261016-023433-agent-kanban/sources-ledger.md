@@ -1,0 +1,1421 @@
+# Sources ledger (auto, 2026-10-16T03:28:58.820Z)
+reports: 331 tool blocks · unique URLs: 1418 · unique domains: 300
+
+- https://chatgpt.com/codex — OpenAI Codex Cloud Tasks Dashboard
+- https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan — OpenAI Codex Cloud Tasks Dashboard
+- https://chatgpt.com/pricing/ — OpenAI Codex Cloud Tasks Dashboard
+- https://learn.chatgpt.com/docs/cloud — OpenAI Codex Cloud Tasks Dashboard
+- https://learn.chatgpt.com/docs/mobile — OpenAI Codex Cloud Tasks Dashboard
+- https://learn.chatgpt.com/docs/codex-sdk — OpenAI Codex Cloud Tasks Dashboard
+- https://learn.chatgpt.com/docs/codex/cli — OpenAI Codex Cloud Tasks Dashboard
+- https://learn.chatgpt.com/docs/changelog — OpenAI Codex Cloud Tasks Dashboard
+- https://github.com/openai/codex — OpenAI Codex Cloud Tasks Dashboard
+- https://apps.nextcloud.com/apps/deck — Nextcloud Deck
+- https://github.com/nextcloud/deck — Nextcloud Deck
+- https://github.com/nextcloud-releases/deck/releases — Nextcloud Deck
+- https://deck.readthedocs.io/en/latest/API/ — Nextcloud Deck
+- https://nextcloud.com/pricing/ — Nextcloud Deck
+- https://github.com/cbcoutinho/nextcloud-mcp-server — Nextcloud Deck
+- https://github.com/cbcoutinho/nextcloud-mcp-server/blob/master/docs/deck.md — Nextcloud Deck
+- https://github.com/fastbs/mcp-nextcloud-deck — Nextcloud Deck
+- https://github.com/raspbeguy/ncdeck — Nextcloud Deck
+- https://github.com/stefan-niedermann/nextcloud-deck — Nextcloud Deck
+- https://github.com/holger-dev/nextdeck — Nextcloud Deck
+- https://github.com/hweihwang/nextcloud-deck-desktop-releases — Nextcloud Deck
+- https://docs.gitlab.com/ee/user/project/issue_board.html — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://about.gitlab.com/pricing/ — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://docs.gitlab.com/ee/api/boards.html — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://docs.gitlab.com/ee/user/project/issues/managing_issues.html — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://raw.githubusercontent.com/modelcontextprotocol/servers-archived/main/src/gitlab/README.md — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://raw.githubusercontent.com/gitlabhq/gitlabhq/master/README.md — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://raw.githubusercontent.com/gitlabhq/gitlabhq/master/LICENSE — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://raw.githubusercontent.com/profclems/glab/trunk/README.md — GitLab Issue Boards (CE Self-Host & SaaS)
+- https://www.omnara.com/ — Omnara
+- https://www.omnara.co/ — Omnara
+- https://www.omnara.com/pricing — Omnara
+- https://github.com/omnara-ai/omnara — Omnara
+- https://api.github.com/repos/omnara-ai/omnara — Omnara
+- https://api.github.com/repos/omnara-ai/omnara/releases — Omnara
+- https://docs.omnara.com/introduction — Omnara
+- https://docs.omnara.com/tools/mcp — Omnara
+- https://docs.omnara.com/api/authentication — Omnara
+- https://docs.omnara.com/changelog — Omnara
+- https://www.omnara.com/blog/mobile-coding-landscape — Omnara
+- https://github.com/wandb/catnip — Catnip
+- https://github.com/HarleyCoops/catnip — Catnip
+- https://github.com/barstoolbluz/agentic-development-with-flox — Catnip
+- https://github.com/bradAGI/awesome-cli-coding-agents — Catnip
+- https://github.com/gabrielmoreira/awesome-ai-rabbit-holes — Catnip
+- https://catnip.run — Catnip
+- https://github.com/BloopAI/vibe-kanban — Vibe Kanban
+- https://vibekanban.com — Vibe Kanban
+- https://github.com/p-wegner/agentic-kanban — Vibe Kanban
+- https://github.com/saltbo/agent-kanban — Agent Kanban (saltbo)
+- https://agent-kanban.dev — Agent Kanban (saltbo)
+- https://github.com/automagik-dev/forge — Automagik Forge
+- https://forge.automag.ik — Automagik Forge
+- https://github.com/5dive-ai/5dive — 5dive
+- https://5dive.ai — 5dive
+- https://t.me/FiveDiveBot — 5dive
+- https://github.com/dustinblack/agent-dashboard — Agent Dashboard (dustinblack)
+- https://github.com/dustinblack/agent-dashboard/blob/main/docs/agent-profiles.md — Agent Dashboard (dustinblack)
+- https://github.com/kronos3610/agent-kanban-pm — Agent Kanban PM (kronos3610)
+- https://pypi.org/project/agent-kanban-pm/ — Agent Kanban PM (kronos3610)
+- https://plane.so — Plane
+- https://github.com/makeplane/plane — Plane
+- https://plane.so/pricing — Plane
+- https://replit.com/mobile — Replit Agent (Replit Mobile)
+- https://replit.com/pricing — Replit Agent (Replit Mobile)
+- https://github.com/mobile — GitHub Mobile (Copilot Workspace / Agent PRs)
+- https://github.com/features/copilot — GitHub Mobile (Copilot Workspace / Agent PRs)
+- https://github.com/yashagldit/PocketShell — PocketShell
+- https://pocketshell.app — PocketShell
+- https://github.com/Tomyail/herdr-connect — Herdr Connect
+- https://testflight.apple.com/join/ZkRzJ6rm — Herdr Connect
+- https://github.com/sohampawar1866/claude-remote-runner — Claude Remote Runner
+- https://www.npmjs.com/package/@sohampawar1866/remote-claude — Claude Remote Runner
+- https://github.com/0cv/herdr-mobile-relay — Herdr Mobile Relay
+- https://herdr.dev — Herdr Mobile Relay
+- https://github.com/powerfooI/roamgate — Roamgate
+- https://roamgate.dev/ — Roamgate
+- https://github.com/dreamwing/clawbridge — ClawBridge
+- https://clawbridge.app/ — ClawBridge
+- https://github.com/kdlbs/kandev — Kandev
+- https://kandev.ai — Kandev
+- https://github.com/weellio/gander — Gander
+- https://github.com/777genius/agent-teams-ai — Agent Teams AI
+- https://agentteams.live — Agent Teams AI
+- https://github.com/chenhg5/cc-connect — cc-connect
+- https://github.com/chenhg5/cc-connect/releases — cc-connect
+- https://github.com/NanmiCoder/cc-haha — cc-haha
+- https://cchaha.ai — cc-haha
+- https://github.com/overwirehq/claude-code-telegram — Claude Code Telegram Bot (overwirehq/claude-code-telegram)
+- https://github.com/PleasePrompto/ductor — Ductor
+- https://ductor.dev — Ductor
+- https://github.com/kaida-palooza/ccpoke — ccpoke
+- https://github.com/raravel/Agent4Discord — Agent4Discord
+- https://github.com/All-Hands-AI/OpenHands — OpenHands
+- https://openhands.dev — OpenHands
+- https://www.all-hands.dev/pricing — OpenHands
+- https://devin.ai — Devin (Devin for Slack / Mobile Web)
+- https://cognition.ai — Devin (Devin for Slack / Mobile Web)
+- https://github.com/phodal/routa — Routa
+- https://phodal.github.io/routa/ — Routa
+- https://www.zenhub.com — ZenHub
+- https://www.zenhub.com/pricing — ZenHub
+- https://developers.zenhub.com — ZenHub
+- https://developers.zenhub.com/graphql-api-docs/getting-started — ZenHub
+- https://github.com/ZenHubIO/API — ZenHub
+- https://www.zenhub.com/terms-of-service — ZenHub
+- https://github.com/daniel-pittman/zenhub-cli — ZenHub
+- https://github.com/derekbar90/zenhub-mcp — ZenHub
+- https://raw.githubusercontent.com/daniel-pittman/zenhub-cli/develop/README.md — zenhub-cli (`zh`) & Bundled MCP Server
+- https://raw.githubusercontent.com/daniel-pittman/zenhub-cli/develop/CLAUDE.md — zenhub-cli (`zh`) & Bundled MCP Server
+- https://api.github.com/repos/daniel-pittman/zenhub-cli/releases — zenhub-cli (`zh`) & Bundled MCP Server
+- https://raw.githubusercontent.com/derekbar90/zenhub-mcp/main/README.md — zenhub-mcp (TypeScript)
+- https://api.github.com/repos/derekbar90/zenhub-mcp — zenhub-mcp (TypeScript)
+- https://kiro.dev — Kiro (AWS)
+- https://kiro.dev/pricing/ — Kiro (AWS)
+- https://kiro.dev/mobile/ — Kiro (AWS)
+- https://kiro.dev/docs/specs/ — Kiro (AWS)
+- https://kiro.dev/docs/hooks/ — Kiro (AWS)
+- https://kiro.dev/docs/hooks/types/ — Kiro (AWS)
+- https://kiro.dev/docs/acp/ — Kiro (AWS)
+- https://kiro.dev/license/ — Kiro (AWS)
+- https://github.com/grg-lab/kiro-specs-dashboard — Kiro (AWS)
+- https://www.kaibanjs.com/ — KaibanJS
+- https://github.com/kaiban-ai/KaibanJS — KaibanJS
+- https://github.com/kaiban-ai/kaiban-board — KaibanJS
+- https://docs.kaibanjs.com/ — KaibanJS
+- https://agent-kanban.dev/ — Agent Kanban
+- https://github.com/rookedsysc/kanvibe — KanVibe
+- https://news.ycombinator.com/item?id=47031388 — KanVibe
+- https://github.com/TechDufus/openkanban — OpenKanban
+- https://news.ycombinator.com/item?id=46892301 — OpenKanban
+- https://github.com/moridinamael/platespinner — PlateSpinner
+- https://news.ycombinator.com/item?id=47281358 — PlateSpinner
+- https://mootasks.dev — Moo Tasks
+- https://github.com/dizlexic/moo-tasks — Moo Tasks
+- https://news.ycombinator.com/item?id=47954002 — Moo Tasks
+- https://sortie-ai.com/ — Sortie
+- https://docs.sortie-ai.com/ — Sortie
+- https://github.com/sortie-ai/sortie — Sortie
+- https://github.com/asheshgoplani/agent-deck — Agent Deck
+- https://news.ycombinator.com/item?id=46272551 — Agent Deck
+- https://offrun.dev/ — Offrun
+- https://news.ycombinator.com/item?id=49247385 — Offrun
+- https://ao-agents.com/ — Agent Orchestrator (Orchestrator.inc)
+- https://orchestrator.inc/ — Agent Orchestrator (Orchestrator.inc)
+- https://github.com/OrchestratorInc/agent-orchestrator — Agent Orchestrator (Orchestrator.inc)
+- https://mindflock.ai — MindFlock
+- https://github.com/MindFlock/MindFlock — MindFlock
+- https://news.ycombinator.com/item?id=47926410 — MindFlock
+- https://maestro-build.com — Maestro
+- https://github.com/PlathsOven/maestro — Maestro
+- https://app.maestro-build.com — Maestro
+- https://news.ycombinator.com/item?id=49018431 — Maestro
+- https://relayd.dev — Relayd
+- https://relayd.dev/manifest.webmanifest — Relayd
+- https://news.ycombinator.com/item?id=46678461 — Relayd
+- https://github.com/NeuralNomadsAI/CodeNomad — CodeNomad
+- https://neuralnomadsai.github.io/CodeNomad/ — CodeNomad
+- https://agentsmesh.ai — AgentsMesh
+- https://agentsmesh.ai/docs — AgentsMesh
+- https://agentsmesh.ai/pricing — AgentsMesh
+- https://github.com/AgentsMesh/AgentsMesh — AgentsMesh
+- https://news.ycombinator.com/item?id=47249381 — AgentsMesh
+- https://try-cairn.com — Cairn
+- https://github.com/cairn-dev/cairn — Cairn
+- https://news.ycombinator.com/item?id=44415849 — Cairn
+- https://www.terragonlabs.com/ — Terragon (Terragon Labs)
+- https://github.com/terragon-labs/terragon-oss — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/README.md — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/mobile.mdx — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/resources/billing.mdx — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/resources/shutdown.mdx — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/integrations/cli.mdx — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/configuration/mcp-setup.mdx — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/tasks/managing-tasks.mdx — Terragon (Terragon Labs)
+- https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/cli/src/mcp-server/index.ts — Terragon (Terragon Labs)
+- https://registry.npmjs.org/@terragon-labs/cli — Terragon (Terragon Labs)
+- https://www.openproject.org — OpenProject
+- https://www.openproject.org/pricing/ — OpenProject
+- https://www.openproject.org/docs/api/ — OpenProject
+- https://www.openproject.org/docs/system-admin-guide/integrations/mcp-server/ — OpenProject
+- https://www.openproject.org/docs/mobile-app-guide/ — OpenProject
+- https://www.openproject.org/docs/installation-and-operations/installation/ — OpenProject
+- https://www.openproject.org/docs/faq/ — OpenProject
+- https://github.com/opf/openproject — OpenProject
+- https://github.com/opf/openproject/releases — OpenProject
+- https://height.app — Height
+- https://github.com/api-evangelist/height — Height
+- https://raw.githubusercontent.com/adamski/height-to-linear-export/main/README.md — Height
+- https://raw.githubusercontent.com/adamski/height-to-linear-export/main/IMPORT_GUIDE.md — Height
+- https://www.taskade.com — Taskade AI Agents
+- https://www.taskade.com/pricing — Taskade AI Agents
+- https://www.taskade.com/create — Taskade AI Agents
+- https://www.taskade.com/downloads — Taskade AI Agents
+- https://www.usemotion.com — Motion AI
+- https://www.usemotion.com/pricing — Motion AI
+- https://docs.usemotion.com — Motion AI
+- https://github.com/rhymiz/python-motion — Motion AI
+- https://paperclip.ing — Paperclip
+- https://github.com/paperclipai/paperclip — Paperclip
+- https://docs.paperclip.ing — Paperclip
+- https://www.vibekanban.com — Vibe Kanban (BloopAI)
+- https://raw.githubusercontent.com/BloopAI/vibe-kanban/main/Cargo.toml — Vibe Kanban (BloopAI)
+- https://raw.githubusercontent.com/BloopAI/vibe-kanban/main/crates/mcp/src/task_server/mod.rs — Vibe Kanban (BloopAI)
+- https://github.com/steveyegge/gastown — Gas Town
+- https://github.com/steveyegge/gastown/blob/main/docs/glossary.md — Gas Town
+- https://github.com/GumbyEnder/agent-relay — Dev Boards (Agent Relay)
+- https://raw.githubusercontent.com/GumbyEnder/agent-relay/main/README.md — Dev Boards (Agent Relay)
+- https://raw.githubusercontent.com/GumbyEnder/agent-relay/main/LICENSE — Dev Boards (Agent Relay)
+- https://platypus.chat — Platypus
+- https://github.com/willdady/platypus — Platypus
+- https://docs.platypus.chat — Platypus
+- https://github.com/shiquda/roadmap-skill — Roadmap Skill
+- https://www.npmjs.com/package/roadmap-skill — Roadmap Skill
+- https://github.com/BaldissaraMatheus/Tasks.md — Tasks.md
+- https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/README.md — Tasks.md
+- https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/LICENSE — Tasks.md
+- https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/backend/server.js — Tasks.md
+- https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/frontend/vite.config.js — Tasks.md
+- https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/frontend/src/card-content-utils.js — Tasks.md
+- https://hub.docker.com/v2/repositories/baldissaramatheus/tasks.md — Tasks.md
+- https://github.com/BaldissaraMatheus/Tasks.md/releases — Tasks.md
+- https://github.com/BaldissaraMatheus?tab=repositories — Tasks.md
+- https://github.com/BaldissaraMatheus/Tasks.md/issues/49 — Tasks.md
+- https://about.gitea.com/ — Gitea
+- https://about.gitea.com/pricing/ — Gitea
+- https://docs.gitea.com/ — Gitea
+- https://gitea.com/api/v1/swagger — Gitea
+- https://gitea.com/swagger.v1.json — Gitea
+- https://github.com/go-gitea/gitea — Gitea
+- https://github.com/go-gitea/gitea/releases/tag/v28.1.0 — Gitea
+- https://gitea.com/gitea/tea — Gitea
+- https://codeberg.org/gitnex/GitNex — Gitea
+- https://forgejo.org/ — Forgejo
+- https://forgejo.org/faq/ — Forgejo
+- https://forgejo.org/compare-to-gitea/ — Forgejo
+- https://codeberg.org/forgejo/forgejo — Forgejo
+- https://codeberg.org/api/v1/repos/forgejo/forgejo/releases — Forgejo
+- https://codeberg.org/ — Forgejo
+- https://conductor.build — Conductor
+- https://conductor.build/docs — Conductor
+- https://conductor.build/pricing — Conductor
+- https://conductor.build/changelog — Conductor
+- https://conductor.build/docs/api — Conductor
+- https://conductor.build/docs/api/mcp — Conductor
+- https://conductor.build/docs/concepts/workspaces-and-branches — Conductor
+- https://conductor.build/docs/concepts/parallel-agents — Conductor
+- https://conductor.build/docs/concepts/workflow — Conductor
+- https://conductor.build/docs/concepts/git-worktrees — Conductor
+- https://conductor.build/docs/cloud — Conductor
+- https://conductor.build/terms — Conductor
+- https://conductor.build/privacy — Conductor
+- https://conductor.build/docs/reference/privacy — Conductor
+- https://apps.apple.com/us/app/conductor-build/id6791228564 — Conductor
+- https://conductor.build/blog — Conductor
+- https://docs.devin.ai — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/admin/billing/self-serve.md — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/work-with-devin/devin-session-tools.md — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/work-with-devin/devin-mcp.md — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/work-with-devin/devin-handoff.md — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/cloud/outposts/overview.md — Devin (Cognition) Sessions Dashboard
+- https://github.com/club-cog/devin-handoff — Devin (Cognition) Sessions Dashboard
+- https://github.com/CognitionAI/devin-outpost-k8s — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/release-notes/overview.md — Devin (Cognition) Sessions Dashboard
+- https://docs.devin.ai/integrations/linear.md — Devin + Linear
+- https://docs.devin.ai/product-guides/automations.md — Devin + Linear
+- https://linear.app/pricing — Devin + Linear
+- https://docs.devin.ai/integrations/jira.md — Devin + Jira
+- https://marketplace.atlassian.com/4162823004 — Devin + Jira
+- https://www.atlassian.com/software/jira/pricing — Devin + Jira
+- https://docs.devin.ai/integrations/slack.md — Devin + Slack
+- https://docs.devin.ai/tutorial-library/slack-bug-fix.md — Devin + Slack
+- https://slack.com/pricing — Devin + Slack
+- https://kan.bn — Kan (kan.bn)
+- https://kan.bn/pricing — Kan (kan.bn)
+- https://github.com/kanbn/kan — Kan (kan.bn)
+- https://github.com/kanbn — Kan (kan.bn)
+- https://docs.kan.bn — Kan (kan.bn)
+- https://docs.kan.bn/introduction — Kan (kan.bn)
+- https://docs.kan.bn/integrations/mcp-server — Kan (kan.bn)
+- https://docs.kan.bn/guides/self-hosting/introduction — Kan (kan.bn)
+- https://docs.kan.bn/guides/self-hosting/s3 — Kan (kan.bn)
+- https://docs.kan.bn/api-reference/introduction — Kan (kan.bn)
+- https://docs.kan.bn/api-reference/webhooks/create-a-webhook — Kan (kan.bn)
+- https://github.com/kanbn/kan/releases — Kan (kan.bn)
+- https://raw.githubusercontent.com/kanbn/kan/main/AGENTS.md — Kan (kan.bn)
+- https://raw.githubusercontent.com/kanbn/kan/main/LICENSE — Kan (kan.bn)
+- https://github.com/makeplane/plane/releases — Plane
+- https://github.com/makeplane/plane/blob/master/README.md — Plane
+- https://github.com/makeplane/plane-mcp-server — Plane
+- https://developers.plane.so/dev-tools/mcp-server — Plane
+- https://developers.plane.so/dev-tools/mcp-server-tools — Plane
+- https://developers.plane.so/dev-tools/mcp-server-self-host — Plane
+- https://developers.plane.so/dev-tools/agents/building-an-agent — Plane
+- https://docs.plane.so/devices/mobile — Plane
+- https://docs.plane.so/integrations/cursor — Plane
+- https://apps.apple.com/in/app/plane/id6657986465 — Plane
+- https://play.google.com/store/apps/details?id=com.plane.so — Plane
+- https://pypi.org/project/plane-mcp-server/ — Plane
+- https://github.com/OpenHands/OpenHands — OpenHands Agent Canvas (All-Hands-AI)
+- https://github.com/OpenHands/OpenHands/releases — OpenHands Agent Canvas (All-Hands-AI)
+- https://raw.githubusercontent.com/OpenHands/OpenHands/main/LICENSE — OpenHands Agent Canvas (All-Hands-AI)
+- https://www.openhands.dev/pricing — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/llms.txt — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/overview.md — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/acp-agents — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/prebuilt-automations — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/mobile-access.md — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/backends — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/backend-setup/docker — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/backend-setup/vm — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/cloud/cloud-api — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/conversations — OpenHands Agent Canvas (All-Hands-AI)
+- https://docs.openhands.dev/openhands/usage/agent-canvas/managing-automations — OpenHands Agent Canvas (All-Hands-AI)
+- https://imbue.com/product/sculptor — Sculptor (by Imbue)
+- https://imbue.com/blog/sculptor-announce — Sculptor (by Imbue)
+- https://imbue.com/blog/sculptor — Sculptor (by Imbue)
+- https://github.com/imbue-ai/sculptor — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/README.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/getting_started.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/workspaces.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/integrated_harnesses.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/experimental/container_backend.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/extensions.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/sculptor/sculptor-plugin/skills/sculpt-cli/SKILL.md — Sculptor (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/development/cli.md — Sculptor (by Imbue)
+- https://imbue.com/product/mngr — mngr (by Imbue)
+- https://github.com/imbue-ai/mngr — mngr (by Imbue)
+- https://raw.githubusercontent.com/imbue-ai/mngr/main/README.md — mngr (by Imbue)
+- https://github.com/cjo4m06/mcp-shrimp-task-manager — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://cjo4m06.github.io/mcp-shrimp-task-manager — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/package.json — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/tools/task-viewer/package.json — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/tools/task-viewer/README.md — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/docs/tools.md — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/docs/api.md — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/docs/agents.md — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/src/index.ts — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/src/web/webServer.ts — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/src/public/style.css — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/tools/task-viewer/src/index.css — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://glama.ai/mcp/servers/@cjo4m06/mcp-shrimp-task-manager — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://smithery.ai/server/@cjo4m06/mcp-shrimp-task-manager — Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)
+- https://www.meistertask.com/ — MeisterTask
+- https://www.meistertask.com/pricing — MeisterTask
+- https://www.meistertask.com/apps — MeisterTask
+- https://developers.meistertask.com/reference/getting-started-1 — MeisterTask
+- https://developers.meistertask.com/llms.txt — MeisterTask
+- https://developers.meistertask.com/reference/authentication.md — MeisterTask
+- https://www.wrike.com/ — Wrike
+- https://www.wrike.com/price/ — Wrike
+- https://developers.wrike.com/ — Wrike
+- https://developers.wrike.com/docs/wrike-mcp-server-overview.md — Wrike
+- https://developers.wrike.com/docs/setup-claude-with-wrike-mcp.md — Wrike
+- https://basecamp.com/pricing — Basecamp card table
+- https://basecamp.com/ai — Basecamp card table
+- https://basecamp.com/via — Basecamp card table
+- https://github.com/basecamp/bc3-api — Basecamp card table
+- https://github.com/basecamp/bc3-api/blob/master/sections/card_tables.md — Basecamp card table
+- https://github.com/basecamp/bc3-api/blob/master/sections/card_table_cards.md — Basecamp card table
+- https://github.com/basecamp/basecamp-cli — Basecamp card table
+- https://github.com/basecamp/skills — Basecamp card table
+- https://teamhood.com/ — Teamhood
+- https://teamhood.com/pricing/ — Teamhood
+- https://teamhood.com/deployment-and-hosting/ — Teamhood
+- https://teamhood.com/capabilities/ — Teamhood
+- https://teamhood.com/open-api/ — Teamhood
+- https://teamhood.com/knowledge-base/integrations/open-api/ — Teamhood
+- https://teamhood.com/release-notes/ — Teamhood
+- https://help.teamhood.com/integrations/mcp/ — Teamhood
+- https://help.teamhood.com/how-it-works/mcp/ — Teamhood
+- https://help.teamhood.com/integrations/connect-mcp/ — Teamhood
+- https://help.teamhood.com/skills/teamhood/SKILL.md — Teamhood
+- https://developer.todoist.com — Todoist
+- https://github.com/Doist/todoist-mcp — Todoist
+- https://github.com/Doist/todoist-cli — Todoist
+- https://www.todoist.com/pricing — Todoist
+- https://www.todoist.com/help/account-and-billing/plans/todoist-plans-pricing-and-billing-faq-Vq2z0HWL6 — Todoist
+- https://todoist.com/help/articles/view-a-project-as-a-board-8g6Yj4 — Todoist
+- https://lifehacker.com/organize-your-life-with-todoists-new-kanban-boards-1845170016 — Todoist
+- https://ticktick.com — TickTick
+- https://blog.ticktick.com/2020/07/03/kanban-manage-projects-on-the-go — TickTick
+- https://help.ticktick.com/articles/7055782353376903168 — TickTick
+- https://ticktick.com/about/download — TickTick
+- https://github.com/dev-mirzabicer/ticktick-sdk — TickTick
+- https://github.com/liadgez/ticktick-mcp-server — TickTick
+- https://developer.ticktick.com — TickTick
+- https://pcmag.com/reviews/ticktick — TickTick
+- https://github.com/community-archive/obsidian-kanban — Obsidian Kanban Plugin
+- https://publish.obsidian.md/kanban/ — Obsidian Kanban Plugin
+- https://obsidian.md/pricing — Obsidian Kanban Plugin
+- https://obsidian.md/mobile — Obsidian Kanban Plugin
+- https://github.com/community-archive/obsidian-kanban/releases/tag/2.0.51 — Obsidian Kanban Plugin
+- https://api.github.com/repos/community-archive/obsidian-kanban — Obsidian Kanban Plugin
+- https://github.com/antopolskiy/kanban-md — kanban-md
+- https://github.com/antopolskiy/kanban-md/releases/tag/v0.39.0 — kanban-md
+- https://api.github.com/repos/antopolskiy/kanban-md — kanban-md
+- https://agentkanban.io — VS Code Agent Kanban / AgentKanban.io
+- https://agentkanban.io/pricing — VS Code Agent Kanban / AgentKanban.io
+- https://github.com/appsoftwareltd/vscode-agent-kanban — VS Code Agent Kanban / AgentKanban.io
+- https://marketplace.visualstudio.com/items?itemName=AppSoftwareLtd.vscode-agent-kanban — VS Code Agent Kanban / AgentKanban.io
+- https://api.github.com/repos/appsoftwareltd/vscode-agent-kanban — VS Code Agent Kanban / AgentKanban.io
+- https://github.com/divisionseven/unified-kanban — Unified Kanban (VS Code Extension)
+- https://open-vsx.org/extension/divisionseven/unified-kanban — Unified Kanban (VS Code Extension)
+- https://open-vsx.org/api/divisionseven/unified-kanban/0.7.3/file/readme.md — Unified Kanban (VS Code Extension)
+- https://api.github.com/repos/divisionseven/unified-kanban — Unified Kanban (VS Code Extension)
+- https://www.adityabawankule.io/projects/aginear — AGINEAR
+- https://github.com/Legorobotdude/AGINEAR — AGINEAR
+- https://api.github.com/repos/Legorobotdude/AGINEAR — AGINEAR
+- https://github.com/mkloubert/vscode-kanban — vscode-kanban (mkloubert)
+- https://marketplace.visualstudio.com/items?itemName=mkloubert.vscode-kanban — vscode-kanban (mkloubert)
+- https://raw.githubusercontent.com/mkloubert/vscode-kanban/master/package.json — vscode-kanban (mkloubert)
+- https://github.com/mattermost/focalboard — Focalboard
+- https://raw.githubusercontent.com/mattermost/focalboard/main/README.md — Focalboard
+- https://raw.githubusercontent.com/mattermost/focalboard/main/CHANGELOG.md — Focalboard
+- https://raw.githubusercontent.com/mattermost/focalboard/main/LICENSE.txt — Focalboard
+- https://github.com/mattermost-community/focalboard/issues/5038 — Focalboard
+- https://mattermost.com/pricing/ — Mattermost Boards
+- https://mattermost.com/blog/mattermost-mcp-server/ — Mattermost Boards
+- https://github.com/mattermost/mattermost-plugin-boards — Mattermost Boards
+- https://github.com/mattermost/mattermost-plugin-agents — Mattermost Boards
+- https://raw.githubusercontent.com/mattermost/mattermost-plugin-boards/master/README.md — Mattermost Boards
+- https://raw.githubusercontent.com/mattermost/mattermost-plugin-boards/master/plugin.json — Mattermost Boards
+- https://github.com/MrLesk/Backlog.md — Backlog.md
+- https://backlog.md — Backlog.md
+- https://github.com/MrLesk/Backlog.md/releases — Backlog.md
+- https://raw.githubusercontent.com/MrLesk/Backlog.md/main/CLI-INSTRUCTIONS.md — Backlog.md
+- https://github.com/MrLesk/Backlog.md/blob/main/backlog/docs/doc-003%20-%20Running-Backlog-Browser-as-a-Service.md — Backlog.md
+- https://api.github.com/repos/MrLesk/Backlog.md — Backlog.md
+- https://raw.githubusercontent.com/MrLesk/Backlog.md/main/package.json — Backlog.md
+- https://github.com/plankanban/planka — Planka
+- https://planka.app/pricing — Planka
+- https://planka.app/pro — Planka
+- https://docs.planka.cloud/docs/welcome/ — Planka
+- https://docs.planka.cloud/docs/community-or-pro — Planka
+- https://docs.planka.cloud/docs/community/projects — Planka
+- https://docs.planka.cloud/docs/api-reference/python — Planka
+- https://plankanban.github.io/planka/swagger-ui/swagger.json — Planka
+- https://raw.githubusercontent.com/plankanban/planka/master/LICENSES/PLANKA%20Community%20License%20EN.md — Planka
+- https://raw.githubusercontent.com/plankanban/planka/master/LICENSES/PLANKA%20Commercial%20License%20EN.md — Planka
+- https://raw.githubusercontent.com/plankanban/planka/master/LICENSES/PLANKA%20License%20Guide%20EN.md — Planka
+- https://github.com/plankanban/planka/releases — Planka
+- https://github.com/gogogadgetbytes/planka-mcp — Planka
+- https://github.com/HexiDev/planka-mcp-kanban — Planka
+- https://github.com/bradrisse/kanban-mcp — Planka
+- https://github.com/plattnum/planka-cli — Planka
+- https://github.com/LouisHDev/planka_app — Planka
+- https://www.notion.com/pricing — Notion Boards & Databases
+- https://www.notion.com/mobile — Notion Boards & Databases
+- https://developers.notion.com/reference/intro — Notion Boards & Databases
+- https://developers.notion.com/guides/get-started/overview.md — Notion Boards & Databases
+- https://github.com/makenotion/notion-sdk-js — Notion Boards & Databases
+- https://www.notion.com/product/ai — Notion AI & Custom Agents
+- https://developers.notion.com/guides/notion-agent-apis/overview.md — Notion AI & Custom Agents
+- https://developers.notion.com/guides/notion-agent-apis/quickstart.md — Notion AI & Custom Agents
+- https://developers.notion.com/guides/agent-skills/overview.md — Notion AI & Custom Agents
+- https://developers.notion.com/guides/mcp/overview.md — Notion MCP (Official Remote Server)
+- https://developers.notion.com/guides/mcp/get-started-with-mcp.md — Notion MCP (Official Remote Server)
+- https://developers.notion.com/guides/mcp/mcp-supported-tools.md — Notion MCP (Official Remote Server)
+- https://developers.notion.com/guides/mcp/hosting-open-source-mcp.md — Notion MCP (Official Remote Server)
+- https://github.com/makenotion/notion-mcp-server — notion-mcp-server (Official Open-Source Local Server)
+- https://github.com/makenotion/notion-mcp-server/blob/main/README.md — notion-mcp-server (Official Open-Source Local Server)
+- https://github.com/suekou/mcp-notion-server — @suekou/mcp-notion-server (Community MCP Server)
+- https://raw.githubusercontent.com/suekou/mcp-notion-server/main/README.md — @suekou/mcp-notion-server (Community MCP Server)
+- https://raw.githubusercontent.com/suekou/mcp-notion-server/main/docs/tools.md — @suekou/mcp-notion-server (Community MCP Server)
+- https://api.github.com/repos/suekou/mcp-notion-server/releases — @suekou/mcp-notion-server (Community MCP Server)
+- https://clickup.com/pricing — ClickUp
+- https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server — ClickUp
+- https://developer.clickup.com/docs/mcp-tools — ClickUp
+- https://clickup.com/security — ClickUp
+- https://apps.apple.com/us/app/clickup-tasks-chat-docs-ai/id1535098836 — ClickUp
+- https://play.google.com/store/apps/details?id=co.mangotechnologies.clickup — ClickUp
+- https://clickup.com/brain — ClickUp Brain & Agents
+- https://clickup.com/brain/pricing — ClickUp Brain & Agents
+- https://github.com/hauptsacheNet/clickup-mcp — ClickUp Community MCP Servers (hauptsacheNet & taazkareem)
+- https://github.com/taazkareem/clickup-mcp-server — ClickUp Community MCP Servers (hauptsacheNet & taazkareem)
+- https://api.github.com/repos/hauptsacheNet/clickup-mcp — ClickUp Community MCP Servers (hauptsacheNet & taazkareem)
+- https://api.github.com/repos/taazkareem/clickup-mcp-server — ClickUp Community MCP Servers (hauptsacheNet & taazkareem)
+- https://www.atlassian.com/software/jira — Jira Boards
+- https://www.atlassian.com/agile/kanban/boards — Jira Boards
+- https://www.atlassian.com/software/jira/mobile-app — Jira Boards
+- https://apps.apple.com/us/app/jira-cloud-by-atlassian/id1006972087 — Jira Boards
+- https://play.google.com/store/apps/details?id=com.atlassian.android.jira.core — Jira Boards
+- https://support.atlassian.com/atlassian-ai-gateway/docs/supported-tools/ — Jira Boards
+- https://www.atlassian.com/software/rovo — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://support.atlassian.com/rovo/docs/rovo-usage-limits/ — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://support.atlassian.com/atlassian-ai-gateway/docs/use-atlassian-rovo-mcp-server/ — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://support.atlassian.com/jira-software-cloud/docs/collaborate-on-work-items-with-ai-agents/ — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://support.atlassian.com/jira-software-cloud/docs/what-is-the-jira-coding-agent/ — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://support.atlassian.com/organization-administration/docs/add-an-external-mcp-server-from-atlassian-administration/ — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://support.atlassian.com/atlassian-ai-gateway/docs/set-up-clients/ — Atlassian Rovo Agents & Rovo Dev / Coding Agent
+- https://www.shortcut.com/ — Shortcut
+- https://www.shortcut.com/pricing — Shortcut
+- https://www.shortcut.com/agents/ — Shortcut
+- https://www.shortcut.com/blog/shortcut-for-agents/ — Shortcut
+- https://www.shortcut.com/blog/why-we-built-the-shortcut-mcp-server/ — Shortcut
+- https://www.shortcut.com/help/integrations/mcp-server/ — Shortcut
+- https://mcp.shortcut.com/mcp — Shortcut
+- https://developer.shortcut.com — Shortcut
+- https://github.com/useshortcut/mcp-server-shortcut — Shortcut
+- https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/package.json — Shortcut
+- https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/LICENSE — Shortcut
+- https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/src/server.ts — Shortcut
+- https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/src/server-http.ts — Shortcut
+- https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/src/tools/stories.ts — Shortcut
+- https://registry.npmjs.org/@shortcut/mcp/latest — Shortcut
+- https://www.shortcut.com/blog/announcing-clubhouse-for-ios-c91bab1b74f7/ — Shortcut
+- https://www.appsoftware.com/blog/introducing-vs-code-agent-kanban-task-management-for-the-ai-assisted-developer — AgentKanban
+- https://www.qodflow.com — QodFlow
+- https://www.qodflow.com/pricing — QodFlow
+- https://is.team — is.team
+- https://is.team/pricing — is.team
+- https://traycer.ai — Traycer AI
+- https://traycer.ai/pricing — Traycer AI
+- https://raw.githubusercontent.com/moridinamael/platespinner/main/README.md — PlateSpinner
+- https://raw.githubusercontent.com/moridinamael/platespinner/main/LICENSE — PlateSpinner
+- https://paddo.dev/blog/flux-kanban-for-ai-agents/ — Flux
+- https://github.com/sirsjg/flux — Flux
+- https://raw.githubusercontent.com/sirsjg/flux/main/README.md — Flux
+- https://nimbalyst.com — Nimbalyst
+- https://github.com/nimbalyst/nimbalyst — Nimbalyst
+- https://raw.githubusercontent.com/nimbalyst/nimbalyst/main/README.md — Nimbalyst
+- https://raw.githubusercontent.com/kdlbs/kandev/main/README.md — Kandev
+- https://raw.githubusercontent.com/kdlbs/kandev/main/docs/public/mobile-remote-access.md — Kandev
+- https://ouijit.com — Ouijit
+- https://github.com/ouijit/ouijit — Ouijit
+- https://raw.githubusercontent.com/ouijit/ouijit/main/README.md — Ouijit
+- https://agentrq.com — AgentRQ
+- https://agentrq.com/pricing — AgentRQ
+- https://github.com/agentrq/agentrq — AgentRQ
+- https://raw.githubusercontent.com/agentrq/agentrq/main/README.md — AgentRQ
+- https://itsaplan.dev — It's a Plan (ItsaPlan)
+- https://github.com/croffasia/itsaplan — It's a Plan (ItsaPlan)
+- https://raw.githubusercontent.com/croffasia/itsaplan/main/README.md — It's a Plan (ItsaPlan)
+- https://raw.githubusercontent.com/croffasia/itsaplan/main/docs/self-hosting.md — It's a Plan (ItsaPlan)
+- https://www.kaibanjs.com — Kaiban Board (KaibanJS)
+- https://github.com/cline/kanban — Cline Kanban
+- https://raw.githubusercontent.com/cline/kanban/main/README.md — Cline Kanban
+- https://sstb.ai — Veritas Kanban
+- https://github.com/BradGroux/veritas-kanban — Veritas Kanban
+- https://raw.githubusercontent.com/BradGroux/veritas-kanban/main/README.md — Veritas Kanban
+- https://raw.githubusercontent.com/777genius/agent-teams-ai/main/README.md — Agent Teams AI
+- https://hoangsonww.github.io/Claude-Code-Agent-Monitor — Claude Code Agent Monitor
+- https://github.com/hoangsonww/Claude-Code-Agent-Monitor — Claude Code Agent Monitor
+- https://raw.githubusercontent.com/hoangsonww/Claude-Code-Agent-Monitor/master/README.md — Claude Code Agent Monitor
+- https://www.dispatchboard.ai — Dispatch Board
+- https://raw.githubusercontent.com/dizlexic/moo-tasks/main/README.md — Moo Tasks
+- https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/README.md — Shrimp Task Manager
+- https://yaoagents.com — Yao Agents
+- https://github.com/YaoApp/yao — Yao Agents
+- https://raw.githubusercontent.com/YaoApp/yao/main/README.md — Yao Agents
+- https://trello.com/pricing — Trello (Atlassian)
+- https://trello.com/platforms — Trello (Atlassian)
+- https://trello.com/mcp — Trello (Atlassian)
+- https://developer.atlassian.com/cloud/trello/rest/ — Trello (Atlassian)
+- https://developer.atlassian.com/cloud/trello/guides/rest-api/api-introduction/ — Trello (Atlassian)
+- https://developer.atlassian.com/cloud/trello/guides/rest-api/rate-limits/ — Trello (Atlassian)
+- https://github.com/atlassian/trello-mcp-server — Trello (Atlassian)
+- https://github.com/delorenj/mcp-server-trello — Trello (Atlassian)
+- https://apps.apple.com/us/app/trello-manage-anything/id461504587 — Trello (Atlassian)
+- https://play.google.com/store/apps/details?id=com.trello — Trello (Atlassian)
+- https://businessmap.io — Businessmap (formerly Kanbanize)
+- https://businessmap.io/plans-pricing — Businessmap (formerly Kanbanize)
+- https://businessmap.io/about/pricing-parameters — Businessmap (formerly Kanbanize)
+- https://businessmap.io/api — Businessmap (formerly Kanbanize)
+- https://apps.apple.com/us/app/kanbanize/id563967812 — Businessmap (formerly Kanbanize)
+- https://play.google.com/store/apps/details?id=com.kanbanize.android — Businessmap (formerly Kanbanize)
+- https://kaiten.ru — Kaiten
+- https://kaiten.ru/tariffs — Kaiten
+- https://apps.apple.com/us/app/kaiten/id6739029367 — Kaiten
+- https://play.google.com/store/apps/details?id=ru.kaiten.app — Kaiten
+- https://kanbanflow.com — KanbanFlow
+- https://kanbanflow.com/pricing — KanbanFlow
+- https://kanbanflow.com/mobile-app — KanbanFlow
+- https://kanbanflow.com/api-docs — KanbanFlow
+- https://kanbantool.com — Kanban Tool
+- https://kanbantool.com/pricing — Kanban Tool
+- https://kanbantool.com/kanban-tool-on-site — Kanban Tool
+- https://kanbantool.com/developer/ — Kanban Tool
+- https://github.com/eyaltoledano/claude-task-master — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://tryhamster.com/pricing — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://tryhamster.com/product/taskmaster — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://tryhamster.com/product/studio — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://raw.githubusercontent.com/eyaltoledano/claude-task-master/main/LICENSE — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://marketplace.visualstudio.com/items?itemName=Hamster.task-master-hamster — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://api.github.com/repos/eyaltoledano/claude-task-master — Taskmaster AI (eyaltoledano/claude-task-master)
+- https://github.com/hcengineering/platform — Huly
+- https://github.com/Platform-Collective/platform — Huly
+- https://huly.io — Huly
+- https://huly.io/pricing — Huly
+- https://huly.io/download — Huly
+- https://docs.huly.io/getting-started/self-host — Huly
+- https://github.com/hcengineering/huly-selfhost — Huly
+- https://github.com/dearlordylord/huly-mcp — Huly
+- https://github.com/hcengineering/huly-examples — Huly
+- https://cursor.com/pricing — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://docs.cursor.com — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/agent — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/agent/agents-window — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent/mobile — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent/self-hosted — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent/capabilities — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent/api/endpoints — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent/setup — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cloud-agent/automations — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/integrations/linear — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/integrations/slack — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://cursor.com/docs/cli/overview — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://apps.apple.com/app/cursor/id6767085653 — Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard
+- https://raw.githubusercontent.com/asheshgoplani/agent-deck/main/README.md — Agent Deck
+- https://github.com/kbwo/ccmanager — CCManager
+- https://raw.githubusercontent.com/kbwo/ccmanager/main/README.md — CCManager
+- https://raw.githubusercontent.com/kbwo/ccmanager/main/docs/status-hooks.md — CCManager
+- https://raw.githubusercontent.com/kbwo/ccmanager/main/package.json — CCManager
+- https://github.com/dagger/container-use — Container-use
+- https://raw.githubusercontent.com/dagger/container-use/main/README.md — Container-use
+- https://raw.githubusercontent.com/dagger/container-use/main/rules/agent.md — Container-use
+- https://container-use.com — Container-use
+- https://github.com/devflowinc/uzi — Uzi
+- https://raw.githubusercontent.com/devflowinc/uzi/main/README.md — Uzi
+- https://www.uzi.sh — Uzi
+- https://github.com/crewAIInc/crewAI — CrewAI AMP & Studio
+- https://docs.crewai.com — CrewAI AMP & Studio
+- https://docs-platform.crewai.com/ — CrewAI AMP & Studio
+- https://crewai.com/amp — CrewAI AMP & Studio
+- https://crewai.com/pricing — CrewAI AMP & Studio
+- https://github.com/microsoft/autogen — AutoGen Studio
+- https://raw.githubusercontent.com/microsoft/autogen/main/python/packages/autogen-studio/README.md — AutoGen Studio
+- https://github.com/langchain-ai/langgraph — LangGraph Studio & LangSmith
+- https://docs.langchain.com/langsmith/studio — LangGraph Studio & LangSmith
+- https://docs.smith.langchain.com/ — LangGraph Studio & LangSmith
+- https://www.langchain.com/pricing — LangGraph Studio & LangSmith
+- https://github.com/agno-agi/agno — Agno AgentOS UI
+- https://docs.agno.com — Agno AgentOS UI
+- https://agno.com — Agno AgentOS UI
+- https://github.com/geekan/MetaGPT — MetaGPT & MGX
+- https://mgx.dev — MetaGPT & MGX
+- https://atoms.dev — MetaGPT & MGX
+- https://github.com/OpenBMB/ChatDev — ChatDev 2.0 (DevAll)
+- https://chatdev.modelbest.cn/ — ChatDev 2.0 (DevAll)
+- https://github.com/openai/openai-agents-python — OpenAI Agents SDK Tracing
+- https://openai.github.io/openai-agents-python/ — OpenAI Agents SDK Tracing
+- https://github.com/langgenius/dify — Dify
+- https://dify.ai — Dify
+- https://docs.dify.ai — Dify
+- https://docs.kaibanjs.com — KaibanJS
+- https://agentteams.live/ — Agent Teams AI
+- https://yetanotherorchestrator.app/apps/agent-teams/ — Agent Teams AI
+- https://yetanotherorchestrator.app/apps/agent-kanban/ — Agent Kanban
+- https://github.com/h0x91b/dev-3.0 — Dev 3.0
+- https://raw.githubusercontent.com/h0x91b/dev-3.0/main/README.md — Dev 3.0
+- https://bradgroux.github.io/veritas-kanban/demo/ — Veritas Kanban
+- https://yetanotherorchestrator.app/apps/openkanban/ — OpenKanban
+- https://github.com/lee-to/aif-handoff — AIF Handoff
+- https://raw.githubusercontent.com/lee-to/aif-handoff/main/README.md — AIF Handoff
+- https://github.com/Chorus-AIDLC/Chorus — Chorus
+- https://doc.chorus-ai.dev — Chorus
+- https://github.com/features/issues — GitHub Projects (v2)
+- https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/about-projects — GitHub Projects (v2)
+- https://docs.github.com/en/issues/planning-and-tracking-with-projects/learning-about-projects/best-practices-for-projects — GitHub Projects (v2)
+- https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-items-in-your-project/adding-items-to-your-project — GitHub Projects (v2)
+- https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects — GitHub Projects (v2)
+- https://cli.github.com/manual/gh_project — GitHub Projects (v2)
+- https://github.blog/changelog/2023-03-14-projects-on-github-mobile-is-now-generally-available — GitHub Projects (v2)
+- https://github.com/arclio/github-projects-mcp — GitHub Projects (v2)
+- https://github.com/pricing — GitHub Projects (v2)
+- https://www.onorca.dev — Orca
+- https://github.com/stablyai/orca — Orca
+- https://apps.apple.com/us/app/orca-ide/id6766130217 — Orca
+- https://www.onorca.dev/docs/model/agents-sessions — Orca
+- https://www.onorca.dev/docs/model/worktrees — Orca
+- https://www.onorca.dev/docs/cli/overview — Orca
+- https://www.onorca.dev/docs/cli/orchestration — Orca
+- https://www.onorca.dev/docs/mobile — Orca
+- https://www.onorca.dev/docs/agents/supported — Orca
+- https://raw.githubusercontent.com/stablyai/orca/main/cloud/README.md — Orca
+- https://raw.githubusercontent.com/stablyai/orca/main/LICENSE — Orca
+- https://www.jetbrains.com/youtrack/ — YouTrack (JetBrains)
+- https://www.jetbrains.com/youtrack/buy — YouTrack (JetBrains)
+- https://blog.jetbrains.com/youtrack/2025/06/new-youtrack-prices-starting-from-october-2025/ — YouTrack (JetBrains)
+- https://www.jetbrains.com/help/youtrack/cloud/model-context-protocol-server.html — YouTrack (JetBrains)
+- https://www.jetbrains.com/youtrack/features/ai_assistant.html — YouTrack (JetBrains)
+- https://www.jetbrains.com/help/youtrack/server/youtrack-mobile.html — YouTrack (JetBrains)
+- https://github.com/JetBrains/youtrack-mobile — YouTrack (JetBrains)
+- https://github.com/tonyzorin/youtrack-mcp — YouTrack (JetBrains)
+- https://hub.docker.com/r/jetbrains/youtrack — YouTrack (JetBrains)
+- https://www.jetbrains.com/legal/docs/youtrack/license/ — YouTrack (JetBrains)
+- https://www.jetbrains.com/help/youtrack/devportal/youtrack-rest-api.html — YouTrack (JetBrains)
+- https://asana.com — Asana
+- https://asana.com/pricing — Asana
+- https://asana.com/product/ai/ai-studio — Asana
+- https://asana.com/product/ai/ai-teammates — Asana
+- https://developers.asana.com/docs/overview — Asana
+- https://apps.apple.com/us/app/asana-work-in-one-place/id489969512 — Asana
+- https://play.google.com/store/apps/details?id=com.asana.app — Asana
+- https://help.asana.com/s/article/ai-studio-smart-workflows?language=en_US — Asana
+- https://help.asana.com/s/article/ai-studio — Asana AI Studio & AI Teammates
+- https://investors.asana.com/news-releases/news-release-details/asana-announces-ai-studio-no-code-builder-designing-and — Asana AI Studio & AI Teammates
+- https://github.com/roychri/mcp-server-asana — mcp-server-asana (Community MCP Server by roychri)
+- https://www.npmjs.com/package/@roychri/mcp-server-asana — mcp-server-asana (Community MCP Server by roychri)
+- https://leantime.io — Leantime
+- https://leantime.io/pricing — Leantime
+- https://github.com/Leantime/leantime — Leantime
+- https://github.com/Leantime/leantime/releases — Leantime
+- https://github.com/Leantime/leantime-mcp — Leantime
+- https://docs.leantime.io — Leantime
+- https://docs.leantime.io/installation/leantime-mcp.md — Leantime
+- https://docs.leantime.io/api/usage.md — Leantime
+- https://docs.leantime.io/development/commandline.md — Leantime
+- https://docs.leantime.io/installation/frequently-asked-questions.md — Leantime
+- https://marketplace.leantime.io/product/mcp-server/ — Leantime
+- https://github.com/Leantime/leantime/issues/3398 — Leantime
+- https://news.hada.io/topic?id=26737 — KanVibe
+- https://github.com/rookedsysc/kanvibe/releases — KanVibe
+- https://news.hada.io/topic?id=29268 — Hermes KanbanWebUI
+- https://github.com/PriuS2/HermesKanban — Hermes KanbanWebUI
+- https://zenn.dev/zennai_ryutaro/articles/20260525-hermes-kanban-swarm-usage — Hermes KanbanWebUI
+- https://aif.cutcode.dev — AIF Handoff
+- https://dooray.com — Dooray! Project
+- https://inside.nhn.com/news/935 — Dooray! Project
+- https://dooray.com/main/mobile — Dooray! Project
+- https://juejin.cn/post/7686331923204292623 — Multica
+- https://juejin.cn/post/7662325201879318562 — Multica
+- https://github.com/multica-ai/multica — Multica
+- https://multica.ai — Multica
+- https://juejin.cn/post/7613971395929112603 — Star-Office-UI
+- https://github.com/ringhyacinth/Star-Office-UI — Star-Office-UI
+- https://github.com/dualface/kander — Kander
+- https://github.com/dualface/kander/releases — Kander
+- https://quicktui.ai/ — Kander
+- https://nerve.zone — Nerve (OpenClaw Nerve)
+- https://github.com/daggerhashimoto/openclaw-nerve — Nerve (OpenClaw Nerve)
+- https://github.com/Sunwood-ai-labs/github-kanban-mcp-server — GitHub Kanban MCP Server (Sunwood AI Labs)
+- https://www.pulsemcp.com/servers/sunwood-ai-labs-github-kanban — GitHub Kanban MCP Server (Sunwood AI Labs)
+- https://news.hada.io/topic?id=29830 — KanBots
+- https://github.com/leodavinci1/kanbots — KanBots
+- https://kanbots.dev — KanBots
+- https://news.hada.io/topic?id=17823 — KaibanJS
+- https://github.com/kaiban-ai/kaibanjs — KaibanJS
+- https://github.com/GreenSheep01201/Claw-Kanban — Claw-Kanban
+- https://github.com/GreenSheep01201/Claw-Kanban/blob/main/README.ko.md — Claw-Kanban
+- https://itsaplan.dev/ — It's a Plan (itsaplan)
+- https://hoangsonww.github.io/Claude-Code-Agent-Monitor/ — Claude Code Agent Monitor
+- https://juejin.cn/post/7661325178647330856 — Hermes Agent Kanban (NousResearch)
+- https://github.com/NousResearch/hermes-agent — Hermes Agent Kanban (NousResearch)
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban — Hermes Agent Kanban (NousResearch)
+- https://backlog.com/ja/lp-ai-assistant/ — Backlog (Nulab)
+- https://backlog.com/ja/blog/backlog-ai-issue-creation/ — Backlog (Nulab)
+- https://qiita.com/tie_rrific/items/8df560b1cb27945bd4c9 — Backlog (Nulab)
+- https://backlog.com/ja/mobile/ — Backlog (Nulab)
+- https://happy.engineering — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/welcome/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/how-it-works/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/mobile/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/voice/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/multiplayer/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/docs/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/docs/security/ — Happy (formerly Happy Coder / slopus/happy)
+- https://happy.engineering/guides/remote-server/ — Happy (formerly Happy Coder / slopus/happy)
+- https://github.com/slopus/happy — Happy (formerly Happy Coder / slopus/happy)
+- https://github.com/slopus/happy/blob/main/packages/happy-cli/README.md — Happy (formerly Happy Coder / slopus/happy)
+- https://github.com/slopus/happy/blob/main/packages/happy-server/README.md — Happy (formerly Happy Coder / slopus/happy)
+- https://api.github.com/repos/slopus/happy — Happy (formerly Happy Coder / slopus/happy)
+- https://api.github.com/repos/slopus/happy-desktop — Happy (formerly Happy Coder / slopus/happy)
+- https://api.github.com/repos/slopus/happy-agent — Happy (formerly Happy Coder / slopus/happy)
+- https://api.github.com/repos/slopus/happy/releases/latest — Happy (formerly Happy Coder / slopus/happy)
+- https://apps.apple.com/us/app/happy-codex-claude-code-app/id6748571505 — Happy (formerly Happy Coder / slopus/happy)
+- https://play.google.com/store/apps/details?id=com.ex3ndr.happy — Happy (formerly Happy Coder / slopus/happy)
+- https://github.com/coder/mux — Coder Mux (Xum)
+- https://github.com/coder/xum — Coder Mux (Xum)
+- https://raw.githubusercontent.com/coder/mux/main/README.md — Coder Mux (Xum)
+- https://mux.coder.com — Coder Mux (Xum)
+- https://xum.cdr.dev/llms.txt — Coder Mux (Xum)
+- https://xum.cdr.dev/index.md — Coder Mux (Xum)
+- https://xum.cdr.dev/reference/cli.md — Coder Mux (Xum)
+- https://xum.cdr.dev/config/server-access.md — Coder Mux (Xum)
+- https://xum.cdr.dev/config/mcp-servers.md — Coder Mux (Xum)
+- https://xum.cdr.dev/integrations/acp.md — Coder Mux (Xum)
+- https://xum.coder.com/integrations/vscode-extension.md — Coder Mux (Xum)
+- https://coder.com/pricing — Coder Agents (formerly Coder Tasks)
+- https://coder.com/pricing.md — Coder Agents (formerly Coder Tasks)
+- https://coder.com/docs/ai-coder/agents — Coder Agents (formerly Coder Tasks)
+- https://coder.com/docs/ai-coder/agents/licensing-usage — Coder Agents (formerly Coder Tasks)
+- https://coder.com/docs/ai-coder/agents/tasks-to-chats-migration — Coder Agents (formerly Coder Tasks)
+- https://coder.com/docs/ai-coder/agent-relay — Coder Agents (formerly Coder Tasks)
+- https://coder.com/blog/launch-week-2025-introducing-coder-tasks — Coder Agents (formerly Coder Tasks)
+- https://coder.com/blog/automate-coder-tasks-via-cli-and-api — Coder Agents (formerly Coder Tasks)
+- https://github.com/coder/coder — Coder Agents (formerly Coder Tasks)
+- https://www.redmine.org — Redmine (with Agile/Kanban plugins)
+- https://www.redmine.org/plugins/redmine_agile — Redmine (with Agile/Kanban plugins)
+- https://www.redmineup.com/pages/plugins/agile — Redmine (with Agile/Kanban plugins)
+- https://github.com/redmine/redmine — Redmine (with Agile/Kanban plugins)
+- https://github.com/jztan/redmine-mcp-server — Redmine (with Agile/Kanban plugins)
+- https://redmine-mcp-server.jztan.com/ — Redmine (with Agile/Kanban plugins)
+- https://phorge.it — Phabricator / Phorge Workboards
+- https://github.com/phorgeit/phorge — Phabricator / Phorge Workboards
+- https://github.com/phacility/phabricator — Phabricator / Phorge Workboards
+- https://github.com/phorgeit/arcanist — Phabricator / Phorge Workboards
+- https://github.com/cortex-app/conduit — Phabricator / Phorge Workboards
+- https://projects.clusterlabs.org/book/phorge/article/conduit_edit/ — Phabricator / Phorge Workboards
+- https://projects.clusterlabs.org/book/phorge/article/projects/ — Phabricator / Phorge Workboards
+- https://kaneo.app — Kaneo
+- https://kaneo.app/pricing — Kaneo
+- https://github.com/usekaneo/kaneo — Kaneo
+- https://easykanb.app — EasyKanban
+- https://easykanb.app/mcp — EasyKanban
+- https://easykanb.app/#pricing — EasyKanban
+- https://api.smithery.ai/servers/e-goetmann/easykanban — EasyKanban
+- https://nodiom.md — Nodiom Cloud
+- https://nodiom.md/pricing — Nodiom Cloud
+- https://api.smithery.ai/servers/synexiom-labs/nodiom-cloud — Nodiom Cloud
+- https://nimbalyst.com/pricing — Nimbalyst
+- https://craaft.io — craaft
+- https://craaft.io/mcp — craaft
+- https://craaft.io/pricing — craaft
+- https://api.smithery.ai/servers/craaft/craaft — craaft
+- https://hamloy.com — Hamloy
+- https://hamloy.com/pricing — Hamloy
+- https://api.smithery.ai/servers/hamloy/hamloy — Hamloy
+- https://tasklix.dev — Tasklix
+- https://tasklix.dev/pricing — Tasklix
+- https://api.smithery.ai/servers/hello-n43p/tasklix — Tasklix
+- https://amux.io — amux
+- https://github.com/mixpeek/amux — amux
+- https://apps.apple.com/us/app/amux-agent-multiplexer/id6760410435 — amux
+- https://scrumboy.com — scrumboy
+- https://github.com/markrai/scrumboy — scrumboy
+- https://getdevboard.app — devBoard
+- https://getdevboard.app/mcp — devBoard
+- https://api.smithery.ai/servers/darko-bacic/devboard — devBoard
+- https://github.com/multidimensionalcats/kanban-mcp — multidimensionalcats/kanban-mcp
+- https://glama.ai/mcp/servers/multidimensionalcats/kanban-mcp — multidimensionalcats/kanban-mcp
+- https://www.kanera.app — Kanera
+- https://api.smithery.ai/servers/kanera/kaneramcp — Kanera
+- https://www.boardmark.ai — BoardMark
+- https://www.boardmark.ai/pricing — BoardMark
+- https://api.smithery.ai/servers/i-c-develop/boardmark — BoardMark
+- https://github.com/siteboon/claudecodeui — Claude Code UI (CloudCLI)
+- https://cloudcli.ai — Claude Code UI (CloudCLI)
+- https://cloudcli.ai/docs — Claude Code UI (CloudCLI)
+- https://cloudcli.ai/claude-code-mobile — Claude Code UI (CloudCLI)
+- https://cloudcli.ai/download — Claude Code UI (CloudCLI)
+- https://github.com/siteboon/claudecodeui/releases — Claude Code UI (CloudCLI)
+- https://raw.githubusercontent.com/siteboon/claudecodeui/main/package.json — Claude Code UI (CloudCLI)
+- https://raw.githubusercontent.com/siteboon/claudecodeui/main/LICENSE — Claude Code UI (CloudCLI)
+- https://raw.githubusercontent.com/siteboon/claudecodeui/main/server/index.ts — Claude Code UI (CloudCLI)
+- https://raw.githubusercontent.com/siteboon/claudecodeui/main/server/modules/taskmaster/taskmaster.routes.ts — Claude Code UI (CloudCLI)
+- https://raw.githubusercontent.com/siteboon/claudecodeui/main/src/modules/task-master/TaskBoard.tsx — Claude Code UI (CloudCLI)
+- https://raw.githubusercontent.com/siteboon/claudecodeui/main/src/modules/task-master/utils/taskKanban.ts — Claude Code UI (CloudCLI)
+- https://github.com/szmidtpiotr/claude-github-issue — Claude Code UI (CloudCLI)
+- https://github.com/TadMSTR/cloudcli-plugin-task-queue — Claude Code UI (CloudCLI)
+- https://github.com/stravu/crystal — Crystal (stravu/crystal) / Nimbalyst
+- https://github.com/Nimbalyst/nimbalyst — Crystal (stravu/crystal) / Nimbalyst
+- https://nimbalyst.com/ — Crystal (stravu/crystal) / Nimbalyst
+- https://nimbalyst.com/features/session-management/ — Crystal (stravu/crystal) / Nimbalyst
+- https://nimbalyst.com/features/task-management/ — Crystal (stravu/crystal) / Nimbalyst
+- https://nimbalyst.com/kanban-for-claude-code/ — Crystal (stravu/crystal) / Nimbalyst
+- https://nimbalyst.com/teams/ — Crystal (stravu/crystal) / Nimbalyst
+- https://docs.nimbalyst.com/ — Crystal (stravu/crystal) / Nimbalyst
+- https://api.github.com/repos/Nimbalyst/nimbalyst — Crystal (stravu/crystal) / Nimbalyst
+- https://api.github.com/repos/stravu/crystal — Crystal (stravu/crystal) / Nimbalyst
+- https://raw.githubusercontent.com/hesreallyhim/awesome-claude-code/main/README.md — Nimbalyst
+- https://raw.githubusercontent.com/e2b-dev/awesome-ai-agents/main/README.md — KaibanJS
+- https://github.com/Paca-AI/paca — Paca
+- https://paca-ai.org — Paca
+- https://raw.githubusercontent.com/awesome-selfhosted/awesome-selfhosted/master/README.md — Paca
+- https://github.com/elirantutia/vibeyard — Vibeyard
+- https://github.com/phodal/routa/blob/main/README.md — Routa
+- https://github.com/eabz/tirith — Tirith
+- https://eabz.github.io/tirith/ — Tirith
+- https://raw.githubusercontent.com/punkpeye/awesome-mcp-servers/main/README.md — Tirith
+- https://github.com/spranab/saga-mcp — Saga MCP
+- https://www.npmjs.com/package/saga-mcp — Saga MCP
+- https://github.com/b52tot/workbuddy-board — WorkBuddy Board
+- https://board-widget-download.app.workbuddy.host/ — WorkBuddy Board
+- https://github.com/bill10/agent-007 — Agent 007
+- https://github.com/bzdOS/hubd — hubd
+- https://hubd.net — hubd
+- https://github.com/croffasia/itsaplan/blob/main/README.md — It's a Plan (itsaplan)
+- https://github.com/kdlbs/kandev/blob/main/README.md — Kandev
+- https://github.com/RARgames/4gaBoards — 4ga Boards
+- https://4gaboards.com — 4ga Boards
+- https://kaneo.app/ — Kaneo
+- https://github.com/super-productivity/super-productivity — Super Productivity
+- https://super-productivity.com — Super Productivity
+- https://github.com/Lukaris/framedeck-mcp — Framedeck MCP
+- https://framedeck.app — Framedeck MCP
+- https://monday.com/pricing — monday.com boards
+- https://monday.com/blog/product/monday-com-pricing-which-plan-is-right-for-you/ — monday.com boards
+- https://developer.monday.com/api-reference/llms.txt — monday.com boards
+- https://developer.monday.com/api-reference/docs/mondaycom-mcp.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/compatible-mcp-clients.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/integrate-with-monday-mcp.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/mcp-api-token.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/build-on-monday-with-ai.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/manage-agent.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/mcli-cli-guide.md — monday.com boards
+- https://developer.monday.com/api-reference/docs/rate-limits.md — monday.com boards
+- https://github.com/mondaycom/mcp — monday.com boards
+- https://github.com/mondaycom/mcli — monday.com boards
+- https://registry.npmjs.org/@mondaydotcomorg/monday-api-mcp — monday.com boards
+- https://wekan.fi — WeKan
+- https://github.com/wekan/wekan — WeKan
+- https://wekan.fi/app — WeKan
+- https://wekan.fi/saas/ — WeKan
+- https://wekan.fi/commercial-support/ — WeKan
+- https://github.com/wekan/wekan/blob/main/docs/API/REST-API.md — WeKan
+- https://github.com/wekan/wekan/blob/main/docs/API/Cards.md — WeKan
+- https://raw.githubusercontent.com/wekan/wekan/main/CHANGELOG.md — WeKan
+- https://raw.githubusercontent.com/wekan/wekan/main/package.json — WeKan
+- https://jules.google/ — Google Jules
+- https://jules.google/docs/ — Google Jules
+- https://jules.google/docs/running-tasks/ — Google Jules
+- https://jules.google/docs/review-plan/ — Google Jules
+- https://jules.google/docs/environment/ — Google Jules
+- https://jules.google/docs/usage-limits/ — Google Jules
+- https://jules.google/docs/changelog/ — Google Jules
+- https://jules.google/docs/faq/ — Google Jules
+- https://jules.google/docs/api/reference/ — Google Jules
+- https://jules.google/docs/api/reference/overview/ — Google Jules
+- https://jules.google/docs/api/reference/sessions/ — Google Jules
+- https://jules.google/docs/api/reference/activities/ — Google Jules
+- https://jules.google/docs/api/reference/types/ — Google Jules
+- https://jules.google/docs/cli/reference/ — Google Jules
+- https://jules.google/docs/integrations/ — Google Jules
+- https://jules.google/docs/integrations/render/ — Google Jules
+- https://jules.google/docs/tasks-repos/ — Google Jules
+- https://jules.google/docs/repo/ — Google Jules
+- https://jules.google/docs/scheduled-tasks/ — Google Jules
+- https://jules.google/docs/suggested-tasks/ — Google Jules
+- https://jules.google/docs/errors/ — Google Jules
+- https://jules.google/docs/code/ — Google Jules
+- https://jules.google/docs/guides/continuous-ai-overview/ — Google Jules
+- https://github.com/google-labs-code/jules-awesome-list — Google Jules
+- https://policies.google.com/terms — Google Jules
+- https://one.google.com/about/plans — Google Jules
+- https://github.com/winfunc/opcode — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/README.md — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/LICENSE — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/web_server.design.md — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/cc_agents/README.md — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/src-tauri/Cargo.toml — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/src-tauri/src/web_main.rs — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/winfunc/opcode/blob/main/src-tauri/src/web_server.rs — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://winfunc.com/ — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://claudelog.com/mcps-and-add-ons/claudia — opcode (formerly Claudia, getAsterisk, Gooey)
+- https://github.com/RestyaPlatform/board — Restyaboard
+- https://api.github.com/repos/RestyaPlatform/board — Restyaboard
+- https://api.github.com/repos/RestyaPlatform/board/releases — Restyaboard
+- https://marketplace.digitalocean.com/apps/restyaboard — Restyaboard
+- https://forum.cloudron.io/topic/1202/restyaboard-trello-like-kanban-board — Restyaboard
+- https://raw.githubusercontent.com/RestyaPlatform/board/master/server/php/R/r.php — Restyaboard
+- https://github.com/kanriapp/kanri — Kanri
+- https://kanriapp.com/about — Kanri
+- https://kanriapp.com/download — Kanri
+- https://api.github.com/repos/kanriapp/kanri — Kanri
+- https://api.github.com/repos/kanriapp/kanri/releases — Kanri
+- https://github.com/apankrat/nullboard — Nullboard
+- https://api.github.com/repos/apankrat/nullboard — Nullboard
+- https://nullboard.io — Nullboard
+- https://raw.githubusercontent.com/apankrat/nullboard/master/nullboard.html — Nullboard
+- https://github.com/justinpchang/nullboard-agent-express — Nullboard
+- https://github.com/basementuniverse/kanbn — Kanbn CLI
+- https://api.github.com/repos/basementuniverse/kanbn — Kanbn CLI
+- https://api.github.com/repos/basementuniverse/kanbn/releases — Kanbn CLI
+- https://github.com/kjduling/kanbn-mcp — Kanbn CLI
+- https://github.com/basementuniverse/vscode-kanbn — Kanbn CLI
+- https://raw.githubusercontent.com/kjduling/kanbn-mcp/main/README.md — Kanbn CLI
+- https://factory.ai — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/llms.txt — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/welcome/index.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/pricing/individuals.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/pricing/organizations.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/missions/overview.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/missions/running-app.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/delegations/index.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/delegations/linear.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/harness/mcp.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/api-reference.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/api-reference/sessions.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/ide-integrations.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/enterprise/network-and-deployment.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/enterprise/airgapped-deployment.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/changelog/release-notes.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/factory-app/overview.md — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/software-factory/overview.md — Factory.ai Droids (Software Factory & Missions)
+- https://github.com/Factory-AI/factory — Factory.ai Droids (Software Factory & Missions)
+- https://docs.factory.com/droid-exec/overview.md — Factory.ai Droids (Software Factory & Missions)
+- https://linear.app — Linear (Linear for Agents)
+- https://linear.app/mobile — Linear (Linear for Agents)
+- https://linear.app/docs/linear-agent — Linear (Linear for Agents)
+- https://linear.app/docs/agent-platform — Linear (Linear for Agents)
+- https://linear.app/docs/mcp — Linear (Linear for Agents)
+- https://linear.app/docs/coding-sessions — Linear (Linear for Agents)
+- https://linear.app/docs/loops — Linear (Linear for Agents)
+- https://linear.app/developers/agents — Linear (Linear for Agents)
+- https://linear.app/developers/agent-interaction — Linear (Linear for Agents)
+- https://linear.app/developers/agent-best-practices — Linear (Linear for Agents)
+- https://linear.app/integrations/cursor-mcp — Linear (Linear for Agents)
+- https://linear.app/integrations/claude — Linear (Linear for Agents)
+- https://linear.app/integrations/codex — Linear (Linear for Agents)
+- https://linear.app/integrations/devin — Linear (Linear for Agents)
+- https://linear.app/integrations/github-copilot — Linear (Linear for Agents)
+- https://github.com/linear/linear — Linear (Linear for Agents)
+- https://github.com/linear/claude-managed-agents-demo — Linear (Linear for Agents)
+- https://linear.app/terms — Linear (Linear for Agents)
+- https://linear.app/docs/security — Linear (Linear for Agents)
+- https://taiga.io/ — Taiga
+- https://taiga.io/deployment-pricing-options/ — Taiga
+- https://github.com/taigaio/taiga-back — Taiga
+- https://github.com/taigaio/taiga-docker — Taiga
+- https://docs.taiga.io/ — Taiga
+- https://docs.taiga.io/api.html — Taiga
+- https://community.taiga.io/t/proposal-mobile-app/257 — Taiga
+- https://community.taiga.io/t/feature-request-official-mcp-server-for-taiga-ai-agent-integration/8931 — Taiga
+- https://community.taiga.io/t/mobile-android-app-for-taiga/8707 — Taiga
+- https://github.com/talhaorak/pytaiga-mcp — Taiga
+- https://github.com/adriapedralbes/mcpTAIGA — Taiga
+- https://www.npmjs.com/package/taiga-mcp-server — Taiga
+- https://emdash.sh — Emdash
+- https://github.com/generalaction/emdash — Emdash
+- https://raw.githubusercontent.com/generalaction/emdash/main/README.md — Emdash
+- https://raw.githubusercontent.com/generalaction/emdash/main/AGENTS.md — Emdash
+- https://emdash.sh/docs — Emdash
+- https://emdash.sh/docs/providers — Emdash
+- https://emdash.sh/docs/tasks — Emdash
+- https://emdash.sh/docs/issues — Emdash
+- https://emdash.sh/docs/library/mcp — Emdash
+- https://emdash.sh/docs/library/skills — Emdash
+- https://emdash.sh/docs/remote-projects — Emdash
+- https://emdash.sh/docs/in-app-browser — Emdash
+- https://emdash.sh/docs/automations — Emdash
+- https://raw.githubusercontent.com/generalaction/emdash/main/LICENSE.md — Emdash
+- https://github.com/generalaction/emdash/releases — Emdash
+- https://superset.sh — Superset
+- https://superset.sh/pricing — Superset
+- https://github.com/superset-sh/superset — Superset
+- https://docs.superset.sh — Superset
+- https://docs.superset.sh/llms.txt — Superset
+- https://docs.superset.sh/tasks — Superset
+- https://docs.superset.sh/mcp-server — Superset
+- https://docs.superset.sh/cli/getting-started — Superset
+- https://docs.superset.sh/cli/cli-reference — Superset
+- https://docs.superset.sh/agent-status — Superset
+- https://docs.superset.sh/supported-agents — Superset
+- https://docs.superset.sh/browser — Superset
+- https://docs.superset.sh/faq — Superset
+- https://apps.apple.com/us/app/id6788926383 — Superset
+- https://raw.githubusercontent.com/superset-sh/superset/main/README.md — Superset
+- https://raw.githubusercontent.com/superset-sh/superset/main/LICENSE.md — Superset
+- https://raw.githubusercontent.com/superset-sh/superset/main/package.json — Superset
+- https://github.com/superset-sh/superset/releases — Superset
+- https://kanboard.org — Kanboard
+- https://github.com/kanboard/kanboard — Kanboard
+- https://docs.kanboard.org/v1/api/ — Kanboard
+- https://docs.kanboard.org/v1/admin/faq/ — Kanboard
+- https://docs.kanboard.org/v1/dev/webhooks/ — Kanboard
+- https://docs.kanboard.org/v1/admin/docker/ — Kanboard
+- https://github.com/kanboard/kanboard/releases — Kanboard
+- https://github.com/ErnestoCorona/kanboard-mcp — Kanboard
+- https://github.com/bivex/kanboard-mcp — Kanboard
+- https://vikunja.io/ — Vikunja
+- https://vikunja.io/pricing/ — Vikunja
+- https://vikunja.io/pro/ — Vikunja
+- https://vikunja.io/features/ — Vikunja
+- https://vikunja.io/help/ — Vikunja
+- https://vikunja.io/help/mcp/ — Vikunja
+- https://vikunja.io/help/views/ — Vikunja
+- https://vikunja.io/help/desktop/ — Vikunja
+- https://vikunja.io/help/quick-add-magic/ — Vikunja
+- https://vikunja.io/help/projects/ — Vikunja
+- https://vikunja.io/docs/ — Vikunja
+- https://vikunja.io/docs/installing/ — Vikunja
+- https://vikunja.io/docs/api-documentation/ — Vikunja
+- https://vikunja.io/docs/api-v2/ — Vikunja
+- https://vikunja.io/docs/cli/ — Vikunja
+- https://vikunja.io/docs/integrations/ — Vikunja
+- https://vikunja.io/docs/webhooks/ — Vikunja
+- https://vikunja.io/docs/config-options/ — Vikunja
+- https://vikunja.io/docs/desktop-packages/ — Vikunja
+- https://vikunja.io/changelog/ — Vikunja
+- https://vikunja.io/changelog/vikunja-2.7.0-was-released/ — Vikunja
+- https://github.com/go-vikunja/vikunja — Vikunja
+- https://raw.githubusercontent.com/go-vikunja/vikunja/main/README.md — Vikunja
+- https://raw.githubusercontent.com/go-vikunja/vikunja/main/CHANGELOG.md — Vikunja
+- https://raw.githubusercontent.com/go-vikunja/vikunja/main/frontend/package.json — Vikunja
+- https://raw.githubusercontent.com/go-vikunja/vikunja/main/frontend/vite.config.ts — Vikunja
+- https://marco308.github.io/mdone/ — Vikunja
+- https://planka.app — Planka MCP (gogogadgetbytes)
+- https://registry.modelcontextprotocol.io — MCP Server Trello (delorenj)
+- https://github.com/m0xai/trello-mcp-server — Trello MCP Server (m0xai)
+- https://github.com/namar0x0309/wekan-mcp — WeKan MCP Server (namar0x0309)
+- https://github.com/omriza5/wekan-mcp-server — WeKan MCP Server (omriza5)
+- https://github.com/MrBildo/collattice — Collattice (MrBildo)
+- https://github.com/florian-strasser/LokalBoards — LokalBoards (florian-strasser)
+- https://github.com/tcarac/taskboard — Taskboard (tcarac)
+- https://github.com/eyalzh/kanban-mcp — kanban-mcp (eyalzh)
+- https://github.com/smtg-ai/claude-squad — Claude Squad
+- https://smtg-ai.github.io/claude-squad/ — Claude Squad
+- https://api.github.com/repos/smtg-ai/claude-squad — Claude Squad
+- https://api.github.com/repos/smtg-ai/claude-squad/releases/latest — Claude Squad
+- https://formulae.brew.sh/formula/claude-squad — Claude Squad
+- https://appflowy.com — AppFlowy (Board View)
+- https://appflowy.com/pricing — AppFlowy (Board View)
+- https://appflowy.com/blog/appflowy-kanban-in-project-management — AppFlowy (Board View)
+- https://docs.appflowy.io/docs/documentation/software-contributions/architecture/frontend/database-view/kanban-board — AppFlowy (Board View)
+- https://github.com/AppFlowy-IO/AppFlowy — AppFlowy (Board View)
+- https://github.com/AppFlowy-IO/AppFlowy/releases — AppFlowy (Board View)
+- https://github.com/AppFlowy-IO/AppFlowy-SelfHost-Commercial — AppFlowy (Board View)
+- https://raw.githubusercontent.com/AppFlowy-IO/AppFlowy-SelfHost-Commercial/main/docs/OPENAPI.md — AppFlowy (Board View)
+- https://raw.githubusercontent.com/AppFlowy-IO/AppFlowy-SelfHost-Commercial/main/docs/AUDIT.md — AppFlowy (Board View)
+- https://www.airtable.com — Airtable (Kanban view + AI + MCP)
+- https://www.airtable.com/pricing — Airtable (Kanban view + AI + MCP)
+- https://github.com/Airtable/airtable-mcp-cli — Airtable (Kanban view + AI + MCP)
+- https://github.com/Airtable/skills — Airtable (Kanban view + AI + MCP)
+- https://github.com/domdomegg/airtable-mcp-server — Airtable (Kanban view + AI + MCP)
+- https://apps.apple.com/us/app/airtable/id914172636 — Airtable (Kanban view + AI + MCP)
+- https://play.google.com/store/apps/details?id=com.formagrid.airtable&hl=en — Airtable (Kanban view + AI + MCP)
+- https://www.vibekanban.com/ — Vibe Kanban
+- https://vibekanban.com/blog/shutdown — Vibe Kanban
+- https://vibekanban.com/docs — Vibe Kanban
+- https://vibekanban.com/docs/integrations/vibe-kanban-mcp-server.md — Vibe Kanban
+- https://vibekanban.com/docs/self-hosting/deploy-docker.md — Vibe Kanban
+- https://vibekanban.com/docs/remote-access.md — Vibe Kanban
+- https://raw.githubusercontent.com/BloopAI/vibe-kanban/main/LICENSE — Vibe Kanban
+- https://api.github.com/repos/BloopAI/vibe-kanban — Vibe Kanban
+- https://goodguyapps.com/blog/vibe-kanban-sunsetting/ — Vibe Kanban
+- https://goodguyapps.com/compare/kanban-pro-vs-vibe-kanban/ — Vibe Kanban
+- https://github.com/features/copilot/agents — GitHub Copilot Coding Agent (Cloud Agent)
+- https://github.com/features/copilot/plans — GitHub Copilot Coding Agent (Cloud Agent)
+- https://docs.github.com/en/copilot/concepts/agents/cloud-agent — GitHub Copilot Coding Agent (Cloud Agent)
+- https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/kick-off-a-task — GitHub Copilot Coding Agent (Cloud Agent)
+- https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/manage-and-track-agents — GitHub Copilot Coding Agent (Cloud Agent)
+- https://apps.apple.com/us/app/github/id1477376905 — GitHub Copilot Coding Agent (Cloud Agent)
+- https://docs.github.com/en/copilot/how-tos/copilot-on-github/use-copilot-agents/overview — GitHub Copilot Agents Panel / Agent HQ (Mission Control)
+- https://docs.github.com/en/rest/projects/projects — GitHub Projects (Projects v2) Boards
+- https://github.com/github/github-mcp-server — GitHub Projects (Projects v2) Boards
+- https://raw.githubusercontent.com/github/github-mcp-server/main/pkg/github/projects.go — GitHub Projects (Projects v2) Boards
+- https://github.com/github/github-mcp-server/releases — GitHub Projects (Projects v2) Boards
+- https://www.npmjs.com/package/routa-cli — Routa
+- https://github.com/kdlbs/kandev/releases — Kandev
+- https://github.com/BradGroux/veritas-kanban/blob/main/CHANGELOG.md — Veritas Kanban
+- https://github.com/L1AD/claude-task-viewer — Claude Task Viewer
+- https://dev3.h0x91b.com/ — dev-3.0
+- https://github.com/DanWahlin/ai-agent-board — AI Agent Board (DanWahlin)
+- https://github.com/alamops/agetor — Agetor
+- https://agetor.dev — Agetor
+- https://github.com/alamops/agetor/releases — Agetor
+- https://dualface.dev/projects/ — Kander
+- https://github.com/ustoppble/overclick — OverClick
+- https://github.com/ustoppble/overclick/releases — OverClick
+- https://1code.dev — 1Code
+- https://yetanotherorchestrator.app/apps/1code/ — 1Code
+- https://github.com/21st-dev/1code — 1Code
+- https://api.github.com/repos/21st-dev/1code — 1Code
+- https://raw.githubusercontent.com/21st-dev/1code/main/package.json — 1Code
+- https://api.github.com/repos/21st-dev/1code/releases/tag/v0.0.84 — 1Code
+- https://ao-agents.com — Agent Orchestrator
+- https://yetanotherorchestrator.app/apps/agent-orchestrator/ — Agent Orchestrator
+- https://api.github.com/repos/OrchestratorInc/agent-orchestrator — Agent Orchestrator
+- https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/cli/README.md — Agent Orchestrator
+- https://github.com/OrchestratorInc/agent-orchestrator/releases — Agent Orchestrator
+- https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/self-hosted-remote.md — Agent Orchestrator
+- https://api.github.com/repos/777genius/agent-teams-ai — Agent Teams
+- https://raw.githubusercontent.com/777genius/agent-teams-ai/main/package.json — Agent Teams
+- https://api.github.com/repos/777genius/agent-teams-ai/releases/tag/v2.17.10 — Agent Teams
+- https://raw.githubusercontent.com/777genius/agent-teams-ai/main/mcp-server/README.md — Agent Teams
+- https://multica.ai/ — Multica
+- https://yetanotherorchestrator.app/apps/multica/ — Multica
+- https://multica.ai/licensing — Multica
+- https://multica.ai/docs/mobile-app — Multica
+- https://multica.ai/docs/desktop-app — Multica
+- https://multica.ai/docs/cli — Multica
+- https://multica.ai/docs/cloud-quickstart — Multica
+- https://github.com/multica-ai/multica/releases — Multica
+- https://yetanotherorchestrator.app/apps/sortie/ — Sortie
+- https://docs.sortie-ai.com/reference/dashboard/ — Sortie
+- https://docs.sortie-ai.com/reference/http-api/ — Sortie
+- https://docs.sortie-ai.com/guides/monitor-with-logs/ — Sortie
+- https://github.com/sortie-ai/sortie/releases — Sortie
+- https://www.agent-of-empires.com/ — Agent of Empires
+- https://yetanotherorchestrator.app/apps/agent-of-empires/ — Agent of Empires
+- https://www.agent-of-empires.com/docs/quick-start/ — Agent of Empires
+- https://www.agent-of-empires.com/guides/web-dashboard/ — Agent of Empires
+- https://www.agent-of-empires.com/guides/web/dashboard/ — Agent of Empires
+- https://www.agent-of-empires.com/docs/api/ — Agent of Empires
+- https://github.com/agent-of-empires/agent-of-empires — Agent of Empires
+- https://github.com/agent-of-empires/agent-of-empires/releases — Agent of Empires
+- https://raw.githubusercontent.com/NeuralNomadsAI/CodeNomad/dev/README.md — CodeNomad
+- https://raw.githubusercontent.com/NeuralNomadsAI/CodeNomad/dev/package.json — CodeNomad
+- https://raw.githubusercontent.com/NeuralNomadsAI/CodeNomad/dev/packages/ui/src/components/instance/instance-shell2.tsx — CodeNomad
+- https://yetanotherorchestrator.app/apps/codenomad/ — CodeNomad
+- https://www.codexmonitor.app/ — Codex Monitor
+- https://github.com/Dimillian/CodexMonitor — Codex Monitor
+- https://raw.githubusercontent.com/Dimillian/CodexMonitor/main/README.md — Codex Monitor
+- https://yetanotherorchestrator.app/apps/codexmonitor/ — Codex Monitor
+- https://constellagent.vercel.app/ — Constellagent
+- https://github.com/owengretzinger/constellagent — Constellagent
+- https://raw.githubusercontent.com/owengretzinger/constellagent/main/README.md — Constellagent
+- https://raw.githubusercontent.com/owengretzinger/constellagent/main/package.json — Constellagent
+- https://yetanotherorchestrator.app/apps/constellagent/ — Constellagent
+- https://agent-box.sh/ — AgentBox
+- https://agent-box.sh/docs — AgentBox
+- https://agent-box.sh/docs/cli — AgentBox
+- https://agent-box.sh/docs/hub — AgentBox
+- https://agent-box.sh/docs/api — AgentBox
+- https://agent-box.sh/docs/core-concepts — AgentBox
+- https://github.com/madarco/agentbox — AgentBox
+- https://yetanotherorchestrator.app/apps/agentbox/ — AgentBox
+- https://dmux.ai/ — dmux
+- https://github.com/formkit/dmux — dmux
+- https://github.com/standardagents/dmux — dmux
+- https://yetanotherorchestrator.app/apps/dmux/ — dmux
+- https://github.com/gastownhall/gastown — Gas Town
+- https://gastownhall.com — Gas Town
+- https://gascity.com — Gas Town
+- https://yetanotherorchestrator.app/apps/gastown/ — Gas Town
+- https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04 — Gas Town
+- https://dorothyai.app/ — Dorothy
+- https://yetanotherorchestrator.app/apps/dorothy/ — Dorothy
+- https://github.com/Charlie85270/Dorothy — Dorothy
+- https://raw.githubusercontent.com/Charlie85270/Dorothy/main/README.md — Dorothy
+- https://granular.build/ — Granular
+- https://yetanotherorchestrator.app/apps/granular/ — Granular
+- https://granular.build/pricing/ — Granular
+- https://granular.build/deal/ — Granular
+- https://granular.build/download/ — Granular
+- https://granular.build/docs/ — Granular
+- https://granular.build/docs/how-the-roadmap-board-works/ — Granular
+- https://jean.build/ — Jean
+- https://yetanotherorchestrator.app/apps/jean/ — Jean
+- https://github.com/coollabsio/jean — Jean
+- https://raw.githubusercontent.com/coollabsio/jean/main/README.md — Jean
+- https://jean.build/docs — Jean
+- https://jean.build/docs/workflows/project-canvas-and-chat — Jean
+- https://jean.build/docs/core-concepts/projects-worktrees-and-sessions — Jean
+- https://jean.build/docs/manage/web-access-and-headless — Jean
+- https://aizen.win/ — Aizen
+- https://yetanotherorchestrator.app/apps/aizen — Aizen
+- https://github.com/vivy-company/aizen — Aizen
+- https://github.com/vivy-company/aizen/releases — Aizen
+- https://aperant.com/ — Aperant
+- https://yetanotherorchestrator.app/apps/aperant — Aperant
+- https://github.com/AndyMik90/Aperant — Aperant
+- https://github.com/AndyMik90/Aperant/releases — Aperant
+- https://getatrium.dev/ — Atrium
+- https://yetanotherorchestrator.app/apps/atrium — Atrium
+- https://getatrium.dev/docs — Atrium
+- https://getatrium.dev/docs/panes/tasks — Atrium
+- https://getatrium.dev/docs/concepts/tasks — Atrium
+- https://getatrium.dev/docs/reference/cli — Atrium
+- https://getatrium.dev/docs/mobile — Atrium
+- https://getatrium.dev/docs/adapters — Atrium
+- https://www.codeagentswarm.com/en — CodeAgentSwarm
+- https://tryhamster.com — Hamster (tryhamster.com, Task Master 클라우드)
+- https://github.com/KaiStephens/OpenTerra — OpenTerra (KaiStephens/OpenTerra)
+- https://code.claude.com/docs/en/claude-code-on-the-web — Claude Code on the web
+- https://github.com/MrLesk/Groma.md — Groma.md (MrLesk/Groma.md)
+- https://raw.githubusercontent.com/saltbo/agent-kanban/main/README.md — Agent Kanban
+- https://raw.githubusercontent.com/saltbo/agent-kanban/main/LICENSE — Agent Kanban
+- https://raw.githubusercontent.com/saltbo/agent-kanban/main/docs/architecture/system-overview.md — Agent Kanban
+- https://ai-maestro.23blocks.com/ — AI Maestro
+- https://yetanotherorchestrator.app/apps/ai-maestro/ — AI Maestro
+- https://github.com/23blocks-OS/ai-maestro — AI Maestro
+- https://ai-maestro.23blocks.com/mobile.html — AI Maestro
+- https://amux.io/ — amux
+- https://yetanotherorchestrator.app/apps/amux/ — amux
+- https://amux.io/pricing/ — amux
+- https://raw.githubusercontent.com/mixpeek/amux/main/LICENSE — amux
+- https://clideck.dev/ — CliDeck
+- https://yetanotherorchestrator.app/apps/clideck/ — CliDeck
+- https://docs.clideck.dev — CliDeck
+- https://docs.clideck.dev/mobile — CliDeck
+- https://docs.clideck.dev/agents/overview.md — CliDeck
+- https://docs.clideck.dev/features/telemetry.md — CliDeck
+- https://docs.clideck.dev/features/sessions.md — CliDeck
+- https://docs.clideck.dev/features/autopilot.md — CliDeck
+- https://github.com/rustykuntz/clideck — CliDeck
+- https://runfusion.ai/ — Fusion
+- https://yetanotherorchestrator.app/apps/fusion/ — Fusion
+- https://github.com/Runfusion/Fusion — Fusion
+- https://github.com/Runfusion/Fusion/blob/main/CHANGELOG.md — Fusion
+- https://github.com/Runfusion/Fusion/blob/main/package.json — Fusion
+- https://github.com/Runfusion/Fusion/blob/main/packages/core/package.json — Fusion
+- https://jat.tools/ — jat
+- https://jat.tools/docs/jat — jat
+- https://jat.tools/reference — jat
+- https://jat.tools/docs/jst — jat
+- https://jat.tools/docs/jat-pilot — jat
+- https://jat.tools/docs/jat-appliance — jat
+- https://jat.tools/docs/jat-secret — jat
+- https://jat.tools/docs/jat-run — jat
+- https://jat.tools/docs/jatstation — jat
+- https://yetanotherorchestrator.app/apps/jat/ — jat
+- https://rywalker.com/research/jat — jat
+- https://github.com/jatstack/jat — jat
+- https://goodguyapps.com — Kanban Pro (Good Guy Apps)
+- https://raw.githubusercontent.com/pingdotgg/t3code/main/README.md — T3 Code (pingdotgg/t3code)
+- https://t3.codes — T3 Code (pingdotgg/t3code)
+- https://runpane.com — Pane (RunPane)
+- https://runpane.com/compare/vibe-kanban — Pane (RunPane)
+- https://github.com/greenfield-inc/Pane — Pane (RunPane)
+- https://herdr.dev/ — Herdr
+- https://herdr.dev/docs/ — Herdr
+- https://herdr.dev/docs/agents/ — Herdr
+- https://herdr.dev/docs/socket-api/ — Herdr
+- https://herdr.dev/docs/connecting-machines/ — Herdr
+- https://herdr.dev/blog/herdr-raised-a-seed/ — Herdr
+- https://herdr.dev/compare/ — Herdr
+- https://github.com/herdrdev/herdr — Herdr
+- https://github.com/herdrdev/herdr/releases — Herdr
+- https://yetanotherorchestrator.app/apps/herdr/ — Herdr
+- https://github.com/TechDufus/openkanban/blob/main/README.md — OpenKanban
+- https://github.com/TechDufus/openkanban/blob/main/docs/CONFIGURATION.md — OpenKanban
+- https://github.com/TechDufus/openkanban/blob/main/LICENSE — OpenKanban
+- https://github.com/TechDufus/openkanban/releases — OpenKanban
+- https://ralph-tui.com/ — Ralph TUI
+- https://github.com/subsy/ralph-tui — Ralph TUI
+- https://github.com/subsy/ralph-tui/releases — Ralph TUI
+- https://yetanotherorchestrator.app/apps/ralph-tui/ — Ralph TUI
+- https://yetanotherorchestrator.app/apps/nimbalyst/ — Nimbalyst
+- https://nimbalyst.com/open-source/ — Nimbalyst
+- https://github.com/Nimbalyst/nimbalyst/releases — Nimbalyst
+- https://yetanotherorchestrator.app/apps/parallel-code/ — Parallel Code
+- https://parallelcode.app/ — Parallel Code
+- https://github.com/johannesjo/parallel-code — Parallel Code
+- https://github.com/johannesjo/parallel-code/releases — Parallel Code
+- https://raw.githubusercontent.com/johannesjo/parallel-code/main/electron/mcp/server.ts — Parallel Code
+- https://raw.githubusercontent.com/johannesjo/parallel-code/main/src/components/TilingLayout.tsx — Parallel Code
+- https://yetanotherorchestrator.app/apps/proliferate/ — Proliferate
+- https://proliferate.com/ — Proliferate
+- https://github.com/proliferate-ai/proliferate — Proliferate
+- https://github.com/proliferate-ai/proliferate/releases — Proliferate
+- https://raw.githubusercontent.com/proliferate-ai/proliferate/main/guides/deploying/self-hosted-deploy.md — Proliferate
+- https://raw.githubusercontent.com/proliferate-ai/proliferate/main/apps/packages/product-client/src/pages/WorkspacesPage.tsx — Proliferate
+- https://automaker.app/ — Automaker
+- https://yetanotherorchestrator.app/apps/automaker/ — Automaker
+- https://github.com/webdevcody/automaker — Automaker
+- https://github.com/AutoMaker-Org/automaker — Automaker
+- https://caudex.sh/ — Caudex
+- https://caudex.sh/docs — Caudex
+- https://yetanotherorchestrator.app/apps/caudex/ — Caudex
+- https://github.com/antasphere/clave — Clave
+- https://yetanotherorchestrator.app/apps/clave/ — Clave
+- https://raw.githubusercontent.com/antasphere/clave/prod/README.md — Clave
+- https://raw.githubusercontent.com/antasphere/clave/prod/docs/adr/0003-server-and-client.md — Clave
+- https://cmux.com/ — cmux
+- https://yetanotherorchestrator.app/apps/cmux/ — cmux
+- https://github.com/manaflow-ai/cmux — cmux
+- https://raw.githubusercontent.com/manaflow-ai/cmux/main/LICENSE — cmux
+- https://cmux.com/docs/api — cmux
+- https://cmux.com/docs/notifications — cmux
+- https://cmux.com/docs/ios — cmux
+- https://cmux.com/docs/skills — cmux
+- https://cmux.com/docs/agent-integrations/claude-code-teams — cmux
+- https://cnvs.dev/ — CNVS
+- https://yetanotherorchestrator.app/apps/cnvs/ — CNVS
+- https://cnvs.dev/release/ — CNVS
+- https://cnvs.dev/release/1-5-2-distraction-guard/ — CNVS
+- https://cnvs.dev/release/1-4-0-shorthand/ — CNVS
+- https://humanlayer.dev/code — CodeLayer
+- https://humanlayer.dev/ — CodeLayer
+- https://yetanotherorchestrator.app/apps/codelayer/ — CodeLayer
+- https://docs.humanlayer.com/ — CodeLayer
+- https://docs.humanlayer.com/release-notes.html — CodeLayer
+- https://docs.humanlayer.com/explanation/tasks — CodeLayer
+- https://docs.humanlayer.com/guide/automation-sessions — CodeLayer
+- https://docs.humanlayer.com/reference/skills-workflows — CodeLayer
+- https://docs.humanlayer.com/guide/linear-integration — CodeLayer
+- https://docs.humanlayer.com/explanation/remote-daemons — CodeLayer
+- https://github.com/humanlayer/homebrew-humanlayer — CodeLayer
+- https://runpane.com/pricing.md — Pane
+- https://runpane.com/agents.md — Pane
+- https://runpane.com/docs/runpane-cli — Pane
+- https://runpane.com/.well-known/mcp/server-card.json — Pane
+- https://runpane.com/docs/security — Pane
+- https://runpane.com/compare/superset — Pane
+- https://maude.pilotdev.fr — Maude
+- https://apps.apple.com/app/id6759869262 — Maude
+- https://play.google.com/store/apps/details?id=com.pilotdev.maude — Maude
+- https://maude.pilotdev.fr/compare/claude-code-vs-codex-vs-opencode/ — Maude
+- https://maude.pilotdev.fr/compare/maude-vs-claude-code-remote-control/ — Maude
+- https://www.codeagent-mobile.com — CodeAgent Mobile
+- https://www.codeagent-mobile.com/pricing — CodeAgent Mobile
+- https://www.codeagent-mobile.com/faq — CodeAgent Mobile
+- https://www.codeagent-mobile.com/terms — CodeAgent Mobile
+- https://marketplace.visualstudio.com/items?itemName=CodeAgentMobile.codeagent-mobile — CodeAgent Mobile
+- https://plugins.jetbrains.com/plugin/30697-codeagent-mobile/versions/stable/1181091 — CodeAgent Mobile
+- https://supacode.sh/ — Supacode
+- https://yetanotherorchestrator.app/apps/supacode/ — Supacode
+- https://github.com/supabitapp/supacode — Supacode
+- https://github.com/supabitapp/supacode/releases — Supacode
+- https://raw.githubusercontent.com/supabitapp/supacode/main/LICENSE — Supacode
+- https://raw.githubusercontent.com/supabitapp/supacode/main/AGENTS.md — Supacode
+- https://github.com/supabitapp/supacode/commits/main — Supacode
+- https://www.trysynara.com/ — Synara
+- https://yetanotherorchestrator.app/apps/synara/ — Synara
+- https://github.com/Emanuele-web04/synara — Synara
+- https://github.com/Emanuele-web04/synara/releases — Synara
+- https://www.trysynara.com/llms.txt — Synara
+- https://www.trysynara.com/docs/features/tasks-and-inbox.md — Synara
+- https://www.trysynara.com/docs/workflows/agent-gateway.md — Synara
+- https://www.trysynara.com/docs/workflows/external-mcp.md — Synara
+- https://raw.githubusercontent.com/Emanuele-web04/synara/main/LICENSE — Synara
+- https://github.com/Emanuele-web04/synara/commits/main — Synara
+- https://unpeel.com/ — Unpeel
+- https://yetanotherorchestrator.app/apps/unpeel/ — Unpeel
+- https://unpeel.com/docs — Unpeel
+- https://unpeel.com/docs/cli — Unpeel
+- https://unpeel.com/docs/unpeel-mcp — Unpeel
+- https://unpeel.com/privacy — Unpeel
+- https://github.com/unpeel-com/unpeel — Unpeel
+- https://raw.githubusercontent.com/unpeel-com/unpeel/main/crates/Cargo.toml — Unpeel
+- https://raw.githubusercontent.com/unpeel-com/unpeel/main/LICENSE — Unpeel
+- https://raw.githubusercontent.com/unpeel-com/unpeel/main/AGENTS.md — Unpeel
+- https://raw.githubusercontent.com/unpeel-com/unpeel/main/clients/ios/UnpeelIOS/project.yml — Unpeel
+- https://github.com/unpeel-com/unpeel/commits/main — Unpeel

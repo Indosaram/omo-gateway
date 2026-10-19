@@ -1,0 +1,8 @@
+task-8 learned precedent live cycle (Slack owner DM, rev 22b5e24, 2026-10-18 UTC)
+1. proposal #3 (vcs_remote:git push:) pending -> asked (quiet hours deferral to 08:00), push NOT executed.
+2. owner decide: omo-gateway autonomy decide 3 always --words "QA: 이 브랜치 push는 항상 해도 돼" -> precedent #6 allow/exact.
+3. push6 request (15:27) -> proposal #4 state=auto_allowed (matched precedent #6), remote branch lane/qa-approval6 created.
+4. omo-gateway autonomy revoke 6 -> revoked_at 2026-10-18 15:28:49.
+5. push7 request (15:28:53) -> proposal #5 state=pending (asks again), remote branch lane/qa-approval7 absent.
+Follow-up: signature target was empty because the compound "cd X && git checkout && git push" lost the cd dir per piece;
+fixed (pieces inherit the peeled cd dir) so precedents scope to the repo; test f_eval_cell... asserts target contains /tmp/repo.

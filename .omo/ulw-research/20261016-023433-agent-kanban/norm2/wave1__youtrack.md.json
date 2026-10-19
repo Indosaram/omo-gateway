@@ -1,0 +1,31 @@
+[
+ {
+  "name": "YouTrack (JetBrains)",
+  "url": "https://www.jetbrains.com/youtrack/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "JetBrains 이슈 트래커·프로젝트 관리, 애자일/칸반 보드와 내장 MCP 제공",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료(10명까지) / Cloud $4.50~/사용자/월(연간)",
+  "selfhost": "가능(Docker·ZIP/MSI·JAR)",
+  "license": "상용(독점)",
+  "agent": "내장 원격 MCP·REST API·CLI / Claude·Cursor·Codex",
+  "status": "활발(정기 릴리스, 2025.3 MCP 도입)",
+  "pros": "내장 원격 MCP로 로컬 게이트웨이 불필요; 10명까지 영구 무료(Cloud·Server); Docker 셀프호스팅·iOS/Android 앱",
+  "cons": "소규모 에이전트용으론 복잡하고 무거움; 독점 코드로 포크 불가; 번들 AI 크레딧 주간 한도",
+  "sources": [
+   "https://www.jetbrains.com/youtrack/",
+   "https://www.jetbrains.com/youtrack/buy",
+   "https://blog.jetbrains.com/youtrack/2025/06/new-youtrack-prices-starting-from-october-2025/",
+   "https://www.jetbrains.com/help/youtrack/cloud/model-context-protocol-server.html",
+   "https://www.jetbrains.com/youtrack/features/ai_assistant.html",
+   "https://www.jetbrains.com/help/youtrack/server/youtrack-mobile.html",
+   "https://github.com/JetBrains/youtrack-mobile",
+   "https://github.com/tonyzorin/youtrack-mcp",
+   "https://hub.docker.com/r/jetbrains/youtrack",
+   "https://www.jetbrains.com/legal/docs/youtrack/license/",
+   "https://www.jetbrains.com/help/youtrack/devportal/youtrack-rest-api.html"
+  ],
+  "confidence": "높음"
+ }
+]

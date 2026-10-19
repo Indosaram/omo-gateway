@@ -1,0 +1,35 @@
+[
+ {
+  "name": "Plane",
+  "url": "https://plane.so",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Jira·Linear 대안 오픈소스 프로젝트·지식 관리(칸반·사이클·위키·간트)",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Pro $6~8/사용자/월 / Business $13~15",
+  "selfhost": "가능(Docker·K8s·에어갭)",
+  "license": "AGPL-3.0",
+  "agent": "공식 MCP(30도구)·REST API·SDK·CLI; Claude Code·Cursor·Codex",
+  "status": "활발(v1.4.2, 2026-08)",
+  "pros": "오픈소스·셀프호스팅 용이; 공식 MCP로 주요 에이전트 즉시 연동; 다양한 레이아웃·위키·스프린트 통합",
+  "cons": "커뮤니티판은 모바일 로그인 제한; 모바일 푸시는 클라우드 전용; 다중 컨테이너 운영 부담",
+  "sources": [
+   "https://plane.so",
+   "https://plane.so/pricing",
+   "https://github.com/makeplane/plane",
+   "https://github.com/makeplane/plane/releases",
+   "https://github.com/makeplane/plane/blob/master/README.md",
+   "https://github.com/makeplane/plane-mcp-server",
+   "https://developers.plane.so/dev-tools/mcp-server",
+   "https://developers.plane.so/dev-tools/mcp-server-tools",
+   "https://developers.plane.so/dev-tools/mcp-server-self-host",
+   "https://developers.plane.so/dev-tools/agents/building-an-agent",
+   "https://docs.plane.so/devices/mobile",
+   "https://docs.plane.so/integrations/cursor",
+   "https://apps.apple.com/in/app/plane/id6657986465",
+   "https://play.google.com/store/apps/details?id=com.plane.so",
+   "https://pypi.org/project/plane-mcp-server/"
+  ],
+  "confidence": "높음"
+ }
+]

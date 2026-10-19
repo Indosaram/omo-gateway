@@ -1,0 +1,3 @@
+scoped_fmt	0	rustfmt --edition 2021 --check src/lanes/runner.rs tests/test_lane_reopen.rs
+clippy	0	cargo clippy -j2 --all-targets --all-features -- -D warnings
+focused	0	env TMPDIR=/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/dori_race_port_XXXXXX.B41YbNccBZ cargo test -j2 --test test_lane_runner --test test_lane_reopen --no-fail-fast -- --nocapture

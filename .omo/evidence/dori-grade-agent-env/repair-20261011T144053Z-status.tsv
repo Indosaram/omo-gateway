@@ -1,0 +1,6 @@
+shell	0	env isolated /bin/bash tests/test_omomeow_delegate.sh
+scoped_fmt	0	rustfmt --edition 2021 --check src/agent/backend.rs tests/test_inbox_sources.rs
+fmt	0	cargo fmt --check
+clippy	101	cargo clippy -j2 --all-targets --all-features -- -D warnings
+state	0	cargo test --lib lanes::state -j2 -- --nocapture
+inbox	0	cargo test -j2 --test test_inbox_sources

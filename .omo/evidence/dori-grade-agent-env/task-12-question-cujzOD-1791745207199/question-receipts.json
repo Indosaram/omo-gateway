@@ -1,0 +1,373 @@
+[
+  {
+    "kind": "identity",
+    "preparedSha256": "12bdbb992c970ef629d4695dec91aff1dc4aaad660ca57c73e22c6eee1c97bdc",
+    "binarySha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+    "manifestSha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+    "validationCode": 0,
+    "authPresent": true,
+    "scratch": "/private/tmp/omon-lane-scratch-qa-cujzOD",
+    "at": "2026-10-11T19:00:07.199Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 43591,
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:00:07.271Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "stdout": "Initialized empty Git repository in /private/tmp/omon-lane-scratch-qa-cujzOD/qa-repo/.git/\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:00:07.272Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 43599,
+    "argv": [
+      "/usr/bin/curl",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:00:07.279Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/usr/bin/curl",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "stdout": "ok\n",
+    "stderr": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100     3    0     3    0     0   4341      0 --:--:-- --:--:-- --:--:--  3000\n",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:00:07.281Z"
+  },
+  {
+    "kind": "shared_ready",
+    "output": "ok\n",
+    "at": "2026-10-11T19:00:07.281Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 43604,
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "43600",
+      "-Fn"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:00:07.357Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "43600",
+      "-Fn"
+    ],
+    "code": 0,
+    "stdout": "p43600\nfcwd\nn/private/tmp/omon-lane-scratch-qa-cujzOD\nftxt\nn/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\nftxt\nn/usr/lib/dyld\nftxt\nn/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db-shm\nf0\nn/dev/null\nf1\nn->0x9f6e0a644f9d604c\nf2\nn->0x6648e30453edbcd3\nf3\nncount=0, state=0xa\nf4\nncount=0, state=0xa\nf5\nncount=0, state=0xa\nf6\nn->0x4fe6949ff9d72c04\nf7\nn->0xac8d98c668f7a588\nf8\nn->0x4fe6949ff9d72c04\nf9\nn/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db\nf10\nn/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db-wal\nf11\nn/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db-shm\nf12\nn/private/tmp/omon-lanes-bee70cc7fa30708673744960.lock\nf13\nn/tmp/omon-lanes-bee70cc7fa30708673744960.sock\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:00:07.357Z"
+  },
+  {
+    "kind": "database_verified",
+    "pragma": [
+      {
+        "seq": 0,
+        "name": "main",
+        "file": "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db"
+      }
+    ],
+    "paths": [
+      "/private/tmp/omon-lane-scratch-qa-cujzOD",
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "/usr/lib/dyld",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db-shm",
+      "/dev/null",
+      "->0x9f6e0a644f9d604c",
+      "->0x6648e30453edbcd3",
+      "count=0, state=0xa",
+      "count=0, state=0xa",
+      "count=0, state=0xa",
+      "->0x4fe6949ff9d72c04",
+      "->0xac8d98c668f7a588",
+      "->0x4fe6949ff9d72c04",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db-wal",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db-shm",
+      "/private/tmp/omon-lanes-bee70cc7fa30708673744960.lock",
+      "/tmp/omon-lanes-bee70cc7fa30708673744960.sock"
+    ],
+    "gatewayPid": 43600,
+    "at": "2026-10-11T19:00:07.359Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 43610,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-1",
+      "--title",
+      "Question QA",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/question-brief.md",
+      "--done",
+      "file unused-question-signal",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:00:09.010Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-1",
+      "--title",
+      "Question QA",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/question-brief.md",
+      "--done",
+      "file unused-question-signal",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-cujzOD/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 0,
+    "stdout": "{\"lane\":{\"brief_path\":\"/private/tmp/omon-lane-scratch-qa-cujzOD/question-brief.md\",\"claim_at\":null,\"claim_evidence\":null,\"created_at\":\"2026-10-11T19:00:09.009121Z\",\"cwd\":\"/private/tmp/omon-lane-scratch-qa-cujzOD/qa-repo\",\"done_signals\":\"file unused-question-signal\",\"key\":\"qa-1\",\"last_activity_at\":\"2026-10-11T19:00:09.009121Z\",\"last_report\":null,\"last_turn_outcome\":null,\"lead_session_key\":\"4:lane|-|4:lead|-|9:lane:lead\",\"model\":\"inferhub/cb/deepseek-v4.1-flash\",\"objection\":null,\"omo_thread_id\":null,\"parent_channel_id\":null,\"session_key\":\"4:lane|-|4:qa-1|-|9:lane:qa-1\",\"stale_posted_at\":null,\"status\":\"working\",\"status_message_id\":null,\"thread_channel_id\":null,\"title\":\"Question QA\",\"turns_run\":0,\"updated_at\":\"2026-10-11T19:00:09.009121Z\"},\"reasons\":[]}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:00:09.010Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 52496,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "log",
+      "qa-1"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:02:07.375Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "log",
+      "qa-1"
+    ],
+    "code": 0,
+    "stdout": "{\"key\":\"qa-1\",\"transcript\":[{\"at\":\"2026-10-11T19:00:09.011079Z\",\"id\":1,\"lane_key\":\"qa-1\",\"role\":\"user\",\"text\":\"\\n\\nIsolated scratch QA. Do not use tools, delegation, goals, credentials, Discord, network writes or claim commands. Emit exactly [REPORT] qa-1 | question | pick A or B and end the turn. Do not continue until the lead sends an answer. On that answer emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn again. No file or claim requirement.\\n\\n\\nLane key: qa-1\\nDone = file unused-question-signal\\n[REPORT] qa-1 | milestone|blocker|question|done | <text>\\nClaim command: omo-gateway lane claim-done qa-1 --evidence \\\"<evidence>\\\"\\n\\nLane done protocol\\nWhen every Done signal is live and every change is pushed, run the claim command from your own session. For local or QA-only work the signals can be a command, file or URL. Run them yourself first: the watcher re-runs every signal and never takes your word for it. The lane key above is required.\\nAfter claiming, stay idle and start no new work. The lead receives a done_claimed event. A claim starts a five-minute objection window. Before closing, the watcher reads every signal live and refuses uncommitted tracked changes or commits on no remote. Closing marks the thread done and removes lane-owned worktrees.\\nIf the lead objects or a check fails, you receive [LEAD] not done: <reasons>; keep working, claim again when fixed. Fix every reason, then claim again for a fresh five-minute window.\\nControl executable (one argv element): \\\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\\\"\\nControl DATABASE_URL: \\\"sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db\\\"\\nUse this DATABASE_URL explicitly for every lane command; do not use another gateway database.\\n\"},{\"at\":\"2026-10-11T19:00:15.196711Z\",\"id\":2,\"lane_key\":\"qa-1\",\"role\":\"activity_item\",\"text\":\"0:lane-item:9ada3c14-e5f1-4435-89fd-06babf391865:chatcmpl-resp_0fa014cbb39dfc44016acbdcbc3d4487d08872090058f6bf82:0\"},{\"at\":\"2026-10-11T19:00:15.216503Z\",\"id\":3,\"lane_key\":\"qa-1\",\"role\":\"agent\",\"text\":\"[REPORT] qa-1 | question | pick A or B\"},{\"at\":\"2026-10-11T19:00:15.219068Z\",\"id\":4,\"lane_key\":\"qa-1\",\"role\":\"outcome\",\"text\":\"completed\"}]}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:02:07.375Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 52497,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "send",
+      "qa-1",
+      "--text",
+      "A. Emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn. Do not use tools or claim."
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:02:07.386Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "send",
+      "qa-1",
+      "--text",
+      "A. Emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn. Do not use tools or claim."
+    ],
+    "code": 0,
+    "stdout": "{\"key\":\"qa-1\",\"queued\":true}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:02:07.386Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 61641,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "log",
+      "qa-1"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:04:07.387Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "log",
+      "qa-1"
+    ],
+    "code": 0,
+    "stdout": "{\"key\":\"qa-1\",\"transcript\":[{\"at\":\"2026-10-11T19:00:09.011079Z\",\"id\":1,\"lane_key\":\"qa-1\",\"role\":\"user\",\"text\":\"\\n\\nIsolated scratch QA. Do not use tools, delegation, goals, credentials, Discord, network writes or claim commands. Emit exactly [REPORT] qa-1 | question | pick A or B and end the turn. Do not continue until the lead sends an answer. On that answer emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn again. No file or claim requirement.\\n\\n\\nLane key: qa-1\\nDone = file unused-question-signal\\n[REPORT] qa-1 | milestone|blocker|question|done | <text>\\nClaim command: omo-gateway lane claim-done qa-1 --evidence \\\"<evidence>\\\"\\n\\nLane done protocol\\nWhen every Done signal is live and every change is pushed, run the claim command from your own session. For local or QA-only work the signals can be a command, file or URL. Run them yourself first: the watcher re-runs every signal and never takes your word for it. The lane key above is required.\\nAfter claiming, stay idle and start no new work. The lead receives a done_claimed event. A claim starts a five-minute objection window. Before closing, the watcher reads every signal live and refuses uncommitted tracked changes or commits on no remote. Closing marks the thread done and removes lane-owned worktrees.\\nIf the lead objects or a check fails, you receive [LEAD] not done: <reasons>; keep working, claim again when fixed. Fix every reason, then claim again for a fresh five-minute window.\\nControl executable (one argv element): \\\"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\\\"\\nControl DATABASE_URL: \\\"sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db\\\"\\nUse this DATABASE_URL explicitly for every lane command; do not use another gateway database.\\n\"},{\"at\":\"2026-10-11T19:00:15.196711Z\",\"id\":2,\"lane_key\":\"qa-1\",\"role\":\"activity_item\",\"text\":\"0:lane-item:9ada3c14-e5f1-4435-89fd-06babf391865:chatcmpl-resp_0fa014cbb39dfc44016acbdcbc3d4487d08872090058f6bf82:0\"},{\"at\":\"2026-10-11T19:00:15.216503Z\",\"id\":3,\"lane_key\":\"qa-1\",\"role\":\"agent\",\"text\":\"[REPORT] qa-1 | question | pick A or B\"},{\"at\":\"2026-10-11T19:00:15.219068Z\",\"id\":4,\"lane_key\":\"qa-1\",\"role\":\"outcome\",\"text\":\"completed\"},{\"at\":\"2026-10-11T19:02:07.386810Z\",\"id\":5,\"lane_key\":\"qa-1\",\"role\":\"user\",\"text\":\"A. Emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn. Do not use tools or claim.\"},{\"at\":\"2026-10-11T19:02:10.620222Z\",\"id\":6,\"lane_key\":\"qa-1\",\"role\":\"activity_item\",\"text\":\"0:lane-item:9ee576b6-7104-4a4a-a424-a428c189b93c:chatcmpl-resp_0feef7489f9c528d016acbdd2fdb008191a6bf6f69400ac727:0\"},{\"at\":\"2026-10-11T19:02:10.621509Z\",\"id\":7,\"lane_key\":\"qa-1\",\"role\":\"agent\",\"text\":\"[REPORT] qa-1 | question | A received; waiting for next instruction\"},{\"at\":\"2026-10-11T19:02:10.633499Z\",\"id\":8,\"lane_key\":\"qa-1\",\"role\":\"outcome\",\"text\":\"completed\"}]}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:04:07.387Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 61644,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: dedicated question QA cleanup"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:04:07.396Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: dedicated question QA cleanup"
+    ],
+    "code": 0,
+    "stdout": "{\"key\":\"qa-1\",\"status\":\"closed\"}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "at": "2026-10-11T19:04:07.400Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 43591,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.400Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 43599,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.404Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 43600,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "run"
+    ],
+    "code": 0,
+    "at": "2026-10-11T19:04:07.405Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 43600,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.405Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 43604,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.405Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 43610,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.405Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 52496,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.405Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 52497,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.405Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 61641,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.406Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 61644,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T19:04:07.406Z"
+  },
+  {
+    "kind": "cleanup",
+    "sharedDaemonUntouched": true,
+    "scratchRetained": "/private/tmp/omon-lane-scratch-qa-cujzOD",
+    "status": "observed",
+    "at": "2026-10-11T19:04:07.410Z"
+  }
+]

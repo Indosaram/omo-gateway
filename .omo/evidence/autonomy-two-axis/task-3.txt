@@ -1,0 +1,7 @@
+todo 3 status message — [~]
+Unit (aa49764, task-14-final-test3.txt): test_status_message short_turn_sends_nothing / long_turn_posts_once_edits_once_and_finalizes / restart_mid_turn_reuses_stored_message = ok (3/3).
+Live attempts (Slack DM D0C9HNVUK5M, 2026-10-19 KST):
+ 1) "sleep 200" -> classified unknown, quiet-hours decline (proposal #8 expired) -> turn short.
+ 2) "tail -f" -> engine session has no bash tool.
+ 3) eval Bun.sleep(200000) -> engine detached the cell after ~18s and ended the turn ("200초 대기 셀이 아직 실행 중이에요") -> turn < 180s, turn_status_messages stays empty (expected: driver posts only when a single turn exceeds 180s).
+Gap: a single foreground turn >180s could not be produced live because the engine detaches long cells; live post/edit not observed.

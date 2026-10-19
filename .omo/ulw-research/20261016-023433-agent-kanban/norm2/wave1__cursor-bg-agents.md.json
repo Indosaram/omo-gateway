@@ -1,0 +1,35 @@
+[
+ {
+  "name": "Cursor Cloud Agents (formerly Background Agents) / Cursor Agents Dashboard",
+  "url": "https://cursor.com/agents",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "격리된 클라우드 VM에서 병렬 코딩 에이전트를 실행·모니터링하고 PR까지 생성하는 대시보드",
+  "mobile": "iOS·iPadOS 앱, Android는 PWA",
+  "pricing": "Premium $30/월 이상 필요(Free·Plus 제외), 모델 토큰 별도",
+  "selfhost": "일부(하이브리드, 셀프호스트 워커)",
+  "license": "상용",
+  "agent": "Desktop·CLI·REST API·SDK·MCP, Slack·GitHub·Linear 트리거",
+  "status": "활발(상용, API 공개 베타)",
+  "pros": "작업별 전용 VM 샌드박스; 웹·데스크톱·iOS·Slack·GitHub·Linear 다중 제어; 스크린샷·녹화·로그·PR diff 아티팩트 제공",
+  "cons": "중앙 오케스트레이터는 비공개 SaaS로 완전 자체호스팅 불가; 최소 $30/월 플랜 및 별도 토큰 과금; 전통적 칸반 보드 없음, Android 네이티브 앱 없음",
+  "sources": [
+   "https://cursor.com/pricing",
+   "https://docs.cursor.com",
+   "https://cursor.com/docs/agent",
+   "https://cursor.com/docs/agent/agents-window",
+   "https://cursor.com/docs/cloud-agent",
+   "https://cursor.com/docs/cloud-agent/mobile",
+   "https://cursor.com/docs/cloud-agent/self-hosted",
+   "https://cursor.com/docs/cloud-agent/capabilities",
+   "https://cursor.com/docs/cloud-agent/api/endpoints",
+   "https://cursor.com/docs/cloud-agent/setup",
+   "https://cursor.com/docs/cloud-agent/automations",
+   "https://cursor.com/docs/integrations/linear",
+   "https://cursor.com/docs/integrations/slack",
+   "https://cursor.com/docs/cli/overview",
+   "https://apps.apple.com/app/cursor/id6767085653"
+  ],
+  "confidence": "높음"
+ }
+]

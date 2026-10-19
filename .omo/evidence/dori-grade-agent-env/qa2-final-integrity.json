@@ -1,0 +1,223 @@
+{
+  "binaryBefore": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97",
+  "binaryAfter": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97",
+  "manifestBefore": "a0837584175fecc6b6ac3907e9f378703c59b510d8ce4887161f27b3ca109f4f",
+  "manifestAfter": "a0837584175fecc6b6ac3907e9f378703c59b510d8ce4887161f27b3ca109f4f",
+  "verifyRows": [
+    {
+      "todo": 15,
+      "root": "/private/tmp/omon-task15-qa2-AX05TM",
+      "pid": 35720,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 15,
+      "root": "/private/tmp/omon-task15-qa2-CK16AC",
+      "pid": 35700,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 16,
+      "root": "/private/tmp/omon-task16-qa2-Cnugr8",
+      "pid": 35716,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 16,
+      "root": "/private/tmp/omon-task16-qa2-eMULg7",
+      "pid": 35709,
+      "pidAbsent": true,
+      "gatewayExit": null,
+      "scratchRetained": true
+    },
+    {
+      "todo": 18,
+      "root": "/private/tmp/omon-task18-qa2-IllvXn",
+      "pid": 35712,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 18,
+      "root": "/private/tmp/omon-task18-qa2-pXeG9j",
+      "pid": 35719,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 20,
+      "root": "/private/tmp/omon-task20-qa2-VvXove",
+      "pid": 35713,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 20,
+      "root": "/private/tmp/omon-task20-qa2-VvXove",
+      "pid": 36170,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 24,
+      "root": "/private/tmp/omon-task24-qa2-MAzxre",
+      "pid": 35721,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 24,
+      "root": "/private/tmp/omon-task24-qa2-K6WyJH",
+      "pid": 41738,
+      "pidAbsent": true,
+      "gatewayExit": null,
+      "scratchRetained": true
+    },
+    {
+      "todo": 25,
+      "root": "/private/tmp/omon-task25-qa2-JK9aEf",
+      "pid": 35728,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 26,
+      "root": "/private/tmp/omon-task26-qa2-0PK82X",
+      "pid": 35735,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 26,
+      "root": "/private/tmp/omon-task26-qa2-7Glkdp",
+      "pid": 42500,
+      "pidAbsent": true,
+      "gatewayExit": null,
+      "scratchRetained": true
+    },
+    {
+      "todo": 35,
+      "root": "/private/tmp/omon-task35-qa2-X9CZFj",
+      "pid": 35745,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    },
+    {
+      "todo": 35,
+      "root": "/private/tmp/omon-task35-qa2-cKSB2N",
+      "pid": 35742,
+      "pidAbsent": true,
+      "gatewayExit": 0,
+      "scratchRetained": true
+    }
+  ],
+  "sockets": [
+    {
+      "root": "/private/tmp/omon-task15-qa2-AX05TM",
+      "path": "/tmp/omon-lanes-6d602405ae2437904106d3ba.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task15-qa2-CK16AC",
+      "path": "/tmp/omon-lanes-8c281f9d25d90d9d4b9c4915.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task16-qa2-Cnugr8",
+      "path": "/tmp/omon-lanes-7196dd3b80888f36de0555c8.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task16-qa2-eMULg7",
+      "path": "/tmp/omon-lanes-b6e50c969d9bdbd631176f3b.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task18-qa2-IllvXn",
+      "path": "/tmp/omon-lanes-ae83b479fa10f841701a0512.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task18-qa2-pXeG9j",
+      "path": "/tmp/omon-lanes-241a219394259a4a15689a3a.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task20-qa2-VvXove",
+      "path": "/tmp/omon-lanes-a3a9a90c6f273f91e02f053f.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task24-qa2-MAzxre",
+      "path": "/tmp/omon-lanes-0ec20c6ec5074ddac7be543d.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task24-qa2-K6WyJH",
+      "path": "/tmp/omon-lanes-bd5a328b798b4533894ec4de.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task25-qa2-JK9aEf",
+      "path": "/tmp/omon-lanes-7890a617b1e807a3e2ae4015.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task26-qa2-0PK82X",
+      "path": "/tmp/omon-lanes-2337f356427d82ed3edff5d3.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task26-qa2-7Glkdp",
+      "path": "/tmp/omon-lanes-467c2a036523702c887f88ad.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task35-qa2-X9CZFj",
+      "path": "/tmp/omon-lanes-2c4e52de594bbdfc80f27a92.sock",
+      "exists": false
+    },
+    {
+      "root": "/private/tmp/omon-task35-qa2-cKSB2N",
+      "path": "/tmp/omon-lanes-5da7546b5bc022a2ade71993.sock",
+      "exists": false
+    }
+  ],
+  "remainingOwned": [],
+  "ownedOrphanGroupsKilled": [
+    36593,
+    36621,
+    36590,
+    36626,
+    36656,
+    36670,
+    36694,
+    37413,
+    37473,
+    42401,
+    44525,
+    41397,
+    41402,
+    42057
+  ],
+  "reboundPorts": [
+    55582,
+    55814,
+    55815
+  ],
+  "limits": "Three interrupted variants lack numeric gateway exits. No fabricated numeric exit."
+}

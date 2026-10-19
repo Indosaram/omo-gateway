@@ -1,0 +1,4 @@
+checks_failed=1
+source_cmp_exit=0
+preserved_cmp_exit=0
+cleanup_exit=0

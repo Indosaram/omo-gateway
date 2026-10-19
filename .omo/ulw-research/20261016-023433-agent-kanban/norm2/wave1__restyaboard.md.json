@@ -1,0 +1,96 @@
+[
+ {
+  "name": "Restyaboard",
+  "url": "https://restya.com/board/",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "PHP·PostgreSQL 기반의 셀프호스팅 오픈소스 Trello 클론",
+  "mobile": "반응형 웹(네이티브 앱 중단)",
+  "pricing": "무료(OSS) / 상용 €7~€197/사용자/월(과거 기준)",
+  "selfhost": "가능(Docker·설치 스크립트)",
+  "license": "OSL-3.0 / 상용 듀얼",
+  "agent": "REST API·웹훅; MCP 없음, 커스텀 HTTP 스크립트로 연동",
+  "status": "비활성(마지막 릴리스 2022-03)",
+  "pros": "Trello 수준 기능; 포괄적 REST API; 플러그인 확장",
+  "cons": "구식 기술 스택; 2022년 이후 릴리스 없음; MCP 미지원",
+  "sources": [
+   "https://github.com/RestyaPlatform/board",
+   "https://api.github.com/repos/RestyaPlatform/board",
+   "https://api.github.com/repos/RestyaPlatform/board/releases",
+   "https://marketplace.digitalocean.com/apps/restyaboard",
+   "https://forum.cloudron.io/topic/1202/restyaboard-trello-like-kanban-board",
+   "https://raw.githubusercontent.com/RestyaPlatform/board/master/server/php/R/r.php"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kanri",
+  "url": "https://kanriapp.com",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "Tauri·Rust 기반의 오프라인 우선 개인용 데스크톱 칸반 앱",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "GPL-3.0",
+  "agent": "로컬 JSON 파일 직접 편집; API·MCP 없음",
+  "status": "활발(v0.8.2, 2025-09)",
+  "pros": "가볍고 깔끔한 UI; 완전 오프라인·텔레메트리 없음; 에이전트가 파싱하기 쉬운 JSON",
+  "cons": "모바일·웹 접근 불가; 에이전트 동시 쓰기 시 충돌 위험; 다중 사용자 미지원",
+  "sources": [
+   "https://github.com/kanriapp/kanri",
+   "https://kanriapp.com/about",
+   "https://kanriapp.com/download",
+   "https://api.github.com/repos/kanriapp/kanri",
+   "https://api.github.com/repos/kanriapp/kanri/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Nullboard",
+  "url": "https://nullboard.io",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "단일 HTML 파일로 동작하는 초미니멀 키보드 중심 칸반 보드",
+  "mobile": "반응형 웹(모바일 미검증)",
+  "pricing": "무료(개인·비상업적 사용)",
+  "selfhost": "가능(단일 HTML·정적 호스팅)",
+  "license": "BSD-2 + Commons Clause",
+  "agent": "로컬 데몬 HTTP 동기화·.nbx JSON 편집; MCP 없음",
+  "status": "휴면(마지막 커밋 2023-11)",
+  "pros": "초경량·즉시 로딩; 한 화면에 많은 작업 표시; 실행 취소 50단계",
+  "cons": "상업적 이용 제한; 모바일 터치 불편; 백업 데몬 없으면 데이터 유실 위험",
+  "sources": [
+   "https://github.com/apankrat/nullboard",
+   "https://api.github.com/repos/apankrat/nullboard",
+   "https://nullboard.io",
+   "https://raw.githubusercontent.com/apankrat/nullboard/master/nullboard.html",
+   "https://github.com/justinpchang/nullboard-agent-express"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kanbn CLI",
+  "url": "https://github.com/basementuniverse/kanbn",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "부분",
+  "what": "Markdown+YAML 파일로 저장하는 Git 친화적 터미널 칸반 CLI",
+  "mobile": "없음(CLI·VS Code 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "CLI·Node API·커뮤니티 MCP; Claude Code·Cursor·Codex 지원",
+  "status": "활발(v2.5.3, 2026-09)",
+  "pros": "전용 MCP 서버로 에이전트 연동 우수; Git으로 버전 관리; 스프린트·번다운 등 풍부한 기능",
+  "cons": "웹·모바일 UI 없음; Git 병합 충돌 가능; 커뮤니티 작음",
+  "sources": [
+   "https://github.com/basementuniverse/kanbn",
+   "https://api.github.com/repos/basementuniverse/kanbn",
+   "https://api.github.com/repos/basementuniverse/kanbn/releases",
+   "https://github.com/kjduling/kanbn-mcp",
+   "https://github.com/basementuniverse/vscode-kanbn",
+   "https://raw.githubusercontent.com/kjduling/kanbn-mcp/main/README.md"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,18 @@
+{
+  "status": "released",
+  "release_allowed": true,
+  "scope": "Wave 4b integration: todo 15/25/26/35 + QA-gap fixes (headless inbox+kibitzer startup, opt-in loopback post sink) on top of wave4",
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binary_sha256": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97",
+  "manifest_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-gate3-post.sha256",
+  "manifest_sha256": "a0837584175fecc6b6ac3907e9f378703c59b510d8ce4887161f27b3ca109f4f",
+  "manifest_entries": 224,
+  "fmt_exit": 0,
+  "clippy_exit": 0,
+  "build_exit": 0,
+  "source_cmp": 0,
+  "supersedes": "wave4b-strict-gate-release.json (release_allowed false: two non-baseline test_omo_backend failures)",
+  "backend": "test_omo_backend after test-only fix: 45 passed / 3 failed / 1 ignored; all 3 failures in canonical baseline; 0 new. Root cause of the 2 new failures was a test ACK-consumption race under virtual time, not a product regression (wave4b-backend-new-failures-diagnosis.md). Only tests/test_omo_backend.rs changed between candidate and this release; binary hash identical.",
+  "integration_tests": "18 focused targets 178 passed / 0 failed / 4 ignored (pre clippy-fix); qa_gaps lib 2 + bin 4 passed; post clippy-fix usage 9, lane_events 25/1 ignored",
+  "limits": "LSP freshness unavailable. Live QA per todo still required."
+}

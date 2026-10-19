@@ -1,0 +1,53 @@
+[
+ {
+  "name": "Sculptor (by Imbue)",
+  "url": "https://imbue.com/product/sculptor",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "격리된 Git 워크트리·컨테이너에서 병렬 코딩 에이전트를 조율·모니터링하는 데스크톱 앱",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS, 자체 API 키 사용)",
+  "selfhost": "로컬 전용(Docker·원격 백엔드 지원)",
+  "license": "MIT",
+  "agent": "CLI(sculpt)·로컬 REST API; Claude Code·Codex·Pi 등",
+  "status": "활발(베타, v0.48.0)",
+  "pros": "에이전트별 워크트리/컨테이너 격리; 라이브 diff·턴 상태로 멀티 에이전트 감독; 모델 종속 없음",
+  "cons": "모바일 미지원; Windows 미지원; 공유 파일 잠금 없음",
+  "sources": [
+   "https://imbue.com/product/sculptor",
+   "https://imbue.com/blog/sculptor-announce",
+   "https://imbue.com/blog/sculptor",
+   "https://github.com/imbue-ai/sculptor",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/README.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/getting_started.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/workspaces.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/integrated_harnesses.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/experimental/container_backend.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/help/extensions.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/sculptor/sculptor-plugin/skills/sculpt-cli/SKILL.md",
+   "https://raw.githubusercontent.com/imbue-ai/sculptor/main/docs/development/cli.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "mngr (by Imbue)",
+  "url": "https://imbue.com/product/mngr",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "로컬·Docker·클라우드에서 다수 코딩 에이전트를 실행·관리하는 Unix식 CLI",
+  "mobile": "없음(SSH 터미널 접속만 가능)",
+  "pricing": "무료(OSS, 컴퓨팅·모델 비용 별도)",
+  "selfhost": "가능(로컬·Docker·SSH·Modal)",
+  "license": "MIT",
+  "agent": "CLI(JSON 출력)·SSH·플러그인; Claude Code·Codex·OpenCode",
+  "status": "활발한 개발 중",
+  "pros": "가벼운 Unix 철학 CLI; 로컬~클라우드 샌드박스 확장; Git식 스냅샷·포크",
+  "cons": "칸반·GUI 대시보드 없음; 모바일 미지원; 터미널 숙련 필요",
+  "sources": [
+   "https://imbue.com/product/mngr",
+   "https://github.com/imbue-ai/mngr",
+   "https://raw.githubusercontent.com/imbue-ai/mngr/main/README.md"
+  ],
+  "confidence": "높음"
+ }
+]

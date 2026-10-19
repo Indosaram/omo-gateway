@@ -1,0 +1,18 @@
+{
+  "status": "released",
+  "release_allowed": true,
+  "scope": "Wave 4d: QA3 product fixes (lane_allowed_mentions zero-ping for lane thread starter/post/edit; kibitzer single clock reading in evaluate) on top of wave4c",
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/release-bins/15140a535c76633a893ddf239ad1c86b3901c6c056e79c57e5e99d3dd7b5c74d/omo-gateway",
+  "binary_sha256": "15140a535c76633a893ddf239ad1c86b3901c6c056e79c57e5e99d3dd7b5c74d",
+  "manifest_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4d-post.sha256",
+  "manifest_sha256": "2e26b9add7c87d1adac7da901b539e3247a22f21bcb60f56b7562fb642aae50c",
+  "manifest_entries": 224,
+  "fmt_exit": 0,
+  "clippy_exit": 0,
+  "build_exit": 0,
+  "source_cmp": 0,
+  "focused": "test_lane_close 27, test_lane_kibitzer 9, test_lane_thread_transport 1, test_lane_status_transport 2, lib kibitzer 2 (incl. new armed_generation_is_admitted_under_an_advancing_clock); all exit 0",
+  "carried": "wave4c: 19 focused targets + qa_gaps exit 0; test_omo_backend 45/3 baseline/1 ignored, 0 new (only kibitzer.rs and discord_threads.rs changed since, both covered above)",
+  "limits": "LSP freshness unavailable; live QA required.",
+  "binary_build_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway"
+}

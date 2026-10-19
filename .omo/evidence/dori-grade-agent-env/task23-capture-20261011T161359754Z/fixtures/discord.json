@@ -1,0 +1,13 @@
+{
+  "platform": "discord",
+  "guild_id": null,
+  "channel_id": "223456789012345678",
+  "thread_id": null,
+  "message_id": "423456789012345678",
+  "author_id": "523456789012345678",
+  "author_name": "[REDACTED AUTHOR]",
+  "content": "[REDACTED MESSAGE TEXT]",
+  "timestamp": "2026-08-28T01:31:05.595+00:00",
+  "metadata_json": "{}"
+}
+

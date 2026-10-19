@@ -1,0 +1,79 @@
+{
+  "schema": "omon-lane-qa-scope-receipts-v1",
+  "preparedSha256": "b970264d8ddb528c5fe01712971e800eabb7afc7175da39a59ea85cce2ac032c",
+  "receipts": [
+    {
+      "kind": "connection_attempt",
+      "stage": "websocket_construct",
+      "endpoint": "ws://127.0.0.1:19742",
+      "authPresent": true
+    },
+    {
+      "kind": "websocket_open",
+      "stage": "websocket_open"
+    },
+    {
+      "kind": "rpc",
+      "id": 1,
+      "method": "initialize"
+    },
+    {
+      "kind": "rpc",
+      "id": 2,
+      "method": "thread/start"
+    },
+    {
+      "kind": "thread_started",
+      "threadId": "01a12ba0-2667-73b9-b5c2-dcb354a3d67e",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-GUgT9Z/qa-repo",
+      "runtimeWorkspaceRoots": [
+        "/private/tmp/omon-lane-scratch-qa-GUgT9Z/qa-repo"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "id": 3,
+      "method": "turn/start"
+    },
+    {
+      "kind": "turn_started",
+      "threadId": "01a12ba0-2667-73b9-b5c2-dcb354a3d67e",
+      "turnId": "1955c54e-9101-4279-bde0-35bd315eede5"
+    },
+    {
+      "kind": "bookkeeping_only",
+      "threadId": "01a12ba0-2667-73b9-b5c2-dcb354a3d67e",
+      "turnId": "1955c54e-9101-4279-bde0-35bd315eede5",
+      "itemId": "call_hHRBBlq2DKEaBlrW9djbRBuu",
+      "tool": "todo"
+    },
+    {
+      "kind": "failure",
+      "stage": "turn_observations",
+      "error": {
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "message": "Unexpected dynamic execution tool\n\u001b[32mactual\u001b[39m \u001b[31mexpected\u001b[39m\n\n\u001b[39m'\u001b[39m\u001b[32mt\u001b[39m\u001b[32mo\u001b[39m\u001b[32mo\u001b[39m\u001b[32ml\u001b[39m\u001b[32m_\u001b[39m\u001b[32ms\u001b[39m\u001b[32me\u001b[39m\u001b[31mb\u001b[39m\u001b[39ma\u001b[39m\u001b[32mr\u001b[39m\u001b[32mc\u001b[39m\u001b[31ms\u001b[39m\u001b[39mh\u001b[39m\u001b[39m'\u001b[39m\n"
+      }
+    },
+    {
+      "kind": "rpc",
+      "id": 4,
+      "method": "turn/interrupt"
+    },
+    {
+      "kind": "owned_turn_interrupt",
+      "threadId": "01a12ba0-2667-73b9-b5c2-dcb354a3d67e",
+      "turnId": "1955c54e-9101-4279-bde0-35bd315eede5",
+      "status": "interrupted"
+    },
+    {
+      "kind": "result",
+      "stage": "turn_observations",
+      "status": "failed",
+      "threadId": "01a12ba0-2667-73b9-b5c2-dcb354a3d67e",
+      "turnId": "1955c54e-9101-4279-bde0-35bd315eede5",
+      "sharedDaemonUntouched": true
+    }
+  ]
+}

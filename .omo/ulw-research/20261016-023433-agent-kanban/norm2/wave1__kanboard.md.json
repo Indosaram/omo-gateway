@@ -1,0 +1,29 @@
+[
+ {
+  "name": "Kanboard",
+  "url": "https://kanboard.org",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "WIP 제한 중심의 경량·미니멀 오픈소스 칸반 프로젝트 관리 도구",
+  "mobile": "반응형 웹(공식 네이티브 앱 없음)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "JSON-RPC 2.0 API·CLI·웹훅; 커뮤니티 MCP(Claude Code·Cursor 등)",
+  "status": "유지보수 모드(v1.2.54, 2026-08)",
+  "pros": "매우 가볍고 빠름; 배치 지원 JSON-RPC API로 에이전트 일괄 업데이트 용이; SQLite로 즉시 로컬 구동",
+  "cons": "신규 기능 개발 중단(유지보수 모드); UI가 구식; 실시간 업데이트 없음(폴링/새로고침)",
+  "sources": [
+   "https://kanboard.org",
+   "https://github.com/kanboard/kanboard",
+   "https://docs.kanboard.org/v1/api/",
+   "https://docs.kanboard.org/v1/admin/faq/",
+   "https://docs.kanboard.org/v1/dev/webhooks/",
+   "https://docs.kanboard.org/v1/admin/docker/",
+   "https://github.com/kanboard/kanboard/releases",
+   "https://github.com/ErnestoCorona/kanboard-mcp",
+   "https://github.com/bivex/kanboard-mcp"
+  ],
+  "confidence": "높음"
+ }
+]

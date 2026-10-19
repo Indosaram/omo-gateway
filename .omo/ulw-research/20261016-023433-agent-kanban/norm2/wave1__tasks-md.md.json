@@ -1,0 +1,30 @@
+[
+ {
+  "name": "Tasks.md",
+  "url": "https://github.com/BaldissaraMatheus/Tasks.md",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "마크다운 파일 디렉터리를 레인·카드로 보여주는 경량 셀프호스팅 칸반 보드",
+  "mobile": "PWA·반응형 웹(네이티브 앱 없음)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "MCP 없음; 파일시스템 직접 조작·무인증 REST API로 에이전트 연동",
+  "status": "활발(v3.3.0, 2026-03)",
+  "pros": "레인=폴더, 카드=.md로 DB 불필요; 간단한 무인증 REST API; 가벼운 Docker·PWA 지원",
+  "cons": "외부 변경 시 자동 새로고침 없음; 인증·권한 관리 없음; 공식 MCP·웹훅 없음",
+  "sources": [
+   "https://github.com/BaldissaraMatheus/Tasks.md",
+   "https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/README.md",
+   "https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/LICENSE",
+   "https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/backend/server.js",
+   "https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/frontend/vite.config.js",
+   "https://raw.githubusercontent.com/BaldissaraMatheus/Tasks.md/main/frontend/src/card-content-utils.js",
+   "https://hub.docker.com/v2/repositories/baldissaramatheus/tasks.md",
+   "https://github.com/BaldissaraMatheus/Tasks.md/releases",
+   "https://github.com/BaldissaraMatheus?tab=repositories",
+   "https://github.com/BaldissaraMatheus/Tasks.md/issues/49"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,51 @@
+[
+ {
+  "name": "Redmine (with Agile/Kanban plugins)",
+  "url": "https://www.redmine.org",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "부분",
+  "what": "Ruby on Rails 기반 오픈소스 이슈 트래커, Agile 플러그인으로 칸반·스크럼 보드 제공",
+  "mobile": "반응형 웹 + 서드파티 iOS·Android 앱",
+  "pricing": "무료(OSS) / Agile PRO 플러그인 $499 일회성~",
+  "selfhost": "가능(Docker·소스 설치)",
+  "license": "GPL-2.0",
+  "agent": "REST API, 웹훅(플러그인), 커뮤니티 MCP 서버(Claude Code·Cursor·Codex CLI)",
+  "status": "활발(2026-10 커밋)",
+  "pros": "성숙하고 안정적인 플러그인 생태계; 포괄적인 공식 REST API; 커뮤니티 MCP 서버가 다양함",
+  "cons": "구식 UI; 기본 코어에 드래그앤드롭 칸반 없음(플러그인 필요); 공식 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://www.redmine.org",
+   "https://www.redmine.org/plugins/redmine_agile",
+   "https://www.redmineup.com/pages/plugins/agile",
+   "https://github.com/redmine/redmine",
+   "https://github.com/jztan/redmine-mcp-server",
+   "https://redmine-mcp-server.jztan.com/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Phabricator / Phorge Workboards",
+  "url": "https://phorge.it",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Phabricator 후속 포크, 코드리뷰·버그추적·저장소·칸반 워크보드 통합 포지",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(LAMP/LEMP·Docker)",
+  "license": "Apache-2.0",
+  "agent": "Conduit API, Arcanist CLI, 커뮤니티 MCP 서버(Claude Code·Codex·Cursor)",
+  "status": "Phorge 활발(Phabricator 2021 종료)",
+  "pros": "코드리뷰와 작업 보드의 긴밀한 통합; 구조화되고 트랜잭션 안전한 Conduit API; 기능 유료화가 없는 Apache 2.0 라이선스",
+  "cons": "학습 곡선이 가파르고 용어가 생소함; 레거시 PHP 구조로 데몬 유지보수 필요; 네이티브 앱·푸시 알림 없음",
+  "sources": [
+   "https://phorge.it",
+   "https://github.com/phorgeit/phorge",
+   "https://github.com/phacility/phabricator",
+   "https://github.com/phorgeit/arcanist",
+   "https://github.com/cortex-app/conduit",
+   "https://projects.clusterlabs.org/book/phorge/article/conduit_edit/",
+   "https://projects.clusterlabs.org/book/phorge/article/projects/"
+  ],
+  "confidence": "높음"
+ }
+]

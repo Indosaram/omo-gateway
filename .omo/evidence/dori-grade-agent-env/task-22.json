@@ -1,0 +1,54 @@
+{
+  "todo": 22,
+  "status": "implementation_ready_pending_integration",
+  "worktree": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+  "migration": {
+    "file": "migrations/0034_inbox.sql",
+    "numeric_head_observed_before_reservation": "0033_lane_inbox.sql",
+    "collision_check": "No migrations/0031_inbox.sql exists in this worktree; 0031_lanes.sql and 0033_lane_inbox.sql are separate files.",
+    "migration_executed": false
+  },
+  "owned_paths": [
+    "migrations/0034_inbox.sql",
+    "src/inbox/mod.rs",
+    "src/inbox/prefilter.rs",
+    "src/inbox/watchers.rs",
+    "tests/test_inbox_store.rs"
+  ],
+  "scratch_qa": {
+    "database": "Python sqlite3 in-memory database; no production or source database used",
+    "migration_schema": "PASS: all four tables created, decisions foreign key present",
+    "fake_data_boundary": "PASS: one synthetic Discord row stored, snippet length 7, failed source cursor retained as old",
+    "external_personal_data_or_source_writes": 0,
+    "cleanup": "In-memory DB released at process exit; no scratch files created"
+  },
+  "checks": {
+    "rustfmt_owned_files": "PASS",
+    "lsp": "UNAVAILABLE: diagnostics calls timed out",
+    "focused_cargo_test": "PENDING: coordinator wiring required; src/lib.rs lacks pub mod inbox and Cargo.toml lacks test_inbox_store target",
+    "broad_compile_clippy_full_suite": "NOT RUN: coordinator explicitly requested one global diagnostics batch after sources settle"
+  },
+  "adversarial_classes": {
+    "duplicate_source_item": "APPLICABLE; regression test covers unique(source,source_ref) idempotency; runtime test pending wiring",
+    "oversized_body_or_snippet": "APPLICABLE; implementation caps snippet at 1000 Unicode scalar values; test covers length; runtime pending wiring",
+    "source_fetch_failure": "APPLICABLE; per-source error capture and continued collection are implemented; test covers isolation; runtime pending wiring",
+    "database_upsert_failure": "APPLICABLE; item writes and cursor update share a transaction; injected-trigger test asserts rollback; runtime pending wiring",
+    "cursor_advance_before_commit": "APPLICABLE; cursor is updated after upserts in the same transaction; tested by injected failure; runtime pending wiring",
+    "wrong_source_or_empty_record": "APPLICABLE; invalid item rejected before cursor write; regression test included; runtime pending wiring",
+    "prefilter_noise_rules": "APPLICABLE; fixture test covers promotions, OM without keyword, shortcode, excluded room and required pass cases; known notification sender creates a direct fyi decision unless escalation subject; runtime pending wiring",
+    "timeout_or_hung_source": "APPLICABLE; collector enforces 60-second timeout; no timed/hanging-source regression test added",
+    "malformed_filter_configuration": "APPLICABLE; load_or_create reports invalid JSON; no malformed-config test added",
+    "source_write_or_personal_data_exposure": "NOT APPLICABLE to synthetic fake QA; API has no write methods and InboxItem carries only metadata/snippet/hash"
+  },
+  "coordinator_wiring_request": [
+    "Add `pub mod inbox;` to src/lib.rs",
+    "Register tests/test_inbox_store.rs in Cargo.toml as an integration test target",
+    "Then run the focused test once, followed by the single coordinated global diagnostics batch"
+  ],
+  "integration_notes": [
+    "Inbox item types include explicit Kakao room_type and mail_categories metadata; prefilter does not infer these from display titles.",
+    "Coordinator must call default_filters() for ~/.omon/inbox-filters.json and supply an event-aware watcher callback; no live source adapter is included in todo22.",
+    "The Rust collector itself has not yet run because module and integration-test target wiring are coordinator-owned."
+  ],
+  "done_claim": "Owned implementation and scratch schema/fake boundary QA are complete. Focused Rust tests, global diagnostics and integration remain pending coordinator wiring; this is not a plan checkbox closure."
+}

@@ -1,0 +1,83 @@
+[
+ {
+  "name": "CliDeck",
+  "url": "https://clideck.dev/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "CLI 코딩 에이전트를 한 창에서 실행·모니터링하는 로컬 브라우저 터미널 대시보드",
+  "mobile": "PWA·반응형 웹(E2E 암호화 릴레이)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "PTY CLI 래퍼·OTLP 수신·clideck ask; Claude Code·Codex·Gemini 등",
+  "status": "활발 / v2.4.0",
+  "pros": "완전 로컬 실행, 텔레메트리 유출 없음; OTLP로 유휴/작업 상태 감지; 에이전트 간 위임(clideck ask)",
+  "cons": "칸반 보드 없음; v2에서 Autopilot 제거; 네이티브 모바일 앱·푸시 없음",
+  "sources": [
+   "https://clideck.dev/",
+   "https://yetanotherorchestrator.app/apps/clideck/",
+   "https://docs.clideck.dev",
+   "https://docs.clideck.dev/mobile",
+   "https://docs.clideck.dev/agents/overview.md",
+   "https://docs.clideck.dev/features/telemetry.md",
+   "https://docs.clideck.dev/features/sessions.md",
+   "https://docs.clideck.dev/features/autopilot.md",
+   "https://github.com/rustykuntz/clideck"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Fusion",
+  "url": "https://runfusion.ai/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "명세·계획·실행·리뷰·자동 병합을 자동화하는 멀티노드 에이전트 오케스트레이터",
+  "mobile": "iOS·Android 앱, PWA",
+  "pricing": "무료(OSS, LLM API 키 별도)",
+  "selfhost": "가능(Docker·npm·Homebrew)",
+  "license": "MIT",
+  "agent": "CLI·REST/SSE API·ACP·MCP; Claude Code·Codex·Gemini 등",
+  "status": "매우 활발 / 0.78.0-beta.7",
+  "pros": "칸반·의존성 그래프·비용 관측; 다단계 품질 게이트와 worktree 격리; 모바일·데스크톱·웹 지원",
+  "cons": "내장 PostgreSQL 등 무거운 구성; 학습 곡선 가파름; 리뷰 게이트가 까다로움",
+  "sources": [
+   "https://runfusion.ai/",
+   "https://yetanotherorchestrator.app/apps/fusion/",
+   "https://github.com/Runfusion/Fusion",
+   "https://github.com/Runfusion/Fusion/blob/main/CHANGELOG.md",
+   "https://github.com/Runfusion/Fusion/blob/main/package.json",
+   "https://github.com/Runfusion/Fusion/blob/main/packages/core/package.json"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "jat",
+  "url": "https://jat.tools/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "tmux 기반 로컬 우선 에이전트 IDE, 20+ 병렬 에이전트 감독·병합 큐",
+  "mobile": "반응형 웹(Tailscale/SSH 경유)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬·원격 VPS)",
+  "license": "MIT",
+  "agent": "jt 태스크 CLI(JSON)·메일박스·슬래시 명령; Claude Code·Codex·Aider 등",
+  "status": "활발(1인 개발, 태그 릴리스 없음)",
+  "pros": "에디터·diff·태스크·터미널 통합 경량 IDE; Slack·Telegram 등 트리거; worktree 격리와 직렬 병합 큐",
+  "cons": "칸반 보드 없음; macOS·Linux 전용; 1인 개발로 버스 팩터 위험",
+  "sources": [
+   "https://jat.tools/",
+   "https://jat.tools/docs/jat",
+   "https://jat.tools/reference",
+   "https://jat.tools/docs/jst",
+   "https://jat.tools/docs/jat-pilot",
+   "https://jat.tools/docs/jat-appliance",
+   "https://jat.tools/docs/jat-secret",
+   "https://jat.tools/docs/jat-run",
+   "https://jat.tools/docs/jatstation",
+   "https://yetanotherorchestrator.app/apps/jat/",
+   "https://rywalker.com/research/jat",
+   "https://github.com/jatstack/jat"
+  ],
+  "confidence": "높음"
+ }
+]

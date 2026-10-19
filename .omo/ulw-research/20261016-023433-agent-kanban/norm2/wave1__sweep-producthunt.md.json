@@ -1,0 +1,420 @@
+[
+ {
+  "name": "AgentKanban",
+  "url": "https://agentkanban.io",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트 개발용 칸반·컨텍스트 관리, VS Code·CLI 에이전트 연결",
+  "mobile": "반응형 웹",
+  "pricing": "무료 / Pro $10/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "MCP 서버(Claude Code·Codex·Cursor), VS Code 확장, REST API, 웹훅",
+  "status": "활발(2026 릴리스)",
+  "pros": "Plan/TODO/Implement 워크플로; 카드별 Git worktree 자동화; AGENTS.md·메모리 동기화",
+  "cons": "무료 티어 하루 250 요청 제한; 셀프호스팅 불가; 네이티브 앱 없음",
+  "sources": [
+   "https://agentkanban.io",
+   "https://agentkanban.io/pricing",
+   "https://github.com/appsoftwareltd/vscode-agent-kanban",
+   "https://www.appsoftware.com/blog/introducing-vs-code-agent-kanban-task-management-for-the-ai-assisted-developer"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "QodFlow",
+  "url": "https://www.qodflow.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "사람과 AI 에이전트가 같은 카드에서 협업하는 AI 네이티브 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(3명·작업 10개) / Premium·Diamond 가격 미확인",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "MCP 서버(Claude Code·Cursor·OpenCode), REST API",
+  "status": "상용 운영 중(2026)",
+  "pros": "사람·에이전트 동등한 카드 작업; 무설정 MCP; 로그인 없는 QR 상태 추적",
+  "cons": "클라우드 전용; 무료 티어 작업 10개 제한; 네이티브 앱 없음",
+  "sources": [
+   "https://www.qodflow.com",
+   "https://www.qodflow.com/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "is.team",
+  "url": "https://is.team",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트가 팀원으로 참여하는 무한 캔버스형 칸반·문서 공간",
+  "mobile": "반응형 웹",
+  "pricing": "무료(3석) / Starter $8~Max $39/월(얼리어답터)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "MCP(Claude·Cursor·ChatGPT), HMAC 웹훅, GitHub·Slack 연동",
+  "status": "활발(2026 PH 출시)",
+  "pros": "무한 캔버스+칸반; 좌석당 아닌 정액 요금; 카드 내 에이전트 채팅",
+  "cons": "작은 화면에서 복잡; 비공개 소스; 오프라인 모드 없음",
+  "sources": [
+   "https://is.team",
+   "https://is.team/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Traycer AI",
+  "url": "https://traycer.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "스펙 우선(계획→실행→검증→커밋) 단계형 칸반 코딩 허브",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Sync $16/사용자/월(연간)",
+  "selfhost": "일부(하이브리드)",
+  "license": "상용",
+  "agent": "Claude Code·Codex CLI·Cursor·OpenCode 직접 연동, 원격 호스트",
+  "status": "활발(2025-2026)",
+  "pros": "iOS·Android 네이티브 앱; 스펙 우선 단계 보드; 토큰 마크업 없음",
+  "cons": "팀 협업·동기화는 유료; 독점 바이너리; 비오픈소스",
+  "sources": [
+   "https://traycer.ai",
+   "https://traycer.ai/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "PlateSpinner",
+  "url": "https://github.com/moridinamael/platespinner",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "제안→계획→실행 3단계로 CLI 에이전트를 돌리는 로컬 칸반",
+  "mobile": "반응형 웹(LAN)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "CLI(Claude Code·Codex·Gemini CLI), REST API, WebSocket",
+  "status": "활발(2026, Show HN)",
+  "pros": "3단계 파이프라인으로 폭주 방지; Autoclicker 자율 모드; 작업별 Git 브랜치",
+  "cons": "로컬 CLI 에이전트 필요; 다중 사용자 동기화 없음; 네이티브 앱 없음",
+  "sources": [
+   "https://github.com/moridinamael/platespinner",
+   "https://raw.githubusercontent.com/moridinamael/platespinner/main/README.md",
+   "https://raw.githubusercontent.com/moridinamael/platespinner/main/LICENSE"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Flux",
+  "url": "https://paddo.dev/blog/flux-kanban-for-ai-agents/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Git 동기화 JSON 기반, MCP·CLI 중심 에이전트용 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS) + 무료 호스팅 웹앱",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "MCP 서버(Claude Code·Cursor), CLI, REST API, 웹훅, TUI",
+  "status": "2026년 1월 출시, 활발",
+  "pros": "MCP·CLI 우선 설계; Git 저장으로 락인 없음; 의존성 그래프",
+  "cons": "초기 단계·엔터프라이즈 ACL 없음; 단순한 UI; 네이티브 앱 없음",
+  "sources": [
+   "https://paddo.dev/blog/flux-kanban-for-ai-agents/",
+   "https://github.com/sirsjg/flux",
+   "https://raw.githubusercontent.com/sirsjg/flux/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Nimbalyst",
+  "url": "https://nimbalyst.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex 등 병렬 세션을 worktree로 관리하는 세션 칸반",
+  "mobile": "iOS 앱",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 데스크톱)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·OpenCode·Copilot 실행, MCP 클라이언트·서버",
+  "status": "활발(스타 1.9k+)",
+  "pros": "푸시·diff 리뷰 iOS 앱; worktree 연동 세션 칸반; 일반 파일 저장",
+  "cons": "병렬 실행 시 리소스 과다; 데스크톱 필수; Android 앱 없음",
+  "sources": [
+   "https://nimbalyst.com",
+   "https://github.com/nimbalyst/nimbalyst",
+   "https://raw.githubusercontent.com/nimbalyst/nimbalyst/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kandev",
+  "url": "https://kandev.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "worktree 병렬 작업과 리뷰 게이트를 갖춘 에이전트 개발 칸반",
+  "mobile": "반응형 웹(VPN 경유)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Go 바이너리·Docker)",
+  "license": "AGPL-3.0",
+  "agent": "다중 제공자(Anthropic·OpenAI·로컬), CLI 하네스, agentctl",
+  "status": "활발(스타 954+)",
+  "pros": "단일 Go 바이너리; 리뷰 우선 게이트; 모바일 사용 가이드",
+  "cons": "AGPL 카피레프트; 모바일은 VPN 필요; 학습 곡선",
+  "sources": [
+   "https://kandev.ai",
+   "https://github.com/kdlbs/kandev",
+   "https://raw.githubusercontent.com/kdlbs/kandev/main/README.md",
+   "https://raw.githubusercontent.com/kdlbs/kandev/main/docs/public/mobile-remote-access.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Ouijit",
+  "url": "https://ouijit.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "카드별 worktree·터미널, 카드 이동 시 에이전트 훅 실행 데스크톱 앱",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "AGPL-3.0",
+  "agent": "CLI(Claude Code·Codex·Aider), 상태 전환 훅, ouijit CLI",
+  "status": "활발(2026)",
+  "pros": "카드 상태와 에이전트 훅 연동; 카드별 샌드박스 터미널; 완전 오프라인",
+  "cons": "데스크톱 전용·Windows 미지원; 모바일 없음; 1인 사용 중심",
+  "sources": [
+   "https://ouijit.com",
+   "https://github.com/ouijit/ouijit",
+   "https://raw.githubusercontent.com/ouijit/ouijit/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "AgentRQ",
+  "url": "https://agentrq.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "승인 요청 등 휴먼인더루프 지원 에이전트 작업 보드·컨트롤 플레인",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS) / 클라우드 무료 티어",
+  "selfhost": "가능(Docker)",
+  "license": "AGPL-3.0",
+  "agent": "MCP 서버, ACP, Chrome 확장(Claude Code·Gemini CLI·Cursor)",
+  "status": "활발(스타 1.1k+)",
+  "pros": "워크스페이스 격리 MCP; 민감 작업 승인 요청; 워크플로 그래프",
+  "cons": "AGPL 라이선스; 단일 에이전트엔 무거움; 네이티브 앱 없음",
+  "sources": [
+   "https://agentrq.com",
+   "https://agentrq.com/pricing",
+   "https://github.com/agentrq/agentrq",
+   "https://raw.githubusercontent.com/agentrq/agentrq/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "It's a Plan (ItsaPlan)",
+  "url": "https://itsaplan.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트를 담당자로 두는 셀프호스팅 Linear·Jira 대안 이슈 트래커",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker·Coolify·Railway)",
+  "license": "AGPL-3.0",
+  "agent": "내장 MCP 서버, REST API, 웹훅",
+  "status": "활발(스타 983+)",
+  "pros": "칸반·테이블·타임라인·캘린더; 에이전트 역할·권한; 원클릭 배포",
+  "cons": "TLS 리버스 프록시 필수; AGPL 라이선스; 네이티브 앱 없음",
+  "sources": [
+   "https://itsaplan.dev",
+   "https://github.com/croffasia/itsaplan",
+   "https://raw.githubusercontent.com/croffasia/itsaplan/main/README.md",
+   "https://raw.githubusercontent.com/croffasia/itsaplan/main/docs/self-hosting.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kaiban Board (KaibanJS)",
+  "url": "https://www.kaibanjs.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "멀티 에이전트 상태를 칸반으로 시각화하는 JS 프레임워크·보드",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(npm·Docker)",
+  "license": "MIT",
+  "agent": "JS SDK, React 컴포넌트, LangChain.js·OpenAI·Anthropic 연동",
+  "status": "유지보수 중(스타 1.4k+)",
+  "pros": "에이전트 디버깅용 칸반; React 임베딩 용이; 사고 과정 실시간 관찰",
+  "cons": "PM 도구 아닌 개발자용; worktree·터미널 미관리; 네이티브 앱 없음",
+  "sources": [
+   "https://www.kaibanjs.com",
+   "https://github.com/kaiban-ai/KaibanJS",
+   "https://github.com/kaiban-ai/kaiban-board"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Cline Kanban",
+  "url": "https://github.com/cline/kanban",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "npx kanban으로 실행, CLI 에이전트를 worktree 병렬 실행하는 로컬 보드",
+  "mobile": "반응형 웹(LAN)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "Apache-2.0",
+  "agent": "CLI(Claude Code·Cline CLI·Codex 자동 감지)",
+  "status": "리서치 프리뷰(스타 1.3k+)",
+  "pros": "무설정 즉시 실행; 카드별 worktree 자동 생성; 의존성 체인·자동 커밋",
+  "cons": "실험적·높은 권한 필요; 1인 로컬 전용; 네이티브 앱 없음",
+  "sources": [
+   "https://github.com/cline/kanban",
+   "https://raw.githubusercontent.com/cline/kanban/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Veritas Kanban",
+  "url": "https://sstb.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "로컬 우선 칸반에 MCP·에이전트 오케스트레이션을 선택적으로 추가",
+  "mobile": "반응형 웹(LAN)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "MCP 서버, CLI, OpenClaw, Squad Chat 웹훅, REST API",
+  "status": "v6.2.1(2026년 10월)",
+  "pros": "모듈형 구조; OpenClaw·MCP 연동; 거버넌스·게이팅",
+  "cons": "웹훅 수동 설정; 작은 커뮤니티; 네이티브 앱 없음",
+  "sources": [
+   "https://sstb.ai",
+   "https://github.com/BradGroux/veritas-kanban",
+   "https://raw.githubusercontent.com/BradGroux/veritas-kanban/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Teams AI",
+  "url": "https://agentteams.live",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트 팀이 협업·상호 리뷰하며 칸반에 진행 보고하는 데스크톱",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(데스크톱·웹서버)",
+  "license": "AGPL-3.0",
+  "agent": "300+ 모델, Claude Code·Codex·Cursor·Copilot 등",
+  "status": "활발(스타 2.2k+)",
+  "pros": "에이전트 간 리뷰·통신; 무료 기본 모델 제공; 광범위한 제공자",
+  "cons": "AGPL 라이선스; CPU·API 소모 큼; 네이티브 앱 없음",
+  "sources": [
+   "https://agentteams.live",
+   "https://github.com/777genius/agent-teams-ai",
+   "https://raw.githubusercontent.com/777genius/agent-teams-ai/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Claude Code Agent Monitor",
+  "url": "https://hoangsonww.github.io/Claude-Code-Agent-Monitor",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex 세션 실시간 모니터링 대시보드·칸반 상태 보드",
+  "mobile": "반응형 웹(웹 푸시)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex 프로세스 모니터링, MCP, REST API, CLI",
+  "status": "활발(스타 1k+)",
+  "pros": "토큰 비용 분석; UI에서 세션 재개; 웹 푸시 알림",
+  "cons": "백로그 계획보다 모니터링 중심; 1인 로컬; 네이티브 앱 없음",
+  "sources": [
+   "https://hoangsonww.github.io/Claude-Code-Agent-Monitor",
+   "https://github.com/hoangsonww/Claude-Code-Agent-Monitor",
+   "https://raw.githubusercontent.com/hoangsonww/Claude-Code-Agent-Monitor/master/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Dispatch Board",
+  "url": "https://www.dispatchboard.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "카드를 사람 또는 AI 에이전트에 배정해 자동 실행하는 협업 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료 베타(대기자 등록)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "클라우드 에이전트 러너, REST API, 웹훅",
+  "status": "베타/대기자",
+  "pros": "Trello형 익숙한 UI; 사람·AI 담당자 선택; 프롬프트 지식 불필요",
+  "cons": "베타 단계; 클라우드 전용; CLI 에이전트 연동 정보 부족",
+  "sources": [
+   "https://www.dispatchboard.ai"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "Moo Tasks",
+  "url": "https://mootasks.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "MCP 서버 내장 칸반, 에이전트가 작업 조회·수락·갱신",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "MCP 서버, REST API(Claude Code·Cursor·OpenCode)",
+  "status": "활발(2026, Show HN)",
+  "pros": "MCP 중심 설계; 깔끔한 Nuxt UI; 간단한 Docker 배포",
+  "cons": "초기 단계; worktree 오케스트레이션 없음; 네이티브 앱 없음",
+  "sources": [
+   "https://mootasks.dev",
+   "https://github.com/dizlexic/moo-tasks",
+   "https://raw.githubusercontent.com/dizlexic/moo-tasks/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Shrimp Task Manager",
+  "url": "https://cjo4m06.github.io/mcp-shrimp-task-manager",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "작업 분해·추론·세션 간 메모리를 제공하는 MCP 작업 관리자",
+  "mobile": "반응형 웹(선택적 GUI)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "MCP 서버(Claude Code·Cline·Claude Desktop·Cursor)",
+  "status": "활발(스타 2.1k+)",
+  "pros": "깊은 작업 분해·의존성 관리; 세션 간 컨텍스트 유지; 넓은 MCP 호환",
+  "cons": "GUI는 보조 수준; 로컬 JSON·다중 사용자 불가; 네이티브 앱 없음",
+  "sources": [
+   "https://cjo4m06.github.io/mcp-shrimp-task-manager",
+   "https://github.com/cjo4m06/mcp-shrimp-task-manager",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/README.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Yao Agents",
+  "url": "https://yaoagents.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "대화 지시를 칸반 작업으로 바꿔 여러 기기에서 실행하는 플랫폼",
+  "mobile": "Android 앱(베타)",
+  "pricing": "무료(OSS) / 엔터프라이즈 별도",
+  "selfhost": "가능(Go 바이너리·Docker)",
+  "license": "수정 Apache-2.0",
+  "agent": "Open API(SSE·WebSocket), DeepSeek Harness, Jev 엔진",
+  "status": "활발(스타 8.1k+)",
+  "pros": "Android 네이티브 앱; 다중 기기 분산 실행; 대화 기반 칸반",
+  "cons": "수정 라이선스 재배포 조건; 설정 복잡; iOS 앱 없음",
+  "sources": [
+   "https://yaoagents.com",
+   "https://github.com/YaoApp/yao",
+   "https://raw.githubusercontent.com/YaoApp/yao/main/README.md"
+  ],
+  "confidence": "높음"
+ }
+]

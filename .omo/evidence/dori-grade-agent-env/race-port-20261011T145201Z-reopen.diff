@@ -1,0 +1,116 @@
+--- .omo/evidence/dori-grade-agent-env/race-port-20261011T145201Z-before-reopen.rs.txt	2026-10-11 23:52:57
++++ tests/test_lane_reopen.rs	2026-10-11 23:53:57
+@@ -161,6 +161,7 @@
+ struct ClosingBackend {
+     pool: sqlx::SqlitePool,
+     started: mpsc::UnboundedSender<()>,
++    cancelled: mpsc::UnboundedSender<()>,
+     release: Arc<Semaphore>,
+     seen: Mutex<Vec<String>>,
+ }
+@@ -183,13 +184,10 @@
+         if self.seen.lock().unwrap().len() > 1 {
+             return change_claim(&self.pool, "qa-reopen", true, "reopened result").await;
+         }
+-        tokio::select! {
+-            permit = self.release.acquire() => {
+-                permit.unwrap().forget();
+-                Err(OmonError::Llm("pre-close turn error".into()))
+-            }
+-            _ = cancellation.cancelled() => Err(OmonError::Llm("pre-close turn cancelled".into())),
+-        }
++        cancellation.cancelled().await;
++        self.cancelled.send(()).unwrap();
++        self.release.acquire().await.unwrap().forget();
++        Err(OmonError::Llm("pre-close turn cancelled".into()))
+     }
+ 
+     async fn steer(&self, _session: &SessionContext, _guidance: &str) -> Result<bool> {
+@@ -205,10 +203,12 @@
+         .await
+         .unwrap();
+     let (started, mut started_rx) = mpsc::unbounded_channel();
++    let (cancelled, mut cancelled_rx) = mpsc::unbounded_channel();
+     let release = Arc::new(Semaphore::new(0));
+     let backend = Arc::new(ClosingBackend {
+         pool: db.pool().clone(),
+         started,
++        cancelled,
+         release: release.clone(),
+         seen: Mutex::new(Vec::new()),
+     });
+@@ -231,7 +231,16 @@
+     reopen(db.pool(), "qa-reopen", Some("add a line to done.txt"))
+         .await
+         .unwrap();
++    let reopened = get_lane(db.pool(), "qa-reopen").await.unwrap().unwrap();
++    assert_eq!(reopened.status, "working");
++    assert_eq!(reopened.turns_run, 0);
++    assert_eq!(backend.seen.lock().unwrap().len(), 1);
+     notify.notify_one();
++    tokio::time::timeout(std::time::Duration::from_secs(5), cancelled_rx.recv())
++        .await
++        .unwrap()
++        .unwrap();
++    assert_eq!(backend.seen.lock().unwrap().len(), 1);
+     release.add_permits(1);
+     tokio::time::timeout(std::time::Duration::from_secs(5), task)
+         .await
+@@ -254,3 +263,57 @@
+     assert_eq!(pending, 1);
+ }
+ 
++struct CompletedBackend {
++    pool: sqlx::SqlitePool,
++    notify: Arc<Notify>,
++}
++
++#[async_trait]
++impl AgentBackend for CompletedBackend {
++    async fn run(&self, _session: &mut SessionContext, _event: InboundEvent) -> Result<()> {
++        omon_gateway::lanes::cli::enqueue(&self.pool, "qa-reopen", "next turn only").await?;
++        change_claim(&self.pool, "qa-reopen", true, "completed result").await?;
++        self.notify.notify_one();
++        Ok(())
++    }
++
++    async fn steer(&self, _session: &SessionContext, _guidance: &str) -> Result<bool> {
++        panic!("a completed turn must not receive steering")
++    }
++}
++
++#[tokio::test(flavor = "current_thread")]
++async fn completed_turn_with_ready_notification_keeps_inbox_pending() {
++    let (_dir, db) = setup("working").await;
++    sqlx::query("UPDATE lanes SET turns_run = 0 WHERE key = 'qa-reopen'")
++        .execute(db.pool())
++        .await
++        .unwrap();
++    let notify = Arc::new(Notify::new());
++    let backend = Arc::new(CompletedBackend {
++        pool: db.pool().clone(),
++        notify: notify.clone(),
++    });
++    tokio::time::timeout(
++        std::time::Duration::from_secs(5),
++        LaneRunner::new(db.pool().clone(), backend).run_lane(
++            "qa-reopen",
++            notify,
++            CancellationToken::new(),
++        ),
++    )
++    .await
++    .unwrap()
++    .unwrap();
++    let row = get_lane(db.pool(), "qa-reopen").await.unwrap().unwrap();
++    assert_eq!(row.status, "done_claimed");
++    assert_eq!(row.turns_run, 1);
++    let (pending, consumed): (i64, i64) = sqlx::query_as(
++        "SELECT count(*), count(consumed_at) FROM lane_inbox WHERE lane_key = 'qa-reopen' AND text = 'next turn only'",
++    )
++    .fetch_one(db.pool())
++    .await
++    .unwrap();
++    assert_eq!(pending, 1);
++    assert_eq!(consumed, 0);
++}

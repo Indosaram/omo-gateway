@@ -1,0 +1,33 @@
+{
+  "todo": 26,
+  "scenario": "corrected-preparation-retry",
+  "root": "/private/tmp/omon-task26-qa2-7Glkdp",
+  "dbPath": "/private/tmp/omon-task26-qa2-7Glkdp/qa.db",
+  "status": "blocked",
+  "exitCode": 1,
+  "error": "Execution monitor timed_out; no final scenario receipt emitted. No relaunch.",
+  "state": {
+    "items": {
+      "n": 1
+    },
+    "classes": [
+      {
+        "class": "bot",
+        "n": 1
+      }
+    ],
+    "usage": [],
+    "lanes": [],
+    "cursors": []
+  },
+  "cleanup": [
+    {
+      "pid": 42500,
+      "code": null,
+      "pidAbsent": true,
+      "socketRemoved": true
+    }
+  ],
+  "scratchRetained": true,
+  "binarySha256": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97"
+}

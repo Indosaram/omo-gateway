@@ -1,0 +1,57 @@
+[
+ {
+  "name": "monday.com boards",
+  "url": "https://monday.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "보드·칸반·자동화·AI를 갖춘 엔터프라이즈 클라우드 업무 OS",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료(2석) / 유료 $9~19/석/월 / 엔터프라이즈 별도",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "호스티드 MCP·GraphQL API·mcli CLI; Claude·Cursor 등 연동",
+  "status": "활발(상용 SaaS)",
+  "pros": "설치 불필요한 호스티드 MCP; 60개 이상 MCP 도구와 mcli CLI; 성숙한 iOS·Android 앱",
+  "cons": "셀프호스팅·오프라인 불가; 유료 플랜 최소 3석; 요금제별 API 호출 제한",
+  "sources": [
+   "https://monday.com/pricing",
+   "https://monday.com/blog/product/monday-com-pricing-which-plan-is-right-for-you/",
+   "https://developer.monday.com/api-reference/llms.txt",
+   "https://developer.monday.com/api-reference/docs/mondaycom-mcp.md",
+   "https://developer.monday.com/api-reference/docs/compatible-mcp-clients.md",
+   "https://developer.monday.com/api-reference/docs/integrate-with-monday-mcp.md",
+   "https://developer.monday.com/api-reference/docs/mcp-api-token.md",
+   "https://developer.monday.com/api-reference/docs/build-on-monday-with-ai.md",
+   "https://developer.monday.com/api-reference/docs/manage-agent.md",
+   "https://developer.monday.com/api-reference/docs/mcli-cli-guide.md",
+   "https://developer.monday.com/api-reference/docs/rate-limits.md",
+   "https://github.com/mondaycom/mcp",
+   "https://github.com/mondaycom/mcli",
+   "https://registry.npmjs.org/@mondaydotcomorg/monday-api-mcp"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "monday AI Agents (Platform Agents)",
+  "url": "https://developer.monday.com/api-reference/docs/build-on-monday-with-ai.md",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "monday 보드 안에서 작업을 자율 감시·갱신하는 네이티브 AI 에이전트",
+  "mobile": "iOS·Android 앱(monday 앱 내장), 반응형 웹",
+  "pricing": "유료 플랜 필요($12~19/사용자/월)+AI 크레딧",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "Platform MCP 도구·GraphQL(프리뷰)·웹훅·Claude Managed Agents",
+  "status": "베타/GA 출시 진행 중(2026)",
+  "pros": "에이전트가 담당자·댓글 작성자로 보드에 참여; 컬럼·상태·일정 기반 트리거; 보드별 세분화된 권한 관리",
+  "cons": "좌석 요금 외 AI 크레딧 소모; 관리 API 일부 프리뷰 상태; 온프레미스 실행 불가",
+  "sources": [
+   "https://developer.monday.com/api-reference/docs/manage-agent.md",
+   "https://developer.monday.com/api-reference/docs/build-on-monday-with-ai.md",
+   "https://monday.com/pricing",
+   "https://developer.monday.com/api-reference/docs/mondaycom-mcp.md",
+   "https://developer.monday.com/api-reference/llms.txt"
+  ],
+  "confidence": "높음"
+ }
+]

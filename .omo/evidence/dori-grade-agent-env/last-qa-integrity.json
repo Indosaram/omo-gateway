@@ -1,0 +1,694 @@
+{
+  "before": "0924e30d9a73ebc57092b07d501b26da898841b200a2daba7dcb346b2d769e00",
+  "after": "0924e30d9a73ebc57092b07d501b26da898841b200a2daba7dcb346b2d769e00",
+  "hashMatch": true,
+  "psExit": 0,
+  "scenarios": [
+    {
+      "task": 15,
+      "root": "/private/tmp/omon-task15-live-final-ssEIbH",
+      "status": "failed",
+      "deadlineMs": 1200000,
+      "deadlineAt": "2026-10-12T04:01:33.299Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54535,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.347Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53564",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-7Mcw7i/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task15-live-final-ssEIbH/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53564",
+        "port": 53564,
+        "timingsMs": {
+          "ready": 617,
+          "cleanup": 15059,
+          "total": 858916
+        },
+        "pid": 54302,
+        "membersBeforeShutdown": [
+          54302
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": null,
+          "signal": "SIGKILL"
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:55:52.268Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 24,
+      "root": "/private/tmp/omon-task24-live-final-ObzuN4",
+      "status": "failed",
+      "deadlineMs": 1200000,
+      "deadlineAt": "2026-10-12T04:01:33.459Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54583,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        },
+        {
+          "pid": 55232,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.500Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53567",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-n2P6Dr/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task24-live-final-ObzuN4/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53567",
+        "port": 53567,
+        "timingsMs": {
+          "ready": 874,
+          "cleanup": 15063,
+          "total": 325206
+        },
+        "pid": 54349,
+        "membersBeforeShutdown": [
+          54349,
+          58349
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": null,
+          "signal": "SIGKILL"
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:46:58.708Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 25,
+      "root": "/private/tmp/omon-task25-live-final-xIB5GK",
+      "status": "blocked",
+      "deadlineMs": 600000,
+      "deadlineAt": "2026-10-12T03:51:33.374Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54549,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.414Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53565",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-XRYdR3/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task25-live-final-xIB5GK/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53565",
+        "port": 53565,
+        "timingsMs": {
+          "ready": 694,
+          "cleanup": 80,
+          "total": 2202
+        },
+        "pid": 54319,
+        "membersBeforeShutdown": [
+          54319
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": 0,
+          "signal": null
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:41:35.613Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 26,
+      "root": "/private/tmp/omon-task26-live-final-3Cq4dM",
+      "status": "blocked",
+      "deadlineMs": 900000,
+      "deadlineAt": "2026-10-12T03:56:33.417Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54573,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.463Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53566",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-z4O5xu/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task26-live-final-3Cq4dM/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53566",
+        "port": 53566,
+        "timingsMs": {
+          "ready": 829,
+          "cleanup": 15064,
+          "total": 333778
+        },
+        "pid": 54338,
+        "membersBeforeShutdown": [
+          54338,
+          56722
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": null,
+          "signal": "SIGKILL"
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:47:07.240Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 28,
+      "root": "/private/tmp/omon-task28-live-final-JXeIXg",
+      "status": "failed",
+      "deadlineMs": 600000,
+      "deadlineAt": "2026-10-12T04:06:04.151Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 91837,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:56:04.186Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:55821",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-H1GObk/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task28-live-final-JXeIXg/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:55821",
+        "port": 55821,
+        "timingsMs": {
+          "ready": 510,
+          "cleanup": 48,
+          "total": 6987
+        },
+        "pid": 91742,
+        "membersBeforeShutdown": [
+          91742
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": 0,
+          "signal": null
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:56:11.170Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 29,
+      "root": "/private/tmp/omon-task29-live-final-1lkxge",
+      "status": "failed",
+      "deadlineMs": 600000,
+      "deadlineAt": "2026-10-12T04:06:04.119Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 91893,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        },
+        {
+          "pid": 91950,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:56:04.161Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:55820",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-nMjE3t/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task29-live-final-1lkxge/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:55820",
+        "port": 55820,
+        "timingsMs": {
+          "ready": 669,
+          "cleanup": 15137,
+          "total": 46127
+        },
+        "pid": 91737,
+        "membersBeforeShutdown": [
+          91737,
+          92364
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": null,
+          "signal": "SIGKILL"
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:56:50.285Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 31,
+      "root": "/private/tmp/omon-task31-live-final-oI0ps1",
+      "status": "failed",
+      "deadlineMs": 1500000,
+      "deadlineAt": "2026-10-12T04:06:33.665Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54621,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.707Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53571",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-6d3jeb/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task31-live-final-oI0ps1/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53571",
+        "port": 53571,
+        "timingsMs": {
+          "ready": 1053,
+          "cleanup": 46,
+          "total": 362678
+        },
+        "pid": 54403,
+        "membersBeforeShutdown": [
+          54403
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": 0,
+          "signal": null
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:47:36.387Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 32,
+      "root": "/private/tmp/omon-task32-live-final-RiFI5E",
+      "status": "blocked",
+      "deadlineMs": 600000,
+      "deadlineAt": "2026-10-12T03:51:33.743Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54636,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        },
+        {
+          "pid": 54940,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.817Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53573",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-9PunR3/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task32-live-final-RiFI5E/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53573",
+        "port": 53573,
+        "timingsMs": {
+          "ready": 1072,
+          "cleanup": 15060,
+          "total": 257565
+        },
+        "pid": 54420,
+        "membersBeforeShutdown": [
+          54420,
+          55390
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": null,
+          "signal": "SIGKILL"
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:45:51.378Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 28,
+      "root": "/private/tmp/omon-task28-live-final-PfIgXH",
+      "status": "failed",
+      "deadlineMs": 600000,
+      "deadlineAt": "2026-10-12T03:51:33.523Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54594,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.569Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53569",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-SbJ8LY/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task28-live-final-PfIgXH/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53569",
+        "port": 53569,
+        "timingsMs": {
+          "ready": 915,
+          "cleanup": 131,
+          "total": 22186
+        },
+        "pid": 54367,
+        "membersBeforeShutdown": [
+          54367
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": 0,
+          "signal": null
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:41:55.752Z"
+      },
+      "remainingScratchProcesses": []
+    },
+    {
+      "task": 29,
+      "root": "/private/tmp/omon-task29-live-final-sqx30O",
+      "status": "failed",
+      "deadlineMs": 600000,
+      "deadlineAt": "2026-10-12T03:51:33.582Z",
+      "shaMatch": true,
+      "gateway": [
+        {
+          "pid": 54605,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        },
+        {
+          "pid": 54878,
+          "code": 0,
+          "pidAbsent": true,
+          "socketRemoved": true,
+          "pidStillAbsent": true
+        }
+      ],
+      "laneSocketAbsent": true,
+      "cronSocketAbsent": true,
+      "ownedAppserver": {
+        "startedAt": "2026-10-12T03:41:33.623Z",
+        "argv": [
+          "omo",
+          "app-server",
+          "--listen",
+          "ws://127.0.0.1:53570",
+          "--ws-auth",
+          "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-9Rbqx8/ws-token"
+        ],
+        "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env",
+        "home": "/private/tmp/omon-task29-live-final-sqx30O/home",
+        "auth": "private 0600 token file via --ws-auth; Authorization: Bearer; no shared token access",
+        "url": "ws://127.0.0.1:53570",
+        "port": 53570,
+        "timingsMs": {
+          "ready": 978,
+          "cleanup": 15067,
+          "total": 47385
+        },
+        "pid": 54381,
+        "membersBeforeShutdown": [
+          54381,
+          55363
+        ],
+        "remainingGroupPids": [],
+        "pidAbsent": true,
+        "childExit": {
+          "code": null,
+          "signal": "SIGKILL"
+        },
+        "portRebindSucceeded": true,
+        "privateScratchRemoved": true,
+        "finishedAt": "2026-10-12T03:42:21.004Z"
+      },
+      "remainingScratchProcesses": []
+    }
+  ],
+  "rpcCleanup": [
+    {
+      "task": 29,
+      "group": 55427,
+      "ownership": "55494 55427 55427 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task29-live-final-sqx30O/senpi-rpc-host-internal-155a7f9c/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "55427     1 55427 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-ddf994e460f896d0.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "55494 55427 55427 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task29-live-final-sqx30O/senpi-rpc-host-internal-155a7f9c/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 32,
+      "group": 55464,
+      "ownership": "55515 55464 55464 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task32-live-final-RiFI5E/senpi-rpc-host-internal-05355ea5/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "55464     1 55464 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-2610ac37c9647ea8.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "55515 55464 55464 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task32-live-final-RiFI5E/senpi-rpc-host-internal-05355ea5/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 24,
+      "group": 3486,
+      "ownership": " 3589  3486  3486 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task24-live-final-ObzuN4/senpi-rpc-host-internal-a68e0cbb/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        " 3486     1  3486 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-83c2c5fd26de0a22.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        " 3589  3486  3486 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task24-live-final-ObzuN4/senpi-rpc-host-internal-a68e0cbb/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 24,
+      "group": 58395,
+      "ownership": "58457 58395 58395 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task24-live-final-ObzuN4/senpi-rpc-host-internal-b9ba4e3e/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "58395     1 58395 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-0be45a47a389f6ec.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "58457 58395 58395 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task24-live-final-ObzuN4/senpi-rpc-host-internal-b9ba4e3e/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 24,
+      "group": 81225,
+      "ownership": "81321 81225 81225 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task24-live-final-ObzuN4/senpi-rpc-host-internal-89b3a227/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "81225     1 81225 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-79a1cecf4c450d00.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "81321 81225 81225 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task24-live-final-ObzuN4/senpi-rpc-host-internal-89b3a227/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 26,
+      "group": 55902,
+      "ownership": "55997 55902 55902 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-live-final-3Cq4dM/senpi-rpc-host-internal-68966b4b/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "55902     1 55902 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-74ffdd6b7465cbea.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "55997 55902 55902 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-live-final-3Cq4dM/senpi-rpc-host-internal-68966b4b/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 26,
+      "group": 56772,
+      "ownership": "56821 56772 56772 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-live-final-3Cq4dM/senpi-rpc-host-internal-f27f3635/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "56772     1 56772 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-07fd9cd03cf69176.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "56821 56772 56772 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-live-final-3Cq4dM/senpi-rpc-host-internal-f27f3635/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 15,
+      "group": 55584,
+      "ownership": "55635 55584 55584 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task15-live-final-ssEIbH/senpi-rpc-host-internal-4b41c5f7/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "55584     1 55584 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-6efa93ff40071724.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "55635 55584 55584 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task15-live-final-ssEIbH/senpi-rpc-host-internal-4b41c5f7/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 15,
+      "group": 87422,
+      "ownership": "87465 87422 87422 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task15-live-final-ssEIbH/senpi-rpc-host-internal-26078714/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "87422     1 87422 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-2454f9a41b852b9b.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "87465 87422 87422 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task15-live-final-ssEIbH/senpi-rpc-host-internal-26078714/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    },
+    {
+      "task": 29,
+      "root": "/private/tmp/omon-task29-live-final-1lkxge",
+      "group": 92419,
+      "ownership": "92451 92419 92419 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task29-live-final-1lkxge/senpi-rpc-host-internal-27abaada/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+      "members": [
+        "92419     1 92419 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-cd1e04e7438daf97.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+        "92451 92419 92419 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task29-live-final-1lkxge/senpi-rpc-host-internal-27abaada/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+      ],
+      "signal": "SIGKILL",
+      "remainingGroupPids": []
+    }
+  ]
+}

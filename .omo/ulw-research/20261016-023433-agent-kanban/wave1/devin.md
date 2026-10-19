@@ -1,0 +1,63 @@
+### Devin (Cognition) Sessions Dashboard
+- URL: https://app.devin.ai
+- Kind: agent-native
+- What: Devin's official web platform and sessions dashboard providing real-time visibility and human-in-the-loop takeover for autonomous software engineering sessions. It combines conversational task steering with embedded VSCode IDE, read-only/interactive terminal shells, headless browser with visual screen/video recordings, and an activity worklog.
+- Agent integration: Devin REST API v3 (base `https://api.devin.ai/v3/organizations/*` using service user tokens `cog_*` or PATs; endpoint `POST /sessions` to launch, `GET /sessions` to list/poll, `POST /sessions/{id}/messages` to interact); official Devin MCP server at `https://mcp.devin.ai/mcp` (Streamable HTTP exposing `devin_session_create`, `devin_session_search`, `devin_session_interact`, `devin_session_events`, `devin_session_gather`); official open-source Devin Handoff plugin/skill (`club-cog/devin-handoff`) supporting Claude Code, Codex, Cursor, and custom agent frameworks; official Devin CLI (`curl -fsSL https://cli.devin.ai/install.sh | bash`) supporting `devin --cloud` and `/handoff`; incoming/outgoing webhooks for automations and incident alerts.
+- Mobile: Responsive web (no standalone native iOS or Android app listed on App Store or Google Play; mobile browser experience includes full-screen notification inbox view, compact session cards, and responsive transcript drawer as verified in October 2026 release notes).
+- Pricing: Free tier ($0, 1 member, limited usage, includes Devin Review & DeepWiki); Pro tier ($20/month, 1 member, daily/weekly quotas + on-demand credit refills); Max tier ($200/month, 1 member, larger weekly quota with no daily cap); Teams tier ($80/month minimum, $40/month per full seat with Pro-equivalent quota + Devin Desktop access, or free flex seats drawing from shared on-demand credits, up to 200 members); Enterprise tier (custom contract, ACU-based compute unit pools, customer KMS, dedicated tenants). (Verified 2026-10-16).
+- Self-host: Hybrid / partial self-hosting via Devin Outposts; the core agent reasoning/planning loop is cloud-hosted SaaS (or Customer Dedicated VPC deployment on AWS), while session VMs/containers/runners execute on customer-controlled infrastructure (Kubernetes via `devin-outpost-k8s`, local machines via `devin worker start --outpost=<name>`, Bare-metal Macs, or partner runners like Modal, Daytona, E2B, Brev). Full standalone air-gapped self-hosting is not supported.
+- License: Proprietary SaaS (client-side integrations like Devin Outposts K8s operator `devin-outpost-k8s` and `club-cog/devin-handoff` are open source under the MIT license).
+- Activity: Active commercial product by Cognition AI; GA since late 2024 with bi-weekly updates throughout 2025 and 2026 (latest release notes dated October 14, 2026 introducing chat width preferences, SARIF exports, and sidebar session tree enhancements).
+- Pros: Complete autonomous agent workspace with real-time streaming IDE, shell, and interactive browser; First-class bi-directional handoff tooling for third-party agents (Claude Code, Codex, Cursor) via official MCP server and handoff plugins; Deep enterprise features including RBAC, audit trails, and BYO-infrastructure (Outposts) execution.
+- Cons: Fully proprietary core engine with no standalone offline self-hosting; High cost for heavy automated workloads (teams minimum $80/mo, high-tier compute on ACU model); No dedicated native mobile applications (relies on responsive web or third-party chat clients like Slack/Teams).
+- Sources: https://devin.ai, https://docs.devin.ai, https://docs.devin.ai/admin/billing/self-serve.md, https://docs.devin.ai/work-with-devin/devin-session-tools.md, https://docs.devin.ai/work-with-devin/devin-mcp.md, https://docs.devin.ai/work-with-devin/devin-handoff.md, https://docs.devin.ai/cloud/outposts/overview.md, https://github.com/club-cog/devin-handoff, https://github.com/CognitionAI/devin-outpost-k8s, https://docs.devin.ai/release-notes/overview.md
+- Confidence: high
+
+### Devin + Linear
+- URL: https://linear.app (integration docs at https://docs.devin.ai/integrations/linear.md)
+- Kind: general-kanban-with-agent-integration
+- What: A high-performance software issue tracking and Kanban project management tool with native, two-way deep integration for Devin autonomous agent sessions. Linear tickets act as dispatch queues and kanban status boards for Devin tasks, rendering real-time agent activity feeds, progress plans, and resulting PR links directly on issue cards.
+- Agent integration: Native Linear Agent session interface built into Linear; Devin connects via OAuth (Settings > Connections > Linear); Devin triggers automatically via assignment, playbook label macros (e.g., `!plan`, `!implement`, `!triage`, `!review`), or `@Devin` comments; Linear edge-triggered automations launch Devin on state transitions (e.g. status moved to "Todo" or "In Progress"); external agents (Claude Code, Cursor, Codex) can manipulate Linear issues and read status via Linear's official GraphQL API, official Linear CLI (`linear-cli`), webhooks, or Linear MCP servers.
+- Mobile: Native iOS app (App Store: Linear - Issue Tracking), native Android app (Google Play: Linear - Mobile), and responsive mobile web application.
+- Pricing: Linear pricing: Free tier (up to 250 active issues, unlimited members); Standard tier ($8/user/month billed annually or $10 billed monthly); Plus tier ($14/user/month billed annually or $16 billed monthly); Enterprise tier (custom pricing). Devin usage consumed during Linear sessions is billed separately to the connected Devin plan (Pro/Teams/Enterprise). (Verified 2026-10-16).
+- Self-host: no (Linear is a pure cloud-hosted SaaS platform).
+- License: Proprietary.
+- Activity: Highly active production platform; continuous updates with industry-standard issue tracking and first-class native AI agent UI cards (agent session views, plan trackers).
+- Pros: World-class responsive UI/UX and keyboard-driven kanban workflow; Native Agent Session tab displaying live step-by-step progress, plan tracking, and PR status; Seamless two-way interaction allowing users to stop, prompt, and review agent runs without leaving the board.
+- Cons: Proprietary cloud SaaS with zero self-hosting option; Separate per-seat subscription cost on top of Devin compute costs; Advanced automation rules and enterprise SLA require paid tiers.
+- Sources: https://docs.devin.ai/integrations/linear.md, https://docs.devin.ai/product-guides/automations.md, https://linear.app/pricing
+- Confidence: high
+
+### Devin + Jira
+- URL: https://www.atlassian.com/software/jira (integration docs at https://docs.devin.ai/integrations/jira.md)
+- Kind: general-kanban-with-agent-integration
+- What: Enterprise project and agile issue management platform supporting Kanban/Scrum boards, integrated with Devin either as an Atlassian Rovo native agent (via the Devin for Jira Forge app) or via OAuth service accounts. Work items on Kanban boards trigger autonomous coding sessions, with agent status and PR artifacts reported back onto the Jira card.
+- Agent integration: Two integration patterns: (1) Devin for Jira Atlassian Forge App (Rovo agent connector) where Devin acts as a native Jira agent with an interactive agent panel on work item cards; (2) Service Account OAuth connection using webhook listeners and comment/remote link write-backs; Automated triggers support issue creation, status changes, labels (`devin`), assignments, and `@Devin` mentions; External agents (Claude Code, Cursor, etc.) integrate via Jira Cloud REST API v3, Jira webhooks, Atlassian MCP v2 servers, or Jira CLI tools.
+- Mobile: Native iOS app (App Store: Jira Cloud by Atlassian), native Android app (Google Play: Jira Cloud), and responsive web.
+- Pricing: Jira Cloud pricing: Free tier (up to 10 users, 2GB storage); Standard tier ($7.75/user/month); Premium tier ($15.25/user/month); Enterprise tier (custom pricing). The Devin for Jira Forge app is free to install; Devin compute usage is billed to the associated Devin account. (Verified 2026-10-16).
+- Self-host: Partial (Jira Data Center is self-hostable on-premises, though Devin's native Forge Rovo app integration specifically targets Jira Cloud; Jira Data Center integration with Devin relies on REST API webhooks or custom proxy connectors).
+- License: Proprietary.
+- Activity: Highly active flagship enterprise issue management platform by Atlassian; continuously updated with deep Atlassian Intelligence / Rovo agent ecosystem support in 2025/2026.
+- Pros: Industry-standard enterprise agile and Kanban management with deep compliance, audit, and custom workflow rules; Native Jira Agent panel shows live status, interactive chat, and direct PR links on the Jira ticket; Extensive trigger customization (status change, field update, assignment, @mentions).
+- Cons: Complex configuration and permissions overhead compared to lightweight developer boards; Native Rovo agent features require Jira Cloud (Data Center requires custom webhook/API plumbing); Heavyweight UI latency relative to modern developer-first boards like Linear.
+- Sources: https://docs.devin.ai/integrations/jira.md, https://marketplace.atlassian.com/4162823004, https://docs.devin.ai/product-guides/automations.md, https://www.atlassian.com/software/jira/pricing
+- Confidence: high
+
+### Devin + Slack
+- URL: https://slack.com (integration docs at https://docs.devin.ai/integrations/slack.md)
+- Kind: general-kanban-with-agent-integration
+- What: Team collaboration and messaging workspace functioning as an asynchronous agent status feed and task control board. Devin sessions can be dispatched, monitored in real time via dedicated "Code Channels", threaded conversations, or Slack List/Canvas views, with automated status chips (working, blocked, done) and interactive action buttons.
+- Agent integration: Official Devin Slack app (installable from Settings > Connections > Slack); triggered by `@Devin` mentions, keyword commands (`!new`, `!fast`, `!ultra`, `!sleep`, `!ask`), emoji reactions (e.g. 🚨), or dedicated Code Channels; supports bidirectional thread syncing, browser preview links, diff and patch attachments; external agents can push/read channel updates via Slack Web API (chat:write, conversations:history), Slack Bolt SDK, Slack CLI, webhooks, or Slack MCP servers.
+- Mobile: Native iOS app (App Store: Slack), native Android app (Google Play: Slack), and responsive web.
+- Pricing: Slack pricing: Free tier (90-day message history, 10 app integrations); Pro tier ($7.25/user/month billed annually or $8.75 monthly); Business+ tier ($12.50/user/month billed annually or $15 monthly); Enterprise Grid (custom). Devin Slack app requires no extra fee; Devin compute usage is billed to the Devin account. (Verified 2026-10-16).
+- Self-host: no (Slack is proprietary cloud SaaS; open-source self-hosted alternatives like Mattermost follow similar webhook patterns).
+- License: Proprietary.
+- Activity: Ubiquitous enterprise collaboration platform; actively maintained and evolving with Code Channels, AI sidebar integrations, and canvas support throughout 2025/2026.
+- Pros: Immediate team visibility where engineering discussions naturally occur; Dedicated Code Channels feature offers automatic status badges (working/blocked/done), live worklogs, and PR tabs; Interactive inline buttons allow quick approval of permissions, blueprints, and questions without leaving chat.
+- Cons: Unstructured chat stream rather than a traditional tabular Kanban board (requires pairing with Slack Lists, GitHub Projects, or Linear for card-based pipeline tracking); Thread clutter in high-volume repos without strict dedicated channel discipline; Notification fatigue if automations and error triage channels are not strictly filtered.
+- Sources: https://docs.devin.ai/integrations/slack.md, https://docs.devin.ai/product-guides/automations.md, https://docs.devin.ai/tutorial-library/slack-bug-fix.md, https://slack.com/pricing
+- Confidence: high
+
+## EXPAND
+- LEAD: Devin Automations Preflight checks & webhook orchestrators — WHY: Enables custom programmatic dispatch and event-driven fan-out of Devin sessions from arbitrary external task boards (e.g., Trello, GitHub Projects, ClickUp) via signed HTTPS webhooks and isolated Preflight Python/Node scripts — ANGLE: web search "site:docs.devin.ai automations preflight check"
+- LEAD: Agent Client Protocol (ACP) for IDE agent boards (Zed & JetBrains) — WHY: Zed and JetBrains now embed Devin CLI directly as an ACP agent panel, serving as a local editor-embedded agent status and interaction board — ANGLE: web search "site:docs.devin.ai cli acp zed jetbrains"

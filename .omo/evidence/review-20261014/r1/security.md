@@ -1,0 +1,26 @@
+# Lane security
+
+### [P1] Hardline rm rule misses system directories written with a trailing slash or dot segments (`rm -rf /etc/`)
+- Location: src/security/hardline.rs:25
+- Trigger: The agent runs the terminal tool with `{"program":"rm","args":["-rf","/etc/"]}`, which yields the command text `rm -rf /etc/`. The same happens with `/usr/`, `/var/`, `/home/`, `/bin/`, `/./etc` or `//etc`, or with `rm -rf /usr/` as a cron script.
+- Impact: No hardline rule matches these spellings, even though each one names the same protected directory that `rm -rf /etc` names, and `rm -rf /etc` is unconditionally blocked. Under `/yolo` or `ApprovalPolicy::Never`, `TerminalTool::require_approval` (src/tools/terminal.rs:207-226) lets hardline and deny globs block, then returns `Ok`, so the delete runs. Under Smart policy it is only an approvable "recursive delete", and an Always grant for that category also covers it. The 2026-10-13 review graded the `rm -rf /""` bypass of this same rule P1; this is the same class with a different spelling.
+- Evidence: `let hardline_system_dirs = r"/home|/home/\*|/root|/root/\*|/etc|/etc/\*|/usr|/usr/\*|..."` is combined with `let tail = r"(?:\s|$|[)`;|&])";` (hardline.rs:18). In `/etc/`, the character after `/etc` is `/`, which the tail does not accept, and the `/etc/\*` alternative needs a `*`. The root alternative `/(?:/|[.]/|[.][.]/)*(?:[.]|[.][.])?\**` stops at `e`. Nothing in normalization strips trailing slashes or `.` components. The home rule already allows a trailing slash with `(?:/?|/\*)?`; the system-dir rule does not. The 2026-09-14 review reported this trigger. It is not in either CONFIRMED file as declined, and the code is unchanged.
+- Fix: In `build_hardline_rm_path`, accept trailing separators and dot segments after each protected directory: allow `(?:/+\.?)*` before the tail, and allow `(?:/+\.?/*)*` between the leading `/` and the directory name. Alternatively, canonicalize literal rm operands (collapse `//`, `/./`, and trailing `/`) before matching.
+
+### [P2] Cron prompt scan runs the shell hardline detector on prose, so ordinary prompts are rejected as "hardline"
+- Location: src/security/scan.rs:155
+- Trigger: `cron add` (src/tools/cron.rs:525), `validate_cron_payload_lifecycle` (src/cron/scheduler.rs:840 and :889) or a Hermes job import (src/cron/store.rs:398 and :416) receives prose text such as:
+  1. `Halt and alert me if disk usage exceeds 90%`. A line starting with Halt, Reboot, Shutdown or Poweroff matches `{cmdpos}(shutdown|reboot|halt|poweroff)(?:\s|...)` after lowercasing (hardline.rs:74).
+  2. `List server events (shutdown events first)`. `mark_command_starts` treats `(` as a command start.
+  3. A line starting with `grep`, `echo` or `printf` that contains an odd number of apostrophes, for example `grep the logs for today's errors`. `shell_tokens_with_spans` returns `None`, `quoted_grep_pattern_spans` returns malformed at normalize.rs:719, and hardline.rs:125 returns `"command parser limit or malformed executable payload"`.
+  4. A one-paragraph prompt or brief over 4096 bytes with no `;&|` or newline, which is about 1,366 Korean characters. `command_parser_limit_exceeded` treats it as a hardline hit.
+- Impact: The cron job is refused or the import is skipped, with a misleading message such as `hardline_command: system shutdown/reboot` or `...malformed executable payload`. The user cannot approve past it. This is the same false-positive class as the "truncate the report" P1 that was fixed by removing the dangerous detector from this function, but here it comes through the hardline path that was kept.
+- Evidence: `if let Some(hardline) = detect_hardline_command(text) { threats.push(format!("hardline_command: {hardline}")); }`. `detect_hardline_command` parses its input as shell source, including the parser-limit and malformed-grep early returns, and the input here is natural language.
+- Fix: For prompt text, run only the hardline regex rules on the normalized text and drop the parser-limit and malformed-grep early returns. Alternatively, restrict the hardline screen to fenced code or command-like lines.
+
+### [P2] Approval display redaction misses `user:password` credentials passed through `-u` / `--user`
+- Location: src/security/approval_display.rs:33
+- Trigger: An approval-gated command such as `curl -u deploy:hunter2 https://api.example.com/x`, or a lane post scrubbed by `src/lanes/scrub.rs:73`.
+- Impact: The password is shown verbatim in the Discord approval prompt and in lane posts. Both are channel-visible surfaces that this redactor is supposed to clean.
+- Evidence: None of the four patterns matches. The Authorization pattern needs `authorization:`. The keyword pattern needs `token`, `secret`, `password`, `api key`, `access key` or `credential` before `[:=]`. The flag pattern covers only `--api-key`, `--token`, `--password`, `--secret`, `--client-secret` and `--access-key`. The userinfo pattern needs `scheme://`. So `-u deploy:hunter2` passes through unchanged.
+- Fix: Add a pattern such as `(?i)((?:^|\s)(?:-u|--user)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s:'"]+):(?:"[^"]*"|'[^']*'|[^\s'";|&]+)` that redacts the part after the colon, keeping `${1}<user>:[REDACTED]`.

@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-11",
+  "task": 23,
+  "scope": "source adapters only; wiring request handed to coordinator",
+  "live_checks": {
+    "mail": {"exit": 0, "threads": 1, "auth_warning_observed": true, "body_saved": false},
+    "kakao": {"rooms": 263, "unread_rooms": 4, "http_ok": true, "guessed_before_id_zero_status": 400, "body_saved": false},
+    "imessage": {"exit": 0, "chat_items": 1, "shape": "single JSON object per chat; numeric chat id", "message_body_saved": false, "parser_updated_for_observed_shape": true},
+    "discord": {"database_mode": "read_only", "owner_mention_rows": 0, "api_calls": 0}
+  },
+  "verification": {
+    "owned_rustfmt_check": "passed with exit 0 on all 6 owned Rust files; formatting applied via patch without broad repository write",
+    "repo_fmt_check": "failed on unrelated pre-existing/unsettled shared-file formatting differences; no broad fmt write run",
+    "focused_test": "not retried (No Cargo retry); blocked by foreign unverified compile errors in lanes/activity.rs, lanes/runner.rs, cron/scheduler.rs"
+  },
+  "review_blockers_resolved": {
+    "1_imessage_compile": "history_args accepts &str, unused imports removed, objects() and NDJSON supported for history",
+    "2_kakao_backwards_progress": "inverted condition oldest >= before to correctly allow strictly decreasing IDs",
+    "3_discord_selection_and_room_type": "true DM uses guild_id IS NULL/empty (room_type='dm'), author exclusions apply across all branches, reply-to-owner captured via metadata_json.referenced_message_id (room_type='owner_reply'), channel mentions set room_type='channel'",
+    "4_mail_cursor_advance": "cursor derives from validated received_at.timestamp() across RFC3339 string and numeric timestamps; preserved on empty items",
+    "5_kakao_per_room_cursor_and_paging_loop": "opaque JSON cursor map isolates per-room progress, avoiding skipped new rooms; event-driven local HTTP server tests full paging loop without sleeps",
+    "6_kakao_fixture_and_production_parser": "logId added to kakao-messages.json; KakaoSource::parse_messages and fetch_since exercised in tests; #[ignore] live tests added",
+    "7_tool_help_and_empty_shapes": "captured actual help and empty response shapes in tool-help.txt; strict parser alignment"
+  },
+  "nine_adversarial_classes": [
+    {"class": 1, "name": "mail_missing_schema_rejection", "test": "mail_rejects_missing_shape_and_empty_cursor_is_stable"},
+    {"class": 2, "name": "mail_cursor_stability", "test": "mail_rejects_missing_shape_and_empty_cursor_is_stable"},
+    {"class": 3, "name": "mail_timestamp_derivation", "test": "mail_rfc3339_internal_date_advances_cursor_from_parsed_timestamp"},
+    {"class": 4, "name": "imessage_read_only_boundary", "test": "imessage_uses_only_read_subcommands_and_skips_own_messages"},
+    {"class": 5, "name": "imessage_owner_exclusion", "test": "imessage_uses_only_read_subcommands_and_skips_own_messages"},
+    {"class": 6, "name": "imessage_output_flexibility", "test": "imessage_accepts_single_object_output_and_numeric_rowids, imessage_parses_multi_item_ndjson_history"},
+    {"class": 7, "name": "kakao_failure_isolation", "test": "kakao_bad_endpoint_fails_clearly_without_other_source_dependency"},
+    {"class": 8, "name": "kakao_paging_loop_and_cursor", "test": "kakao_event_driven_paging_loop, kakao_production_parser_and_per_room_cursor"},
+    {"class": 9, "name": "discord_behavioral_relations", "test": "discord_behavioral_db_cases_and_cursor, discord_producer_event_to_adapter_end_to_end"}
+  ],
+  "truncation_contract": "Fixed batch limits (Mail 100, imsg 50); older items beyond ceiling in a burst are omitted rather than backfilled on subsequent cursor",
+  "live_discord_harness": "Requires explicit OMON_QA_DISCORD_COPY_DB with SqliteConnectOptions read_only(true); no repository DB fallback",
+  "producer_to_adapter_pipeline": "InboundEvent.author_id.referenced_message_id -> storage.index_inbound -> DiscordSource.fetch_since tested end-to-end with true guild author preservation",
+  "unrun_live_tests": [
+    "live_mail_source_fetch_once",
+    "live_kakao_source_fetch_once",
+    "live_imessage_source_fetch_once",
+    "live_discord_source_fetch_once (requires explicit OMON_QA_DISCORD_COPY_DB with read_only)"
+  ],
+  "fixture_text_sanitized": true,
+  "cleanup": "No scratch databases or service changes. Read-only live DB connection closed."
+}

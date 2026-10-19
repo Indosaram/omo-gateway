@@ -1,0 +1,93 @@
+{
+  "status": "authenticated-numeric-time-capture-ready-for-postfreeze-wiring",
+  "captureId": "task23-kakao-numeric-20261011T175050750Z",
+  "privateBindingRecovery": "not available in bounded owned artifacts; one rooms GET used",
+  "receipts": [
+    {
+      "operation": "rooms",
+      "method": "GET",
+      "endpoint": "https://indo.taila0cef2.ts.net/api/rooms",
+      "httpStatus": 200,
+      "rawSha256": "3e47e2961ad01ab82cf8493dd5cf049cda0ed1f6eb622764cc5d4c9204a12774",
+      "count": 263,
+      "schema": {
+        "chatId": "string",
+        "type": "string",
+        "title": "string",
+        "members": "number",
+        "unreadCount": "number",
+        "roomImageUrl": "string",
+        "lastMessage": "string",
+        "lastMessageTime": "number",
+        "lastReadLogId": "string",
+        "lastLogId": "string"
+      },
+      "capturedAt": "2026-10-11T17:50:50.880Z"
+    },
+    {
+      "operation": "messages",
+      "method": "GET",
+      "endpointTemplate": "https://indo.taila0cef2.ts.net/api/rooms/[PRIVATE ROOM ID]/messages?limit=1",
+      "httpStatus": 200,
+      "rawSha256": "30ae716d1c386f2cc00b1386d9a785f8673a03694e765efde1093a963592443e",
+      "responseCount": 1,
+      "retainedCount": 1,
+      "utcValidCount": 1,
+      "schema": {
+        "attachment": "string",
+        "attachment_parsed": "object",
+        "authorId": "string",
+        "authorName": "string",
+        "authorProfileUrl": "string",
+        "deleted": "number",
+        "feedType": "null",
+        "id": "string",
+        "isFeed": "boolean",
+        "isMe": "boolean",
+        "is_deleted": "boolean",
+        "is_edited": "boolean",
+        "is_restored": "boolean",
+        "is_safebot": "boolean",
+        "logId": "string",
+        "message": "string",
+        "previous_message": "null",
+        "reactions": "array",
+        "real_type": "number",
+        "reply": "null",
+        "revision": "number",
+        "revisions": "array",
+        "sendAt": "number",
+        "text": "string",
+        "thread": "null",
+        "threadReplyCount": "number",
+        "time": "number",
+        "type": "number",
+        "unreadCount": "number"
+      },
+      "selectedRoomIdSha256": "a7bf5b0c7d719dbaaa11bf03ee435835dbac7442aea9b821a1ba0b4d7bfefd5b",
+      "capturedAt": "2026-10-11T17:51:10.936Z",
+      "lastLogIdMatchedSelectedMessage": true
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "fixtures/kakao-rooms.json",
+      "sha256": "5f5d2eaf4ec13aacc924c8898ad61e0283ece6abfe48311776fdb747e0ea4f9e",
+      "mapping": "Same selected actual room as message GET. Room identity substituted; type/unreadCount retained; title redacted; lastLogId included only if observed equal to selected message ID."
+    },
+    {
+      "path": "fixtures/kakao-messages-numeric.json",
+      "sha256": "936b20cd30da29510a1332a2d0a1202e6eb1b13e6a9fcaf9c1eb3302a2f0c65b",
+      "mapping": "One actual response row. Integral Unix-seconds time retained exactly; IDs consistently substituted; personal text/author replaced with REDACTED placeholders. No sendAt or ID timestamp decoding.",
+      "utcValidCount": 1
+    }
+  ],
+  "rawRetention": "Response bytes hashed in memory before projection, zeroed and cleared; private selected room and row references cleared. Original identities not staged.",
+  "sourceFreeze": "No product source, tests, or product fixtures edited. No ignored harness, Cargo, model, daemon, git or environment-file invocation.",
+  "historicalProof": "task23.log/json and task23-capture-20261011T161359754Z preserved; this fresh receipt complements rather than rewrites historical timestamp-incomplete staging.",
+  "limitations": [
+    "UTC validity checked locally on exact safe integral seconds; chrono production-parser fixture wiring remains future postfreeze work.",
+    "Only one messages page requested with limit=1; no completeness/history claim.",
+    "Sanitized IDs are substitutes, not original identities."
+  ]
+}

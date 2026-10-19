@@ -1,0 +1,6 @@
+fmt	0	cargo fmt --check
+clippy	0	cargo clippy -j2 --all-targets --all-features -- -D warnings
+lib_scrub	0	cargo test -j2 --all-features --lib creation_metadata --no-fail-fast -- --nocapture
+entry_session	0	cargo test -j2 --all-features --bin omo-gateway session_cli_output_preserves_aggregate_exit_and_projection --no-fail-fast -- --nocapture
+entry_cli	0	cargo test -j2 --all-features --bin omo-gateway tests::cli_ --no-fail-fast -- --nocapture
+focused	101	cargo test -j2 --all-features --test test_lane_runner --test test_lane_reopen --test test_lane_events --test test_session_registry --no-fail-fast -- --nocapture

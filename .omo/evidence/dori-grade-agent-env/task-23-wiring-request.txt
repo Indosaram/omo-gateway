@@ -1,0 +1,41 @@
+Coordinator wiring request for todo23 (corrected source explicit ready; source-owner22 files remain frozen):
+
+1. In src/inbox/mod.rs add `pub mod sources;`.
+2. At the inbox startup/watch construction point, create:
+   - `sources::mail::MailSource`
+   - `sources::kakao::KakaoSource::default()`
+   - `sources::imessage::IMessageSource`
+   - `sources::discord::DiscordSource::new(existing_gateway_pool.clone())`
+3. Pass these adapters into existing collection/watcher setup. Continue using collect_all's independent per-source error capture and cursor persistence.
+4. Keep Discord read-only against the existing gateway database pool; do not add Discord network calls or user-token access.
+5. Preserve read-only argv and endpoint contracts:
+   - Zele mail: `mail list --folder inbox --account freedomzero91@gmail.com --filter "is:unread -category:promotions -category:social -category:updates" --limit 100` (no `--json`; parser decodes YAML/JSON).
+   - imsg: `chats --limit 50 --json` and `history --chat-id <id> --limit 50 --json` (no `--since-rowid`; parser supports single-object, multi-line NDJSON, and array output, with numeric row IDs).
+   - PirateTalk: GET `/api/rooms` and GET `/api/rooms/:id/messages` with valid omitted initial `before_id` (initial request omits before_id completely; paging uses oldest seen message ID).
+   - Discord: indexed search rows from `message_search_documents` where platform='discord'. Populates `item.room_type`: 'dm' (guild_id null/empty), 'owner_reply' (verified parent referenced owner in same channel), or 'channel'.
+
+Implementation contract status:
+- All owned Rust files (src/inbox/sources/*.rs, src/storage/message_search.rs, and tests/test_inbox_sources.rs) are strictly formatted to rustfmt --edition 2021 standard (rustfmt --check exits 0). Patch applied only to owned/authorized files without broad repository format writes.
+- Real observed argv and endpoint contracts are implemented directly in source code; no documents-only divergence and no invented fallback APIs.
+- Existing tree compiler failures (lanes/activity.rs, lanes/runner.rs, cron/scheduler.rs) are unverified foreign work and not a baseline for todo23. No Cargo retries or live fetches were re-run.
+
+Cursor & Seam Specifications for Coordinator:
+- Mail cursor: Unix epoch seconds string ("<timestamp>") derived directly from validated `item.received_at.timestamp()`. Preserved stably when response items are empty.
+- Kakao cursor: Opaque JSON string map (`{"<chatId>": "<lastLogId>", ...}`). Per-room tracking prevents new rooms with lower IDs from being skipped by a global maximum.
+- iMessage cursor: RFC3339 timestamp string ("2026-10-11T08:14:10.830Z") tracking newest message timestamp.
+- Discord cursor: Numeric snowflake message ID string ("423456789012345676") tracking `d.message_id > ?`.
+
+Storage Seam & Normal Ingress Notification:
+1. `src/storage/message_search.rs` now provides:
+   - `update_referenced_message(pool, platform, channel_id, message_id, referenced_message_id)` to link parent references in `message_search_documents`.
+   - `index_inbound_with_metadata(session, event, metadata)` to accept caller-provided metadata (such as `referenced_message_id`).
+2. Live ingress integration:
+   - `InboundEvent` now carries `pub author_id: Option<String>` and `pub referenced_message_id: Option<String>` with `#[serde(default)]`.
+   - `src/discord/adapter.rs` populates `event.author_id` from `message.author.id` and `event.referenced_message_id` from `message.message_reference` / `message.referenced_message`. Guild routing keys in `session.user_id` remain intact (`""`).
+   - `src/storage/message_search.rs:index_inbound` prioritizes `event.author_id` over `session.user_id`, ensuring guild owner messages are indexed with their true author ID so `parent.author_id = ?` joins succeed.
+   - `index_inbound` attaches `referenced_message_id` directly to `metadata_json` via `index_inbound_with_metadata` on live document upsert without relying on database triggers.
+3. Truncation limit specification:
+   - Sources operate with fixed batch ceilings (Mail limit 100 threads, imsg chats/history limit 50 items).
+   - In bursts exceeding these batch limits, only items up to the ceiling are processed in that turn; older items beyond the limit are not collected by forward cursor advancement. This is the exact plan design constraint.
+
+No src/inbox/mod.rs, src/inbox/watchers.rs, src/main.rs, src/lib.rs, src/entry.rs, or Cargo integration elsewhere is modified by this source owner.

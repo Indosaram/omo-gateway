@@ -1,0 +1,55 @@
+ M .omo/boulder.json
+ M .omo/evidence/review-20260908/dashboard.json
+ M Cargo.toml
+ M src/agent/omo_daemon.rs
+ D web/dist/assets/index-B2cKiMlT.js
+ M web/dist/index.html
+?? .omo/drafts/dori-grade-agent-env.md
+?? .omo/evidence/dori-grade-agent-env-db-cleanup-authorization.md
+?? .omo/evidence/dori-grade-agent-env-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-next-action-status.md
+?? .omo/evidence/dori-grade-agent-env-task27-upstream-candidate-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo10-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo11-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo12-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo13-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo14-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo18-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo19-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo19-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo2-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo21-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo22-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo22-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo23-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo23-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo27-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo3-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo30-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo4-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo5-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo7-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-todo7-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo8-9-current-gate.md
+?? .omo/evidence/dori-grade-agent-env-wave3-review-status.md
+?? .omo/evidence/dori-grade-agent-env/
+?? .omo/evidence/review-20261012/
+?? .omo/evidence/review-20261013/
+?? .omo/evidence/review-20261014/
+?? .omo/evidence/task10-independent-review.md
+?? .omo/evidence/task14-shutdown-durability-gate.md
+?? .omo/evidence/task27-upstream-candidate-gate.md
+?? .omo/evidence/todo10-current-gate.md
+?? .omo/evidence/todo14-current-gate.md
+?? .omo/evidence/todo23-current-gate.md
+?? .omo/evidence/todo8-9-current-gate.md
+?? .omo/evidence/ulw-20261014/
+?? .omo/plans/dori-grade-agent-env.md
+?? .omo/plans/gateway-autonomy-lanes.md
+?? .omo/thread-tools/
+?? .senpi/
+?? docs/research/
+?? scripts/deploy.sh
+?? scripts/gateway_watchdog.sh
+?? tests/test_gateway_watchdog.sh
+?? web/dist/assets/index-BpdKQlou.js

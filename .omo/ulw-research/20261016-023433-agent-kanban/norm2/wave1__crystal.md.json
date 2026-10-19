@@ -1,0 +1,30 @@
+[
+ {
+  "name": "Crystal (stravu/crystal) / Nimbalyst",
+  "url": "https://nimbalyst.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex 등 병렬 AI 세션 관리 워크스페이스, 세션·태스크 칸반",
+  "mobile": "iOS·Android 앱 + 반응형 웹 콘솔",
+  "pricing": "무료(OSS) / Teams $20/사용자/월(베타 무료)",
+  "selfhost": "로컬 전용(팀 동기화는 Cloudflare)",
+  "license": "MIT",
+  "agent": "MCP·REST/WS·CLI(nim); Claude Code·Codex·Gemini 등",
+  "status": "활발(v0.81.6, 2026-10)",
+  "pros": "전용 세션·태스크 칸반 보드; 원클릭 git worktree 격리; 네이티브 모바일 앱·푸시 승인",
+  "cons": "Crystal→Nimbalyst 리브랜딩 혼란; 무거운 Electron 번들; OpenCode·Copilot 연동 알파",
+  "sources": [
+   "https://github.com/stravu/crystal",
+   "https://github.com/Nimbalyst/nimbalyst",
+   "https://nimbalyst.com/",
+   "https://nimbalyst.com/features/session-management/",
+   "https://nimbalyst.com/features/task-management/",
+   "https://nimbalyst.com/kanban-for-claude-code/",
+   "https://nimbalyst.com/teams/",
+   "https://docs.nimbalyst.com/",
+   "https://api.github.com/repos/Nimbalyst/nimbalyst",
+   "https://api.github.com/repos/stravu/crystal"
+  ],
+  "confidence": "높음"
+ }
+]

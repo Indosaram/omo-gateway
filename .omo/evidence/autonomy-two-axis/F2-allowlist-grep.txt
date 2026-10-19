@@ -1,0 +1,1 @@
+git diff f7e6c41..HEAD -- src | grep '^+.*approval_allowlist' -> 0 lines (no new runtime use). Pre-existing refs only: src/storage/db.rs:1235 (table list), src/dashboard.rs:815/2504 (read-only list API).

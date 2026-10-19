@@ -1,0 +1,7 @@
+$ cat /tmp/omon-claim.txt | wc -l; sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select id, state, sentence, argv_json, expect_regex, replace(measured_output,char(10),' '), created_at, checked_at from report_claims; select rowid, role, substr(content,1,200), platform_message_id from messages order by rowid desc limit 2"
+[exit 0]
+       5
+1|corrected|`/tmp/omon-claim.txt`는 3줄이에요.|["wc","-l","/tmp/omon-claim.txt"]|\b3\b|5 /tmp/omon-claim.txt|2026-10-18 14:54:49|2026-10-18 14:55:20
+5553|assistant|`/tmp/omon-claim.txt`는 3줄이에요. [[measure ["wc","-l","/tmp/omon-claim.txt"] expect~"\\b3\\b"]]|
+5552|user|[QA] 다시: `wc -l < /tmp/omon-claim.txt` 줄 수를 한 문장으로 답하고, 그 문장 바로 뒤에 정확히 이 문법으로 마커를 붙여: [[measure ["wc","-l","/tmp/omon-claim.txt"] expect~"\\b3\\b"]]|12440673-c7fa-4491-a317-16cbadb12961
+

@@ -1,0 +1,33 @@
+{
+  "schema": "omon-task12-freeze-reconciliation-v1",
+  "root": "/private/tmp/omon-lane-scratch-qa-i3OfeG",
+  "at": "2026-10-11T18:41:00.477Z",
+  "process_check": {
+    "exit": 0,
+    "matchingOwnedProcesses": [],
+    "scopePid59128Absent": true,
+    "questionGatewayNeverStarted": true,
+    "questionLaneNeverStarted": true
+  },
+  "daemon_check": {
+    "endpoint": "ws://127.0.0.1:19742",
+    "authenticated": true,
+    "methods": [
+      "initialize",
+      "thread/loaded/list",
+      "thread/list",
+      "thread/read"
+    ],
+    "loadedThreadCount": 8,
+    "loadedThreadsRead": 8,
+    "exactCwdLoadedMatches": 0,
+    "savedFirstPageCount": 100,
+    "savedFirstPageExactMatches": 0,
+    "savedPaginationRemaining": true,
+    "claim": "No active owned i3OfeG runtime in loaded daemon state; historical absence not asserted"
+  },
+  "runtimeHeld": true,
+  "reason": "Parent reported task14 duplicate-final product defect on3b852fbd; await fixed binary release",
+  "oldFailureRetained": "task-12-i3OfeG-launch-failure.json",
+  "next": "No fresh root or execute until parent new binary release"
+}

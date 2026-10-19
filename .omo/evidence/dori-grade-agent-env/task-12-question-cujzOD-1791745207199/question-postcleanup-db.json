@@ -1,0 +1,114 @@
+{
+  "row": {
+    "key": "qa-1",
+    "title": "Question QA",
+    "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+    "thread_channel_id": null,
+    "parent_channel_id": null,
+    "status_message_id": null,
+    "cwd": "/private/tmp/omon-lane-scratch-qa-cujzOD/qa-repo",
+    "brief_path": "/private/tmp/omon-lane-scratch-qa-cujzOD/question-brief.md",
+    "session_key": "4:lane|-|4:qa-1|-|9:lane:qa-1",
+    "omo_thread_id": "01a12c56-32b4-717f-b592-b5b5d83e0bde",
+    "model": "inferhub/cb/deepseek-v4.1-flash",
+    "status": "closed",
+    "done_signals": "file unused-question-signal",
+    "claim_evidence": null,
+    "claim_at": null,
+    "objection": null,
+    "turns_run": 2,
+    "last_turn_outcome": "completed",
+    "last_report": "[REPORT] qa-1 | question | A received; waiting for next instruction",
+    "last_activity_at": "2026-10-11T19:02:10.620222+00:00",
+    "stale_posted_at": null,
+    "created_at": "2026-10-11T19:00:09.009121+00:00",
+    "updated_at": "2026-10-11T19:04:07.395408+00:00"
+  },
+  "events": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+      "kind": "question",
+      "body": "pick A or B",
+      "created_at": "2026-10-11T19:00:15.214552+00:00",
+      "delivered_at": "2026-10-11T19:00:47.322961+00:00",
+      "delivery_reason": "jev_skip"
+    },
+    {
+      "id": 2,
+      "lane_key": "qa-1",
+      "lead_session_key": "4:lane|-|4:lead|-|9:lane:lead",
+      "kind": "question",
+      "body": "A received; waiting for next instruction",
+      "created_at": "2026-10-11T19:02:10.621108+00:00",
+      "delivered_at": "2026-10-11T19:02:42.323144+00:00",
+      "delivery_reason": "jev_skip"
+    }
+  ],
+  "transcript": [
+    {
+      "id": 1,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:00:09.011079+00:00",
+      "role": "user",
+      "text": "\n\nIsolated scratch QA. Do not use tools, delegation, goals, credentials, Discord, network writes or claim commands. Emit exactly [REPORT] qa-1 | question | pick A or B and end the turn. Do not continue until the lead sends an answer. On that answer emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn again. No file or claim requirement.\n\n\nLane key: qa-1\nDone = file unused-question-signal\n[REPORT] qa-1 | milestone|blocker|question|done | <text>\nClaim command: omo-gateway lane claim-done qa-1 --evidence \"<evidence>\"\n\nLane done protocol\nWhen every Done signal is live and every change is pushed, run the claim command from your own session. For local or QA-only work the signals can be a command, file or URL. Run them yourself first: the watcher re-runs every signal and never takes your word for it. The lane key above is required.\nAfter claiming, stay idle and start no new work. The lead receives a done_claimed event. A claim starts a five-minute objection window. Before closing, the watcher reads every signal live and refuses uncommitted tracked changes or commits on no remote. Closing marks the thread done and removes lane-owned worktrees.\nIf the lead objects or a check fails, you receive [LEAD] not done: <reasons>; keep working, claim again when fixed. Fix every reason, then claim again for a fresh five-minute window.\nControl executable (one argv element): \"/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\"\nControl DATABASE_URL: \"sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db\"\nUse this DATABASE_URL explicitly for every lane command; do not use another gateway database.\n"
+    },
+    {
+      "id": 2,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:00:15.196711+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:9ada3c14-e5f1-4435-89fd-06babf391865:chatcmpl-resp_0fa014cbb39dfc44016acbdcbc3d4487d08872090058f6bf82:0"
+    },
+    {
+      "id": 3,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:00:15.216503+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | question | pick A or B"
+    },
+    {
+      "id": 4,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:00:15.219068+00:00",
+      "role": "outcome",
+      "text": "completed"
+    },
+    {
+      "id": 5,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:02:07.386810+00:00",
+      "role": "user",
+      "text": "A. Emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn. Do not use tools or claim."
+    },
+    {
+      "id": 6,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:02:10.620222+00:00",
+      "role": "activity_item",
+      "text": "0:lane-item:9ee576b6-7104-4a4a-a424-a428c189b93c:chatcmpl-resp_0feef7489f9c528d016acbdd2fdb008191a6bf6f69400ac727:0"
+    },
+    {
+      "id": 7,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:02:10.621509+00:00",
+      "role": "agent",
+      "text": "[REPORT] qa-1 | question | A received; waiting for next instruction"
+    },
+    {
+      "id": 8,
+      "lane_key": "qa-1",
+      "at": "2026-10-11T19:02:10.633499+00:00",
+      "role": "outcome",
+      "text": "completed"
+    }
+  ],
+  "pragma": [
+    {
+      "seq": 0,
+      "name": "main",
+      "file": "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db"
+    }
+  ]
+}

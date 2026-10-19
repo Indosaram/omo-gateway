@@ -1,0 +1,34 @@
+[
+ {
+  "name": "Shrimp Task Manager MCP (cjo4m06/mcp-shrimp-task-manager)",
+  "url": "https://github.com/cjo4m06/mcp-shrimp-task-manager",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "AI 에이전트 작업 계획·분해·실행·검증 및 세션 간 메모리 유지 MCP 서버",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "MCP(15개 툴)·REST API·SSE·CLI; Claude Code·Cline·Cursor 등",
+  "status": "활성(최근 커밋 2025-08-21)",
+  "pros": "MCP 클라이언트와 높은 호환성; 의존성 그래프 GUI+Task Viewer 제공; Git 자동 백업·스냅샷 복원",
+  "cons": "네이티브 모바일 앱 없음; RBAC·팀 클라우드 동기화 부재; 2025-08 이후 커밋 둔화",
+  "sources": [
+   "https://github.com/cjo4m06/mcp-shrimp-task-manager",
+   "https://cjo4m06.github.io/mcp-shrimp-task-manager",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/package.json",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/tools/task-viewer/package.json",
+   "https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/tools/task-viewer/README.md",
+   "https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/docs/tools.md",
+   "https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/docs/api.md",
+   "https://github.com/cjo4m06/mcp-shrimp-task-manager/blob/main/docs/agents.md",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/src/index.ts",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/src/web/webServer.ts",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/src/public/style.css",
+   "https://raw.githubusercontent.com/cjo4m06/mcp-shrimp-task-manager/main/tools/task-viewer/src/index.css",
+   "https://glama.ai/mcp/servers/@cjo4m06/mcp-shrimp-task-manager",
+   "https://smithery.ai/server/@cjo4m06/mcp-shrimp-task-manager"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,3 @@
+scoped_fmt	0	rustfmt --edition 2021 --check tests/test_lane_reopen.rs
+clippy	0	cargo clippy -j2 --all-targets --all-features -- -D warnings
+reopen	101	env TMPDIR=/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/dori_guard_repair_XXXXXX.6mxvYK42Qz cargo test -j2 --test test_lane_reopen -- --nocapture

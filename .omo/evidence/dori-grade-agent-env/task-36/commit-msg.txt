@@ -1,0 +1,23 @@
+feat(lanes,inbox,sessions,cron): gateway-run work lanes with verified completion
+
+Lanes: app-server lane threads with briefs, done signals, five-minute
+objection window, jev done-diff gate, full close and reopen on owner reply,
+Discord lane threads, milestone/status posts, scrubbed text, host guard and
+heavy slots, kibitzer, coalesced lead events and operator guide.
+
+Inbox: read-only collectors (Discord, iMessage, Kakao, mail), jev triage
+(owner/bot/fyi/ignore), owner task list and morning digest, approve-to-run
+bot proposals.
+
+Sessions: cross-machine registry, read/send/interrupt/adopt, and a direct
+session-status reply in owner DMs without a model turn.
+
+Cron: event-driven health hook, remediation lanes with verified rerun,
+health report. Purpose-based model routing, jev decision layer with
+fallback, usage accounting, persona lanes block and apply-block CLI.
+
+Backend: carries the uncommitted 45 s initial-response watchdog refinement
+the running release was built from (counted from prompt start, queued-prompt
+successor tracking, pre-ack relay), with lane turns exempt.
+
+Plan: .omo/plans/dori-grade-agent-env.md

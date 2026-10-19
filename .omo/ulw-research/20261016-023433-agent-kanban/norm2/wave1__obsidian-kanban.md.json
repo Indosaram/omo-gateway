@@ -1,0 +1,134 @@
+[
+ {
+  "name": "Obsidian Kanban Plugin",
+  "url": "https://github.com/community-archive/obsidian-kanban",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "Obsidian 마크다운 목록을 드래그앤드롭 칸반 보드로 변환하는 커뮤니티 플러그인",
+  "mobile": "iOS·Android 앱(Obsidian 모바일)",
+  "pricing": "무료(OSS) / Obsidian Sync·Publish 선택 유료",
+  "selfhost": "로컬 전용",
+  "license": "GPL-3.0",
+  "agent": "마크다운 파일 직접 편집(MCP·CLI·API 없음)",
+  "status": "커뮤니티 아카이브·메인테이너 모집",
+  "pros": "순수 마크다운 단일 파일 형식; 완전 오프라인·로컬 우선; 데스크톱·모바일 동시 지원",
+  "cons": "에이전트 전용 인터페이스·잠금 없음; 에이전트와 UI 동시 쓰기 시 충돌; 2026년 메인테이너 사임",
+  "sources": [
+   "https://github.com/community-archive/obsidian-kanban",
+   "https://publish.obsidian.md/kanban/",
+   "https://obsidian.md/pricing",
+   "https://obsidian.md/mobile",
+   "https://github.com/community-archive/obsidian-kanban/releases/tag/2.0.51",
+   "https://api.github.com/repos/community-archive/obsidian-kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "kanban-md",
+  "url": "https://github.com/antopolskiy/kanban-md",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 코딩 에이전트 협업용 파일 기반 칸반 엔진 및 Go TUI",
+  "mobile": "없음(SSH로 TUI 접속만)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Go 바이너리)",
+  "license": "MIT",
+  "agent": "CLI·스킬(Claude Code·Codex·Cursor·OpenClaw), 클레임 잠금",
+  "status": "활발(v0.39.0, 2026.10)",
+  "pros": "멀티 에이전트 리스 잠금(--claim); 토큰 절약 --compact·--json 출력; 마우스 지원 TUI",
+  "cons": "모바일 앱·웹 GUI 없음; 공식 MCP 서버 없음; 기기마다 Go 바이너리 설치 필요",
+  "sources": [
+   "https://github.com/antopolskiy/kanban-md",
+   "https://github.com/antopolskiy/kanban-md/releases/tag/v0.39.0",
+   "https://api.github.com/repos/antopolskiy/kanban-md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "VS Code Agent Kanban / AgentKanban.io",
+  "url": "https://agentkanban.io",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 코딩 에이전트용 칸반·계획 워크플로·Git 워크트리 격리 VS Code 확장",
+  "mobile": "반응형 웹",
+  "pricing": "무료 / Pro $10/사용자/월",
+  "selfhost": "일부(하이브리드)",
+  "license": "ELv2(확장)·상용(클라우드)",
+  "agent": "MCP·REST API·웹훅·Copilot 채팅(Claude Code·Codex·Cursor)",
+  "status": "활발(v2.1.3, 2026.5)",
+  "pros": "공식 MCP 서버로 작업 직접 조작; Git 워크트리 자동 격리; AGENTS.md 컨텍스트 자동 주입",
+  "cons": "클라우드 협업은 유료 SaaS; ELv2로 상업 재배포 제한; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://agentkanban.io",
+   "https://agentkanban.io/pricing",
+   "https://github.com/appsoftwareltd/vscode-agent-kanban",
+   "https://marketplace.visualstudio.com/items?itemName=AppSoftwareLtd.vscode-agent-kanban",
+   "https://api.github.com/repos/appsoftwareltd/vscode-agent-kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Unified Kanban (VS Code Extension)",
+  "url": "https://github.com/divisionseven/unified-kanban",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "Obsidian Kanban 형식과 호환되는 VS Code 칸반 보드 확장",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "마크다운 파일 직접 편집(MCP·CLI·API 없음)",
+  "status": "유지 중(v0.7.3, 2026.4)",
+  "pros": "Obsidian Kanban 문법 100% 호환; 보드·표·목록 보기; 클라우드 의존성 없음",
+  "cons": "에이전트 훅·잠금 없음; 동시 편집 시 리로드 경합; MCP·CLI 미지원",
+  "sources": [
+   "https://github.com/divisionseven/unified-kanban",
+   "https://open-vsx.org/extension/divisionseven/unified-kanban",
+   "https://open-vsx.org/api/divisionseven/unified-kanban/0.7.3/file/readme.md",
+   "https://api.github.com/repos/divisionseven/unified-kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "AGINEAR",
+  "url": "https://github.com/Legorobotdude/AGINEAR",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "todo.md 기반 CLI·웹 칸반·MCP 서버를 결합한 마크다운 프로젝트 관리 도구",
+  "mobile": "반응형 웹(로컬 네트워크)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node.js/npx, 로컬)",
+  "license": "MIT",
+  "agent": "stdio MCP·CLI(Claude Code·Claude Desktop·Cursor)",
+  "status": "초기 단계(2026.2 공개)",
+  "pros": "에이전트용 MCP로 토큰 낭비 감소; CST 파서로 무손실 마크다운 보존; 실시간 동기화 웹 GUI",
+  "cons": "소규모·초기 프로젝트(1인 개발); 멀티 에이전트 잠금 없음; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://www.adityabawankule.io/projects/aginear",
+   "https://github.com/Legorobotdude/AGINEAR",
+   "https://api.github.com/repos/Legorobotdude/AGINEAR"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "vscode-kanban (mkloubert)",
+  "url": "https://github.com/mkloubert/vscode-kanban",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "Mermaid·Toggl·JS 이벤트 자동화를 지원하는 고전 VS Code 칸반 확장",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "LGPL-3.0",
+  "agent": "JSON 파일·JS 이벤트 스크립트(MCP 없음)",
+  "status": "아카이브·지원 중단(2022)",
+  "pros": "카드 이동 시 커스텀 스크립트 실행; Mermaid·Toggl 내장; 카드 마크다운 내보내기",
+  "cons": "2022년 이후 미유지; 기본 저장 형식이 JSON; AI 에이전트·MCP 미지원",
+  "sources": [
+   "https://github.com/mkloubert/vscode-kanban",
+   "https://marketplace.visualstudio.com/items?itemName=mkloubert.vscode-kanban",
+   "https://raw.githubusercontent.com/mkloubert/vscode-kanban/master/package.json"
+  ],
+  "confidence": "높음"
+ }
+]

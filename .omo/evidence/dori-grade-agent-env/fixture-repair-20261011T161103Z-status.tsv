@@ -1,0 +1,4 @@
+fmt	0	rustfmt --edition 2021 --check tests/test_lane_runner.rs
+clippy	0	cargo clippy -j2 --all-targets --all-features -- -D warnings
+runner	0	cargo test -j2 --all-features --test test_lane_runner --no-fail-fast -- --nocapture
+build	0	cargo build -j2 --bin omo-gateway

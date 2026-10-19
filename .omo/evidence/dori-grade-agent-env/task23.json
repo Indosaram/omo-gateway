@@ -1,0 +1,56 @@
+{
+  "status": "four-actual-adapter-fetches-passed-source-freeze-preserved",
+  "date": "2026-10-11",
+  "cwd": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+  "argv": ["./target-w4/debug/deps/test_inbox_sources-8cc35fd0c65ac070", "live_", "--ignored", "--nocapture", "--test-threads=1"],
+  "environment": {
+    "clearInheritedEnvironment": true,
+    "HOME": "/Users/indo",
+    "PATH": "/Users/indo/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin",
+    "TMPDIR": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/task23_live_XXXXXX.HUoSwROA8t",
+    "OMON_PIRATETALK_URL": "https://indo.taila0cef2.ts.net",
+    "OMON_QA_DISCORD_COPY_DB": "sqlite:///tmp/task23-discord-6joAvb/snapshot.db?mode=ro&immutable=1"
+  },
+  "execution": {"invocations": 1, "eachAdapterFetches": 1, "passed": 4, "failed": 0, "filteredOut": 19, "elapsedSeconds": 13.90, "exit": 0, "monitor": "mon_1WR96GYKWD71HJ6T", "terminal": "bash_6", "cargoInvoked": false},
+  "counts": {"discord": 24, "imessage": 710, "kakao": 2718, "mail": 0},
+  "operations": {
+    "mail": {"program": "zele", "argv": ["mail", "list", "--folder", "inbox", "--account", "freedomzero91@gmail.com", "--filter", "is:unread -category:promotions -category:social -category:updates", "--limit", "100"], "ordinaryRefreshAllowed": true, "refreshObservedThisRun": "unknown; subprocess stderr intentionally suppressed"},
+    "imessage": {"program": "imsg", "chatsArgv": ["chats", "--limit", "50", "--json"], "historyArgvTemplate": ["history", "--chat-id", "<selected actual chat ID omitted>", "--limit", "50", "--json"], "identifiersRetained": false},
+    "kakao": {"method": "GET", "paths": ["/api/rooms", "/api/rooms/<selected actual room ID omitted>/messages", "/api/rooms/<selected actual room ID omitted>/messages?before_id=<actual cursor omitted>"], "numericTimeContract": "Integral rangechecked Unix seconds, archive time * 1000 contract; prior authenticated schema records time:number. Current actual adapter successfully parsed 2718 items. Counts-only harness does not separately expose timestamp field choices per item."},
+    "discord": {"surface": "actual DiscordSource SQL SELECT on verified consistent historical snapshot only", "apiOrUi": false, "migrationOrOwnerWrite": false, "optionalBotId": "not configured in explicit safe environment"}
+  },
+  "hashes": {
+    "sourceManifest": "6408b90a62b071b82666e6dec339dd0508f2dc3e3c50eedc19e95cba314d53a7",
+    "sourceManifestPath": "wrapper-gate-20261011T173919Z-build-post-manifest.sha256",
+    "gatewayBinary": "884a16827325e3512ef7a4ce7441f4dd0aa1fa2e4b8954cf95feefaf42bc461e",
+    "executedTestBinary": "f6aee3386feed2e76b59a9386134f377b06b794038e77f3e430028ba3ab29835",
+    "snapshot": "8b768f856d9aefd8346ff59cd6f444b980ecaa2f489a2f36ee225341096743f6",
+    "kakaoSource": "b604647d15d32f97b0d63f88d86643252594882472f914354ce0b0c928b76250",
+    "inboxTests": "5be5cde6bc6b3cc2a90d0291905b63c56e702e79e4ed28cd3fb5bb7e35c2710c"
+  },
+  "freeze": {"preCheckExit": 0, "duringCheckExit": 0, "postCheckExit": 0, "inputs": 196, "binaryHashesUnchanged": true, "sourceOrTestEdits": false},
+  "snapshotVerification": {"source": "task23-capture-20261011T161359754Z/lineage.json", "historicalConsistentBackupExit": 0, "currentQuickCheck": "ok", "currentRequiredIndexedTableCount": 1, "immutableUsedOnlyOnOwnedSnapshot": true, "snapshotHashUnchanged": true, "walShmSidecars": 0, "retainedHistoricalSnapshot": true},
+  "cleanup": {"scratchRemoveExit": 0, "scratchAbsenceExit": 0, "scratchRemainingEntries": 0, "historicalCapturePreserved": true},
+  "lineage": {
+    "captureDirectory": "task23-capture-20261011T161359754Z",
+    "lineageSha256": "6d33e906d3eac4c954d1d0be9fc076dede42b90ae88101870d69c62ec261a577",
+    "mailLineageSha256": "ba240aaaf5125bc7a224cf7a8d8aaf745afbd2e4bdb8f003233335138908fc60",
+    "fixtures": {
+      "discord.json": "a24c33f29caca7b54381acfb24b03094b9abe8f4bf22c4e8ae475130b4d358cf",
+      "imessage-chats.json": "0b5fe088186e5ac0e9335ffac8409d77af6483b069b40c189ddacb3fc1017464",
+      "imessage-history.json": "314eddaa6fdaa8dc423f9465c48d5607ec49b182bb0b96b1bee0df05b421a65a",
+      "kakao-messages.json": "a3dd82c0089dce6a628ff1f4b111ccf135b326f697900f10c14cc0bf73588e4f",
+      "kakao-rooms.json": "014f2f102ac0c0dc5d48deddf3cbe4a22a7bb75d31cdefc42896208cfd9878e0",
+      "mail.json": "5cdbe9fb42368950639ffcccdd290245d610998e531e2830e6d4f54e79d58ebb"
+    },
+    "integration": "Evidence links preserved captures and current actual adapter execution; no frozen product fixture replacement or new synthetic authenticated values."
+  },
+  "coverageGaps": [
+    "Real mail capture and current fetch are empty; no authenticated populated thread/snippet fixture exists. Populated product mail fixture remains synthetic.",
+    "Staged real Kakao messages omitted numeric time values before raw buffers were cleared; they cannot replay timestamp parsing. Numeric-time regression data remains explicitly synthetic. Successful current fetch plus prior authenticated numeric field schema is not retained raw per-item timestamp evidence.",
+    "Real iMessage staging is normalized JSON from NDJSON; supplementary multi-item NDJSON product fixture remains synthetic, and captured fixtures are not wired into frozen tests.",
+    "Discord proves real SQL adapter against the historical consistent snapshot, not current Discord API/UI or live DB state. Producer regression remains separate synthetic behavior evidence.",
+    "Prior raw-response hashes and sanitized selected-row projections cannot replay full original responses after raw deletion."
+  ],
+  "boundaries": {"modelOrDaemonChanges": false, "environmentFileChanges": false, "gitChanges": false, "globalGatesOrFocusedReplay": false, "rawPersonalTextRetention": false, "stateChangingSourceOperations": false}
+}

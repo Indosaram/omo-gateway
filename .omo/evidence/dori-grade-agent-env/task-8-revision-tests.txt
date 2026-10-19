@@ -1,0 +1,31 @@
+status: completed exit_code: 0
+QA_TARGET=sqlite:///tmp/omon-task8-review-Fy6m13/qa.db
+QA_CHILD_PID=61131
+   Compiling omo-gateway v0.1.0 (/Users/indo/code/project/omon-gateway-wt/dori-work)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.60s                                             
+     Running tests/test_lane_cli.rs (target-w4/debug/deps/test_lane_cli-b13801cf02ea029b)
+
+running 3 tests
+test forced_close_claimed_lane_requires_explicit_force_and_note ... ok
+test invalid_done_exits_two_without_a_lane ... ok
+test hold_exits_four_and_persists_queued_small_lane ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.72s
+
+     Running tests/test_lane_runner.rs (target-w4/debug/deps/test_lane_runner-d27f9ff9fe84c861)
+
+running 12 tests
+test live_qa_runner_process ... ignored, requires a disposable app-server and explicit QA database
+test repeated_cancellation_keeps_lane_resumable ... ok
+test misleading_success_output_never_verifies_or_closes_lane ... ok
+test restart_uses_persistent_thread_and_idle_message ... ok
+test chains_until_claim_and_captures_without_discord ... ok
+test stale_lane_binding_prefers_durable_session_binding ... ok
+test three_errors_fail_with_dead_event ... ok
+test active_send_steers_and_consumes_only_after_ack ... ok
+test two_failed_checks_escalate_small_lane_only_once ... ok
+test twenty_four_turn_cap_fails_with_event ... ok
+test service_recovers_file_database_and_shutdown_releases_socket ... ok
+test dirty_worktree_is_preserved_by_claim ... ok
+
+test result: ok. 11 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.01s

@@ -1,0 +1,1 @@
+Isolated scratch QA. Do not use tools, delegation, goals, credentials, Discord, network writes or claim commands. Emit exactly [REPORT] qa-1 | question | pick A or B and end the turn. Do not continue until the lead sends an answer. On that answer emit exactly [REPORT] qa-1 | question | A received; waiting for next instruction and end the turn again. No file or claim requirement.

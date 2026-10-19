@@ -1,0 +1,5 @@
+fmt=1
+clippy=0
+build=not_run
+source_cmp=not_run
+tmpdir=/tmp/wave4c-strict.LciuiU

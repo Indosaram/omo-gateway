@@ -1,0 +1,23 @@
+{
+  "proposal": 3,
+  "effect": "vcs_remote",
+  "states": [
+    "pending",
+    "approved"
+  ],
+  "push_executed_before_decision": false,
+  "quiet_hours_deferral": true,
+  "repo_scoped": {
+    "proposal": 6,
+    "signature": "vcs_remote:git push:/tmp/qa-approval",
+    "states": [
+      "pending",
+      "approved"
+    ]
+  },
+  "fix_commits": [
+    "8e888ae",
+    "22b5e24",
+    "4e9c65c"
+  ]
+}

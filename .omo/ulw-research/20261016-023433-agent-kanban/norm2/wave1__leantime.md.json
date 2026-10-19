@@ -1,0 +1,32 @@
+[
+ {
+  "name": "Leantime",
+  "url": "https://leantime.io",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "신경다양성 팀 친화적 목표 중심 오픈소스 PM·칸반(마일스톤·간트·AI)",
+  "mobile": "반응형 웹(네이티브 앱은 TestFlight 개발 중)",
+  "pricing": "무료(OSS) / Pro $10/사용자/월(연간 $8)",
+  "selfhost": "가능(Docker, PHP/MySQL)",
+  "license": "AGPL-3.0",
+  "agent": "공식 MCP(HTTP/stdio)·JSON-RPC API·CLI; Claude Code·Cursor 등",
+  "status": "활발(v3.12.0, 2026-10)",
+  "pros": "공식 MCP 서버 지원; 셀프호스트 가볍고 사용자 수 제한 없음; JSON-RPC API·개인 토큰",
+  "cons": "셀프호스트 MCP 플러그인 유료($29~); 공개 모바일 앱 미출시; 기본 웹훅 제한적",
+  "sources": [
+   "https://leantime.io",
+   "https://leantime.io/pricing",
+   "https://github.com/Leantime/leantime",
+   "https://github.com/Leantime/leantime/releases",
+   "https://github.com/Leantime/leantime-mcp",
+   "https://docs.leantime.io",
+   "https://docs.leantime.io/installation/leantime-mcp.md",
+   "https://docs.leantime.io/api/usage.md",
+   "https://docs.leantime.io/development/commandline.md",
+   "https://docs.leantime.io/installation/frequently-asked-questions.md",
+   "https://marketplace.leantime.io/product/mcp-server/",
+   "https://github.com/Leantime/leantime/issues/3398"
+  ],
+  "confidence": "높음"
+ }
+]

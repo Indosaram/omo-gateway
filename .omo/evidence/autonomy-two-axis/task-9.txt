@@ -1,0 +1,4 @@
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select instr(system_prompt,'omon:autonomy:begin')>0 and instr(system_prompt,'omon:lanes:begin')>0 from bot_profiles where bot_id='1465631383862120451'"
+[exit 0]
+1
+

@@ -1,0 +1,139 @@
+*** Begin Patch
+*** Update File: src/cron/mod.rs
+@@
+ pub mod health;
++pub mod remediate;
++pub mod report;
+ mod scheduler;
+*** Update File: src/entry.rs
+@@
+     Usage(omon_gateway::usage::UsageArgs),
++    Cron(omon_gateway::cron::report::CronArgs),
+ }
+@@
+     let command = Cli::parse().into_command();
++    if let Command::Cron(args) = command {
++        std::process::exit(omon_gateway::cron::report::run(args).await);
++    }
+     if let Command::InboxPropose(args) = command {
+@@
+         Command::Usage(args) => std::process::exit(omon_gateway::usage::run(args).await),
++        Command::Cron(args) => std::process::exit(omon_gateway::cron::report::run(args).await),
+     }
+*** Update File: src/cron/scheduler.rs
+@@
+     pub async fn trigger_job(&self, id: &str) -> Result<bool> {
+         self.trigger(id).await
+     }
++
++    pub async fn trigger_wait(&self, id: &str) -> Result<super::remediate::RunReceipt> {
++        let claim = self.claim_job(id, false, false).await?
++            .ok_or_else(|| OmonError::Config(format!("cron job unavailable or leased: {id}")))?;
++        let run_id = claim.run_id.clone();
++        self.execute_claim(claim).await;
++        let (status, error): (String, Option<String>) = sqlx::query_as(
++            "SELECT status,error FROM cron_runs WHERE run_id=? AND job_id=?",
++        ).bind(&run_id).bind(id).fetch_one(&self.pool).await?;
++        let output: Option<String> = sqlx::query_scalar(
++            "SELECT output FROM cron_outputs WHERE run_id=? AND job_id=? ORDER BY created_at DESC LIMIT 1",
++        ).bind(&run_id).bind(id).fetch_optional(&self.pool).await?;
++        let job = self.get(id).await?
++            .ok_or_else(|| OmonError::Config(format!("cron job disappeared: {id}")))?;
++        Ok(super::remediate::RunReceipt {
++            job_id: id.into(), run_id, status, error, output,
++            last_delivery_error: job.last_delivery_error(),
++        })
++    }
+@@
+             tracing::error!(%error, job_id, run_id, "cron health hook failed after run outcome committed");
+         }
++        if let Err(error) = super::remediate::reconcile_fixed(&self.pool, job_id).await {
++            tracing::warn!(%error, job_id, "cron fixed-lane reconciliation failed");
++        }
++        if job_id == crate::inbox::digest::JOB_ID {
++            if let Err(error) = super::report::acknowledge_digest(&self.pool, run_id).await {
++                tracing::warn!(%error, "cron digest outcome acknowledgement failed");
++            }
++        }
+     }
+*** Update File: src/lanes/dispatch.rs
+@@
+         for event in take_undelivered_events(&self.pool, None).await? {
++            if event.kind == "cron_problem" && crate::cron::remediate::handle_event(&event.body, &event.lead_session_key).await? {
++                self.receipt(&[event.id], now, "cron_remediation").await?;
++                continue;
++            }
+             groups
+*** Update File: src/lanes/settle.rs
+@@
+                     Ok(signals) => {
+-                        for result in self.signals.check_all(&signals, Path::new(&lane.cwd)).await {
++                        let results = match crate::cron::remediate::settle_lane(&lane.key).await? {
++                            Some(results) => results,
++                            None => self.signals.check_all(&signals, Path::new(&lane.cwd)).await,
++                        };
++                        for result in results {
+                             if !result.ok {
+*** Update File: src/main.rs
+@@
+     let lane_shutdown = tokio_util::sync::CancellationToken::new();
+     let mut lane_tasks = spawn_lane_service(&pool, &lane_shutdown, kibitzer)?;
++    omon_gateway::cron::remediate::install(Arc::new(omon_gateway::cron::remediate::Remediator {
++        pool: pool.clone(),
++        judge: Arc::new(omon_gateway::judge::JevCli::new(None, Some(pool.clone()), None, None)),
++        runtime: Arc::new(omon_gateway::cron::remediate::GatewayRuntime {
++            pool: pool.clone(), scheduler: scheduler.clone(),
++            briefs: config.workspace_root.join(".omo/cron-fix/briefs"),
++        }),
++    }))?;
++    lane_tasks.spawn(omon_gateway::cron::report::serve_native(pool.clone(), scheduler.clone(), lane_shutdown.clone()));
+     if parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
+*** Update File: src/inbox/digest.rs
+@@
+     let usage = crate::usage::yesterday(pool, now).await?;
++    let cron = crate::cron::report::digest_section(pool, now).await?;
+     if owner.is_empty()
+@@
+         && usage.inbox_collected == 0
++        && cron.is_none()
+     {
+@@
+     message.push_str(&format!("\n\n{}", usage.digest_line()));
++    if let Some(cron) = cron {
++        message.push_str(&format!("\n\n{cron}"));
++    }
+     if !errors.is_empty() {
+*** Update File: bot_profiles/blocks/lanes.md
+@@
++## Cron health
++- On "크론 상태" or "크론 다 잘 돌아?", run `omo-gateway cron health --json` and answer in one message: collapse OK jobs to a count and list problems with lane keys and last success KST. Never send routine all-good notices or duplicate existing cron failure alerts. Related remediation outcomes belong in the single 09:00 owner-home-DM gateway digest.
+ <!-- omon:lanes:end -->
+*** Add File: migrations/0041_cron_remediation.sql
++PRAGMA defer_foreign_keys=ON;
++CREATE TABLE inbox_items_cron (
++    id TEXT PRIMARY KEY,
++    source TEXT NOT NULL CHECK(source IN ('mail','kakao','discord','imessage','cron')),
++    source_ref TEXT NOT NULL,
++    thread_ref TEXT,
++    author TEXT,
++    title TEXT,
++    snippet TEXT NOT NULL,
++    received_at DATETIME NOT NULL,
++    link TEXT,
++    raw_hash TEXT NOT NULL,
++    collected_at DATETIME NOT NULL,
++    UNIQUE(source,source_ref)
++);
++INSERT INTO inbox_items_cron SELECT * FROM inbox_items;
++DROP TABLE inbox_items;
++ALTER TABLE inbox_items_cron RENAME TO inbox_items;
++CREATE TABLE cron_remediation_outcomes (
++    id INTEGER PRIMARY KEY AUTOINCREMENT,
++    problem_id INTEGER NOT NULL REFERENCES cron_problems(id),
++    job_id TEXT NOT NULL,
++    message TEXT NOT NULL,
++    created_at DATETIME NOT NULL,
++    delivered_at DATETIME,
++    UNIQUE(problem_id,message)
++);
+*** End Patch

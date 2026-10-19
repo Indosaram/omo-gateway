@@ -1,0 +1,97 @@
+[
+  {
+    "id": "B1 shell renders (sidebar Inbox/My issues)",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B1 home redirects to team issues",
+    "pass": true,
+    "detail": "#/tracker/team/OMO/active"
+  },
+  {
+    "id": "B2 C opens create modal",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B2 issue created and listed",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B3 board layout has columns",
+    "pass": true,
+    "detail": "columns=3"
+  },
+  {
+    "id": "B3 drag Todo→In Progress persisted",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B4 F opens filter menu",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "S6/B search page shows result",
+    "pass": true,
+    "detail": "OMO-4"
+  },
+  {
+    "id": "B5 issue page renders",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B5 S opens status picker",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B5 comment posted",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B7 ⌘K opens command palette",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B7 palette navigates to Projects",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B8 inbox renders",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B agent lanes visible as AGT issues",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B9 X multi-select shows bulk bar",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B10 mobile dark no horizontal page scroll",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B10 mobile light no horizontal page scroll",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "id": "B10 mobile drawer toggle exists",
+    "pass": true,
+    "detail": ""
+  }
+]

@@ -1,0 +1,293 @@
+{
+  "status": "blocked-new-backend-failures",
+  "release_allowed": false,
+  "workspace": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+  "binary": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+    "sha256": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97",
+    "built_before_baseline_policy_arrived": true,
+    "released": false
+  },
+  "manifest": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-source-post-2.sha256",
+    "sha256": "3c5d7ff8e4cdbaaf1f3ce1e21ee0d4038aa62e5a089cad400f3b1e6fa537194e",
+    "entries": 224,
+    "pre_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-source-pre-2.sha256",
+    "pre_sha256": "3c5d7ff8e4cdbaaf1f3ce1e21ee0d4038aa62e5a089cad400f3b1e6fa537194e"
+  },
+  "fmt_exit": 0,
+  "clippy_exit": 0,
+  "build_exit": 0,
+  "source_cmp": 0,
+  "owned_tmpdir": "/tmp/wave4b-strict.WDVBJF",
+  "strict_attempts": [
+    {
+      "attempt": 1,
+      "fmt": 0,
+      "clippy": 101,
+      "build": null,
+      "source_cmp": null
+    },
+    {
+      "attempt": 2,
+      "fmt": 0,
+      "clippy": 0,
+      "build": 0,
+      "source_cmp": 0
+    }
+  ],
+  "pre_fix_gate": {
+    "source_manifest": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-source-pre-1.sha256",
+    "source_manifest_sha256": "0149e5c296c2945d44add7e6f8b583e233cd9633141416f1d5a899e556963a43",
+    "phase": "before clippy tuple fix",
+    "exit": 0,
+    "passed": 178,
+    "failed": 0,
+    "ignored": 4,
+    "per_target": {
+      "test_cron_health": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 2
+      },
+      "test_inbox_cli_digest": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_inbox_proposals": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_inbox_store": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_inbox_triage": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_close": {
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_dispatch": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_done": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_events": {
+        "passed": 25,
+        "failed": 0,
+        "ignored": 1
+      },
+      "test_lane_guard_alerts": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_kibitzer": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_reopen": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_lane_runner": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 1
+      },
+      "test_lane_status_transport": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_profile_import": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_session_registry": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_session_registry_task27": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "test_usage_done_gate": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0
+      }
+    }
+  },
+  "qa_gaps": {
+    "phase": "pre-fix",
+    "exit": 0,
+    "lib": {
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 485,
+      "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 485 filtered out; finished in 0.00s"
+    },
+    "bin": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 61,
+      "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 61 filtered out; finished in 0.05s"
+    }
+  },
+  "post_fix": {
+    "diff_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-post-focused-clippy-fix.patch",
+    "files": [
+      "src/usage.rs",
+      "src/agent/omo_backend.rs",
+      "tests/test_usage_done_gate.rs"
+    ],
+    "change": "Bundle thread_id and turn_id into one tuple argument; destructure immediately; update all callers without changing behavior or assertions.",
+    "rerun_targets": {
+      "test_usage_done_gate": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "exit": 0
+      },
+      "test_lane_events": {
+        "passed": 25,
+        "failed": 0,
+        "ignored": 1
+      },
+      "test_omo_backend": {
+        "passed": 43,
+        "failed": 5,
+        "ignored": 1
+      }
+    },
+    "backend_batch_exit": 101
+  },
+  "backend_baseline": {
+    "policy_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/durability-fixtures-20261011T180128Z-baseline-policy.md",
+    "canonical_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T135508Z-handoff.md",
+    "original_task2_failing_file": "not found in either inspected workspace",
+    "canonical_failure_names": [
+      "test_omo_backend_accepts_received_completion_at_deadline_edge",
+      "test_omo_backend_emits_hermes_activity_lines",
+      "test_omo_backend_omits_workspace_when_per_agent_disabled",
+      "test_omo_backend_provisions_agent_workspace_and_passes_to_thread_start",
+      "test_omo_backend_waits_for_final_message_after_tool_activity",
+      "test_omo_backend_requires_turn_terminal_even_after_final_agent_message",
+      "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+      "test_omo_backend_deadline_interrupts_looping_turn",
+      "test_omo_backend_e2e_thread_lifecycle_and_streaming",
+      "test_omo_backend_retries_once_after_connection_drop"
+    ],
+    "failure_comparison": [
+      {
+        "name": "discord_silent_turn_interrupted_after_45s",
+        "baseline": false,
+        "classification": "new-failure"
+      },
+      {
+        "name": "lane_silent_turn_not_interrupted_after_50s",
+        "baseline": false,
+        "classification": "new-failure"
+      },
+      {
+        "name": "test_omo_backend_e2e_thread_lifecycle_and_streaming",
+        "baseline": true,
+        "classification": "known-baseline-failure"
+      },
+      {
+        "name": "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+        "baseline": true,
+        "classification": "known-baseline-failure"
+      },
+      {
+        "name": "test_omo_backend_deadline_interrupts_looping_turn",
+        "baseline": true,
+        "classification": "known-baseline-failure"
+      }
+    ],
+    "name_by_name": [
+      {
+        "name": "test_omo_backend_accepts_received_completion_at_deadline_edge",
+        "current_status": "passed"
+      },
+      {
+        "name": "test_omo_backend_emits_hermes_activity_lines",
+        "current_status": "passed"
+      },
+      {
+        "name": "test_omo_backend_omits_workspace_when_per_agent_disabled",
+        "current_status": "passed"
+      },
+      {
+        "name": "test_omo_backend_provisions_agent_workspace_and_passes_to_thread_start",
+        "current_status": "passed"
+      },
+      {
+        "name": "test_omo_backend_waits_for_final_message_after_tool_activity",
+        "current_status": "passed"
+      },
+      {
+        "name": "test_omo_backend_requires_turn_terminal_even_after_final_agent_message",
+        "current_status": "passed"
+      },
+      {
+        "name": "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+        "current_status": "failed-baseline"
+      },
+      {
+        "name": "test_omo_backend_deadline_interrupts_looping_turn",
+        "current_status": "failed-baseline"
+      },
+      {
+        "name": "test_omo_backend_e2e_thread_lifecycle_and_streaming",
+        "current_status": "failed-baseline"
+      },
+      {
+        "name": "test_omo_backend_retries_once_after_connection_drop",
+        "current_status": "passed"
+      }
+    ],
+    "new_failure_count": 2,
+    "unfinished_baseline": [],
+    "known_previously_unfinished": {
+      "test_omo_backend_e2e_thread_lifecycle_and_streaming": "failed-baseline in current completed run",
+      "test_omo_backend_retries_once_after_connection_drop": "passed in current completed run"
+    }
+  },
+  "verification_limits": [
+    "No services, live Discord, model calls, env-file edits or git commands.",
+    "LSP diagnostics timed out; cargo compilation and strict clippy are recorded.",
+    "No additional build or release performed after new failure names were found."
+  ],
+  "logs": [
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-check.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-focused.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-qa-gaps.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-usage-recheck.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-backend-recheck.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-fmt-2.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-clippy-2.log",
+    "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4b-build-2.log"
+  ]
+}

@@ -1,0 +1,222 @@
+{
+  "status": "released",
+  "release_allowed": true,
+  "release_id": "wave4c",
+  "worktree": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+  "scope": "QA2 loopback lane-start and queued-lane transport, kibitzer cross-process DB arming and startup logs, inbox empty Kakao row drop and local approval-to-lane",
+  "gate_policy": "Backend is accepted by exact failure-name baseline comparison; zero new failures required, not whole-backend green.",
+  "reasons": [],
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binary_sha256": "d162a234313e3329d40724eb083458b1ae18fb7795ef37e5c16184eaafbe278f",
+  "manifest_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4c-source-post-2.sha256",
+  "manifest_sha256": "8f08a9546538d4ff7af0b8d4641eecbcd8153dbb0d25b8b5bb10807298c67028",
+  "manifest_entries": 224,
+  "check_exit": 0,
+  "focused_exit": 0,
+  "qa_gaps_exit": 0,
+  "focused": {
+    "targets": {
+      "test_cron_health": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 2,
+        "filtered_out": 0
+      },
+      "test_inbox_cli_digest": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_inbox_proposals": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_inbox_store": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_inbox_triage": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_close": {
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_dispatch": {
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_done": {
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_events": {
+        "passed": 25,
+        "failed": 0,
+        "ignored": 1,
+        "filtered_out": 0
+      },
+      "test_lane_guard_alerts": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_kibitzer": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_reopen": {
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_runner": {
+        "passed": 12,
+        "failed": 0,
+        "ignored": 1,
+        "filtered_out": 0
+      },
+      "test_lane_status_transport": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_lane_thread_transport": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_profile_import": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_session_registry": {
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_session_registry_task27": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      },
+      "test_usage_done_gate": {
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "filtered_out": 0
+      }
+    },
+    "totals": {
+      "passed": 183,
+      "failed": 0,
+      "ignored": 4
+    },
+    "reruns": 0,
+    "subprocess_helper_counts_excluded": true
+  },
+  "qa_gaps": {
+    "lib": {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 485
+    },
+    "bin": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 61
+    }
+  },
+  "backend": {
+    "runs": 1,
+    "exit": 101,
+    "passed": 45,
+    "failed": 3,
+    "ignored": 1,
+    "canonical_failure_names": [
+      "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+      "test_omo_backend_deadline_interrupts_looping_turn",
+      "test_omo_backend_e2e_thread_lifecycle_and_streaming"
+    ],
+    "observed_failure_names": [
+      "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+      "test_omo_backend_deadline_interrupts_looping_turn",
+      "test_omo_backend_e2e_thread_lifecycle_and_streaming"
+    ],
+    "new_failure_names": [],
+    "new_failure_count": 0,
+    "missing_baseline_failure_names": [],
+    "baseline_source": "/Users/indo/code/project/omon-gateway-wt/dori-grade-agent-env/.omo/evidence/dori-grade-agent-env/task-2-failing.txt",
+    "comparison": "Exact three names supplied by user, each present in canonical file; older canonical file also includes seven backend names that now pass."
+  },
+  "strict": {
+    "attempts": [
+      {
+        "attempt": 1,
+        "fmt_exit": 1,
+        "clippy_exit": 0,
+        "build_exit": null,
+        "source_cmp": null,
+        "tmpdir": "/tmp/wave4c-strict.LciuiU"
+      },
+      {
+        "attempt": 2,
+        "fmt_exit": 0,
+        "clippy_exit": 0,
+        "build_exit": 0,
+        "source_cmp": 0,
+        "tmpdir": "/tmp/wave4c-strict.IgT6E9"
+      }
+    ],
+    "fmt_exit": 0,
+    "clippy_exit": 0,
+    "build_exit": 0,
+    "source_cmp": 0,
+    "tmpdir_kept_through_build": true,
+    "correction": "Only rustfmt line wrapping in src/lanes/guard.rs:632-636. Another workspace owner applied it before the gate-owner patch; attempted patch failed without changing files. Pre-attempt manifests differ only for guard.rs."
+  },
+  "source_changes_by_gate_owner": [],
+  "constraints": {
+    "cargo_target": "target-w4",
+    "rustc_wrapper": "",
+    "jobs": 4,
+    "offline": true,
+    "monitor_timeout_ms": 1800000,
+    "services_started": false,
+    "live_discord": false,
+    "models_called": false,
+    "env_files_modified": false,
+    "git_commands": false
+  },
+  "limits": [
+    "No live QA rerun; retained QA2 failures are not relabeled PASS.",
+    "Installed app-server token usage emission remains unavailable per qa2-fix-usage-source-settled.md; synthetic usage contract tests do not prove real usage emission.",
+    "Bash LSP unavailable; strict script passed bash -n."
+  ]
+}

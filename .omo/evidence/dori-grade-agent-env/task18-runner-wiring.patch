@@ -1,0 +1,26 @@
+diff --git a/src/lanes/runner.rs b/src/lanes/runner.rs
+--- a/src/lanes/runner.rs
++++ b/src/lanes/runner.rs
+@@ -362,5 +362,6 @@
+         let socket = WakeSocket::bind(&self.pool).await?;
+         posts::recover(&self.pool).await?;
+         if let Some(sink) = &self.post_sink {
+-            posts::drain(&self.pool, sink.as_ref()).await?;
++            posts::drain_with_status(&self.pool, sink.as_ref(), Utc::now()).await?;
++            posts::refresh_statuses(&self.pool, sink.as_ref(), Utc::now()).await?;
+         }
+@@ -379,4 +380,7 @@
+             if shutdown.is_cancelled() {
+                 break;
+             }
++            if let Some(sink) = &self.post_sink {
++                posts::refresh_statuses(&self.pool, sink.as_ref(), Utc::now()).await?;
++            }
+             for lane in list_lanes(&self.pool, &["working", "not_done"]).await? {
+@@ -410,5 +414,5 @@
+                 }
+                 _ = self.posts_ready.notified() => {
+-                    if let Some(sink) = &self.post_sink { posts::drain(&self.pool, sink.as_ref()).await?; }
++                    if let Some(sink) = &self.post_sink { posts::drain_with_status(&self.pool, sink.as_ref(), Utc::now()).await?; }
+                 }
+                 result = socket.socket.recv(&mut bytes) => {

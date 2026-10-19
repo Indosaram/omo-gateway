@@ -1,0 +1,10 @@
+
+===== fmt: cargo fmt --check =====
+exit_status=1
+raw_log=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T121136Z-fmt.log
+
+===== clippy: cargo clippy -j 2 --all-targets --all-features -- -D warnings =====
+exit_status=101
+raw_log=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T121136Z-clippy.log
+
+===== full: cargo test -j 2 --all-targets --all-features --no-fail-fast =====

@@ -1,0 +1,28 @@
+
+===== fmt: cargo fmt --check =====
+exit_status=1
+raw_log=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-fmt.log
+
+===== clippy: cargo clippy -j 2 --all-targets --all-features -- -D warnings =====
+exit_status=101
+raw_log=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-clippy.log
+
+===== full: cargo test -j 2 --all-targets --all-features --no-fail-fast =====
+exit_status=101
+raw_log=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-full.log
+
+===== dashboard: cargo test -j 2 --test test_review_dashboard =====
+exit_status=101
+raw_log=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-dashboard.log
+
+===== FINAL SUMMARY =====
+manifest_result=IDENTICAL
+pre_manifest=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-pre-manifest.sha256
+post_manifest=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-post-manifest.sha256
+status_ledger=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-status.tsv
+provenance=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-provenance.txt
+worktree_status=/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/batch-20261011T102415Z-worktree.txt
+fmt_exit=1 command=cargo fmt --check
+clippy_exit=101 command=cargo clippy -j 2 --all-targets --all-features -- -D warnings
+full_exit=101 command=cargo test -j 2 --all-targets --all-features --no-fail-fast
+dashboard_exit=101 command=cargo test -j 2 --test test_review_dashboard

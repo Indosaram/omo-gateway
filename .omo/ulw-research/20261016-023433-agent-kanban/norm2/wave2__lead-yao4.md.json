@@ -1,0 +1,62 @@
+[
+ {
+  "name": "CodeNomad (NeuralNomadsAI/CodeNomad)",
+  "url": "https://github.com/NeuralNomadsAI/CodeNomad",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "OpenCode V2용 데스크톱·브라우저 작업공간(탭·중첩 세션·타임라인·worktree)",
+  "mobile": "없음(브라우저 접근 가능, 앱 없음)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(원격 서버 지원)",
+  "license": "MIT",
+  "agent": "OpenCode 공유 백그라운드 서비스 연결(터미널과 세션 공유)",
+  "status": "스타 2,626, 최근 push 2026-10-16",
+  "pros": "OpenCode에 최적화; 데스크톱·브라우저 모두 사용; MIT",
+  "cons": "OpenCode 전용; 칸반 뷰 없음; 모바일 앱 없음",
+  "sources": [
+   "https://github.com/NeuralNomadsAI/CodeNomad",
+   "https://yetanotherorchestrator.app/apps/codenomad/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Codex Monitor",
+  "url": "https://www.codexmonitor.app/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "여러 프로젝트의 Codex 에이전트를 스레드·리뷰·worktree로 관리하는 데스크톱 커맨드 센터",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(데스크톱 앱)",
+  "license": "미확인(오픈소스 표기)",
+  "agent": "OpenAI Codex 전용(스레드 시작·재개, 리뷰)",
+  "status": "활발(Changelog 운영)",
+  "pros": "Codex 다중 워크스페이스 대시보드; macOS·Windows·Linux 지원; 무료",
+  "cons": "Codex 전용; 모바일 없음; 라이선스 미확인",
+  "sources": [
+   "https://www.codexmonitor.app/",
+   "https://yetanotherorchestrator.app/apps/codexmonitor/"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "Constellagent",
+  "url": "https://constellagent.vercel.app/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code 작업공간 수십 개를 병렬 실행하는 컨트롤룸(터미널·파일·브랜치·PR)",
+  "mobile": "없음(macOS 데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(macOS 앱)",
+  "license": "미확인(오픈소스 표기)",
+  "agent": "Claude Code 병렬 세션, GitHub PR 상태 연동",
+  "status": "미확인",
+  "pros": "다수 Claude Code 병렬 실행; PR 상태 사이드바; 무료 OSS",
+  "cons": "macOS 전용; Claude Code 전용; 모바일 없음",
+  "sources": [
+   "https://constellagent.vercel.app/",
+   "https://yetanotherorchestrator.app/apps/constellagent/"
+  ],
+  "confidence": "중간"
+ }
+]

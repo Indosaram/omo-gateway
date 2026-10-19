@@ -1,0 +1,32 @@
+[
+ {
+  "name": "Nextcloud Deck",
+  "url": "https://apps.nextcloud.com/apps/deck",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Nextcloud 통합 오픈소스 온프레미스 칸반 작업·프로젝트 관리 앱",
+  "mobile": "iOS·Android 앱(커뮤니티/서드파티), 반응형 웹",
+  "pricing": "무료(OSS) / 엔터프라이즈 지원 €71.29~/사용자/년",
+  "selfhost": "가능(Docker, K8s, AIO)",
+  "license": "AGPL-3.0",
+  "agent": "REST/OCS API, 커뮤니티 MCP, CLI(ncdeck); Claude Code·Cursor·Codex",
+  "status": "활발(v1.19.0, 2026-10)",
+  "pros": "완전한 데이터 주권·자체 호스팅; 성숙한 REST API와 MCP·CLI 도구; Nextcloud 생태계 깊은 통합",
+  "cons": "대규모 인스턴스 DB 성능 병목; 코어에 실시간 WebSocket 없음; Nextcloud 서버 운영 필요",
+  "sources": [
+   "https://apps.nextcloud.com/apps/deck",
+   "https://github.com/nextcloud/deck",
+   "https://github.com/nextcloud-releases/deck/releases",
+   "https://deck.readthedocs.io/en/latest/API/",
+   "https://nextcloud.com/pricing/",
+   "https://github.com/cbcoutinho/nextcloud-mcp-server",
+   "https://github.com/cbcoutinho/nextcloud-mcp-server/blob/master/docs/deck.md",
+   "https://github.com/fastbs/mcp-nextcloud-deck",
+   "https://github.com/raspbeguy/ncdeck",
+   "https://github.com/stefan-niedermann/nextcloud-deck",
+   "https://github.com/holger-dev/nextdeck",
+   "https://github.com/hweihwang/nextcloud-deck-desktop-releases"
+  ],
+  "confidence": "높음"
+ }
+]

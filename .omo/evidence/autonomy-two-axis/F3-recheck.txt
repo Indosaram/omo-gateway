@@ -1,0 +1,8 @@
+aa49764 deployed (gateway 83332, appserver 83821, TeamIdentifier 5DUM8WPB4C)
+DM push10 at 01:1x KST -> action_proposals #9 vcs_remote signature 'vcs_remote:git push:/tmp/qa-approval', declined for quiet hours, state expired (M1), lane_events re-ask at 08:00; remote branch lane/qa-approval10 absent (push not run).
+--- engine env (PI_SESSION_ID set) ---
+error: only an owner-origin session or local CLI may decide proposals
+exit=0
+--- classify ---
+{"effect":"delete","program":"rm","target":"~/x","signature":"delete:rm:~/x|rm -rf ~/x","summary":"ls && rm -rf ~/x"}
+{"effect":"unknown","program":"git -c","target":"","signature":"unknown:git -c:","summary":"git -c core.pager=sh status"}

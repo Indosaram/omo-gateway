@@ -1,0 +1,28 @@
+[
+ {
+  "name": "GitLab Issue Boards (CE Self-Host & SaaS)",
+  "url": "https://about.gitlab.com/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "저장소·MR·CI/CD와 통합된 GitLab 이슈 칸반/스크럼 보드",
+  "mobile": "반응형 웹(공식 네이티브 앱 없음)",
+  "pricing": "무료(CE) / Premium $29/사용자/월 / Ultimate $99+",
+  "selfhost": "가능(Omnibus·Docker·Helm, CE 무료)",
+  "license": "MIT(CE, 오픈코어)",
+  "agent": "REST·GraphQL API, glab CLI, 웹훅, MCP(Claude Code 등)",
+  "status": "활발(18.x 릴리스, 2026.10)",
+  "pros": "코드·MR·CI/CD와 긴밀한 통합; REST·GraphQL·CLI·MCP로 에이전트 자동화 용이; MIT CE로 셀프호스팅 시 데이터 주권 확보",
+  "cons": "WIP 제한·스윔레인 등 고급 기능은 유료; 셀프호스팅 시 RAM 4~8GB 필요·운영 부담 큼; 공식 모바일 앱 없음",
+  "sources": [
+   "https://docs.gitlab.com/ee/user/project/issue_board.html",
+   "https://about.gitlab.com/pricing/",
+   "https://docs.gitlab.com/ee/api/boards.html",
+   "https://docs.gitlab.com/ee/user/project/issues/managing_issues.html",
+   "https://raw.githubusercontent.com/modelcontextprotocol/servers-archived/main/src/gitlab/README.md",
+   "https://raw.githubusercontent.com/gitlabhq/gitlabhq/master/README.md",
+   "https://raw.githubusercontent.com/gitlabhq/gitlabhq/master/LICENSE",
+   "https://raw.githubusercontent.com/profclems/glab/trunk/README.md"
+  ],
+  "confidence": "높음"
+ }
+]

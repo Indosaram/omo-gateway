@@ -1,0 +1,13 @@
+const root = '/tmp/omon-task8-review-Fy6m13';
+const worktree = '/Users/indo/code/project/omon-gateway-wt/dori-work';
+const mode = process.argv[2];
+const env = {...process.env, DATABASE_URL: `sqlite://${root}/qa.db`, OMON_DISCORD_ENABLED: 'false', OMON_LANES_ENABLED: 'true', OMON_OMO_APPSERVER_URL: 'ws://127.0.0.1:29749', OMON_LANE_TURN_SECS: '180', OMON_LANE_KEYWORDS: '', DASHBOARD_ENABLED: 'false', CARGO_TARGET_DIR: `${worktree}/target-w4`, CARGO_BUILD_JOBS: '2'};
+for (const name of ['DASHBOARD_PORT','DISCORD_BOT_TOKEN','DISCORD_BOT_TOKENS','OMON_MODEL_SMALL']) delete env[name];
+if (env.DATABASE_URL !== `sqlite://${root}/qa.db` || !root.startsWith('/tmp/omon-task8-review-')) throw Error('QA database isolation failed');
+console.error(`QA_TARGET=${env.DATABASE_URL}`);
+const args = mode === 'engine' ? ['omo','app-server','--listen','ws://127.0.0.1:29749','--ws-auth','off'] : mode === 'tests' ? ['cargo','test','--test','test_lane_runner','--test','test_lane_cli'] : mode === 'clippy' ? ['cargo','clippy','--all-targets','--all-features','--','-D','warnings'] : [`${worktree}/target-w4/debug/omo-gateway`, ...(mode === 'gateway' ? ['run'] : process.argv.slice(3))];
+const child = Bun.spawn(args,{cwd: ['tests','clippy'].includes(mode) ? worktree : root,env,stdout:'inherit',stderr:'inherit'});
+console.error(`QA_CHILD_PID=${child.pid}`);
+process.on('SIGTERM',()=>child.kill('SIGTERM'));
+process.on('SIGINT',()=>child.kill('SIGINT'));
+process.exit(await child.exited);

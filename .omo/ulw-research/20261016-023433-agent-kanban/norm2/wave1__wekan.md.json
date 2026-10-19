@@ -1,0 +1,29 @@
+[
+ {
+  "name": "WeKan",
+  "url": "https://wekan.fi",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Trello/Jira 대안인 오픈소스 셀프호스팅 칸반·프로젝트 관리 플랫폼",
+  "mobile": "PWA·반응형 웹, Android TWA 래퍼(iOS 앱 없음)",
+  "pricing": "무료(OSS) / 호스팅 SaaS 무료 또는 50 EUR/년",
+  "selfhost": "가능(Docker·K8s·Snap 등)",
+  "license": "MIT",
+  "agent": "REST API·웹훅·Python CLI·Bots, 커뮤니티 n8n MCP",
+  "status": "매우 활발(~19k★, v12.48)",
+  "pros": "MIT 완전 오픈소스, 유료 기능 없음; 다양한 셀프호스팅 패키징; Trello/Jira/GitHub API 호환 모드",
+  "cons": "모바일은 웹뷰/PWA만(오프라인 동기화 없음); Meteor 기반으로 메모리 사용량 큼; 공식 MCP 패키지 없음",
+  "sources": [
+   "https://wekan.fi",
+   "https://github.com/wekan/wekan",
+   "https://wekan.fi/app",
+   "https://wekan.fi/saas/",
+   "https://wekan.fi/commercial-support/",
+   "https://github.com/wekan/wekan/blob/main/docs/API/REST-API.md",
+   "https://github.com/wekan/wekan/blob/main/docs/API/Cards.md",
+   "https://raw.githubusercontent.com/wekan/wekan/main/CHANGELOG.md",
+   "https://raw.githubusercontent.com/wekan/wekan/main/package.json"
+  ],
+  "confidence": "높음"
+ }
+]

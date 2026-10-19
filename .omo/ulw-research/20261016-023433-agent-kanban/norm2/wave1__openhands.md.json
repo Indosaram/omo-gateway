@@ -1,0 +1,35 @@
+[
+ {
+  "name": "OpenHands Agent Canvas (All-Hands-AI)",
+  "url": "https://www.openhands.dev",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "자율 코딩 에이전트용 웹 워크스페이스·대화/상태 대시보드 및 자동화 관리",
+  "mobile": "반응형 웹(Tailscale/ngrok 경유, 네이티브 앱 없음)",
+  "pricing": "무료(OSS, BYOK) / 클라우드 개인 무료 / 엔터프라이즈 맞춤",
+  "selfhost": "가능(npm·Docker·VM·Helm·Modal)",
+  "license": "MIT",
+  "agent": "REST API·WebSocket·ACP(Claude Code·Codex·Gemini 등)·CLI·MCP",
+  "status": "활발(v1.27.1, 2026-10)",
+  "pros": "ACP로 다양한 외부 CLI 에이전트 오케스트레이션; 로컬·Docker·VM·클라우드 백엔드 전환; cron·웹훅 자동화 내장",
+  "cons": "네이티브 모바일 앱 없음(터널링 필요); 다중 저장소·Node 24+ 등 복잡한 구성; 전통적 칸반 보드 아님",
+  "sources": [
+   "https://github.com/OpenHands/OpenHands",
+   "https://github.com/OpenHands/OpenHands/releases",
+   "https://raw.githubusercontent.com/OpenHands/OpenHands/main/LICENSE",
+   "https://www.openhands.dev/pricing",
+   "https://docs.openhands.dev/llms.txt",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/overview.md",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/acp-agents",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/prebuilt-automations",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/mobile-access.md",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/backends",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/backend-setup/docker",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/backend-setup/vm",
+   "https://docs.openhands.dev/openhands/usage/cloud/cloud-api",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/conversations",
+   "https://docs.openhands.dev/openhands/usage/agent-canvas/managing-automations"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,56 @@
+*** Begin Patch
+*** Update File: src/entry.rs
+@@
+-    Sessions(SessionsArgs),
++    Sessions(omon_gateway::sessions::cli::SessionsArgs),
+@@
+-        std::process::exit(run_sessions(args).await);
++        std::process::exit(omon_gateway::sessions::cli::run(args).await);
+@@
+-        Command::Sessions(args) => std::process::exit(run_sessions(args).await),
++        Command::Sessions(args) => std::process::exit(omon_gateway::sessions::cli::run(args).await),
+*** Update File: src/lanes/runner.rs
+@@
+             for lane in list_lanes(&self.pool, &["working", "not_done"]).await? {
++                let released: bool = sqlx::query_scalar("SELECT kind='external' AND external_target IS NULL FROM lanes WHERE key=?")
++                    .bind(&lane.key).fetch_one(&self.pool).await?;
++                if released { continue; }
+                 let closing: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_close_intents WHERE lane_key=? AND state IN ('pending','running'))").bind(&lane.key).fetch_one(&self.pool).await?;
+@@
+     ) -> Result<()> {
+         let initial = self.lane(key).await?;
++        if crate::sessions::external::ExternalDriver::<crate::sessions::registry::ProcessCommandRunner>::is_external(&self.pool, key).await? {
++            return crate::sessions::external::ExternalDriver::from_environment(self.pool.clone())?
++                .drive(key, notify, shutdown).await;
++        }
+         let mut session = SessionContext::new(lane_key(key));
+*** Update File: src/lanes/settle.rs
+@@
+-                match parse_signals(&lane.done_signals) {
++                if let Some(remote_reasons) = crate::sessions::external::remote_checks(&self.pool, &lane).await? {
++                    reasons.extend(remote_reasons);
++                } else {
++                match parse_signals(&lane.done_signals) {
+@@
+                     diff_detail = Some(detail);
+                 }
++                }
+             }
+*** Add File: migrations/0040_external_sessions.sql
++ALTER TABLE lanes ADD COLUMN kind TEXT NOT NULL DEFAULT 'managed' CHECK(kind IN ('managed','external'));
++ALTER TABLE lanes ADD COLUMN external_target TEXT;
++CREATE UNIQUE INDEX idx_lanes_external_target ON lanes(external_target) WHERE external_target IS NOT NULL;
++CREATE TABLE external_sessions (
++    lane_key TEXT PRIMARY KEY REFERENCES lanes(key),
++    goal TEXT NOT NULL,
++    send_key TEXT NOT NULL,
++    sent_at DATETIME,
++    cursor TEXT,
++    released_at DATETIME
++);
++CREATE TABLE external_session_items (
++    lane_key TEXT NOT NULL REFERENCES lanes(key),
++    item_id TEXT NOT NULL,
++    PRIMARY KEY(lane_key, item_id)
++);
+*** End Patch

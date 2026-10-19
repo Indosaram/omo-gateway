@@ -1,0 +1,137 @@
+{
+  "schema": "omon-lane-qa-scope-receipts-v1",
+  "preparedSha256": "b970264d8ddb528c5fe01712971e800eabb7afc7175da39a59ea85cce2ac032c",
+  "receipts": [
+    {
+      "kind": "connection_attempt",
+      "stage": "websocket_construct",
+      "endpoint": "ws://127.0.0.1:19742",
+      "authPresent": true
+    },
+    {
+      "kind": "websocket_open",
+      "stage": "websocket_open"
+    },
+    {
+      "kind": "rpc",
+      "id": 1,
+      "method": "initialize"
+    },
+    {
+      "kind": "rpc",
+      "id": 2,
+      "method": "thread/start"
+    },
+    {
+      "kind": "thread_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-GUgT9Z/qa-repo",
+      "runtimeWorkspaceRoots": [
+        "/private/tmp/omon-lane-scratch-qa-GUgT9Z/qa-repo"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "id": 3,
+      "method": "turn/start"
+    },
+    {
+      "kind": "turn_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "a6d08826-ca1c-4f65-b6f6-3f3649fad591",
+      "type": "userMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "chatcmpl-resp_02483a416c9137c6016acbaea2fd3881918057cb32c9ffd435:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "call_eb9c85bc35584779bd263744ed19354d",
+      "type": "dynamicToolCall",
+      "tool": "todo"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "call_eb9c85bc35584779bd263744ed19354d",
+      "tool": "todo",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "chatcmpl-resp_08ada626490cbd56016acbaea7a9bc8191b6f6534a68508d87:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "call_273fb33309914a8f8a597935fbb30637",
+      "type": "dynamicToolCall",
+      "tool": "tool_search"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "call_273fb33309914a8f8a597935fbb30637",
+      "tool": "tool_search",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "call_By9BtaEbWoAsAwEjPC2L05ea",
+      "type": "dynamicToolCall",
+      "tool": "todo"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "call_By9BtaEbWoAsAwEjPC2L05ea",
+      "tool": "todo",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "itemId": "chatcmpl-resp_0b5ca58f7a0687f0016acbaeb176588191999bc1f1b02ae857:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "failure",
+      "stage": "turn_observations",
+      "error": {
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "message": "No observed machine tool result"
+      }
+    },
+    {
+      "kind": "result",
+      "stage": "turn_observations",
+      "status": "failed",
+      "threadId": "01a12ba2-2314-735e-871b-4de73cf88480",
+      "turnId": "32a4f07a-47f3-431a-aedb-afb77284655f",
+      "sharedDaemonUntouched": true
+    }
+  ]
+}

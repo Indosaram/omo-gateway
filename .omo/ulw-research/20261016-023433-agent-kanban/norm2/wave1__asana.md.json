@@ -1,0 +1,71 @@
+[
+ {
+  "name": "Asana",
+  "url": "https://asana.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "칸반·리스트·타임라인·간트 뷰를 갖춘 엔터프라이즈 협업 업무관리 플랫폼",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(최대 2인) / Starter $10.99~, Advanced $24.99/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "REST API·웹훅, 커뮤니티 MCP(Claude Code·Cursor 등), 내장 AI",
+  "status": "활발(상장사 SaaS)",
+  "pros": "성숙한 엔터프라이즈 칸반; 내장 AI Studio·AI Teammates; 충실한 REST API·웹훅",
+  "cons": "셀프호스팅 불가; 사용자당 요금 부담; 공식 MCP 서버 없음",
+  "sources": [
+   "https://asana.com",
+   "https://asana.com/pricing",
+   "https://asana.com/product/ai/ai-studio",
+   "https://asana.com/product/ai/ai-teammates",
+   "https://developers.asana.com/docs/overview",
+   "https://apps.apple.com/us/app/asana-work-in-one-place/id489969512",
+   "https://play.google.com/store/apps/details?id=com.asana.app",
+   "https://help.asana.com/s/article/ai-studio-smart-workflows?language=en_US"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Asana AI Studio & AI Teammates",
+  "url": "https://asana.com/product/ai/ai-studio",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Asana 보드에 통합된 노코드 에이전트 자동화 빌더 및 자율 AI 에이전트",
+  "mobile": "iOS·Android 앱(Asana 앱 경유)",
+  "pricing": "Asana 유료 플랜 필요 + 추가 요청당 $0.50~$0.60",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "앱 내장 에이전트(OpenAI·Anthropic), REST API·웹훅 연동",
+  "status": "활발(2024 말 출시)",
+  "pros": "노코드 설정 간편; 보드·필드·담당자와 깊은 통합; 엔터프라이즈 보안",
+  "cons": "폐쇄형 생태계; 요청당 변동 비용 높음; 코드/CLI 실행 에이전트 대비 유연성 부족",
+  "sources": [
+   "https://asana.com/product/ai/ai-studio",
+   "https://asana.com/product/ai/ai-teammates",
+   "https://asana.com/pricing",
+   "https://help.asana.com/s/article/ai-studio",
+   "https://investors.asana.com/news-releases/news-release-details/asana-announces-ai-studio-no-code-builder-designing-and"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "mcp-server-asana (Community MCP Server by roychri)",
+  "url": "https://github.com/roychri/mcp-server-asana",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "AI 에이전트가 Asana 작업·프로젝트를 MCP로 조회·생성·수정하는 오픈소스 서버",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "MCP(stdio), Claude Code·Cursor·Codex·Claude Desktop",
+  "status": "활발(★149, 2026-10 커밋)",
+  "pros": "MCP 표준 준수로 손쉬운 연동; 섹션 이동으로 칸반 상태 변경; 읽기 전용 모드 지원",
+  "cons": "커뮤니티 유지(공식 지원 없음); PAT 수동 관리 필요; 고급 엔터프라이즈 기능 미지원",
+  "sources": [
+   "https://github.com/roychri/mcp-server-asana",
+   "https://www.npmjs.com/package/@roychri/mcp-server-asana"
+  ],
+  "confidence": "높음"
+ }
+]

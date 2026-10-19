@@ -1,0 +1,37 @@
+$ cd /tmp/qa-lanes && /Users/indo/.omon/bin/omo-gateway lane start qa-pause --title "qa-pause" --brief /tmp/qa-brief-pause.md --done "file done.txt" --model small --lead '5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B' 2>&1
+[exit 0]
+{"lane":{"brief_path":"/private/tmp/qa-brief-pause.md","claim_at":null,"claim_evidence":null,"created_at":"2026-10-18T15:00:24.867084Z","cwd":"/private/tmp/qa-lanes-lanes/qa-pause","done_signals":"file done.txt","key":"qa-pause","last_activity_at":"2026-10-18T15:00:24.867084Z","last_report":null,"last_turn_outcome":null,"lead_session_key":"5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B","model":"inferhub/cb/deepseek-v4.1-flash","objection":null,"omo_thread_id":null,"parent_channel_id":null,"session_key":"4:lane|-|8:qa-pause|-|13:lane:qa-pause","stale_posted_at":null,"status":"working","status_message_id":null,"thread_channel_id":null,"title":"qa-pause","turns_run":0,"updated_at":"2026-10-18T15:00:24.867084Z"},"reasons":[]}
+
+
+$ cd /tmp/qa-lanes && /Users/indo/.omon/bin/omo-gateway lane start qa-wt-a --title "qa-wt-a" --brief /tmp/qa-brief-wt.md --done "file NOTE.md" --model small --lead '5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B' 2>&1
+[exit 0]
+{"lane":{"brief_path":"/private/tmp/qa-brief-wt.md","claim_at":null,"claim_evidence":null,"created_at":"2026-10-18T15:00:24.985165Z","cwd":"/private/tmp/qa-lanes-lanes/qa-wt-a","done_signals":"file NOTE.md","key":"qa-wt-a","last_activity_at":"2026-10-18T15:00:24.985165Z","last_report":null,"last_turn_outcome":null,"lead_session_key":"5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B","model":"inferhub/cb/deepseek-v4.1-flash","objection":null,"omo_thread_id":null,"parent_channel_id":null,"session_key":"4:lane|-|7:qa-wt-a|-|12:lane:qa-wt-a","stale_posted_at":null,"status":"working","status_message_id":null,"thread_channel_id":null,"title":"qa-wt-a","turns_run":0,"updated_at":"2026-10-18T15:00:24.985165Z"},"reasons":[]}
+
+
+$ cd /tmp/qa-lanes && /Users/indo/.omon/bin/omo-gateway lane start qa-wt-b --title "qa-wt-b" --brief /tmp/qa-brief-wt.md --done "file NOTE.md" --model small --lead '5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B' 2>&1
+[exit 0]
+{"lane":{"brief_path":"/private/tmp/qa-brief-wt.md","claim_at":null,"claim_evidence":null,"created_at":"2026-10-18T15:00:25.122242Z","cwd":"/private/tmp/qa-lanes-lanes/qa-wt-b","done_signals":"file NOTE.md","key":"qa-wt-b","last_activity_at":"2026-10-18T15:00:25.122242Z","last_report":null,"last_turn_outcome":null,"lead_session_key":"5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B","model":"inferhub/cb/deepseek-v4.1-flash","objection":null,"omo_thread_id":null,"parent_channel_id":null,"session_key":"4:lane|-|7:qa-wt-b|-|12:lane:qa-wt-b","stale_posted_at":null,"status":"working","status_message_id":null,"thread_channel_id":null,"title":"qa-wt-b","turns_run":0,"updated_at":"2026-10-18T15:00:25.122242Z"},"reasons":[]}
+
+
+$ cd /tmp && /Users/indo/.omon/bin/omo-gateway lane start qa-nogit --title qa-nogit --brief /tmp/qa-brief-wt.md --done "file /tmp/none" --model small --lead '5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B' 2>&1
+[exit 0]
+{"lane":{"brief_path":"/private/tmp/qa-brief-wt.md","claim_at":null,"claim_evidence":null,"created_at":"2026-10-18T15:00:25.219518Z","cwd":"/private/tmp","done_signals":"file /tmp/none","key":"qa-nogit","last_activity_at":"2026-10-18T15:00:25.219518Z","last_report":null,"last_turn_outcome":null,"lead_session_key":"5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B","model":"inferhub/cb/deepseek-v4.1-flash","objection":null,"omo_thread_id":null,"parent_channel_id":null,"session_key":"4:lane|-|8:qa-nogit|-|13:lane:qa-nogit","stale_posted_at":null,"status":"working","status_message_id":null,"thread_channel_id":null,"title":"qa-nogit","turns_run":0,"updated_at":"2026-10-18T15:00:25.219518Z"},"reasons":[]}
+
+
+$ git -C /tmp/qa-lanes worktree list; for k in qa-wt-a qa-wt-b; do git -C /tmp/qa-lanes-lanes/$k log --oneline -1; done; sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select lane_key, path, role from lane_owned_worktrees where lane_key like 'qa-%'; select key,status from lanes where key in ('qa-wt-a','qa-wt-b','qa-nogit')"
+[exit 0]
+/private/tmp/qa-lanes                5603ccf [main]
+/private/tmp/qa-lanes-lanes/qa-pause 5603ccf [lane/qa-pause]
+/private/tmp/qa-lanes-lanes/qa-wt-a  126fbb5 [lane/qa-wt-a]
+/private/tmp/qa-lanes-lanes/qa-wt-b  27e195b [lane/qa-wt-b]
+126fbb5 qa note
+27e195b qa note
+qa-pause|/private/tmp/qa-lanes-lanes/qa-pause|cwd
+qa-wt-a|/private/tmp/qa-lanes-lanes/qa-wt-a|cwd
+qa-wt-b|/private/tmp/qa-lanes-lanes/qa-wt-b|cwd
+qa-nogit|working
+qa-wt-a|done_claimed
+qa-wt-b|done_claimed
+
+
+non-git lane qa-nogit: cwd stays /private/tmp (no worktree created); the skip log line is emitted by the CLI process, not gateway.log.

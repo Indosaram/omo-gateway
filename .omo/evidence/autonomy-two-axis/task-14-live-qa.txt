@@ -1,0 +1,193 @@
+=== sign
+$ codesign -dv --verbose=2 /Users/indo/.omon/bin/omo-gateway 2>&1 | grep -E "Authority=Developer|TeamIdentifier"
+[exit 0]
+Authority=Developer ID Application: Indo Yoon (5DUM8WPB4C)
+Authority=Developer ID Certification Authority
+TeamIdentifier=5DUM8WPB4C
+
+=== block
+$ cd /Users/indo/code/project/omon-gateway && /Users/indo/.omon/bin/omo-gateway profile apply-block --bot-id 1465631383862120451 --block-file /Users/indo/code/project/omon-gateway-wt/autonomy/bot_profiles/blocks/autonomy.md --block autonomy; sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "SELECT instr(system_prompt,'omon:autonomy:begin')>0, instr(system_prompt,'omon:lanes:begin')>0 FROM bot_profiles WHERE bot_id='1465631383862120451'"
+[exit 0]
+{
+  "after": {
+    "characters": 8958,
+    "sha256": "6884bbb6f96f362901899dc6411add0461680b455914065e4ae975a4ca9c21a9"
+  },
+  "before": {
+    "characters": 6879,
+    "sha256": "aaed5763a3dd2bb8c9bab421549bd3a30096984ff26ca692a129bb536642697f"
+  },
+  "bot_id": "1465631383862120451"
+}
+1|1
+
+=== migr
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "SELECT version, description FROM _sqlx_migrations WHERE version>=46 ORDER BY version"
+[exit 0]
+46|report claims
+47|turn status messages
+48|lane pauses
+49|action ledger
+50|action loop state
+51|inbox github
+52|source health
+
+=== tables
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('report_claims','turn_status_messages','lane_pauses','action_proposals','action_precedents','action_loop_seen','source_health') ORDER BY name"
+[exit 0]
+action_loop_seen
+action_precedents
+action_proposals
+lane_pauses
+report_claims
+source_health
+turn_status_messages
+
+=== legacy
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "SELECT (SELECT count(*) FROM approval_allowlist), (SELECT count(*) FROM action_precedents)"
+[exit 0]
+5|5
+
+=== classify
+$ for c in 'ls' 'git status' 'git push origin main' 'rm -rf /tmp/x' 'gh pr create'; do /Users/indo/.omon/bin/omo-gateway autonomy classify --json "$c" 2>&1 | head -2; done
+[exit 0]
+{"effect":"read","program":"ls","target":"","signature":"read:ls:","summary":"ls"}
+{"effect":"read","program":"git status","target":"","signature":"read:git status:","summary":"git status"}
+{"effect":"vcs_protected","program":"git push","target":"","signature":"vcs_protected:git push:","summary":"git push origin main"}
+{"effect":"delete","program":"rm","target":"/tmp/x","signature":"delete:rm:/tmp/x","summary":"rm -rf /tmp/x"}
+{"effect":"vcs_remote","program":"gh pr create","target":"","signature":"vcs_remote:gh pr create:","summary":"gh pr create"}
+
+=== list
+$ cd /Users/indo/code/project/omon-gateway && /Users/indo/.omon/bin/omo-gateway autonomy list --json 2>&1 | head -40
+[exit 0]
+[
+  {
+    "id": 5,
+    "signature": "delete in root path",
+    "effect": "unknown",
+    "target_scope": "",
+    "decision": "allow",
+    "scope": "exact",
+    "approvals": 1,
+    "declines": 0,
+    "origin": "legacy_allowlist",
+    "owner_words": null,
+    "revoked_at": null,
+    "created_at": "2026-08-28 04:06:08",
+    "updated_at": "2026-08-28 04:06:08"
+  },
+  {
+    "id": 4,
+    "signature": "script execution via heredoc",
+    "effect": "unknown",
+    "target_scope": "",
+    "decision": "allow",
+    "scope": "exact",
+    "approvals": 1,
+    "declines": 0,
+    "origin": "legacy_allowlist",
+    "owner_words": null,
+    "revoked_at": null,
+    "created_at": "2026-08-18 00:46:01",
+    "updated_at": "2026-08-18 00:46:01"
+  },
+  {
+    "id": 3,
+    "signature": "script execution via -e/-c flag",
+    "effect": "unknown",
+    "target_scope": "",
+    "decision": "allow",
+    "scope": "exact",
+    "approvals": 1,
+    "declines": 0,
+
+=== api
+$ curl -s -m 5 http://127.0.0.1:9119/api/autonomy/precedents | head -c 1500; echo; curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:9119/api/health
+[exit 0]
+{"items":[{"approvals":1,"created_at":"2026-08-28 04:06:08","decision":"allow","declines":0,"effect":"unknown","id":5,"origin":"legacy_allowlist","owner_words":null,"revoked_at":null,"scope":"exact","signature":"delete in root path","target_scope":"","updated_at":"2026-08-28 04:06:08"},{"approvals":1,"created_at":"2026-08-18 00:46:01","decision":"allow","declines":0,"effect":"unknown","id":4,"origin":"legacy_allowlist","owner_words":null,"revoked_at":null,"scope":"exact","signature":"script execution via heredoc","target_scope":"","updated_at":"2026-08-18 00:46:01"},{"approvals":1,"created_at":"2026-08-18 00:44:40","decision":"allow","declines":0,"effect":"unknown","id":3,"origin":"legacy_allowlist","owner_words":null,"revoked_at":null,"scope":"exact","signature":"script execution via -e/-c flag","target_scope":"","updated_at":"2026-08-18 00:44:40"},{"approvals":1,"created_at":"2026-08-18 00:25:23","decision":"allow","declines":0,"effect":"unknown","id":2,"origin":"legacy_allowlist","owner_words":null,"revoked_at":null,"scope":"exact","signature":"shell execution via heredoc","target_scope":"","updated_at":"2026-08-18 00:25:23"},{"approvals":1,"created_at":"2026-08-17 00:52:17","decision":"allow","declines":0,"effect":"unknown","id":1,"origin":"legacy_allowlist","owner_words":null,"revoked_at":null,"scope":"exact","signature":"shell command via -c/-lc flag","target_scope":"","updated_at":"2026-08-17 00:52:17"}]}
+200
+=== log
+$ grep -E "action_loop|kibitzer|report_claims|recover_pending|approval ledger|github|source_health|context pack|orphan" /Users/indo/.omon/gateway.log | tail -40
+[exit 0]
+[2m2026-10-17T13:20:52.649569Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer configured [3menabled[0m[2m=[0mtrue [3mjudge_api_key_present[0m[2m=[0mfalse [3mjudge_url_present[0m[2m=[0mfalse [3mjudge_model_present[0m[2m=[0mfalse
+[2m2026-10-17T13:20:52.650370Z[0m [32m INFO[0m [2momo_gateway::legacy[0m[2m:[0m kibitzer initialized before producers
+[2m2026-10-17T13:20:56.822611Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer serve started [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3marm_scan_secs[0m[2m=[0m5
+[2m2026-10-17T13:21:56.496512Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer configured [3menabled[0m[2m=[0mtrue [3mjudge_api_key_present[0m[2m=[0mfalse [3mjudge_url_present[0m[2m=[0mfalse [3mjudge_model_present[0m[2m=[0mfalse
+[2m2026-10-17T13:21:56.497131Z[0m [32m INFO[0m [2momo_gateway::legacy[0m[2m:[0m kibitzer initialized before producers
+[2m2026-10-17T13:21:58.201464Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer serve started [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3marm_scan_secs[0m[2m=[0m5
+[2m2026-10-17T13:42:47.847885Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792244567847
+[2m2026-10-17T19:35:59.078343Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer configured [3menabled[0m[2m=[0mtrue [3mjudge_api_key_present[0m[2m=[0mfalse [3mjudge_url_present[0m[2m=[0mfalse [3mjudge_model_present[0m[2m=[0mfalse
+[2m2026-10-17T19:35:59.078972Z[0m [32m INFO[0m [2momo_gateway::legacy[0m[2m:[0m kibitzer initialized before producers
+[2m2026-10-17T19:36:00.866472Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer serve started [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3marm_scan_secs[0m[2m=[0m5
+[2m2026-10-17T23:00:00.002898Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792278000002
+[2m2026-10-17T23:30:00.004375Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792279800003
+[2m2026-10-17T23:31:15.349638Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: turn exceeded total deadline of 60s; turn/interrupt sent
+[2m2026-10-18T00:00:00.005517Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792281600004
+[2m2026-10-18T00:15:11.924243Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer configured [3menabled[0m[2m=[0mtrue [3mjudge_api_key_present[0m[2m=[0mfalse [3mjudge_url_present[0m[2m=[0mfalse [3mjudge_model_present[0m[2m=[0mfalse
+[2m2026-10-18T00:15:11.924686Z[0m [32m INFO[0m [2momo_gateway::legacy[0m[2m:[0m kibitzer initialized before producers
+[2m2026-10-18T00:15:13.665240Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer serve started [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3marm_scan_secs[0m[2m=[0m5
+[2m2026-10-18T00:30:00.006732Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792283400006
+[2m2026-10-18T01:03:14.523722Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792285394523
+[2m2026-10-18T02:19:07.276361Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792289947275
+[2m2026-10-18T02:20:55.286027Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: turn exceeded total deadline of 60s; turn/interrupt sent
+[2m2026-10-18T02:49:07.275840Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792291747275
+[2m2026-10-18T03:28:35.862785Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792294115854
+[2m2026-10-18T03:31:11.820475Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer configured [3menabled[0m[2m=[0mtrue [3mjudge_api_key_present[0m[2m=[0mfalse [3mjudge_url_present[0m[2m=[0mfalse [3mjudge_model_present[0m[2m=[0mfalse
+[2m2026-10-18T03:31:11.821064Z[0m [32m INFO[0m [2momo_gateway::legacy[0m[2m:[0m kibitzer initialized before producers
+[2m2026-10-18T03:31:13.693975Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer serve started [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3marm_scan_secs[0m[2m=[0m5
+[2m2026-10-18T05:00:33.861896Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792299633861
+[2m2026-10-18T07:01:10.090500Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: omo turn ended with no content (likely upstream LLM failure)
+[2m2026-10-18T07:01:10.092191Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792306870092
+[2m2026-10-18T09:04:21.514545Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: omo turn ended with no content (likely upstream LLM failure)
+[2m2026-10-18T09:04:21.516353Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792314261516
+[2m2026-10-18T11:07:32.997446Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: omo turn ended with no content (likely upstream LLM failure)
+[2m2026-10-18T11:07:32.999054Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792321652998
+[2m2026-10-18T12:44:44.586330Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: omo turn ended with no content (likely upstream LLM failure)
+[2m2026-10-18T12:44:44.587966Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792327484587
+[2m2026-10-18T13:51:59.666750Z[0m [33m WARN[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer turn failed [3merror[0m[2m=[0mLLM error: turn exceeded total deadline of 60s; turn/interrupt sent
+[2m2026-10-18T13:51:59.668306Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer armed generation admitted [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3madmitted_ms[0m[2m=[0m1792331519668
+[2m2026-10-18T14:43:26.555350Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer configured [3menabled[0m[2m=[0mtrue [3mjudge_api_key_present[0m[2m=[0mfalse [3mjudge_url_present[0m[2m=[0mfalse [3mjudge_model_present[0m[2m=[0mfalse
+[2m2026-10-18T14:43:26.556022Z[0m [32m INFO[0m [2momo_gateway::legacy[0m[2m:[0m kibitzer initialized before producers
+[2m2026-10-18T14:43:27.827442Z[0m [32m INFO[0m [2momon_gateway::lanes::kibitzer[0m[2m:[0m kibitzer serve started [3mlead[0m[2m=[0m5:slack|-|11:D0C9HNVUK5M|-|11:U04M1JNJM8T|11:U0C9ST69M8B [3marm_scan_secs[0m[2m=[0m5
+
+=== env
+$ ps -E -p $(pgrep -f "omo-gateway run" | head -1) -o command= 2>/dev/null | tr ' ' '\n' | grep -E "OMON_(APPROVAL_LEDGER|ACTION_LOOP|GITHUB_SOURCE)_ENABLED"
+[exit 1]
+
+=== lanehelp
+$ /Users/indo/.omon/bin/omo-gateway lane --help 2>&1 | head -30
+[exit 0]
+Control persistent worker lanes
+
+Usage: omo-gateway lane <COMMAND>
+
+Commands:
+  start              
+  list               
+  log                
+  send               
+  claim-done         
+  object             
+  close              
+  reopen             
+  register-worktree  
+  can-launch         
+  pause              Stop a lane: cancel its running turn and start no new one until resumed
+  resume             Let a paused lane take turns again. Exits 2 with NOT_PAUSED when it is not paused
+  lead               Print the session that lanes started from here would report to
+  heavy              
+  help               Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help  Print help
+
+=== settings
+$ cd /Users/indo/.omo/agent && git -C . status --short settings.json 2>/dev/null; stat -f "%Sm" /Users/indo/.omo/agent/settings.json
+[exit 0]
+Oct 18 23:32:02 2026
+
+=== slackwt
+$ cd /Users/indo/code/project/omon-gateway-wt/slack && git log --oneline -1 && git status --short | wc -l
+[exit 0]
+e87390e fix(slack): give the Slack bot the persona bot's agent workspace
+      52

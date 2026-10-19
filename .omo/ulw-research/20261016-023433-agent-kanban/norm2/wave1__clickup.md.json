@@ -1,0 +1,70 @@
+[
+ {
+  "name": "ClickUp",
+  "url": "https://clickup.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "칸반·리스트·문서를 갖춘 올인원 PM 플랫폼, 공식 MCP로 에이전트 연동",
+  "mobile": "iOS·Android 앱(watchOS 지원)",
+  "pricing": "무료 / Core $9·Business $17/사용자/월(연간)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 원격 MCP(OAuth 2.1)·REST API·웹훅; Claude Code·Cursor 등",
+  "status": "활발(상용 SaaS)",
+  "pros": "풍부한 보드·상태·자동화; 공식 원격 MCP로 설치 불필요; 네이티브 모바일 앱 완비",
+  "cons": "셀프호스팅 불가; 공식 MCP 24시간 호출 한도; 공식 MCP는 OAuth만 허용(API 키 불가)",
+  "sources": [
+   "https://clickup.com/pricing",
+   "https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server",
+   "https://developer.clickup.com/docs/mcp-tools",
+   "https://clickup.com/security",
+   "https://apps.apple.com/us/app/clickup-tasks-chat-docs-ai/id1535098836",
+   "https://play.google.com/store/apps/details?id=co.mangotechnologies.clickup"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "ClickUp Brain & Agents",
+  "url": "https://clickup.com/brain",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "ClickUp 내장 AI 에이전트 계층, 상태 업데이트·요약·작업 자동화",
+  "mobile": "iOS·Android 앱",
+  "pricing": "Brain $9/사용자/월(연간)~; 무료 플랜 500크레딧 체험",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "@Brain 멘션·AI 자동화·외부 MCP 커넥터 소비",
+  "status": "활발(상용, Brain² 출시)",
+  "pros": "기존 보드에 설정 없이 통합; 조직 컨텍스트 자동 활용; 멀티모델(Claude·GPT·Gemini) 지원",
+  "cons": "ClickUp 전용 폐쇄 생태계; 사용자별 추가 요금; 복잡한 자동화 시 크레딧 소모",
+  "sources": [
+   "https://clickup.com/brain",
+   "https://clickup.com/brain/pricing",
+   "https://clickup.com/pricing",
+   "https://clickup.com/security"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "ClickUp Community MCP Servers (hauptsacheNet & taazkareem)",
+  "url": "https://github.com/hauptsacheNet/clickup-mcp",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "API 키로 코딩 에이전트를 ClickUp에 연결하는 커뮤니티 MCP 서버",
+  "mobile": "없음(개발자 도구)",
+  "pricing": "무료(OSS) / taazkareem $9/월·$89 평생",
+  "selfhost": "가능(npx·Docker)",
+  "license": "MIT",
+  "agent": "MCP(STDIO·HTTP); Claude Code·Cursor·Codex·Windsurf·n8n",
+  "status": "활동 중(2026-10 푸시)",
+  "pros": "정적 API 키 인증 지원; 로컬 이미지 업로드; read-minimal 모드로 토큰 절약",
+  "cons": "ClickUp API 속도 제한 적용; taazkareem판 유료 라이선스; 공식 스키마 변경 반영 지연 가능",
+  "sources": [
+   "https://github.com/hauptsacheNet/clickup-mcp",
+   "https://github.com/taazkareem/clickup-mcp-server",
+   "https://api.github.com/repos/hauptsacheNet/clickup-mcp",
+   "https://api.github.com/repos/taazkareem/clickup-mcp-server"
+  ],
+  "confidence": "높음"
+ }
+]

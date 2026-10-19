@@ -1,0 +1,4 @@
+Identifier=omo-gateway
+Timestamp=Oct 12, 2026 at 4:47:13 PM
+TeamIdentifier=5DUM8WPB4C
+49c75b552f36c60f1b0d485caba537e0dae716b3a1c377712535b8d5da09b669  /Users/indo/code/project/omon-gateway/target/release/omo-gateway

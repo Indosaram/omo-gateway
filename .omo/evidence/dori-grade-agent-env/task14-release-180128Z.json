@@ -1,0 +1,11 @@
+{
+  "status": "released",
+  "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binarySha256": "3b852fbd4d5f93911a3200fe07bb8bb7d037f317c24a7bc46fcc60a5b314b933",
+  "manifest": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/durability-fixtures-20261011T180128Z-build-post-manifest.sha256",
+  "manifestSha256": "0d3fc34abc10daa6d15f4de0745762ff26e6e3afcfb39137e347b6b70095b9ee",
+  "helperSha256": "07b95002796b0375355611f3739bc7f3edc83fd4ac05c622af6ba1886b4874e2",
+  "authorization": "User authorized one fresh owned actual task14 headless QA run against existing authenticated 19742 daemon",
+  "gate": "build0 fmt0 strictClippy0 headless5 dispatch10 mux19 runner12; 205 inputs frozen",
+  "baselineLimitation": "Combined focused batch timed out; backend eight baseline failures retained and two exact lifecycle/retry tests uncovered. This release is bounded baseline policy, not all-green."
+}

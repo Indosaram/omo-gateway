@@ -1,0 +1,70 @@
+[
+ {
+  "name": "CodeNomad",
+  "url": "https://github.com/NeuralNomadsAI/CodeNomad",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "OpenCode V2용 멀티 인스턴스 데스크톱·웹 오케스트레이터(병렬 세션·워커·git 브랜치)",
+  "mobile": "PWA·반응형 웹(OpenTunnel 원격), 네이티브 앱 없음",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(데스크톱·npm 서버·Docker)",
+  "license": "MIT",
+  "agent": "OpenCode V2 데몬/CLI 연동, MCP 서버 점검·도구 토글",
+  "status": "활발(v0.20.0, 2026-10, 2.6k★)",
+  "pros": "OpenCode V2 네이티브 통합·서브에이전트 오케스트레이션; Git worktree 격리·멀티 인스턴스; 웹 프리뷰·원격 터널 지원",
+  "cons": "칸반 보드 없음; OpenCode V2 전용; macOS 바이너리 미서명",
+  "sources": [
+   "https://github.com/NeuralNomadsAI/CodeNomad",
+   "https://raw.githubusercontent.com/NeuralNomadsAI/CodeNomad/dev/README.md",
+   "https://raw.githubusercontent.com/NeuralNomadsAI/CodeNomad/dev/package.json",
+   "https://raw.githubusercontent.com/NeuralNomadsAI/CodeNomad/dev/packages/ui/src/components/instance/instance-shell2.tsx",
+   "https://yetanotherorchestrator.app/apps/codenomad/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Codex Monitor",
+  "url": "https://www.codexmonitor.app/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "OpenAI Codex용 경량 데스크톱·모바일 컴패니언(워크스페이스·worktree·diff 리뷰)",
+  "mobile": "iOS 앱(TestFlight), 반응형 웹; Android 없음",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Tauri 앱·헤드리스 데몬)",
+  "license": "MIT",
+  "agent": "Codex app-server(JSON-RPC), gh CLI, MCP 상태 점검",
+  "status": "활발(v0.7.67, 2026-10, 4.3k★)",
+  "pros": "Rust/Tauri 기반 고성능; Codex 서브에이전트·포크 완전 지원; Tailscale 원격 iOS 모니터링",
+  "cons": "칸반 보드 없음; OpenAI Codex 전용; iOS 앱 정식 출시 전(TestFlight)",
+  "sources": [
+   "https://www.codexmonitor.app/",
+   "https://github.com/Dimillian/CodexMonitor",
+   "https://raw.githubusercontent.com/Dimillian/CodexMonitor/main/README.md",
+   "https://yetanotherorchestrator.app/apps/codexmonitor/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Constellagent",
+  "url": "https://constellagent.vercel.app/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code 다중 인스턴스를 git worktree별로 실행하는 macOS 데스크톱 환경",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(macOS Electron)",
+  "license": "ISC",
+  "agent": "Claude Code CLI·훅, Codex 훅, GitHub GraphQL/gh CLI",
+  "status": "활동 중(v1.0.0, 217★)",
+  "pros": "Claude Code 병렬 실행·worktree 자동 격리; Monaco 에디터·diff 뷰어 내장; 크론 스케줄링·PR 모니터링",
+  "cons": "칸반 보드 없음; macOS 전용; 배포 바이너리 없어 소스 빌드 필요",
+  "sources": [
+   "https://constellagent.vercel.app/",
+   "https://github.com/owengretzinger/constellagent",
+   "https://raw.githubusercontent.com/owengretzinger/constellagent/main/README.md",
+   "https://raw.githubusercontent.com/owengretzinger/constellagent/main/package.json",
+   "https://yetanotherorchestrator.app/apps/constellagent/"
+  ],
+  "confidence": "높음"
+ }
+]

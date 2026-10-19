@@ -1,0 +1,76 @@
+[
+ {
+  "name": "1Code",
+  "url": "https://1code.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex를 격리된 git worktree에서 실행하는 오픈소스 데스크톱/웹 클라이언트",
+  "mobile": "PWA",
+  "pricing": "무료(OSS) / Pro $20/월",
+  "selfhost": "가능(로컬 데스크톱, SQLite)",
+  "license": "Apache-2.0",
+  "agent": "Claude Code·Codex CLI, REST API, MCP 클라이언트, 웹훅",
+  "status": "GitHub 아카이브됨(비활성)",
+  "pros": "세션별 격리 worktree; 실시간 diff·hunk 롤백; MCP 관리자·플러그인 마켓",
+  "cons": "저장소 아카이브(비활성); Claude Code·Codex 위주 지원; 바이너리·클라우드는 유료",
+  "sources": [
+   "https://1code.dev",
+   "https://yetanotherorchestrator.app/apps/1code/",
+   "https://github.com/21st-dev/1code",
+   "https://api.github.com/repos/21st-dev/1code",
+   "https://raw.githubusercontent.com/21st-dev/1code/main/package.json",
+   "https://api.github.com/repos/21st-dev/1code/releases/tag/v0.0.84"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Orchestrator",
+  "url": "https://ao-agents.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "격리 worktree에서 병렬 AI 코딩 에이전트를 계획·실행·감독하는 로컬 오케스트레이터",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(OSS) / AO Cloud 유료(가격 미확인)",
+  "selfhost": "가능(로컬 데몬·원격 VM)",
+  "license": "Apache-2.0",
+  "agent": "ao CLI·REST API, Claude Code·Codex 등 25+ 하네스, ACP",
+  "status": "매우 활발(v0.14.2)",
+  "pros": "25+ 에이전트 하네스 지원; CI·PR 리뷰 피드백 자동 반영; 네이티브 모바일 앱",
+  "cons": "Electron+Go 이중 구조로 복잡; 원격 페어링에 터널/VPN 필요; 열린 이슈 880+",
+  "sources": [
+   "https://ao-agents.com",
+   "https://yetanotherorchestrator.app/apps/agent-orchestrator/",
+   "https://github.com/OrchestratorInc/agent-orchestrator",
+   "https://api.github.com/repos/OrchestratorInc/agent-orchestrator",
+   "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/cli/README.md",
+   "https://github.com/OrchestratorInc/agent-orchestrator/releases",
+   "https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/self-hosted-remote.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Teams",
+  "url": "https://agentteams.live",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "멀티 에이전트 코딩 팀이 자율 협업하는 무료 오픈소스 데스크톱 앱(실시간 칸반)",
+  "mobile": "반응형 웹(개발 중)",
+  "pricing": "무료(OSS), 내장 무료 모델 / BYOK",
+  "selfhost": "가능(로컬 데스크톱·Docker)",
+  "license": "AGPL-3.0",
+  "agent": "내장 MCP 서버, HTTP API, Claude Code·Codex·Cursor 등",
+  "status": "활발(v2.17.10)",
+  "pros": "API 키 없이 무료 모델로 시작; 팀 간 메시징 멀티 에이전트 협업; hunk 단위 코드 리뷰",
+  "cons": "네이티브 모바일 앱 없음; AGPL 카피레프트 제약; 무거운 Electron 용량",
+  "sources": [
+   "https://agentteams.live",
+   "https://yetanotherorchestrator.app/apps/agent-teams/",
+   "https://github.com/777genius/agent-teams-ai",
+   "https://api.github.com/repos/777genius/agent-teams-ai",
+   "https://raw.githubusercontent.com/777genius/agent-teams-ai/main/package.json",
+   "https://api.github.com/repos/777genius/agent-teams-ai/releases/tag/v2.17.10",
+   "https://raw.githubusercontent.com/777genius/agent-teams-ai/main/mcp-server/README.md"
+  ],
+  "confidence": "높음"
+ }
+]

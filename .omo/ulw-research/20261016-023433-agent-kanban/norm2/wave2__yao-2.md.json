@@ -1,0 +1,67 @@
+[
+ {
+  "name": "Automaker",
+  "url": "https://automaker.app/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반 카드를 진행 중으로 옮기면 git 워크트리에서 코딩 에이전트가 자율 실행되는 스튜디오",
+  "mobile": "반응형 웹·PWA(웹 모드)",
+  "pricing": "무료(OSS, 자체 LLM 키/Claude 구독)",
+  "selfhost": "가능(로컬·Docker)",
+  "license": "MIT",
+  "agent": "Claude Agent SDK·Codex·Copilot 등; REST/WS API; MCP",
+  "status": "유지보수 중단(as-is 제공)",
+  "pros": "카드 이동 시 에이전트 자동 실행; 격리된 git 워크트리; REST·WebSocket API 확장성",
+  "cons": "공식적으로 유지보수 중단; 로컬 Node/Electron 설정 부담; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://automaker.app/",
+   "https://yetanotherorchestrator.app/apps/automaker/",
+   "https://github.com/webdevcody/automaker",
+   "https://github.com/AutoMaker-Org/automaker"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Caudex",
+  "url": "https://caudex.sh/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code 전용 경량 데스크톱 터미널·오케스트레이션 작업공간(탭 그리드, 칸반 없음)",
+  "mobile": "PWA(터널 경유 원격 접속)",
+  "pricing": "무료(비공개 프리웨어)",
+  "selfhost": "로컬 전용",
+  "license": "상용(비공개 프리웨어)",
+  "agent": "Claude Code 훅·statusLine 연동; MCP 관리자; 공개 API 없음",
+  "status": "활발(v0.1.52)",
+  "pros": "무설정 Claude Code 훅 통합; 토큰·비용 실시간 모니터링; 터널 기반 PWA 원격 접속",
+  "cons": "비공개 소스; 칸반 보드 없음; Claude Code 전용(다중 에이전트 미흡)",
+  "sources": [
+   "https://caudex.sh/",
+   "https://caudex.sh/docs",
+   "https://yetanotherorchestrator.app/apps/caudex/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Clave",
+  "url": "https://github.com/antasphere/clave",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "여러 AI 코딩 에이전트를 병렬 실행·관리하는 macOS 중심 오픈소스 데스크톱 워크스테이션",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Antigravity·Pi CLI; 플러그인; MCP 브리지",
+  "status": "매우 활발(v2.4.0, v3 베타)",
+  "pros": "다중 CLI 에이전트 병렬 PTY 실행; MCP 도구 브리지 플러그인; MagicSync Git 패널",
+  "cons": "macOS 중심(Windows 초기, Linux 미지원); 모바일·웹 클라이언트 없음; 커뮤니티 규모 작음",
+  "sources": [
+   "https://github.com/antasphere/clave",
+   "https://yetanotherorchestrator.app/apps/clave/",
+   "https://raw.githubusercontent.com/antasphere/clave/prod/README.md",
+   "https://raw.githubusercontent.com/antasphere/clave/prod/docs/adr/0003-server-and-client.md"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,26 @@
+fix(backend,daemon,discord,cron): self-heal a stalled app-server and quiet noisy runtime paths
+
+Backend
+- A turn that gets no frames back (45s no output / no server activity) now
+  force-restarts the gateway-owned omo app-server (SIGKILL, wait for readyz,
+  at most once per 2 min) and runs the turn once more instead of erroring.
+- Interim narration: the first status goes out as the acknowledgement; later
+  ones only after 3 minutes, so quick tasks are ack -> answer and long ones get
+  an occasional update instead of a message before every tool call.
+
+Daemon
+- The spawned app-server pid is recorded in ~/.omon/omo-appserver-<port>.pid;
+  a restarted gateway stops its predecessor's leftover daemon (command line
+  verified) and owns a fresh one, so no orphan keeps the port.
+
+Discord
+- Receive watchdog restarts a session silent for 3x the threshold even when
+  the shard runner reports a healthy heartbeat (a 95 min zombie was observed).
+
+Cron
+- Cron problems without OMON_LANE_DEFAULT_LEAD fall back to the owner DM lead
+  instead of dropping the lane event.
+- "Hermes store file missing" is logged once per absence, not every tick.
+
+Each behavior change has a regression test.
+Gate: fmt, clippy -D warnings, cargo test (1548 passed, 0 failed).

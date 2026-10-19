@@ -1,0 +1,68 @@
+{
+  "status": "actual-mail-capture-completed-empty",
+  "supersedes": "lineage.json historical mail blocked-not-invoked receipt; other three source captures unchanged",
+  "receipt": {
+    "source": "mail",
+    "operation": "mail-list",
+    "argv": [
+      "/Users/indo/.bun/bin/zele",
+      "mail",
+      "list",
+      "--folder",
+      "inbox",
+      "--account",
+      "freedomzero91@gmail.com",
+      "--filter",
+      "is:unread -category:promotions -category:social -category:updates",
+      "--limit",
+      "100"
+    ],
+    "capturedAt": "2026-10-11T16:18:53.516Z",
+    "exit": 0,
+    "timeoutMs": 60000,
+    "rawSha256": "669be172bb76339384d403c2f0b87b6ee9ba694ca8863a4423a8c04f2d8f3db1",
+    "count": 0,
+    "framing": "YAML object",
+    "schema": {
+      "summary": "string",
+      "items": "array"
+    },
+    "refreshNoticeObserved": true,
+    "sanitizedStderr": "Token expired for [ACCOUNT], refreshing...\n(node:14898) ExperimentalWarning: SQLite is an experimental feature and might change at any time\n(Use `node --trace-warnings ...` to show where the warning was created)",
+    "authPathFinding": {
+      "path": "/Users/indo/.zele/sqlite.db",
+      "resolvedBy": "installed db.js os.homedir() + .zele/sqlite.db; same as previous failed path",
+      "readonlySchemaExit": 1,
+      "readonlySchemaError": "Parse error in 4th command line argument: unable to open database file (14)\n",
+      "builtinPreviousError": "unable to open database file",
+      "noTokenValuesRead": true
+    },
+    "status": "captured-empty-real-response",
+    "limitation": "Real empty list capture proves response framing and stable-empty parser input; no populated thread/snippet fixture lineage available from this authorized single attempt."
+  },
+  "fixture": {
+    "file": "fixtures/mail.json",
+    "sanitizedSha256": "5cdbe9fb42368950639ffcccdd290245d610998e531e2830e6d4f54e79d58ebb",
+    "mapping": "Actual YAML object normalized to JSON; items remained empty; no personal row values exist; neutral No threads found summary retained",
+    "consumer": "MailSource::parse requires items array; empty cursor stability case; not a populated thread fixture"
+  },
+  "auth": "Ordinary incidental OAuth refresh explicitly permitted; no login/new scopes/account changes",
+  "sanitizationAudit": {
+    "priorFixtures": [
+      "imessage-chats.json",
+      "discord.json",
+      "kakao-messages.json",
+      "kakao-rooms.json",
+      "imessage-history.json"
+    ],
+    "personalStrings": "All allowlisted personal text fields inspected and REDACTED or omitted; no raw snapshot contents staged",
+    "snapshot": "Private owned scratch retained; never copied into evidence"
+  },
+  "limitations": [
+    "Empty mail result cannot prove populated thread parser mapping.",
+    "Kakao real message staging has no parser-accepted timestamp; do not manufacture one.",
+    "No product/parser harness/Cargo execution during freeze."
+  ],
+  "rawRetention": "Raw stdout cleared after digest/decoding; stderr retained only sanitized refresh notice"
+}
+

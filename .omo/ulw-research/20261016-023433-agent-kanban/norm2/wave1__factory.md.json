@@ -1,0 +1,40 @@
+[
+ {
+  "name": "Factory.ai Droids (Software Factory & Missions)",
+  "url": "https://factory.ai",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "자율 AI 에이전트(Droid)가 계획·구현·리뷰·테스트·배포하는 에이전트 네이티브 개발 플랫폼",
+  "mobile": "반응형 웹(네이티브 앱 없음)",
+  "pricing": "Pro $20/월 / Plus $100 / Max $200 / Teams $60+$40/석",
+  "selfhost": "엔터프라이즈만(하이브리드·에어갭)",
+  "license": "상용",
+  "agent": "MCP·REST API·CLI·SDK·ACP, Linear/Jira·Slack 위임",
+  "status": "활발(주간 릴리스, 2026.10)",
+  "pros": "Missions 기반 멀티에이전트 오케스트레이션; Linear/Jira 카드 상태 자동 전환; Mission Control 실시간 대시보드",
+  "cons": "핵심 플랫폼 폐쇄형; 네이티브 모바일 앱 없음; 범용 칸반 아님(Linear/Jira 의존)",
+  "sources": [
+   "https://factory.ai",
+   "https://docs.factory.com/llms.txt",
+   "https://docs.factory.com/welcome/index.md",
+   "https://docs.factory.com/pricing/individuals.md",
+   "https://docs.factory.com/pricing/organizations.md",
+   "https://docs.factory.com/missions/overview.md",
+   "https://docs.factory.com/missions/running-app.md",
+   "https://docs.factory.com/delegations/index.md",
+   "https://docs.factory.com/delegations/linear.md",
+   "https://docs.factory.com/harness/mcp.md",
+   "https://docs.factory.com/api-reference.md",
+   "https://docs.factory.com/api-reference/sessions.md",
+   "https://docs.factory.com/ide-integrations.md",
+   "https://docs.factory.com/enterprise/network-and-deployment.md",
+   "https://docs.factory.com/enterprise/airgapped-deployment.md",
+   "https://docs.factory.com/changelog/release-notes.md",
+   "https://docs.factory.com/factory-app/overview.md",
+   "https://docs.factory.com/software-factory/overview.md",
+   "https://github.com/Factory-AI/factory",
+   "https://docs.factory.com/droid-exec/overview.md"
+  ],
+  "confidence": "높음"
+ }
+]

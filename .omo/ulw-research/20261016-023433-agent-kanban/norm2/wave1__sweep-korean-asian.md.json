@@ -1,0 +1,394 @@
+[
+ {
+  "name": "KanVibe",
+  "url": "https://github.com/rookedsysc/kanvibe",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 코딩 에이전트용 키보드 중심 칸반, CLI 훅으로 상태 자동 추적·카드별 터미널",
+  "mobile": "반응형 웹(터미널 조작은 데스크톱)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(start.sh·Docker)",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code·Gemini CLI·Codex·OpenCode 훅, worktree·tmux",
+  "status": "활발(v1.4.0, ★147)",
+  "pros": "훅 기반 카드 자동 이동; 내장 웹 터미널; git worktree 자동 생성·정리",
+  "cons": "모바일 조작 제약; PostgreSQL 셀프호스팅 필요; tmux/zellij 의존",
+  "sources": [
+   "https://news.hada.io/topic?id=26737",
+   "https://github.com/rookedsysc/kanvibe",
+   "https://github.com/rookedsysc/kanvibe/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Hermes KanbanWebUI",
+  "url": "https://github.com/PriuS2/HermesKanban",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Hermes Agent 칸반 DB용 트렐로형 WebUI, AI 워크플로 DAG 설계",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 Python/Node 서버)",
+  "license": "Apache-2.0",
+  "agent": "Hermes Agent CLI·공유 SQLite DB 직접 접근",
+  "status": "활발(★39)",
+  "pros": "기존 Hermes DB 공유; 실행 전 DAG 미리보기; 부모-자식 의존관계 시각화",
+  "cons": "Hermes 생태계 종속; 엔터프라이즈 접근제어 없음; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://news.hada.io/topic?id=29268",
+   "https://github.com/PriuS2/HermesKanban",
+   "https://zenn.dev/zennai_ryutaro/articles/20260525-hermes-kanban-swarm-usage"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "AIF Handoff",
+  "url": "https://aif.cutcode.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI가 계획·구현·리뷰하는 자율 칸반, 사람 인계 게이트 포함",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node.js·Docker)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Cursor CLI 어댑터, 서브에이전트 오케스트레이션",
+  "status": "활발(★308)",
+  "pros": "수렴 인식 자동 리뷰; 명시적 사람 인계 게이트; 역할별 서브에이전트 분리",
+  "cons": "AI Factory 생태계 결합; 작은 커뮤니티; 로컬 CLI 인증 사전 설정 필요",
+  "sources": [
+   "https://github.com/lee-to/aif-handoff",
+   "https://aif.cutcode.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Dooray! Project",
+  "url": "https://dooray.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "NHN 기업용 협업 스위트, 프로젝트 칸반+Dooray AI 요약·초안",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(25명) / 비즈니스 2,000원/사용자/월~",
+  "selfhost": "엔터프라이즈만(프라이빗·온프렘)",
+  "license": "상용",
+  "agent": "Dooray AI·Open API(REST)·웹훅·봇",
+  "status": "운영 중(주간 업데이트)",
+  "pros": "한국어 성숙 UX; 네이티브 모바일 앱; 메일·메신저·캘린더·위키 통합",
+  "cons": "상용 소프트웨어; 코딩 에이전트보다 요약·초안 중심; 고급 자동화엔 관리자 토큰 필요",
+  "sources": [
+   "https://dooray.com",
+   "https://inside.nhn.com/news/935",
+   "https://dooray.com/main/mobile"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Multica",
+  "url": "https://multica.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "사람과 26+ AI 코딩 에이전트가 worktree에서 협업하는 Linear형 칸반",
+  "mobile": "iOS·Android 앱 + 반응형 웹",
+  "pricing": "무료(셀프호스팅) / 클라우드·엔터프라이즈 문의",
+  "selfhost": "가능(Docker Compose·Helm)",
+  "license": "Apache-2.0 변형(소스공개)",
+  "agent": "26+ CLI(Claude Code·Codex·Cursor 등), WebSocket 데몬",
+  "status": "매우 활발(★52.9k, v0.4.44)",
+  "pros": "26+ CLI 통합 어댑터; 엄격한 worktree 격리; 데스크톱·모바일 앱 지원",
+  "cons": "상업 호스팅·브랜딩 제한; 높은 아키텍처 복잡도; 0.4.x 잦은 호환성 변경",
+  "sources": [
+   "https://juejin.cn/post/7686331923204292623",
+   "https://juejin.cn/post/7662325201879318562",
+   "https://github.com/multica-ai/multica",
+   "https://multica.ai"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Star-Office-UI",
+  "url": "https://github.com/ringhyacinth/Star-Office-UI",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "AI 에이전트 작업 상태를 픽셀아트 오피스로 시각화하는 보드",
+  "mobile": "반응형 웹 + 데스크톱 펫(Tauri)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Flask+Phaser)",
+  "license": "MIT",
+  "agent": "OpenClaw 스킬·REST API·Python 푸시 스크립트",
+  "status": "매우 활발(★7.5k, v1.0.0)",
+  "pros": "직관적 픽셀아트 시각화; 멀티에이전트 참여 키; 중·영·일 3개 언어",
+  "cons": "코드리뷰·머지 기능 없음; 아트 에셋 상업 사용 제한; worktree 연동 부족",
+  "sources": [
+   "https://juejin.cn/post/7613971395929112603",
+   "https://github.com/ringhyacinth/Star-Office-UI"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Kanban (agent-kanban.dev)",
+  "url": "https://agent-kanban.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "에이전트가 OpenAPI·CLI로 보드를 운영하는 미션 컨트롤 작업 보드",
+  "mobile": "반응형 웹",
+  "pricing": "무료(셀프호스팅)",
+  "selfhost": "가능(Cloudflare Workers·D1)",
+  "license": "FSL-1.1-ALv2",
+  "agent": "OpenAPI·Realmroot Toolbox CLI·Agent Skills·GitHub App",
+  "status": "활발(★492)",
+  "pros": "서버리스로 운영 부담 적음; 의존성 인식 계획; 사람 리뷰 게이트 강제",
+  "cons": "Cloudflare·Realmroot/Enbor 필요; FSL 소스공개 라이선스; 로컬 터미널 실행 약함",
+  "sources": [
+   "https://agent-kanban.dev",
+   "https://github.com/saltbo/agent-kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kander",
+  "url": "https://github.com/dualface/kander",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "규칙 기반 멀티에이전트 병렬개발 칸반, 2단계 독립 리뷰 게이트",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Go 바이너리+SQLite)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex 등 CLI, 리뷰어 에이전트, worktree",
+  "status": "매우 활발(v0.9.7, ★148)",
+  "pros": "실전 1,726건 처리 검증; 구현·리뷰 에이전트 분리; 충돌 인식 스케줄링",
+  "cons": "엄격한 워크플로; 초기 버전(v0.9.x); 문서 주로 중·영",
+  "sources": [
+   "https://github.com/dualface/kander",
+   "https://github.com/dualface/kander/releases",
+   "https://quicktui.ai/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Nerve (OpenClaw Nerve)",
+  "url": "https://nerve.zone",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "OpenClaw용 실시간 웹 콕핏, 에이전트 칸반·음성·세션 트리",
+  "mobile": "반응형 웹·PWA",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(원라인 설치, Node.js)",
+  "license": "MIT",
+  "agent": "OpenClaw 데몬 네이티브, WebSocket·음성 명령",
+  "status": "활발(★867)",
+  "pros": "칸반+음성+파일탐색 통합; 모바일 웹 UI 우수; 60초 설치",
+  "cons": "OpenClaw 생태계 종속; 리소스 요구 큼; 음성은 권한·API 필요",
+  "sources": [
+   "https://nerve.zone",
+   "https://github.com/daggerhashimoto/openclaw-nerve"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "GitHub Kanban MCP Server (Sunwood AI Labs)",
+  "url": "https://github.com/Sunwood-ai-labs/github-kanban-mcp-server",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "LLM 에이전트가 GitHub 이슈·Projects를 칸반으로 관리하는 MCP 서버",
+  "mobile": "없음(로컬 MCP 서버)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(npm/npx)",
+  "license": "MIT",
+  "agent": "MCP: Claude Desktop·Cursor·Cline·Claude Code",
+  "status": "활동 중(★10)",
+  "pros": "GitHub에 바로 연결; 표준 MCP 즉시 사용; 별도 인프라 불필요",
+  "cons": "자체 시각 대시보드 없음; GitHub 이슈 기능에 한정; 1인 개발",
+  "sources": [
+   "https://github.com/Sunwood-ai-labs/github-kanban-mcp-server",
+   "https://www.pulsemcp.com/servers/sunwood-ai-labs-github-kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "KanBots",
+  "url": "https://kanbots.dev",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "11개 에이전트 CLI를 worktree에서 병렬 실행하는 로컬 칸반 앱",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS) / 클라우드 $19/석/월",
+  "selfhost": "로컬 전용(Electron), 클라우드는 호스팅",
+  "license": "MIT / 상용(클라우드)",
+  "agent": "11개 CLI(Claude Code·Codex 등)+ACP, MCP 서버",
+  "status": "활발(v1.2.0, ★615)",
+  "pros": "11개 CLI 병렬 지원; 사람 개입 결정 프롬프트; 로컬 우선·텔레메트리 없음",
+  "cons": "클라우드 협업 유료; 모바일·웹 없음; 에이전트 CLI 별도 설치 필요",
+  "sources": [
+   "https://news.hada.io/topic?id=29830",
+   "https://github.com/leodavinci1/kanbots",
+   "https://kanbots.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "KaibanJS",
+  "url": "https://www.kaibanjs.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반 보드를 내장한 JS/TS 멀티에이전트 프레임워크",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(npm 패키지)",
+  "license": "MIT",
+  "agent": "LangChainJS, OpenAI·Claude·Gemini·로컬 LLM",
+  "status": "활발(★1.48k)",
+  "pros": "JS/TS 네이티브; 임베드 가능한 칸반 컴포넌트; 토큰·비용 관측",
+  "cons": "기존 CLI 에이전트 관리용 아님; JS 코딩 필요; 비개발자에 부적합",
+  "sources": [
+   "https://news.hada.io/topic?id=17823",
+   "https://www.kaibanjs.com/",
+   "https://github.com/kaiban-ai/kaibanjs"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Claw-Kanban",
+  "url": "https://github.com/GreenSheep01201/Claw-Kanban",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "6개 에이전트 CLI에 역할 기반으로 작업을 배분하는 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node.js 22+·Docker)",
+  "license": "Apache-2.0",
+  "agent": "Claude Code·Codex·Gemini·OpenCode·Copilot·Antigravity",
+  "status": "활발(v1.0.3, ★72)",
+  "pros": "역할 기반 자동 배분; 한국어 문서 제공; AI 프롬프트로 설치",
+  "cons": "작은 커뮤니티; 로컬 CLI 인증 의존; 의존성 시각화 부족",
+  "sources": [
+   "https://github.com/GreenSheep01201/Claw-Kanban",
+   "https://github.com/GreenSheep01201/Claw-Kanban/blob/main/README.ko.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Roadmap Skill",
+  "url": "https://www.npmjs.com/package/roadmap-skill",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반+DAG 그래프와 MCP 서버를 갖춘 로컬 계획 도구",
+  "mobile": "반응형 웹(로컬 네트워크)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(npx)",
+  "license": "MIT",
+  "agent": "MCP 서버·Agent Skills, Claude Code·Codex·Cursor·OpenCode",
+  "status": "활동 중(★81)",
+  "pros": "칸반+DAG 이중 뷰; npx 한 줄 실행; VS Code MCP 원클릭 설치",
+  "cons": "단일 사용자 중심; 클라우드 동기화 없음; 기능 최소",
+  "sources": [
+   "https://github.com/shiquda/roadmap-skill",
+   "https://www.npmjs.com/package/roadmap-skill"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "It's a Plan (itsaplan)",
+  "url": "https://itsaplan.dev/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "사람과 AI 에이전트 협업용 오픈소스 Linear/Plane 대안",
+  "mobile": "반응형 웹·PWA",
+  "pricing": "무료(OSS) / 클라우드 팀 약 $8-12/사용자/월",
+  "selfhost": "가능(Docker·Railway·Coolify)",
+  "license": "AGPL-3.0",
+  "agent": "내장 MCP 서버·REST API·웹훅",
+  "status": "매우 활발(★983)",
+  "pros": "스프린트·로드맵 등 완전한 PM; 에이전트를 팀원으로 지원; 원클릭 배포",
+  "cons": "서버 인프라 필요; AGPL 소스공개 의무; 설치가 무거움",
+  "sources": [
+   "https://itsaplan.dev/",
+   "https://github.com/croffasia/itsaplan"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "Claude Code Agent Monitor",
+  "url": "https://hoangsonww.github.io/Claude-Code-Agent-Monitor/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Cursor·Codex 세션 실시간 모니터링·칸반 대시보드",
+  "mobile": "반응형 웹(+macOS·Windows 앱)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 Node.js+SQLite)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Cursor 훅 스트리밍, MCP",
+  "status": "활발(★1.08k)",
+  "pros": "토큰·비용 분석 통합; 한국어·중국어 문서; 로컬 우선",
+  "cons": "작업 배분보다 관측 중심; 로컬 데몬 필요; 데스크톱 앱은 래퍼",
+  "sources": [
+   "https://hoangsonww.github.io/Claude-Code-Agent-Monitor/",
+   "https://github.com/hoangsonww/Claude-Code-Agent-Monitor"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "OpenKanban",
+  "url": "https://github.com/TechDufus/openkanban",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 코딩 에이전트 오케스트레이션용 Go TUI 칸반",
+  "mobile": "없음(터미널 TUI)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Go 바이너리)",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code·Codex 등 CLI, 티켓별 worktree",
+  "status": "활발(★151)",
+  "pros": "터미널·SSH에서 동작; 카드별 내장 터미널; 초경량",
+  "cons": "웹·모바일 불가; 드래그앤드롭 없음; 외부 연동 적음",
+  "sources": [
+   "https://github.com/TechDufus/openkanban",
+   "https://yetanotherorchestrator.app/apps/openkanban/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Hermes Agent Kanban (NousResearch)",
+  "url": "https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Hermes Agent 내장 멀티에이전트 작업 보드·스웜 실행 엔진",
+  "mobile": "커뮤니티 WebUI로 반응형 웹(코어 CLI)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Python·SQLite)",
+  "license": "MIT",
+  "agent": "hermes kanban CLI·A2A·kanban_* 툴 콜",
+  "status": "매우 활발(★254k)",
+  "pros": "에이전트 런타임 내장; 워커→검증→합성 패턴; 영속 SQLite 큐",
+  "cons": "기본 UI는 CLI뿐; 프로필·스킬 설정 필요; 토큰 소모 큼",
+  "sources": [
+   "https://zenn.dev/zennai_ryutaro/articles/20260525-hermes-kanban-swarm-usage",
+   "https://juejin.cn/post/7661325178647330856",
+   "https://github.com/NousResearch/hermes-agent",
+   "https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Backlog (Nulab)",
+  "url": "https://backlog.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Nulab의 일본 대표 PM·이슈 칸반, Backlog AI 탑재",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(10명) / Starter 약 ¥2,970/월~",
+  "selfhost": "엔터프라이즈만(온프레미스)",
+  "license": "상용",
+  "agent": "Backlog AI·REST API v2·웹훅·커뮤니티 MCP",
+  "status": "운영 중(주간 릴리스)",
+  "pros": "성숙한 UX; 네이티브 모바일 앱; Git·간트·위키 통합",
+  "cons": "상용 유료 SaaS; 자율 코딩 에이전트 아님; 엔터프라이즈 라이선스 비용 큼",
+  "sources": [
+   "https://backlog.com/ja/lp-ai-assistant/",
+   "https://backlog.com/ja/blog/backlog-ai-issue-creation/",
+   "https://qiita.com/tie_rrific/items/8df560b1cb27945bd4c9",
+   "https://backlog.com/ja/mobile/"
+  ],
+  "confidence": "중간"
+ }
+]

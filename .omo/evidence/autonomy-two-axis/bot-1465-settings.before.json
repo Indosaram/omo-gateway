@@ -1,0 +1,5 @@
+{
+  "defaultProvider": "mahoquot",
+  "defaultModel": "nekos-claude-sonnet-5-5",
+  "defaultThinkingLevel": "high"
+}

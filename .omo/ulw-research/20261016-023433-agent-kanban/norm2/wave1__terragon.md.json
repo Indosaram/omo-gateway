@@ -1,0 +1,31 @@
+[
+ {
+  "name": "Terragon (Terragon Labs)",
+  "url": "https://www.terragonlabs.com/",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "격리 샌드박스에서 원격 AI 코딩 에이전트에 비동기 작업 위임·PR 생성하는 클라우드 오케스트레이터",
+  "mobile": "PWA(iOS·Android 홈화면 추가)",
+  "pricing": "14일 체험 / Core $25·Pro $50/사용자/월(종료 전)",
+  "selfhost": "가능(OSS 스냅샷, 복잡한 구성)",
+  "license": "Apache-2.0",
+  "agent": "terry CLI·MCP 서버; Claude Code·Codex·Amp·Gemini CLI·OpenCode",
+  "status": "SaaS 2026-02-09 종료",
+  "pros": "샌드박스 격리·브랜치·PR 자동 Git 워크플로; 다양한 에이전트+BYO 구독 지원; CLI·MCP로 로컬 핸드오프(terry pull --resume)",
+  "cons": "공식 SaaS 종료·신규 가입 불가; 셀프호스팅에 Postgres·Redis·R2 등 복잡한 인프라 필요; 드래그앤드롭 칸반 아닌 상태 목록 중심",
+  "sources": [
+   "https://www.terragonlabs.com/",
+   "https://github.com/terragon-labs/terragon-oss",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/README.md",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/mobile.mdx",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/resources/billing.mdx",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/resources/shutdown.mdx",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/integrations/cli.mdx",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/configuration/mcp-setup.mdx",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/docs/content/docs/tasks/managing-tasks.mdx",
+   "https://raw.githubusercontent.com/terragon-labs/terragon-oss/main/apps/cli/src/mcp-server/index.ts",
+   "https://registry.npmjs.org/@terragon-labs/cli"
+  ],
+  "confidence": "높음"
+ }
+]

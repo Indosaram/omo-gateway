@@ -1,0 +1,6 @@
+#!/bin/sh
+case "$1:$2" in
+  thread:list) exec /usr/bin/env HOME=/Users/indo /Users/indo/.bun/bin/omo "$@" ;;
+  app-server:*) exec /Users/indo/.bun/bin/omo "$@" ;;
+  *) exit 64 ;;
+esac

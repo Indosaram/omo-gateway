@@ -1,0 +1,54 @@
+[
+ {
+  "name": "Gitea",
+  "url": "https://about.gitea.com/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Go로 작성된 경량 자체호스팅 Git·DevOps 서비스, 사용자/저장소/조직 단위 칸반 보드 내장",
+  "mobile": "반응형 웹·PWA (서드파티 GitNex Android 앱)",
+  "pricing": "무료(OSS) / Enterprise $9.50~$19/사용자/월",
+  "selfhost": "가능(바이너리·Docker·Helm)",
+  "license": "MIT",
+  "agent": "REST API·Webhook·tea CLI·커뮤니티 MCP(Claude Code, Codex, Cursor 등)",
+  "status": "활발(v28.1.0, 2026-10-06)",
+  "pros": "매우 가볍고 저사양에서도 구동; 보드 전체 수명주기 REST API 지원; 사용자 제한 없이 칸반 무료",
+  "cons": "에이전트 네이티브 기능(로그·트레이스) 없음; 공식 모바일 앱 없음; 보드 실시간 갱신 미지원",
+  "sources": [
+   "https://about.gitea.com/",
+   "https://about.gitea.com/pricing/",
+   "https://docs.gitea.com/",
+   "https://gitea.com/api/v1/swagger",
+   "https://gitea.com/swagger.v1.json",
+   "https://github.com/go-gitea/gitea",
+   "https://github.com/go-gitea/gitea/releases/tag/v28.1.0",
+   "https://gitea.com/gitea/tea",
+   "https://codeberg.org/gitnex/GitNex"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Forgejo",
+  "url": "https://forgejo.org/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Codeberg e.V. 주도 비영리 커뮤니티의 Gitea 하드포크 포지, 이슈 칸반 보드 제공",
+  "mobile": "반응형 웹·PWA (서드파티 GitNex Android 앱)",
+  "pricing": "무료(OSS, 유료 티어 없음)",
+  "selfhost": "가능(바이너리·Docker·Helm)",
+  "license": "GPL-3.0-or-later",
+  "agent": "Gitea 호환 REST API·Webhook·tea/forgejo-cli·커뮤니티 MCP",
+  "status": "매우 활발(v17.0.0, 2026-10-15)",
+  "pros": "비영리 커뮤니티 거버넌스, 오픈코어 없음; 유료 제한 없는 Gitea 동급 보드; REST API로 에이전트 카드 관리 가능",
+  "cons": "에이전트 계측 기능 없음; 공식 모바일 앱 없음; Windows 서버 공식 지원 중단(2024)",
+  "sources": [
+   "https://forgejo.org/",
+   "https://forgejo.org/faq/",
+   "https://forgejo.org/compare-to-gitea/",
+   "https://codeberg.org/forgejo/forgejo",
+   "https://codeberg.org/api/v1/repos/forgejo/forgejo/releases",
+   "https://codeberg.org/gitnex/GitNex",
+   "https://codeberg.org/"
+  ],
+  "confidence": "높음"
+ }
+]

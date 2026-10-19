@@ -1,0 +1,566 @@
+{
+  "status": "baseline-bounded-pass",
+  "exit_codes": {
+    "pre_manifest": 0,
+    "fmt": 0,
+    "clippy": 0,
+    "tests": 101,
+    "build": 0,
+    "post_manifest": 0,
+    "source_cmp": 0,
+    "binary_copy": 0,
+    "baseline_comparison": 0,
+    "todo20_sentinels": 0,
+    "todo29_sentinel": 0,
+    "final": 0
+  },
+  "test_command": "cargo test --offline --locked -j4 --workspace --all-features --no-fail-fast -- --format pretty",
+  "targets": {
+    "lib:omon_gateway": {
+      "source": "src/lib.rs",
+      "passed": 485,
+      "failed": 0,
+      "ignored": 7,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-lib_omon_gateway.log"
+    },
+    "bin:omo-gateway": {
+      "source": "src/entry.rs",
+      "passed": 66,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-bin_omo-gateway.log"
+    },
+    "test_agent_tools": {
+      "source": "tests/test_agent_tools.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_agent_tools.log"
+    },
+    "test_cron_authority_upgrade": {
+      "source": "tests/test_cron_authority_upgrade.rs",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_authority_upgrade.log"
+    },
+    "test_cron_boundary_parity": {
+      "source": "tests/test_cron_boundary_parity.rs",
+      "passed": 3,
+      "failed": 1,
+      "ignored": 0,
+      "failure_names": [
+        "sync_isolates_bad_jobs_and_rearms_changed_once"
+      ],
+      "status": "FAILED",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_boundary_parity.log"
+    },
+    "test_cron_delivery_parity": {
+      "source": "tests/test_cron_delivery_parity.rs",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_delivery_parity.log"
+    },
+    "test_cron_egress_parity": {
+      "source": "tests/test_cron_egress_parity.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_egress_parity.log"
+    },
+    "test_cron_executor_parity": {
+      "source": "tests/test_cron_executor_parity.rs",
+      "passed": 4,
+      "failed": 1,
+      "ignored": 0,
+      "failure_names": [
+        "agent_result_uses_scheduler_delivery"
+      ],
+      "status": "FAILED",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_executor_parity.log"
+    },
+    "test_cron_health": {
+      "source": "tests/test_cron_health.rs",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 3,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_health.log"
+    },
+    "test_cron_remediation": {
+      "source": "tests/test_cron_remediation.rs",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_remediation.log"
+    },
+    "test_cron_report": {
+      "source": "tests/test_cron_report.rs",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_report.log"
+    },
+    "test_cron_schedule_parity": {
+      "source": "tests/test_cron_schedule_parity.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_schedule_parity.log"
+    },
+    "test_cron_tool_parity": {
+      "source": "tests/test_cron_tool_parity.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_cron_tool_parity.log"
+    },
+    "test_discord_adapter": {
+      "source": "tests/test_discord_adapter.rs",
+      "passed": 59,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_discord_adapter.log"
+    },
+    "test_discord_thread_lifecycle": {
+      "source": "tests/test_discord_thread_lifecycle.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_discord_thread_lifecycle.log"
+    },
+    "test_e2e_stress": {
+      "source": "tests/test_e2e_stress.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_e2e_stress.log"
+    },
+    "test_inbox_cli_digest": {
+      "source": "tests/test_inbox_cli_digest.rs",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_inbox_cli_digest.log"
+    },
+    "test_inbox_proposals": {
+      "source": "tests/test_inbox_proposals.rs",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_inbox_proposals.log"
+    },
+    "test_inbox_sources": {
+      "source": "tests/test_inbox_sources.rs",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 4,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_inbox_sources.log"
+    },
+    "test_inbox_store": {
+      "source": "tests/test_inbox_store.rs",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_inbox_store.log"
+    },
+    "test_inbox_triage": {
+      "source": "tests/test_inbox_triage.rs",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_inbox_triage.log"
+    },
+    "test_judge": {
+      "source": "tests/test_judge.rs",
+      "passed": 22,
+      "failed": 0,
+      "ignored": 3,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_judge.log"
+    },
+    "test_lane_cli": {
+      "source": "tests/test_lane_cli.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_cli.log"
+    },
+    "test_lane_close": {
+      "source": "tests/test_lane_close.rs",
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_close.log"
+    },
+    "test_lane_dispatch": {
+      "source": "tests/test_lane_dispatch.rs",
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_dispatch.log"
+    },
+    "test_lane_done": {
+      "source": "tests/test_lane_done.rs",
+      "passed": 11,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_done.log"
+    },
+    "test_lane_events": {
+      "source": "tests/test_lane_events.rs",
+      "passed": 25,
+      "failed": 0,
+      "ignored": 1,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_events.log"
+    },
+    "test_lane_guard_alerts": {
+      "source": "tests/test_lane_guard_alerts.rs",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_guard_alerts.log"
+    },
+    "test_lane_kibitzer": {
+      "source": "tests/test_lane_kibitzer.rs",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_kibitzer.log"
+    },
+    "test_lane_post_transport": {
+      "source": "tests/test_lane_post_transport.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_post_transport.log"
+    },
+    "test_lane_reopen": {
+      "source": "tests/test_lane_reopen.rs",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_reopen.log"
+    },
+    "test_lane_runner": {
+      "source": "tests/test_lane_runner.rs",
+      "passed": 12,
+      "failed": 0,
+      "ignored": 1,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_runner.log"
+    },
+    "test_lane_scrub": {
+      "source": "tests/test_lane_scrub.rs",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_scrub.log"
+    },
+    "test_lane_status_transport": {
+      "source": "tests/test_lane_status_transport.rs",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_status_transport.log"
+    },
+    "test_lane_thread_transport": {
+      "source": "tests/test_lane_thread_transport.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lane_thread_transport.log"
+    },
+    "test_lanes_storage": {
+      "source": "tests/test_lanes_storage.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_lanes_storage.log"
+    },
+    "test_message_context": {
+      "source": "tests/test_message_context.rs",
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_message_context.log"
+    },
+    "test_migrate": {
+      "source": "tests/test_migrate.rs",
+      "passed": 8,
+      "failed": 2,
+      "ignored": 0,
+      "failure_names": [
+        "cutover_second_store_failure_preserves_bytes_and_receipt",
+        "cutover_survives_startup_sync"
+      ],
+      "status": "FAILED",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_migrate.log"
+    },
+    "test_model_routing": {
+      "source": "tests/test_model_routing.rs",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_model_routing.log"
+    },
+    "test_multiplexer": {
+      "source": "tests/test_multiplexer.rs",
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_multiplexer.log"
+    },
+    "test_omo_backend": {
+      "source": "tests/test_omo_backend.rs",
+      "passed": 48,
+      "failed": 3,
+      "ignored": 1,
+      "failure_names": [
+        "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+        "test_omo_backend_deadline_interrupts_looping_turn",
+        "test_omo_backend_e2e_thread_lifecycle_and_streaming"
+      ],
+      "status": "FAILED",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_omo_backend.log"
+    },
+    "test_profile_import": {
+      "source": "tests/test_profile_import.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_profile_import.log"
+    },
+    "test_profile_routing": {
+      "source": "tests/test_profile_routing.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_profile_routing.log"
+    },
+    "test_review_agent": {
+      "source": "tests/test_review_agent.rs",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_review_agent.log"
+    },
+    "test_review_dashboard": {
+      "source": "tests/test_review_dashboard.rs",
+      "passed": 70,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_review_dashboard.log"
+    },
+    "test_review_discord": {
+      "source": "tests/test_review_discord.rs",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_review_discord.log"
+    },
+    "test_review_security": {
+      "source": "tests/test_review_security.rs",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_review_security.log"
+    },
+    "test_session_registry": {
+      "source": "tests/test_session_registry.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_session_registry.log"
+    },
+    "test_session_registry_task27": {
+      "source": "tests/test_session_registry_task27.rs",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_session_registry_task27.log"
+    },
+    "test_sessions_control": {
+      "source": "tests/test_sessions_control.rs",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_sessions_control.log"
+    },
+    "test_usage_done_gate": {
+      "source": "tests/test_usage_done_gate.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_usage_done_gate.log"
+    },
+    "test_voice_cron": {
+      "source": "tests/test_voice_cron.rs",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_voice_cron.log"
+    },
+    "test_voice_transcription": {
+      "source": "tests/test_voice_transcription.rs",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_voice_transcription.log"
+    },
+    "test_wiring_e2e": {
+      "source": "tests/test_wiring_e2e.rs",
+      "passed": 1,
+      "failed": 1,
+      "ignored": 0,
+      "failure_names": [
+        "test_e2e_actor_omo_backend_persists_assistant_message"
+      ],
+      "status": "FAILED",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_wiring_e2e.log"
+    },
+    "test_work_heartbeat": {
+      "source": "tests/test_work_heartbeat.rs",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-test_work_heartbeat.log"
+    },
+    "doc:omon_gateway": {
+      "source": "omon_gateway",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "failure_names": [],
+      "status": "ok",
+      "log": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-target-doc_omon_gateway.log"
+    }
+  },
+  "new_failures": [],
+  "report_errors": [],
+  "backend_canonical_baseline": [
+    "test_omo_backend_aborts_turn_on_repeated_approval_denials",
+    "test_omo_backend_deadline_interrupts_looping_turn",
+    "test_omo_backend_e2e_thread_lifecycle_and_streaming"
+  ],
+  "baseline": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-baseline.txt",
+    "sha256": "390b137c498a055184a25d76fcf38880d2b92db6acba263b97b6aa961d9e684c"
+  },
+  "binary": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/release-bins/4903aad46ca3bbcd87b09c21573c98c1711bf96ddcde841fd2ca88a7f3925cb7/omo-gateway",
+    "sha256": "4903aad46ca3bbcd87b09c21573c98c1711bf96ddcde841fd2ca88a7f3925cb7"
+  },
+  "pre_manifest": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-pre.sha256",
+    "sha256": "9ca7c9105cae355991b7cbeb66f5edc06881b92caac3fd7173725fba1978d1f5"
+  },
+  "post_manifest": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-verify-post.sha256",
+    "sha256": "9ca7c9105cae355991b7cbeb66f5edc06881b92caac3fd7173725fba1978d1f5"
+  },
+  "tmpdir": "/tmp/dori-final-verify.YUhPZp",
+  "tmpdir_retained": true,
+  "integration_receipt": {
+    "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/final-integration.md",
+    "sha256": "140da1ee8b56bd408eacc00f94fb17217905e3d384271ee01a334d5c25d0721c"
+  }
+}

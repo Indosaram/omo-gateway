@@ -1,0 +1,23 @@
+[
+  {
+    "id": "20000000000000002",
+    "logId": "20000000000000002",
+    "authorId": "30000000000000001",
+    "type": 1,
+    "real_type": 1,
+    "text": "[REDACTED MESSAGE TEXT]",
+    "message": "[REDACTED MESSAGE TEXT]",
+    "authorName": "[REDACTED AUTHOR]"
+  },
+  {
+    "id": "20000000000000001",
+    "logId": "20000000000000001",
+    "authorId": "30000000000000001",
+    "type": 1,
+    "real_type": 1,
+    "text": "[REDACTED MESSAGE TEXT]",
+    "message": "[REDACTED MESSAGE TEXT]",
+    "authorName": "[REDACTED AUTHOR]"
+  }
+]
+

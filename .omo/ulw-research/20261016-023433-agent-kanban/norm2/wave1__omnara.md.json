@@ -1,0 +1,31 @@
+[
+ {
+  "name": "Omnara",
+  "url": "https://www.omnara.com/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code·Codex 원격 제어에서 출발한 오픈소스 관리형 에이전트 플랫폼",
+  "mobile": "iOS·Android 앱, Apple Watch, 반응형 웹",
+  "pricing": "무료(OSS) / 클라우드 플랫폼비 $0, 컴퓨트 종량제",
+  "selfhost": "가능(Docker Compose)",
+  "license": "Apache-2.0",
+  "agent": "MCP 서버·REST API·SDK·CLI; Claude Code·Codex·Cursor",
+  "status": "활발(★2,921, 2026-10 릴리스)",
+  "pros": "iOS·Android·Watch·데스크톱 네이티브 앱; Postgres 이벤트 로그로 세션 유지·클라우드 이전; 모델·샌드박스 무관, 플랫폼비 0",
+  "cons": "전통적 칸반 보드 아님; 빠른 구조 변화로 설정 추적 필요; 셀프호스팅 시 Postgres·Redis·스토리지 필요",
+  "sources": [
+   "https://www.omnara.com/",
+   "https://www.omnara.co/",
+   "https://www.omnara.com/pricing",
+   "https://github.com/omnara-ai/omnara",
+   "https://api.github.com/repos/omnara-ai/omnara",
+   "https://api.github.com/repos/omnara-ai/omnara/releases",
+   "https://docs.omnara.com/introduction",
+   "https://docs.omnara.com/tools/mcp",
+   "https://docs.omnara.com/api/authentication",
+   "https://docs.omnara.com/changelog",
+   "https://www.omnara.com/blog/mobile-coding-landscape"
+  ],
+  "confidence": "높음"
+ }
+]

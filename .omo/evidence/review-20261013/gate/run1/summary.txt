@@ -1,0 +1,7 @@
+fmt EXIT=0
+clippy EXIT=0
+test EXIT=101
+web-test EXIT=0
+web-tsc EXIT=0
+web-build EXIT=0
+GATE_DONE

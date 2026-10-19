@@ -1,0 +1,33 @@
+### Redmine (with Agile/Kanban plugins)
+- URL: https://www.redmine.org (Plugins: https://www.redmineup.com/pages/plugins/agile, https://www.redmineflux.com/product/redmine-plugins/agile-board)
+- Kind: general-kanban-with-agent-integration
+- What: Redmine is a classic open-source project management and issue tracking web application written in Ruby on Rails. When combined with Agile/Kanban plugins (such as RedmineUP Agile or Redmineflux Agile Board), it provides customizable drag-and-drop Kanban boards, Scrum sprint planning, WIP limits, and swimlanes.
+- Agent integration: REST API (official JSON/XML API with API token or basic auth), Webhooks (via plugins like redmine_webhook), and dedicated community MCP servers including `jztan/redmine-mcp-server` (53 core tools + 15 plugin tools supporting Claude Code, Cursor, Codex CLI, and rendering interactive in-chat Kanban MCP Apps), `runekaagaard/mcp-redmine`, and `onozaty/redmine-mcp-server`.
+- Mobile: Responsive web layout supported out-of-the-box in modern Redmine core (official responsive stylesheet since Redmine 3.2+). No official first-party mobile app from redmine.org, but third-party native apps exist on iOS App Store and Google Play (e.g., RedminePM, Redminer, Redmine Client).
+- Pricing: Core Redmine is 100% free open-source software. Agile plugins follow freemium models: RedmineUP Agile has a free Light version and PRO licenses at $499 one-time (single-server) or $1,199 one-time (multi-server) including 1 year of updates/support; Redmineflux Agile Board starts at $499 one-time.
+- Self-host: Yes. Fully self-hostable via Docker, Docker Compose, Linux packages, or source install (Ruby on Rails + PostgreSQL/MySQL/SQLite/SQL Server). No enterprise-only lockouts on core functionality.
+- License: GNU General Public License v2 (GPL-2.0) for Redmine core; RedmineUP Light plugin is free/commercial dual-license (PRO is proprietary commercial).
+- Activity: GitHub mirror `redmine/redmine` has 6,045+ stars, active upstream commits on 2026-10-16 (Subversion primary repository). RedmineUP Agile plugin v1.7.0 released on 2026-09-02 with Redmine 7.0/6.1 compatibility. Community MCP server `jztan/redmine-mcp-server` active in October 2026.
+- Pros: Mature ecosystem with battle-tested stability and extensible plugin architecture; comprehensive official REST API covering tickets, custom fields, and time logs; strong MCP ecosystem with dedicated tools (e.g. `jztan/redmine-mcp-server`) featuring prompt injection guardrails, OAuth2, and in-chat Kanban app rendering; completely free self-hosted core with no per-user monthly SaaS fees.
+- Cons: Outdated legacy UI compared to modern agent-native boards; stock core lacks built-in drag-and-drop Kanban (requires commercial or third-party plugins); Ruby on Rails deployment and plugin dependency management can be cumbersome to maintain; no official first-party native mobile app.
+- Sources: https://www.redmine.org, https://www.redmine.org/plugins/redmine_agile, https://www.redmineup.com/pages/plugins/agile, https://github.com/redmine/redmine, https://github.com/jztan/redmine-mcp-server, https://redmine-mcp-server.jztan.com/
+- Confidence: high
+
+### Phabricator / Phorge Workboards
+- URL: https://phorge.it (Documentation: https://projects.clusterlabs.org/book/phorge/, GitHub mirror: https://github.com/phorgeit/phorge, Legacy upstream: https://github.com/phacility/phabricator)
+- Kind: general-kanban-with-agent-integration
+- What: Phorge is the active open-source, community-maintained successor and fork of Phabricator, providing an integrated software forge that combines code review (Differential), bug tracking (Maniphest), repository hosting (Diffusion), and customizable project Kanban workboards. Workboards offer multi-column task boards with customizable policies, triggers, milestones (sprints), and subprojects.
+- Agent integration: Native JSON-RPC "Conduit" REST API (`maniphest.edit`, `maniphest.search`, `project.search`, `project.column.search`), official Arcanist CLI (`arc conduit`, `arc which`), and community MCP server `cortex-app/conduit` (formerly `mcpnow-io/conduit`, exposing Conduit API tools via stdio or HTTP/SSE for agents like Claude Code, Codex, and Cursor).
+- Mobile: Responsive web interface optimized for mobile browsers. No official native iOS or Android app; no official PWA.
+- Pricing: 100% free open-source software. No user tiers, paywalls, or commercial seat charges (Phacility's paid SaaS shutdown in 2021; Phorge is fully volunteer/community driven).
+- Self-host: Yes. Fully self-hostable on Linux/FreeBSD/macOS using standard LAMP/LEMP stacks (PHP 7.4-8.x + MySQL/MariaDB) or community Docker containers (e.g., bitnami/phorge or custom compose stacks). No enterprise editions or feature paywalls.
+- License: Apache License 2.0 (both Phorge and Arcanist).
+- Activity: Original Phabricator by Phacility was archived/shut down on 2021-06-01 (12,286 GitHub stars). Fork Phorge is active with 205+ GitHub mirror stars, upstream commits active on 2026-10-14, and community MCP server `cortex-app/conduit` active through 2026.
+- Pros: Deeply integrated code review and task board workflows with powerful transaction audit trails; flexible subproject, milestone, and workboard column automation; Conduit API is exceptionally structured and transaction-safe for programmatic editing by AI agents; completely free and permissive open-source license (Apache 2.0) with zero feature paywalls.
+- Cons: Steep administrative learning curve and unconventional terminology (Maniphest, Diffusion, Herald, Conduit); legacy PHP architecture requires dedicated maintenance and daemons (phd); original author Phacility is defunct, relying entirely on the grassroots Phorge volunteer community; mobile experience is limited to responsive browser view without native push notifications.
+- Sources: https://phorge.it, https://github.com/phorgeit/phorge, https://github.com/phacility/phabricator, https://github.com/phorgeit/arcanist, https://github.com/cortex-app/conduit, https://projects.clusterlabs.org/book/phorge/article/conduit_edit/, https://projects.clusterlabs.org/book/phorge/article/projects/
+- Confidence: high
+
+## EXPAND
+- LEAD: Easy Redmine — WHY: Commercial fork of Redmine with a redesigned React-based Kanban/Scrum interface, native mobile app, and official AI assistant features — ANGLE: "Easy Redmine" mobile app pricing kanban AI agent 2026
+- LEAD: Phorge Herald Webhooks & Conduit column movement — WHY: Moving task cards across Phorge workboard columns programmatically requires specific transaction types in Conduit (`maniphest.edit` column transaction) — ANGLE: "maniphest.edit" "columnPHID" phorge conduit transaction documentation

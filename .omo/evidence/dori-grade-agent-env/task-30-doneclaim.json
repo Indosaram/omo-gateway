@@ -1,0 +1,137 @@
+{
+  "task": 30,
+  "title": "Detect cron problems when run results are written",
+  "status": "source_ready30_tests_and_live_qa_pending",
+  "completion_claimed": false,
+  "source_settled": true,
+  "worktree": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+  "migration": {
+    "path": "migrations/0035_cron_problems.sql",
+    "reservation_basis": "Inspected target worktree with migrations/0034_inbox.sql present and 0035 absent before adding the cron migration.",
+    "inbox_migration_modified": false
+  },
+  "change_inventory": [
+    {
+      "path": "src/cron/health.rs",
+      "change": "Adds model-free SQL classification from committed cron_runs status/error; emits cron_problem lane_events transactionally for new problems; implements OMON_CRON_WATCH_ENABLED with default true; excludes a missed occurrence when a run started inside its scheduled occurrence window."
+    },
+    {
+      "path": "src/cron/scheduler.rs",
+      "change": "Uses the coordinator-owned super::health import once; awaits health handling synchronously after committed terminal results and lease reclaim, and performs one startup missed-occurrence scan before spawning the scheduler loop. Health errors are logged without changing committed cron outcomes; catch-up missed writes are synchronous. Delivery failure is passed as a typed execution-path flag, not classified from error prose."
+    },
+    {
+      "path": "migrations/0035_cron_problems.sql",
+      "change": "Adds cron_problems with unique (job_id, kind, signature), lifecycle status constraint, optional lane_key and timestamps."
+    },
+    {
+      "path": "tests/test_cron_health.rs",
+      "change": "Adds in-memory scheduler/fake-executor fixtures for failed outcome, delivery failure, stuck reclaim, expected-output mismatch and recovery, no-expect success, health DB errors, startup missed idempotence, and a late-started run negative case. Adds an isolated subprocess kill-switch test that runs the actual scheduler with OMON_CRON_WATCH_ENABLED=false and asserts committed failed run plus zero problem/event rows. Fixtures were not compiled or executed."
+    },
+    {
+      "path": "src/cron/mod.rs",
+      "change": "Coordinator-owned current checkout declares pub mod health; not edited by this worker."
+    },
+    {
+      "path": "Cargo.toml",
+      "change": "Coordinator-owned current checkout contains a test_cron_health test registration; not edited by this worker."
+    }
+  ],
+  "nine_class_accounting": [
+    {
+      "class": "T30-TERMINAL: failed terminal outcome and duplicate calls",
+      "source": "implemented; terminal row is read from committed cron_runs and inserts are unique",
+      "test": "fixture present; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-MISSED: expired lease and late executor completion",
+      "source": "implemented via successful reclaim update then synchronous stuck classification",
+      "test": "stuck reclaim fixture present; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-TERMINAL: delivery error and destination success",
+      "source": "typed flag set only on primary destination delivery failure; hook requires committed failed status",
+      "test": "delivery fixture present; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-TESTS: opt-in empty output, absent expect, invalid regex",
+      "source": "expect regex evaluated against persisted output; malformed regex becomes an explicit empty_success detail",
+      "test": "mismatch and no-expect fixtures present; malformed-regex fixture absent; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-TERMINAL: clean success and recurrence/deduplication",
+      "source": "clean success fixes open/remediating/needs_owner rows; uniqueness suppresses duplicate signatures",
+      "test": "recovery fixture present; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-MISSED: startup/catch-up and already-running occurrence",
+      "source": "startup inspection runs once before scheduler loop; missed lookup uses occurrence started_at window",
+      "test": "startup idempotence and late-run negative fixtures present; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-ISOLATION: kill switch and health database errors",
+      "source": "switch disables hooks; hook SQL errors are logged after committed run outcome",
+      "test": "health DB error fixtures and isolated kill-switch no-write subprocess fixture present; unrun",
+      "verified": false
+    },
+    {
+      "class": "T30-EVENT: event atomicity, FK validity, lead assumptions",
+      "source": "problem and lane_event inserts share a transaction; migration permits nullable lane_key",
+      "test": "not runtime verified",
+      "verified": false
+    },
+    {
+      "class": "T30-TESTS: determinism, resource safety, no polling/models",
+      "source": "no new timer, model call, or extra health task; health SQL is synchronous",
+      "test": "Notify-based scheduler fixtures; compile/runtime unverified",
+      "verified": false
+    }
+  ],
+  "ultraqa_adversarial_classes": [
+    "Terminal outcome duplication and idempotency",
+    "Lease expiry/reclaim and late completion",
+    "Delivery outcome versus destination failure",
+    "Expectation parsing and output semantics",
+    "Recovery and recurrence/deduplication",
+    "Startup/catch-up and already-running occurrences",
+    "Kill-switch and health database failures",
+    "Problem/event atomicity and lane assumptions",
+    "Determinism, resource lifecycle, no polling/model work"
+  ],
+  "wiring": {
+    "observed": "At final inspection src/cron/mod.rs declared pub mod health; and scheduler.rs imported super::health once. Cargo.toml registered test_cron_health.",
+    "required_import_expectation": "Keep the cron module declaration in src/cron/mod.rs and the single use super::health in scheduler.rs. Do not add a second #[path] module declaration in scheduler.rs."
+  },
+  "verification": {
+    "rustfmt_check": "passed after formatting src/cron/health.rs, src/cron/scheduler.rs and tests/test_cron_health.rs",
+    "git_diff_check": "passed for owned source, migration and test paths",
+    "focused_cargo_test": "not run per explicit instruction; focused and full batch remain pending",
+    "last_observed_focused_build": "Earlier run exited 101 before tests ran; compiler reported bool-versus-integer comparisons in task9-owned src/lanes/runner.rs at lines 402, 421 and 501. This is historical output, not a rerun or baseline claim.",
+    "lsp": "not available as evidence; daemon timed out on diagnostics requests"
+  },
+  "live_qa": {
+    "status": "pending",
+    "happy_scenario": "Run debug gateway against an isolated scratch DB with qa-cron-fail; verify cron_problems and cron_problem lane_event timestamps against completed_at in task-30.log.",
+    "success_scenario": "Run a successful QA job; verify no problem row and no model call in gateway.log.",
+    "cleanup": "Not applicable to this turn: no scratch DB, gateway process, QA cron job, temp script, or QA log was created. Existing target-w4 compilation artifacts were not removed."
+  },
+  "independent_review_reconciliation": {
+    "R1_startup_missed_window": "Addressed in source: startup evaluates persisted next_run_at and its next scheduled boundary. The positive interval:1h fixture is enabled and scheduled two hours ago; start().await completes the startup scan before loop creation, the test observes the row, then Notify blocks due execution before success cleanup. The late-run fixture places a run 30 minutes into the same completed window. Manual source trace only; unrun.",
+    "R2_periodic_scan": "Addressed in source: the full missed scan is awaited once before scheduler-loop spawn; it is absent from the recurring loop. Existing catch-up recording remains at claim transition points.",
+    "R3_secondary_delivery_flag": "Addressed in source: only failures sending primary execution output set delivery_failed; failure-alert transport errors log without changing primary terminal classification.",
+    "R4_late_run_fixture_sql": "Addressed in source: late-run INSERT supplies all eleven cron_runs columns, including three timestamps; run starts 30 minutes into the examined one-hour occurrence window.",
+    "R5_payload_string_parse": "Addressed in source: parsed directly from the unwrapped String with serde_json::from_str.",
+    "preserved_kill_switch_test": "Isolated subprocess behavioral test remains in tests/test_cron_health.rs; it is unrun.",
+    "remaining_verification": "No Cargo tests or live scratch-gateway QA were run; these remain pending."
+  },
+  "remaining_gates": [
+    "Run focused and full batch tests after coordinator batch permits Cargo.",
+    "Perform the two named scratch-gateway scenarios and record actual timestamps, log evidence and cleanup receipts.",
+    "Review the unexecuted fixture paths and migration integration; no runtime behavior is claimed as verified."
+  ]
+}

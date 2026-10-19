@@ -1,0 +1,60 @@
+diff --git a/src/entry.rs b/src/entry.rs
+--- a/src/entry.rs
++++ b/src/entry.rs
+@@ -54,3 +54,4 @@
+     Lane(omon_gateway::lanes::cli::LaneArgs),
++    Inbox(omon_gateway::inbox::cli::InboxArgs),
+     Profile(ProfileArgs),
+     Sessions(SessionsArgs),
+@@ -105,3 +106,6 @@
+         std::process::exit(omon_gateway::lanes::cli::run(args).await);
+     }
++    if let Command::Inbox(args) = command {
++        std::process::exit(omon_gateway::inbox::cli::run(args).await);
++    }
+     if let Command::Profile(args) = command {
+@@ -125,3 +129,4 @@
+         Command::Lane(args) => std::process::exit(omon_gateway::lanes::cli::run(args).await),
++        Command::Inbox(args) => std::process::exit(omon_gateway::inbox::cli::run(args).await),
+         Command::Profile(args) => std::process::exit(run_profile(args).await),
+         Command::Sessions(args) => std::process::exit(run_sessions(args).await),
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -917,15 +917,33 @@
+ 
+     let scheduler = CronScheduler::with_dispatcher(
+         pool.clone(),
+-        Arc::new(AgentCronExecutor {
+-            backend: cron_backend,
+-            workspace_root: config.workspace_root.clone(),
++        Arc::new(omon_gateway::inbox::digest::DigestExecutor {
+             pool: pool.clone(),
+-            cron_script_timeout_secs: config.cron_script_timeout_secs,
++            inner: Arc::new(AgentCronExecutor {
++                backend: cron_backend,
++                workspace_root: config.workspace_root.clone(),
++                pool: pool.clone(),
++                cron_script_timeout_secs: config.cron_script_timeout_secs,
++            }),
+         }),
+         discord_egress,
+     )
+     .with_hermes_sync(cron_sync);
++    // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
++    let owner = "414011632306618368";
++    let home: Option<String> = sqlx::query_scalar(
++        "SELECT session_key FROM sessions WHERE platform='discord' AND guild_id IS NULL \
++         AND thread_id IS NULL AND user_id=? ORDER BY updated_at DESC LIMIT 1",
++    )
++    .bind(owner)
++    .fetch_optional(&pool)
++    .await?;
++    if let Some(home) = home {
++        let home = home.parse::<SessionKey>()?;
++        omon_gateway::inbox::digest::register(&pool, &scheduler, &home, owner).await?;
++    } else {
++        warn!("inbox digest not registered: owner home DM is not yet persisted");
++    }
+     scheduler.start().await;
+     cron_tool.bind_scheduler(Arc::new(scheduler.clone()));

@@ -1,0 +1,53 @@
+[
+ {
+  "name": "Todoist",
+  "url": "https://todoist.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "리스트·캘린더·보드(칸반) 뷰를 갖춘 개인/팀 작업 관리 서비스",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료 / Pro $5~7/월 / Business $8~10/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 호스팅 MCP·CLI(td)·REST/Sync API·SDK; Claude Code·Cursor·Codex 등",
+  "status": "활발(MCP v13.5.0, 2026.10)",
+  "pros": "공식 호스팅 MCP와 OAuth 무설정 연결; 에이전트 스킬 설치 지원 공식 CLI; 무료·유료 모두 모바일 보드 뷰",
+  "cons": "셀프호스팅 불가; 무료는 프로젝트 5개 제한; 커스텀 스윔레인·WIP 제한 없음",
+  "sources": [
+   "https://developer.todoist.com",
+   "https://github.com/Doist/todoist-mcp",
+   "https://github.com/Doist/todoist-cli",
+   "https://www.todoist.com/pricing",
+   "https://www.todoist.com/help/account-and-billing/plans/todoist-plans-pricing-and-billing-faq-Vq2z0HWL6",
+   "https://todoist.com/help/articles/view-a-project-as-a-board-8g6Yj4",
+   "https://lifehacker.com/organize-your-life-with-todoists-new-kanban-boards-1845170016"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "TickTick",
+  "url": "https://ticktick.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "GTD 작업·칸반·캘린더·습관·뽀모도로 통합 개인 생산성 앱",
+  "mobile": "iOS·Android 앱, 반응형 웹",
+  "pricing": "무료 / Premium $3.99/월 또는 $35.99/년",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "커뮤니티 MCP(비공식)·공식 Open API v1·비공식 V2 API",
+  "status": "활발(SaaS 유지보수 중)",
+  "pros": "칸반·캘린더·습관·뽀모도로 올인원; 저렴한 프리미엄 요금; 커뮤니티 MCP로 칸반 컬럼 CRUD 가능",
+  "cons": "공식 MCP·CLI 없음; 공식 API에 칸반 컬럼 관리 없음; 2FA가 V2 세션 MCP와 충돌",
+  "sources": [
+   "https://ticktick.com",
+   "https://blog.ticktick.com/2020/07/03/kanban-manage-projects-on-the-go",
+   "https://help.ticktick.com/articles/7055782353376903168",
+   "https://ticktick.com/about/download",
+   "https://github.com/dev-mirzabicer/ticktick-sdk",
+   "https://github.com/liadgez/ticktick-mcp-server",
+   "https://developer.ticktick.com",
+   "https://pcmag.com/reviews/ticktick"
+  ],
+  "confidence": "높음"
+ }
+]

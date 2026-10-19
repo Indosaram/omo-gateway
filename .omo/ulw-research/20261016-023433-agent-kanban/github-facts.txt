@@ -1,0 +1,46 @@
+eyaltoledano/claude-task-master|NOASSERTION|28231|2026-04-28|archived=false
+MrLesk/Backlog.md|MIT|7044|2026-10-15|archived=false
+stravu/crystal|MIT|3132|2026-02-26|archived=false
+smtg-ai/claude-squad|AGPL-3.0|8609|2026-08-20|archived=false
+omnara-ai/omnara|Apache-2.0|2921|2026-10-16|archived=false
+slopus/happy|MIT|24166|2026-10-15|archived=false
+cjo4m06/mcp-shrimp-task-manager|MIT|2146|2025-08-21|archived=false
+getAsterisk/opcode|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+siteboon/claudecodeui|AGPL-3.0|14110|2026-10-15|archived=false
+asheshgoplani/agent-deck|MIT|1092|2026-10-14|archived=false
+generalaction/emdash|Apache-2.0|5994|2026-10-14|archived=false
+wandb/catnip|HTTP 404 Not Found
+All-Hands-AI/OpenHands|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+makeplane/plane|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+hcengineering/platform|EPL-2.0|27912|2026-10-14|archived=false
+wekan/wekan|MIT|21120|2026-10-15|archived=false
+kanboard/kanboard|MIT|9907|2026-10-14|archived=false
+mattermost-community/focalboard|NOASSERTION|26506|2026-05-18|archived=false
+plankanban/planka|NOASSERTION|12619|2026-10-12|archived=false
+go-vikunja/vikunja|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+opf/openproject|GPL-3.0|16435|2026-10-15|archived=false
+Leantime/leantime|AGPL-3.0|11837|2026-10-15|archived=false
+BaldissaraMatheus/Tasks.md|MIT|2203|2026-03-08|archived=false
+kanbn/kan|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+nextcloud/deck|AGPL-3.0|1427|2026-10-16|archived=false
+AppFlowy-IO/AppFlowy|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+taigaio/taiga-back|MPL-2.0|857|2026-09-28|archived=false
+manaflow-ai/cmux|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+coder/mux|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+superset-sh/superset|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+TechDufus/openkanban|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+steveyegge/gastown|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+coder/coder|HTTP 403 API rate limit exceeded for 218.51.49.176. (But here's the good news: Authenticated requests get a higher rate limit. Check out the documentation for more details.)
+# retry via gh (authenticated)
+getAsterisk/opcode|AGPL-3.0|22418|2026-09-18|false
+All-Hands-AI/OpenHands|MIT|91011|2026-10-16|false
+makeplane/plane|AGPL-3.0|60904|2026-10-15|false
+go-vikunja/vikunja|AGPL-3.0|5756|2026-10-15|false
+kanbn/kan|AGPL-3.0|5770|2026-10-02|false
+AppFlowy-IO/AppFlowy|AGPL-3.0|77409|2026-10-08|false
+manaflow-ai/cmux|NOASSERTION|28198|2026-10-16|false
+coder/mux|AGPL-3.0|2055|2026-10-16|false
+superset-sh/superset|NOASSERTION|15241|2026-10-16|false
+TechDufus/openkanban|AGPL-3.0|151|2026-06-12|false
+steveyegge/gastown|MIT|18383|2026-10-15|false
+coder/coder|AGPL-3.0|17038|2026-10-16|false

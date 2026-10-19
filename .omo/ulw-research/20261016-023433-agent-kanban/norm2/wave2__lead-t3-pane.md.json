@@ -1,0 +1,43 @@
+[
+ {
+  "name": "T3 Code (pingdotgg/t3code)",
+  "url": "https://t3.codes",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "로컬 코딩 에이전트를 데스크톱·웹·모바일에서 제어하는 오픈소스 컨트롤 서피스",
+  "mobile": "iOS·Android 앱 + 웹 앱",
+  "pricing": "무료(OSS, 기존 구독 사용)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Cursor·Grok Build·OpenCode·Antigravity 제어",
+  "status": "활발(스타 27,801, 2026-10-16 push)",
+  "pros": "iOS·Android 모바일 앱 지원; 지원 에이전트 다수; MIT 무료",
+  "cons": "칸반 뷰 없음(세션 중심); 팀 협업 기능 제한적; 모바일 원격 시 데스크톱 상시 실행 필요",
+  "sources": [
+   "https://raw.githubusercontent.com/pingdotgg/t3code/main/README.md",
+   "https://t3.codes"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Pane (RunPane)",
+  "url": "https://runpane.com",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "CLI 코딩 에이전트를 실제 터미널에서 병렬 관리하는 터미널 우선 매니저",
+  "mobile": "Remote Pane(앱/웹 형태 미확인)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(데스크톱 앱)",
+  "license": "커스텀(GitHub 'Other')",
+  "agent": "임의 CLI 에이전트(Claude Code·Codex 등), npm CLI",
+  "status": "활동 중(스타 547, 2026-10-15)",
+  "pros": "실제 터미널 그대로 사용; Windows/WSL 네이티브; 오픈소스",
+  "cons": "칸반 보드 아님; Windows 바이너리 미서명; 모바일 형태 불명확",
+  "sources": [
+   "https://runpane.com",
+   "https://runpane.com/compare/vibe-kanban",
+   "https://github.com/greenfield-inc/Pane"
+  ],
+  "confidence": "중간"
+ }
+]

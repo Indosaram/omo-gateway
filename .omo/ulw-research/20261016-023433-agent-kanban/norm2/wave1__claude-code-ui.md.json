@@ -1,0 +1,34 @@
+[
+ {
+  "name": "Claude Code UI (CloudCLI)",
+  "url": "https://cloudcli.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Claude Code·Codex 등 AI 코딩 에이전트 CLI 세션을 관리하는 웹 GUI/IDE",
+  "mobile": "반응형 웹·PWA (네이티브 앱 개발 중)",
+  "pricing": "무료(OSS) / 클라우드 €7~€39/월, 엔터프라이즈 별도",
+  "selfhost": "가능(npx·Docker 샌드박스·PM2)",
+  "license": "AGPL-3.0-or-later",
+  "agent": "Claude Code·Codex·Cursor·Gemini CLI·OpenCode; REST·MCP",
+  "status": "활발(~14.1k★, v1.37.4)",
+  "pros": "다중 에이전트 CLI 지원; TaskMaster 칸반 내장; npx 한 줄 로컬 실행",
+  "cons": "네이티브 모바일 앱 미출시; AGPL 카피레프트 제약; 팀 공유·상시 실행은 유료 클라우드 필요",
+  "sources": [
+   "https://github.com/siteboon/claudecodeui",
+   "https://cloudcli.ai",
+   "https://cloudcli.ai/docs",
+   "https://cloudcli.ai/claude-code-mobile",
+   "https://cloudcli.ai/download",
+   "https://github.com/siteboon/claudecodeui/releases",
+   "https://raw.githubusercontent.com/siteboon/claudecodeui/main/package.json",
+   "https://raw.githubusercontent.com/siteboon/claudecodeui/main/LICENSE",
+   "https://raw.githubusercontent.com/siteboon/claudecodeui/main/server/index.ts",
+   "https://raw.githubusercontent.com/siteboon/claudecodeui/main/server/modules/taskmaster/taskmaster.routes.ts",
+   "https://raw.githubusercontent.com/siteboon/claudecodeui/main/src/modules/task-master/TaskBoard.tsx",
+   "https://raw.githubusercontent.com/siteboon/claudecodeui/main/src/modules/task-master/utils/taskKanban.ts",
+   "https://github.com/szmidtpiotr/claude-github-issue",
+   "https://github.com/TadMSTR/cloudcli-plugin-task-queue"
+  ],
+  "confidence": "높음"
+ }
+]

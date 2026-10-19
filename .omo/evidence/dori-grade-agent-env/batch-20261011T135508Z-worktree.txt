@@ -1,0 +1,70 @@
+ M Cargo.toml
+ M bin/omomeow-delegate
+ M bot_profiles/omomeow.json
+ M docs/AGENTS_DELEGATE.md
+ M src/agent/mod.rs
+ M src/agent/omo_backend.rs
+ M src/agent/omo_config.rs
+ M src/cron/mod.rs
+ M src/cron/scheduler.rs
+ M src/discord/adapter.rs
+ M src/entry.rs
+ M src/lib.rs
+ M src/main.rs
+ M src/models/events.rs
+ M src/multiplexer/actor.rs
+ M src/multiplexer/router.rs
+ M src/storage/db.rs
+ M src/storage/message_search.rs
+ M src/storage/mod.rs
+ M src/work_heartbeat.rs
+ M tests/test_omo_backend.rs
+ M tests/test_omomeow_delegate.sh
+?? .omo/evidence/dori-grade-agent-env-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo10-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo11-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo20-pre-review.md
+?? .omo/evidence/dori-grade-agent-env-todo33-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo34-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo4-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo5-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo6-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo7-gate-review.md
+?? .omo/evidence/dori-grade-agent-env-todo9-pre-review.md
+?? .omo/evidence/dori-grade-agent-env/
+?? .omo/evidence/task-27-fix.md
+?? .omo/evidence/task8gate-review.md
+?? bot_profiles/blocks/
+?? migrations/0031_lanes.sql
+?? migrations/0032_judge_calls.sql
+?? migrations/0033_lane_inbox.sql
+?? migrations/0034_inbox.sql
+?? migrations/0035_cron_problems.sql
+?? src/cron/health.rs
+?? src/inbox/
+?? src/judge/
+?? src/lanes/
+?? src/profiles/
+?? src/sessions/
+?? src/storage/lanes.rs
+?? target-w3-task3/
+?? target-w3/
+?? target-w33/
+?? target-w34/
+?? target-w4/
+?? target-w5/
+?? target-w6/
+?? tests/fixtures/
+?? tests/test_cron_health.rs
+?? tests/test_inbox_sources.rs
+?? tests/test_inbox_store.rs
+?? tests/test_judge.rs
+?? tests/test_lane_cli.rs
+?? tests/test_lane_events.rs
+?? tests/test_lane_reopen.rs
+?? tests/test_lane_runner.rs
+?? tests/test_lane_scrub.rs
+?? tests/test_lanes_storage.rs
+?? tests/test_model_routing.rs
+?? tests/test_profile_import.rs
+?? tests/test_session_registry.rs

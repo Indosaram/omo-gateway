@@ -1,0 +1,29 @@
+[
+ {
+  "name": "OpenAI Codex Cloud Tasks Dashboard",
+  "url": "https://chatgpt.com/codex",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "클라우드·로컬 Codex 코딩 태스크의 상태·Diff·승인·로그를 모니터링하는 대시보드",
+  "mobile": "iOS·Android 앱(ChatGPT 내), 반응형 웹",
+  "pricing": "ChatGPT 플랜 기반: Plus ₩29,000/월부터 Cloud 포함",
+  "selfhost": "불가(SaaS), CLI·App Server만 로컬",
+  "license": "상용",
+  "agent": "Codex SDK·App Server(JSON-RPC)·CLI, GitHub/Linear/Slack",
+  "status": "활성 GA 운영 중",
+  "pros": "PC 오프라인에도 클라우드 백그라운드 실행; 네이티브 앱·위젯으로 모바일 승인 원활; 로컬·클라우드 통합 조회",
+  "cons": "커스텀 칸반 아닌 목록형 콘솔 UI; ChatGPT 유료 구독 종속; 타사 에이전트용 공개 REST 제한적",
+  "sources": [
+   "https://chatgpt.com/codex",
+   "https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan",
+   "https://chatgpt.com/pricing/",
+   "https://learn.chatgpt.com/docs/cloud",
+   "https://learn.chatgpt.com/docs/mobile",
+   "https://learn.chatgpt.com/docs/codex-sdk",
+   "https://learn.chatgpt.com/docs/codex/cli",
+   "https://learn.chatgpt.com/docs/changelog",
+   "https://github.com/openai/codex"
+  ],
+  "confidence": "높음"
+ }
+]

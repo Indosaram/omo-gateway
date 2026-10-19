@@ -1,0 +1,120 @@
+{
+  "todo": 27,
+  "status": "actual-gateway-QA-failed-local-timeout-not-confirmed",
+  "actual_gateway_qa": {
+    "date": "2026-10-11",
+    "provenance": "mon_X9C9XC5QWQW7X484; exactly one happy and one loopback failure invocation; runner exited 1",
+    "binary_sha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+    "source_sha256": {
+      "src/entry.rs": "2a8c128e145435ae8b0c5927efe9d84a582a4647d80685434fc679b9fbd5a7e1",
+      "src/sessions/registry.rs": "e16bf038b1b75263a1e036d224345689ebec4e4d63e38c95c84b9cb29e0dc5eb",
+      "src/sessions/mod.rs": "9256c987523dcb5ab3483a114bfafd4d3c0728a530577280b78913ec402dc0a3",
+      "tests/test_session_registry.rs": "110e812e42376462f5005a3789fb4f8e503523bff8e99a2de21af5b38ae23576"
+    },
+    "pre_post_identity": "binary and four listed source hashes identical",
+    "argv": ["/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway", "sessions", "list", "--json"],
+    "cwd": "/private/tmp/omon-task27-qa-ef26ec6ae997",
+    "environment_names": ["DATABASE_URL", "HOME", "OMON_SESSION_HOSTS", "PATH", "TMPDIR"],
+    "happy": {
+      "exit_code": 0,
+      "signal": null,
+      "elapsed_ms": 20019.690833,
+      "projection_field_parity": true,
+      "counts": {"local": 0, "omarchy": 3},
+      "sessions": [
+        {"machine": "omarchy", "name": "Finalize merge push and deploy", "cwd": "/home/projects/mhc"},
+        {"machine": "omarchy", "name": "지금 cli에 omo native라고 나오는데 이 부분을 아예 지워줘, 그리고 추론강도에 따라 프롬프트창 색", "cwd": "/home/projects/mhc"},
+        {"machine": "omarchy", "name": "Linux 샌드박스 잠금파일 오류 분석", "cwd": "/home/projects/mhc"}
+      ],
+      "errors": [{"machine": "local", "code": 3, "message": "timed out after 20 seconds"}],
+      "stdout_bytes": 1456,
+      "stderr_bytes": 0,
+      "passed": false,
+      "failure": "required local session absent: actual local command timed out"
+    },
+    "unreachable_receipt": "task-27-live-failure.log",
+    "cleanup": {
+      "happy_pid": 63717,
+      "failure_pid": 65228,
+      "owned_process_groups_remaining": 0,
+      "cleanup_signals_needed": false,
+      "listener_closed": true,
+      "remaining_sockets": 0,
+      "accepted_connections": 1,
+      "scratch_db_files": [],
+      "owned_helpers_and_compile_cache_removed": true,
+      "scratch_root_absent": true
+    },
+    "raw_output_retention": "full output retained in runner memory only; receipts omit session IDs, controls values and other non-name/cwd session values",
+    "remaining_gap": "local listing timed out in both actual gateway runs; no retry or cause claim; exact 20-second SSH cancellation was not exercised"
+  },
+  "historical_sections_note": "All following cli_probe, ssh_host_probe and live_read_only_listing entries are prior raw omo/SSH captures, not this actual gateway execution. Their pending wiring statements are historical and superseded by current source and parent grouped verification.",
+  "scope": [
+    "src/sessions/mod.rs",
+    "src/sessions/registry.rs",
+    "tests/test_session_registry.rs"
+  ],
+  "cli_probe": {
+    "command": ["omo", "thread", "list", "--all-scope", "--json"],
+    "exit_code": 0,
+    "result": "JSON array of session records"
+  },
+  "ssh_host_probe": {
+    "method": "one BatchMode ssh probe per configured alias, ConnectTimeout=5, remote argv command -v omo",
+    "omo_available": ["omarchy"],
+    "not_available_or_unreachable": ["noos.club", "noveling", "vuev", "oracle-vps", "maho-win", "maho-scalper", "maho-steam", "maho-mac", "maho-mac-root", "xmr-miner", "xmr-miner-ip"],
+    "home_config_modified": false,
+    "seeded_file_written": false
+  },
+  "host_persistence": {
+    "path": "/Users/indo/.omon/session-hosts.json",
+    "prior_read": "absent",
+    "result": ["omarchy"],
+    "method": "apply_patch; JSON array schema consumed by read_seeded_hosts",
+    "owner_entries_overwritten": false
+  },
+  "live_read_only_listing": {
+    "local": {
+      "argv": ["omo", "thread", "list", "--all-scope", "--json"],
+      "exit_code": 0,
+      "valid_json_array": true,
+      "session_count": 9,
+      "captured_fields": ["sessionId", "name", "cwd"],
+      "example": {
+        "sessionId": "01a123f9-7fea-7e15-b769-45ce3aae26aa",
+        "name": "Check PirateTalk MCP chat history range",
+        "cwd": "/Users/indo/code/project/omon-gateway"
+      }
+    },
+    "omarchy": {
+      "argv": ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "omarchy", "omo", "thread", "list", "--all-scope", "--json"],
+      "exit_code": 0,
+      "valid_json_array": true,
+      "session_count": 3,
+      "captured_fields": ["sessionId", "name", "cwd"],
+      "example": {
+        "sessionId": "01a128a6-9e07-7069-8e5c-fe5248ef4aa7",
+        "name": "오픈채팅방 관련 아직 원본 클라이언트에는 있는데 우리 코드에는 없는 모든 기능 식별해서 구현 mass ulw",
+        "cwd": "/home/indo/piratetalk"
+      }
+    }
+  },
+  "cleanup_receipt": "No temporary files or processes were created; no service stopped; no sessions were sent to or interrupted; no software or keys installed or changed. The intended reversible host-list file remains at /Users/indo/.omon/session-hosts.json.",
+  "adversarial_classes": {
+    "host_timeout_isolated": "applicable",
+    "exit_code_3_nothing_answering": "applicable",
+    "strict_json_non_array_or_missing_session_id": "applicable",
+    "ssh_host_globs_and_duplicates": "applicable",
+    "cache_deduplicates_recent_listing": "applicable",
+    "host_config_file_round_trip": "applicable",
+    "local_plus_remote_merge": "applicable",
+    "remote_installation_or_key_changes": "not applicable; none performed",
+    "existing_session_send_or_interrupt": "not applicable; none performed"
+  },
+  "teardown_receipt": "No temporary process, service, session, key, or configuration changes were left behind.",
+  "pending": [
+    "parent coordinator must wire pub mod sessions in src/lib.rs",
+    "parent coordinator must register tests/test_session_registry.rs in Cargo.toml",
+    "global cargo gates and focused cargo test were not run in this continuation per coordination instruction"
+  ]
+}

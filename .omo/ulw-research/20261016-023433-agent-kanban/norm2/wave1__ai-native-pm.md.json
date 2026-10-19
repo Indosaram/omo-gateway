@@ -1,0 +1,213 @@
+[
+ {
+  "name": "Height",
+  "url": "https://height.app",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "AI 워커가 작업을 자동 정리·분류·갱신·종료하는 자율형 프로젝트 관리 도구",
+  "mobile": "iOS·Android 앱(과거 제공)",
+  "pricing": "무료 / Team $6.99/월(연간) / Business $11.99/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "REST API(API 키·OAuth)·웹훅, 공식 MCP 없음",
+  "status": "2025-09-24 서비스 종료",
+  "pros": "자율 AI PM의 선구자; 스프레드시트+칸반형 UI; 자동 분류·중복 감지",
+  "cons": "서비스 영구 종료; 셀프호스팅 불가; 공식 MCP 서버 없음",
+  "sources": [
+   "https://height.app",
+   "https://github.com/api-evangelist/height",
+   "https://raw.githubusercontent.com/adamski/height-to-linear-export/main/README.md",
+   "https://raw.githubusercontent.com/adamski/height-to-linear-export/main/IMPORT_GUIDE.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Taskade AI Agents",
+  "url": "https://www.taskade.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 앱 생성·24시간 자율 에이전트 팀·칸반 뷰를 갖춘 협업 워크스페이스",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Pro $10/월(연간) / Business $25/월~",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 MCP·REST API·웹훅, 멀티 에이전트 내장",
+  "status": "활발(주간 릴리스)",
+  "pros": "공식 MCP 서버 제공; 에이전트 무제한·영구 메모리; 칸반 등 다양한 뷰와 네이티브 앱",
+  "cons": "온프레미스 셀프호스팅 불가; 크레딧 소진형 과금; 복잡한 요금 체계",
+  "sources": [
+   "https://www.taskade.com",
+   "https://www.taskade.com/pricing",
+   "https://www.taskade.com/create",
+   "https://www.taskade.com/downloads"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Motion AI",
+  "url": "https://www.usemotion.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "AI가 작업 우선순위를 정해 캘린더·칸반에 자동 배치하는 생산성 플랫폼",
+  "mobile": "iOS·Android 앱",
+  "pricing": "7일 체험 / 개인 $19/월(연간) / 팀 $12/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "REST API·커뮤니티 SDK·Zapier, MCP 없음",
+  "status": "활발(상용)",
+  "pros": "뛰어난 자동 타임블로킹; 칸반·문서·캘린더 통합; REST API로 외부 에이전트 연동",
+  "cons": "공식 MCP 서버 없음; 영구 무료 플랜 없고 비쌈; 셀프호스팅 불가",
+  "sources": [
+   "https://www.usemotion.com",
+   "https://www.usemotion.com/pricing",
+   "https://docs.usemotion.com",
+   "https://github.com/rhymiz/python-motion"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Paperclip",
+  "url": "https://paperclip.ing",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "7열 칸반·조직도·예산 게이트를 갖춘 멀티 에이전트 오케스트레이션 플랫폼",
+  "mobile": "반응형 웹(모바일 최적화)",
+  "pricing": "무료(OSS) / Cloud 대기·베타",
+  "selfhost": "가능(Node.js·Docker)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Cursor 등 어댑터, MCP·REST·CLI",
+  "status": "활발(PR 2,700+ 병합)",
+  "pros": "기능 제한 없는 MIT 오픈소스; 원자적 작업 체크아웃 칸반; 예산 상한·거버넌스 내장",
+  "cons": "Node.js 24+·PostgreSQL 필요; 네이티브 모바일 앱 없음; 에이전트별 API 키 설정 필요",
+  "sources": [
+   "https://paperclip.ing",
+   "https://github.com/paperclipai/paperclip",
+   "https://docs.paperclip.ing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Teams AI",
+  "url": "https://agentteams.live",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "300+ 모델·코딩 하네스를 지원하는 데스크톱용 멀티 에이전트 칸반",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(데스크톱 앱)",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code·Codex·Cursor 등 연동, 내장 MCP 서버",
+  "status": "활발(스타 2,265+)",
+  "pros": "실시간 5열 칸반과 diff 리뷰; API 키 없이 무료 모델 사용; 에이전트별 git worktree 격리",
+  "cons": "모바일 미지원; AGPL 카피레프트 의무; Electron 리소스 과다",
+  "sources": [
+   "https://agentteams.live",
+   "https://github.com/777genius/agent-teams-ai"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Vibe Kanban (BloopAI)",
+  "url": "https://www.vibekanban.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "코딩 에이전트를 격리된 Git worktree에서 실행하는 개발자용 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(NPX·Docker)",
+  "license": "Apache-2.0",
+  "agent": "전용 MCP 서버, Claude Code·Codex 등 10+ 에이전트",
+  "status": "2026 종료(sunset) 발표",
+  "pros": "빠른 Rust 백엔드; 에이전트별 worktree 격리; diff 리뷰·브라우저 미리보기",
+  "cons": "공식 종료·유지보수 단계; 네이티브 모바일 앱 없음; 로컬 에이전트 CLI 필요",
+  "sources": [
+   "https://www.vibekanban.com",
+   "https://github.com/BloopAI/vibe-kanban",
+   "https://raw.githubusercontent.com/BloopAI/vibe-kanban/main/Cargo.toml",
+   "https://raw.githubusercontent.com/BloopAI/vibe-kanban/main/crates/mcp/src/task_server/mod.rs"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Gas Town",
+  "url": "https://github.com/steveyegge/gastown",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Beads 이슈 추적으로 20~30개 코딩 에이전트를 조율하는 Git 기반 시스템",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS), 모델 비용 별도",
+  "selfhost": "가능(Go 바이너리·Docker)",
+  "license": "MIT",
+  "agent": "CLI 중심(gt), Claude Code·Codex 등, 웹 대시보드",
+  "status": "활발(2026 후반)",
+  "pros": "에이전트 크래시에도 작업 보존; 확장성 있는 감시 구조; 머지 큐·OpenTelemetry 내장",
+  "cons": "용어가 낯설어 학습 곡선 가파름; tmux·Go·Dolt 필요; 드래그앤드롭 칸반 아님",
+  "sources": [
+   "https://github.com/steveyegge/gastown",
+   "https://github.com/steveyegge/gastown/blob/main/docs/glossary.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Dev Boards (Agent Relay)",
+  "url": "https://github.com/GumbyEnder/agent-relay",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "poll·claim·heartbeat·escalate·deliver 계약 기반 AI 에이전트용 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS) / 호스팅 클라우드 베타",
+  "selfhost": "가능(Node.js·Docker)",
+  "license": "MIT",
+  "agent": "5동사 REST API·토큰, TUI CLI, MCP 지원",
+  "status": "초기(v0.3.x) 활발",
+  "pros": "단순한 5동사 REST 프로토콜; 409 기반 원자적 작업 점유; 내장 PGLite로 무설정 시작",
+  "cons": "초기 단계로 사양 변동; 모바일 앱 없음; 에이전트 실행 샌드박스 제한",
+  "sources": [
+   "https://github.com/GumbyEnder/agent-relay",
+   "https://raw.githubusercontent.com/GumbyEnder/agent-relay/main/README.md",
+   "https://raw.githubusercontent.com/GumbyEnder/agent-relay/main/LICENSE"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Platypus",
+  "url": "https://platypus.chat",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반·대시보드·크론·A2A 통신을 갖춘 셀프호스팅 AI 에이전트 플랫폼",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS), LLM 별도",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "MCP·A2A·REST API·웹훅, 다양한 LLM 제공자",
+  "status": "활발(2026-10)",
+  "pros": "칸반 포함 올인원 스택; MCP·A2A 일급 지원; Ollama로 완전 오프라인 가능",
+  "cons": "Docker Compose 필수; 모바일 앱 없음; SSO 미지원·Git worktree 없음",
+  "sources": [
+   "https://platypus.chat",
+   "https://github.com/willdady/platypus",
+   "https://docs.platypus.chat"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Roadmap Skill",
+  "url": "https://github.com/shiquda/roadmap-skill",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "사람과 AI가 공유하는 로컬 칸반·의존성 그래프 계획 도구",
+  "mobile": "반응형 웹(로컬)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "MCP 서버(npx), Claude Code·Codex·Cursor 등",
+  "status": "활발(v0.3.x)",
+  "pros": "npx 한 줄 무설정 설치; 채팅과 칸반 양방향 동기화; 의존성 DAG 뷰",
+  "cons": "단일 사용자·협업 불가; 모바일 앱 없음; 코드 실행 기능 없음",
+  "sources": [
+   "https://github.com/shiquda/roadmap-skill",
+   "https://www.npmjs.com/package/roadmap-skill"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,27 @@
+[
+ {
+  "name": "Backlog.md",
+  "url": "https://backlog.md",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "Git 저장소 내 마크다운 기반 작업 관리·칸반 보드(인간+AI 에이전트 협업)",
+  "mobile": "반응형 웹(기본 127.0.0.1, 터널 필요)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "MIT",
+  "agent": "MCP 서버·CLI·JSON 출력; Claude Code·Codex·Gemini CLI·Kiro·Cursor",
+  "status": "활발(v1.53.0, 2026-09)",
+  "pros": "Git 네이티브·로컬 우선, 클라우드 종속 없음; Claude Code·Codex·Cursor용 MCP·CLI 지원; TUI·웹 칸반·JSON watch로 간편 설정",
+  "cons": "실시간 다중 사용자 협업·클라우드 동기화 없음; 모바일 앱·푸시 알림 없음; 원격 열람 시 터널링 필요",
+  "sources": [
+   "https://github.com/MrLesk/Backlog.md",
+   "https://backlog.md",
+   "https://github.com/MrLesk/Backlog.md/releases",
+   "https://raw.githubusercontent.com/MrLesk/Backlog.md/main/CLI-INSTRUCTIONS.md",
+   "https://github.com/MrLesk/Backlog.md/blob/main/backlog/docs/doc-003%20-%20Running-Backlog-Browser-as-a-Service.md",
+   "https://api.github.com/repos/MrLesk/Backlog.md",
+   "https://raw.githubusercontent.com/MrLesk/Backlog.md/main/package.json"
+  ],
+  "confidence": "높음"
+ }
+]

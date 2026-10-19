@@ -1,0 +1,26 @@
+# EXPAND leads (harvest 2026-10-16T02:52:19.088Z)
+- omnara.md: HappyCoder, Blink, and Claude Code Teleport — WHY: Omnara's official comparative architecture survey identifies HappyCoder (encrypte
+- terragon.md: OpenTerra (KaiStephens/OpenTerra) — WHY: Open-source community project positioned as an open-source alternative/runner inspired by T
+- terragon.md: Claude Code Web & OpenAI Codex Web — WHY: The two primary vendor-native cloud background agent solutions explicitly recommended by T
+- conductor.md: OpenClaw agent integration with Conductor — WHY: Conductor docs explicitly highlight driving Conductor cloud workspaces via OpenClaw
+- devin.md: Devin Automations Preflight checks & webhook orchestrators — WHY: Enables custom programmatic dispatch and event-driven fan-out of D
+- devin.md: Agent Client Protocol (ACP) for IDE agent boards (Zed & JetBrains) — WHY: Zed and JetBrains now embed Devin CLI directly as an ACP a
+- sculptor.md: Conductor vs Sculptor workflow differences — WHY: Sculptor's official FAQ specifically compares itself against Conductor for paralle
+- sculptor.md: Imbue Blueprint and Vet — WHY: Imbue offers companion tools in the same agent ecosystem (Blueprint for planning copilot and Vet for 
+- shrimp-task-manager.md: Task Viewer의 React 기반 단독 실행 배포(Docker 컨테이너화 여부) 및 원격 멀티머신 접근 설정 — WHY: 현재 로컬 호스트(127.0.0.1) 바인딩 기본값이므로 원격 호스팅 시 보안 및 역방향 프록시 구성 확인 필
+- backlog-md.md: Groma.md (groma.md) — WHY: Backlog.md officially integrates with Groma.md to project backlog tasks directly onto a C4 architectural 
+- backlog-md.md: Vibe Kanban & Taskmaster — WHY: Mentioned in creator Alex Gavrilescu's retrospective as contemporary agent kanban / task management 
+- jira-rovo.md: Atlassian Teamwork Graph CLI (`twg-cli`) & Local Developer Experience — WHY: Detailed CLI command syntax and local environment token
+- taskmaster.md: Hamster Studio Web Platform (tryhamster.com/product/studio) — WHY: Cloud counterpart that provides team-level collaborative briefs, 
+- taskmaster.md: DevDreed/claude-task-master-extension — WHY: Alternative community-created visual interface extension for Claude Task Master before 
+- cursor-bg-agents.md: Linear Project & Triage Board integration for Cursor Agents — WHY: Linear provides the actual Kanban board UI (columns, swimlanes, t
+- orca.md: Orca Agent Dashboard kanban board cardStatus states — WHY: The prompt asks about 'cardStatus boards' in Orca, which maps to Orca's e
+- happy-coder.md: T3 Code (pingdotgg/t3code) — WHY: Happy's documentation directly compares itself against T3 Code as the primary multi-machine mobile
+- crystal.md: Nimbalyst Wiki Plugin & CLI (`@nimbalyst/cli` & `nim wiki serve`) — WHY: Provides headless and browser-based access for agents like 
+- factory.md: Linear Agent Delegation integration with Factory — WHY: Factory's direct card transition mechanism in Linear (auto-moving backlog ti
+- linear-agents.md: Plane (makeplane/plane) — WHY: Open-source, self-hostable project management and kanban platform with growing AI agent integrations 
+- claude-squad.md: CodeAgentSwarm and Pane — WHY: Direct desktop GUI alternatives to Claude Squad that manage parallel Claude Code/terminal agents with
+- vibe-kanban.md: Kanban Pro (Good Guy Apps) — WHY: Emerged in mid-2026 as a major local-first competitor to Vibe Kanban following Bloop's shutdown, s
+- github-agent-hq.md: GitHub Copilot CLI & Local Agent Harness — WHY: GitHub provides a terminal-native agent CLI (`gh copilot` / `copilot` standalone v1.
+- github-agent-hq.md: GitHub Copilot Workspace (Next technical preview) — WHY: Originally introduced by GitHub Next as a task-to-plan-to-code environment 
+- github-agent-hq.md: Community MCP Kanban Adapters for Third-Party Orchestrators (e.g. Linear / Jira / Plane MCP bridges to GitHub Projects) — WHY: Multi

@@ -1,0 +1,5 @@
+fmt	0	cargo fmt --check
+clippy	0	cargo clippy --offline -j2 --all-targets --all-features -- -D warnings
+headless	0	cargo test --offline -j2 --all-features --bin omo-gateway headless_tests --no-fail-fast -- --nocapture
+runner	0	cargo test --offline -j2 --all-features --test test_lane_runner --no-fail-fast -- --nocapture
+build	0	cargo build --offline -j2 --bin omo-gateway

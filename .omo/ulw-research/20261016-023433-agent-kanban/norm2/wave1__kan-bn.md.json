@@ -1,0 +1,34 @@
+[
+ {
+  "name": "Kan (kan.bn)",
+  "url": "https://kan.bn",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Next.js 기반 오픈소스 미니멀 Trello 대안, 네이티브 MCP·REST API 지원",
+  "mobile": "PWA·반응형 웹(네이티브 앱 없음)",
+  "pricing": "무료 / Teams $8/사용자/월 / Enterprise 별도",
+  "selfhost": "가능(Docker Compose, Railway)",
+  "license": "AGPL-3.0",
+  "agent": "공식 MCP(@kan/mcp, 46개 도구)·REST API·웹훅; Claude·Codex·Cursor",
+  "status": "활발(v0.6.0, 2026-10 커밋)",
+  "pros": "공식 MCP 서버 46개 도구; 간단한 Docker 셀프호스팅; OpenAPI REST API·웹훅 제공",
+  "cons": "네이티브 모바일 앱 없음; 호스팅 MCP는 Teams 유료 필요; API 분당 100회 제한",
+  "sources": [
+   "https://kan.bn",
+   "https://kan.bn/pricing",
+   "https://github.com/kanbn/kan",
+   "https://github.com/kanbn",
+   "https://docs.kan.bn",
+   "https://docs.kan.bn/introduction",
+   "https://docs.kan.bn/integrations/mcp-server",
+   "https://docs.kan.bn/guides/self-hosting/introduction",
+   "https://docs.kan.bn/guides/self-hosting/s3",
+   "https://docs.kan.bn/api-reference/introduction",
+   "https://docs.kan.bn/api-reference/webhooks/create-a-webhook",
+   "https://github.com/kanbn/kan/releases",
+   "https://raw.githubusercontent.com/kanbn/kan/main/AGENTS.md",
+   "https://raw.githubusercontent.com/kanbn/kan/main/LICENSE"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,399 @@
+[
+ {
+  "name": "Replit Agent (Replit Mobile)",
+  "url": "https://replit.com/mobile",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Replit Agent를 폰에서 실행·모니터링·조종하는 공식 모바일 IDE",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Core $15/월(연간)·$20/월 / Teams $30/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "자체 Replit Agent 런타임, WebSocket 이벤트 스트림",
+  "status": "매우 활발(주간 릴리스)",
+  "pros": "네이티브 앱, 설정 불필요; 체크포인트 검토·라이브 미리보기; 푸시 알림·롤백",
+  "cons": "Replit 클라우드 종속; 크레딧 빠른 소진; 셀프호스트·오프라인 불가",
+  "sources": [
+   "https://replit.com/mobile",
+   "https://replit.com/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "GitHub Mobile (Copilot Workspace / Agent PRs)",
+  "url": "https://github.com/mobile",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Copilot 에이전트 PR 모니터링·diff 리뷰·승인을 하는 공식 모바일 앱",
+  "mobile": "iOS·Android 앱",
+  "pricing": "앱 무료 / Copilot $10/월, $19·$39/사용자/월",
+  "selfhost": "불가(SaaS, GHES 일부 지원)",
+  "license": "상용",
+  "agent": "Copilot·Copilot Workspace, REST/GraphQL API, Actions 웹훅",
+  "status": "매우 활발(1~2주 업데이트)",
+  "pros": "즉시 푸시 알림; 고품질 모바일 diff 뷰어; 엔터프라이즈 SSO·위젯",
+  "cons": "로컬 CLI 에이전트 실행 불가; 리뷰·승인 위주; 상용 클라우드",
+  "sources": [
+   "https://github.com/mobile",
+   "https://github.com/features/copilot"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "PocketShell",
+  "url": "https://pocketshell.app",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "E2E 암호화 WebRTC로 로컬 Claude Code·Codex 세션을 제어하는 모바일 터미널",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(단일 기기) / Pro $5–$10/월",
+  "selfhost": "일부(호스트 데몬만)",
+  "license": "Apache-2.0(호스트)/앱 상용",
+  "agent": "WebRTC로 Claude Code·Codex CLI stdio 스트리밍",
+  "status": "v0.x 베타, 별 10개",
+  "pros": "P2P WebRTC·DTLS 암호화; 실제 PTY·터치 제스처; 푸시 알림",
+  "cons": "모바일 앱·시그널링 비공개; Rust 호스트 데몬 필요; 작은 커뮤니티",
+  "sources": [
+   "https://github.com/yashagldit/PocketShell",
+   "https://pocketshell.app"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Herdr Connect",
+  "url": "https://github.com/Tomyail/herdr-connect",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "LAN/Tailscale로 Herdr 에이전트를 모니터링·제어하는 iOS 앱",
+  "mobile": "iOS 앱(TestFlight 베타)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "Apache-2.0",
+  "agent": "Herdr 데몬 JSON-RPC/WebSocket; Claude Code·Codex·aider",
+  "status": "TestFlight 베타, 별 19개",
+  "pros": "네이티브 iOS·햅틱 완료 알림; 클라우드·계정·텔레메트리 없음; 폰에서 턴 중단·후속 지시",
+  "cons": "iOS 전용; 같은 Wi-Fi 또는 Tailscale/VPN 필요; Herdr 설치 필요",
+  "sources": [
+   "https://github.com/Tomyail/herdr-connect",
+   "https://testflight.apple.com/join/ZkRzJ6rm"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Claude Remote Runner",
+  "url": "https://remote-claude.shaniai.tech",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code 세션을 PWA로 원격 제어하는 E2E 암호화 CLI 래퍼",
+  "mobile": "PWA",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "Claude Code CLI 래퍼+훅, WebRTC 스트리밍",
+  "status": "별 11개, 2026.4 푸시",
+  "pros": "QR 즉시 페어링; WebRTC 저지연 스트리밍; 일시정지·승인 푸시 알림",
+  "cons": "정지 감지가 휴리스틱 의존; P2P/TURN 네트워크 조건 필요; 작은 커뮤니티",
+  "sources": [
+   "https://github.com/sohampawar1866/claude-remote-runner",
+   "https://www.npmjs.com/package/@sohampawar1866/remote-claude"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Herdr Mobile Relay",
+  "url": "https://github.com/0cv/herdr-mobile-relay",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "여러 호스트의 Herdr 에이전트를 하나의 모바일 PWA로 통합 제어",
+  "mobile": "PWA",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Herdr 플러그인)",
+  "license": "AGPL-3.0",
+  "agent": "Herdr 플러그인, Herdr 서버 프로토콜 연동",
+  "status": "v0.22.10, 별 297개",
+  "pros": "다중 컴퓨터 통합 모니터링; 계정 없는 WebRTC 게이트웨이; 웹 푸시·QR 설정",
+  "cons": "Windows 미지원; Herdr 0.7.5+ 필요; AGPL 카피레프트",
+  "sources": [
+   "https://github.com/0cv/herdr-mobile-relay",
+   "https://herdr.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Roamgate",
+  "url": "https://roamgate.dev/",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Herdr 워크스페이스·터미널·diff 리뷰를 폰으로 가져오는 모바일 웹 클라이언트",
+  "mobile": "PWA·반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "Herdr 서버 API; Claude Code·Codex 등 모니터링",
+  "status": "별 298개, 활발 유지",
+  "pros": "파일트리·diff·작업보드 모바일 뷰; PWA 홈화면 설치; 데스크톱→폰 인계",
+  "cons": "Herdr 데몬 필요; 자체 푸시 알림 없음; 가상 키보드 터미널 입력 불편",
+  "sources": [
+   "https://github.com/powerfooI/roamgate",
+   "https://roamgate.dev/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "ClawBridge",
+  "url": "https://clawbridge.app/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "OpenClaw 에이전트용 모바일 우선 미션 컨트롤 대시보드",
+  "mobile": "PWA",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "OpenClaw 런타임, WebSocket 스트림, 프로세스 API",
+  "status": "v1.2.3, 별 231개, 속도 둔화",
+  "pros": "모바일 우선 레이아웃; Cloudflare 터널·QR 무설정 접속; 토큰 비용 관리",
+  "cons": "OpenClaw 생태계 종속; 네이티브 푸시 없음; 개발 속도 둔화",
+  "sources": [
+   "https://github.com/dreamwing/clawbridge",
+   "https://clawbridge.app/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kandev",
+  "url": "https://kandev.ai",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "여러 AI 코딩 에이전트를 병렬 조율하는 오픈소스 AI 칸반 보드",
+  "mobile": "PWA",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(바이너리·Docker)",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code·OpenAI·Gemini·로컬 모델, git worktree",
+  "status": "별 954개, 매우 활발",
+  "pros": "전용 모바일 UI(바텀시트); 원격 접속 공식 문서; 칸반+worktree, 텔레메트리 없음",
+  "cons": "AGPL 라이선스 제약; Tailscale 등 네트워크 설정 필요; 소스 빌드 무거움",
+  "sources": [
+   "https://github.com/kdlbs/kandev",
+   "https://kandev.ai"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Gander",
+  "url": "https://github.com/weellio/gander",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "픽셀아트 오피스형 AI 에이전트 관제 대시보드(/phone 콘솔·Telegram 알림)",
+  "mobile": "PWA·/phone 웹·Telegram 알림",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 Node.js)",
+  "license": "MIT",
+  "agent": "Claude Code 훅, gander-wrap(Codex·Gemini·aider), Telegram 봇",
+  "status": "별 10개, 초기 릴리스",
+  "pros": "배터리 절약형 /phone 페이지; Telegram에서 승인·/stop; 비용 폭주 모니터",
+  "cons": "초기 단계 소수 사용자; 픽셀아트 뷰는 폰에서 복잡; 원격 접속 시 토큰 설정 필요",
+  "sources": [
+   "https://github.com/weellio/gander"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent Teams AI",
+  "url": "https://agentteams.live",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "코딩 에이전트 팀을 칸반으로 지휘하는 멀티에이전트 오케스트레이션 플랫폼",
+  "mobile": "반응형 웹(데스크톱 앱 중심)",
+  "pricing": "무료(OSS·데스크톱 앱)",
+  "selfhost": "가능(Docker)",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code·Codex·OpenCode·Cursor 등 CLI, 200+ LLM",
+  "status": "별 2,265개, 빠른 릴리스",
+  "pros": "멀티에이전트 전용 칸반·의존성 추적; 주요 CLI·LLM 광범위 지원; 상세 실행 로그",
+  "cons": "데스크톱 우선; 네이티브 모바일 알림 없음; 좁은 화면에서 UI 복잡",
+  "sources": [
+   "https://github.com/777genius/agent-teams-ai",
+   "https://agentteams.live"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "cc-connect",
+  "url": "https://github.com/chenhg5/cc-connect",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "로컬 코딩 에이전트를 Telegram·Discord·Slack 등 메신저에 연결하는 게이트웨이",
+  "mobile": "메신저 앱(Telegram·Discord·Slack 등)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Go 바이너리)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Gemini CLI, MCP 도구, 웹훅",
+  "status": "별 15,959개, v1.5.1-beta.1",
+  "pros": "기존 메신저 앱에서 바로 사용; 채팅 버튼으로 권한 승인; 다중 세션 전환",
+  "cons": "호스트 데몬 필요; 시각적 칸반 없음; 봇 토큰 설정 필요",
+  "sources": [
+   "https://github.com/chenhg5/cc-connect",
+   "https://github.com/chenhg5/cc-connect/releases"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "cc-haha",
+  "url": "https://cchaha.ai",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code용 로컬 데스크톱 워크스페이스(H5 모바일 웹·메신저 봇 포함)",
+  "mobile": "H5 모바일 웹 + 메신저 봇",
+  "pricing": "개인·사내 무료 / 상업 배포는 유료 라이선스",
+  "selfhost": "가능(데스크톱 로컬)",
+  "license": "소스공개(CSL 1.0)",
+  "agent": "Claude Code·Codex·DeepSeek·Ollama 등, MCP 관리",
+  "status": "별 15,025개, 매우 활발",
+  "pros": "QR H5 웹+다중 메신저 봇; worktree·diff·MCP 관리; 화면 잠금에도 연결 유지",
+  "cons": "비OSI 라이선스(상업 재판매 제한); 데스크톱 앱 상시 실행 필요; 주로 중국어 UI",
+  "sources": [
+   "https://github.com/NanmiCoder/cc-haha",
+   "https://cchaha.ai"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Claude Code Telegram Bot (overwirehq/claude-code-telegram)",
+  "url": "https://github.com/overwirehq/claude-code-telegram",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code CLI를 원격 사용하는 경량 Python Telegram 봇",
+  "mobile": "Telegram 앱",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(pip/uv)",
+  "license": "MIT",
+  "agent": "Claude Code CLI 서브프로세스, 웹훅 리스너",
+  "status": "v1.3.0, 별 2,815개",
+  "pros": "uv로 가벼운 설치; 세션 컨텍스트 유지; 디렉터리 샌드박싱·푸시 알림",
+  "cons": "Telegram 전용; 칸반·diff 뷰어 없음; 대형 코드 리뷰 불편",
+  "sources": [
+   "https://github.com/overwirehq/claude-code-telegram"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Ductor",
+  "url": "https://ductor.dev",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "공식 코딩 에이전트 CLI를 Telegram·Matrix·Slack으로 제어하는 게이트웨이",
+  "mobile": "Telegram·Matrix·Slack 앱",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(pip·Docker)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Gemini·Antigravity CLI·Grok Build",
+  "status": "별 460개, 2026.7 푸시",
+  "pros": "공식 CLI 직접 실행(구독 활용); Matrix·Slack 지원; Docker 샌드박스",
+  "cons": "채팅 출력이 장황; 시각적 작업 보드 없음; 봇 자격증명 설정 필요",
+  "sources": [
+   "https://github.com/PleasePrompto/ductor",
+   "https://ductor.dev"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "ccpoke",
+  "url": "https://kaida-palooza.github.io/ccpoke/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "코딩 에이전트를 Telegram과 잇는 양방향 알림·채팅 브리지",
+  "mobile": "Telegram 앱",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(npm)",
+  "license": "MIT",
+  "agent": "Claude Code·Codex·Cursor CLI, Stop 훅·tmux",
+  "status": "별 103개, 2026.3 푸시",
+  "pros": "npx로 무설치 실행; 이벤트 기반 훅(폴링 없음); tmux로 양방향 응답·승인",
+  "cons": "tmux 필요(Windows 복잡); Telegram 전용; 웹 대시보드·칸반 없음",
+  "sources": [
+   "https://github.com/kaida-palooza/ccpoke"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Agent4Discord",
+  "url": "https://github.com/raravel/Agent4Discord",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code 세션을 Discord 채널로 관리하는 셀프호스트 봇",
+  "mobile": "Discord 앱",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 Node.js)",
+  "license": "MIT",
+  "agent": "Claude Code CLI, Discord 버튼·메뉴 인터랙션",
+  "status": "2026.10 푸시, 활발",
+  "pros": "버튼으로 도구 승인; 도구 호출별 스레드로 가독성; 토큰·비용 추적",
+  "cons": "Claude Code 전용; Discord 봇 설정 필요; 2,000자 제한으로 분할",
+  "sources": [
+   "https://github.com/raravel/Agent4Discord"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "OpenHands",
+  "url": "https://openhands.dev",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "오픈소스 자율 AI 개발 플랫폼(반응형 웹·Slack 봇 제공)",
+  "mobile": "반응형 웹 + Slack 봇",
+  "pricing": "무료(OSS) / Cloud 무료+사용량 기반 유료",
+  "selfhost": "가능(Docker·Helm)",
+  "license": "MIT",
+  "agent": "Docker 샌드박스, REST/WebSocket API, GitHub App, Slack, MCP",
+  "status": "별 91,014개, 매우 활발",
+  "pros": "편집·터미널·브라우징 등 포괄적 자율 기능; Slack으로 폰에서 작업 지시; 대규모 생태계",
+  "cons": "셀프호스트 리소스 부담; 모바일 웹 UI 복잡; Slack 봇 기능 축소",
+  "sources": [
+   "https://github.com/All-Hands-AI/OpenHands",
+   "https://openhands.dev",
+   "https://www.all-hands.dev/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Devin (Devin for Slack / Mobile Web)",
+  "url": "https://devin.ai",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Cognition의 자율 AI 엔지니어, 모바일 웹·Slack으로 모니터링",
+  "mobile": "반응형 웹 + Slack 앱",
+  "pricing": "유료(팀 약 $500/월~, 엔터프라이즈 별도)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "클라우드 샌드박스, GitHub/GitLab, Slack 봇, REST API",
+  "status": "상용, 지속 업데이트",
+  "pros": "높은 벤치마크 성능; Slack 알림·모바일 승인; 로컬 하드웨어 불필요",
+  "cons": "고가; 폐쇄형 플랫폼; 네이티브 앱·온프레미스 없음",
+  "sources": [
+   "https://devin.ai",
+   "https://cognition.ai"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Routa",
+  "url": "https://phodal.github.io/routa/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반 오케스트레이션 기반 오픈소스 멀티에이전트 협업 플랫폼",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "MIT",
+  "agent": "MCP·ACP·A2A 프로토콜, REST/WebSocket API",
+  "status": "별 1,828개, 활발",
+  "pros": "에이전트 상태를 칸반으로 표시; MCP·ACP·A2A 표준 지원; 완전 무료 OSS",
+  "cons": "네이티브 앱·푸시 없음; 모바일 웹 스크롤 불편; 작은 커뮤니티",
+  "sources": [
+   "https://github.com/phodal/routa",
+   "https://phodal.github.io/routa/"
+  ],
+  "confidence": "높음"
+ }
+]

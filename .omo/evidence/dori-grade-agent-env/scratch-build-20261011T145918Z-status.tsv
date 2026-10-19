@@ -1,0 +1,1 @@
+build	0	cargo build -j2 --bin omo-gateway

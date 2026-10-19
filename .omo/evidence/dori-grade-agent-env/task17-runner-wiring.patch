@@ -1,0 +1,30 @@
+*** Begin Patch
+*** Update File: src/lanes/runner.rs
+@@
+         let mut settle_tick = tokio::time::interval(super::settle::SETTLE_INTERVAL);
+         settle_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
++        let mut guard_tick = tokio::time::interval(super::guard::GUARD_INTERVAL);
++        guard_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
++        let mut guard_watcher = super::guard::GuardWatcher::default();
++        let guard_lead = std::env::var("OMON_LANE_DEFAULT_LEAD").ok();
+         let service_result: Result<()> = async {
+@@
+             tokio::select! {
+                 _ = shutdown.cancelled() => break,
++                _ = guard_tick.tick() => {
++                    match super::guard::sample(&self.pool).await {
++                        Ok(host) => {
++                            if let Some(lead) = &guard_lead {
++                                if let Err(error) = guard_watcher.enqueue_transition(&self.pool, lead, &host).await {
++                                    tracing::warn!(%error, "guard transition remains pending");
++                                }
++                            }
++                            if let Err(error) = super::guard::retry_queued(&self.pool, &host, guard_watcher.thresholds()).await {
++                                tracing::warn!(%error, "queued lane retry failed");
++                            }
++                        }
++                        Err(error) => tracing::warn!(%error, "host guard sample failed"),
++                    }
++                }
+                 _ = settle_tick.tick(), if settlements.is_empty() => {
+*** End Patch

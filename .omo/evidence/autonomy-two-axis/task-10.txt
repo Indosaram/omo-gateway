@@ -1,0 +1,15 @@
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select count(*) from lane_events where kind='action_loop'; select count(*) from lane_events where delivered_at is null; select lead_session_key, count(*) from lane_events where delivered_at is null group by 1"
+[exit 0]
+3
+0
+
+
+$ sed 's/\x1b\[[0-9;]*m//g' /Users/indo/.omon/gateway.log | grep -E 'action_loop delivered|kibitzer disabled' | tail -10; echo "invalid key after fix:"; sed 's/\x1b\[[0-9;]*m//g' /Users/indo/.omon/gateway.log | awk '$1 > "2026-10-18T14:48:32"' | grep -c 'invalid storage key'
+[exit 1]
+2026-10-18T14:45:10.879657Z  INFO omo_gateway::legacy: kibitzer disabled; no worker started
+2026-10-18T14:47:11.860498Z  INFO omon_gateway::autonomy::action_loop: action_loop delivered items=596
+2026-10-18T14:50:11.807295Z  INFO omon_gateway::autonomy::action_loop: action_loop delivered items=1
+2026-10-18T14:50:26.072445Z  INFO omo_gateway::legacy: kibitzer disabled; no worker started
+invalid key after fix:
+0
+

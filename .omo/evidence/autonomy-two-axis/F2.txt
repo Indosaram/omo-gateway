@@ -1,0 +1,19 @@
+F2 code quality review — [~]
+Independent reviewer (omo-native-code-reviewer, mahoquot/claude-opus-5-5) attempts on aa49764:
+  st_01a14fbe: error "Provider stream start timed out after 600000ms" (1h50m, no report)
+  st_01a150b3: error "Idle timeout waiting for provider stream" (0 tools)
+  st_01a15101: stalled ~20min after 3 tool calls, cancelled
+  Endpoint itself answered (chat/completions 200 in 1.3s), so stalls were provider streaming, not quota.
+Review #1 (REJECT): .omo/evidence/autonomy-two-axis-code-review.md. Lead verification of its blockers on aa49764:
+  C1 CLOSED  src/autonomy/effect.rs:470-494 splits segments, worst effect wins; :573-577 rg --pre -> unknown; :722 git --config-env -> unknown.
+  C2 CLOSED  src/agent/omo_backend.rs:1589-1611 bare eval auto-allowed only when the cell code was seen and classify_eval_code (effect.rs:193) finds no side effect; interpolation / opaque APIs (fetch, Bun.spawn, rm, tool.bash...) -> unknown with code-hash signature.
+  H1 CLOSED  omo_backend.rs:1782-1802 pre-ask error and ledger-without-db both decline; no legacy auto-approve fallback.
+  H2 CLOSED  resolve_owner_reply only from actor.rs:626-645 (origin User + owner author + owner lead session, 5s timeout), slack/ingress.rs:666 (owner_id check), discord/adapter.rs:1618 (OWNER_ID check).
+  H3 CLOSED  effect.rs:93-104 Delete/VcsProtected/ExternalSend signatures carry the exact command.
+  H4 CLOSED  autonomy/mod.rs:52-57 decide/revoke refused whenever PI_SESSION_ID is set (live: "only an owner-origin session or local CLI may decide proposals", F3-recheck.txt).
+  H5 CLOSED  omo_backend.rs:878-887 turn_tainted (non-User origin, non-owner author, foreign pack text) passed to evaluate_pre_ask (:1650); ledger find_matching_precedent honors tainted.
+  H6 CLOSED  lanes/runner.rs:1305-1318 from_env_with_requester wires the approval requester; main.rs:2698 uses it.
+Residual risk (not blocker): eval side-effect detection is a text heuristic; an obfuscated JS call (e.g. computed property name) can evade eval_opaque_api. Unknown effects still ask.
+approval_allowlist: no new runtime use (F2-allowlist-grep.txt).
+Gate on this tree: fmt clean, clippy -D warnings clean, cargo test --no-fail-fast 1888 pass / 1 pre-existing fail r_dash_001 (task-14-final-test3.txt).
+Gap: no independent APPROVE verdict because the reviewer model could not complete; verification above is by the lead.

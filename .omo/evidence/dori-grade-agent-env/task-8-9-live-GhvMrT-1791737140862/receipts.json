@@ -1,0 +1,245 @@
+[
+  {
+    "kind": "provenance",
+    "mode": "execute-8-9",
+    "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+    "sha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+    "releaseReceipt": "/private/tmp/omon-lane-scratch-qa-GhvMrT/release.json",
+    "scratch": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+    "envNames": [
+      "DASHBOARD_ENABLED",
+      "DATABASE_URL",
+      "HOME",
+      "LOGNAME",
+      "NO_COLOR",
+      "OMON_DISCORD_ENABLED",
+      "OMON_INBOX_KAKAO_ROOMS",
+      "OMON_KIBITZER_ENABLED",
+      "OMON_LANES_ENABLED",
+      "OMON_LANE_KEYWORDS",
+      "OMON_OMO_APPSERVER_AUTH_TOKEN",
+      "OMON_OMO_APPSERVER_URL",
+      "OMON_PIRATETALK_URL",
+      "OMON_WORKSPACE_ROOT",
+      "PATH",
+      "RUST_LOG",
+      "TMPDIR",
+      "TYPESAFE_API_KEY",
+      "TYPESAFE_MODEL",
+      "TYPESAFE_URL",
+      "USER",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME"
+    ],
+    "at": "2026-10-11T16:45:40.863Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 21950,
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:45:41.254Z"
+  },
+  {
+    "id": "command-2",
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "stdoutBytes": 91,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:45:41.257Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 21975,
+    "argv": [
+      "/usr/bin/curl",
+      "-i",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:45:41.266Z"
+  },
+  {
+    "id": "command-4",
+    "argv": [
+      "/usr/bin/curl",
+      "-i",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "stdoutBytes": 175,
+    "stderrBytes": 317,
+    "at": "2026-10-11T16:45:41.268Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 21982,
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "21976",
+      "-Fn"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:45:41.378Z"
+  },
+  {
+    "id": "command-6",
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "21976",
+      "-Fn"
+    ],
+    "code": 0,
+    "stdoutBytes": 697,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:45:41.379Z"
+  },
+  {
+    "kind": "database_verified",
+    "pid": 21976,
+    "path": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+    "pragma": [
+      {
+        "seq": 0,
+        "name": "main",
+        "file": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db"
+      }
+    ],
+    "descriptorSha256": "2e238cae237d18ed4e5dd34d0630ff456f3290e5bc39f09dd64266af1020cf9b",
+    "at": "2026-10-11T16:45:41.381Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 21986,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-1",
+      "--title",
+      "QA lane",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/brief8.md",
+      "--done",
+      "file done.txt",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:45:43.263Z"
+  },
+  {
+    "id": "command-9",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-1",
+      "--title",
+      "QA lane",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/brief8.md",
+      "--done",
+      "file done.txt",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 0,
+    "stdoutBytes": 734,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:45:43.267Z"
+  },
+  {
+    "kind": "failure",
+    "message": "8 turn file report claim: deadline exceeded",
+    "at": "2026-10-11T16:55:41.387Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 55015,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: qa cleanup"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:55:41.405Z"
+  },
+  {
+    "id": "command-12",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: qa cleanup"
+    ],
+    "code": 0,
+    "stdoutBytes": 33,
+    "stderrBytes": 0,
+    "at": "2026-10-11T16:55:41.406Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 21976,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "run"
+    ],
+    "code": 0,
+    "at": "2026-10-11T16:55:41.408Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 21976,
+    "exit": 0,
+    "absent": true,
+    "at": "2026-10-11T16:55:41.408Z"
+  },
+  {
+    "kind": "gateway_final_exit",
+    "pid": 21976,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T16:55:41.408Z"
+  },
+  {
+    "kind": "cleanup",
+    "retainedScratch": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+    "sharedDaemonUntouched": true,
+    "at": "2026-10-11T16:55:41.408Z"
+  }
+]

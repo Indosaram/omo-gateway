@@ -1,0 +1,117 @@
+{
+  "schema": "omon-lane-qa-scope-receipts-v1",
+  "preparedSha256": "4ae06ac9950ffd644d10ca0b573228e9a45447b4c619c5aedddef4a1193bad78",
+  "receipts": [
+    {
+      "kind": "connection_attempt",
+      "stage": "websocket_construct",
+      "endpoint": "ws://127.0.0.1:19742",
+      "authPresent": true
+    },
+    {
+      "kind": "websocket_open",
+      "stage": "websocket_open"
+    },
+    {
+      "kind": "rpc",
+      "id": 1,
+      "method": "initialize"
+    },
+    {
+      "kind": "rpc",
+      "id": 2,
+      "method": "thread/start"
+    },
+    {
+      "kind": "thread_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo",
+      "runtimeWorkspaceRoots": [
+        "/private/tmp/omon-lane-scratch-qa-TzIHbY/qa-repo"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "id": 3,
+      "method": "turn/start"
+    },
+    {
+      "kind": "turn_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "itemId": "f093897d-9d4e-40d4-baac-748c0b1b83b1",
+      "type": "userMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "itemId": "chatcmpl-resp_072868c752d1ebfb016acbb6f274d08191a8a005522f6ac9cc:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "itemId": "call_1be567392e9f419eac5c177c919b7c68",
+      "type": "dynamicToolCall",
+      "tool": "todo"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "itemId": "call_1be567392e9f419eac5c177c919b7c68",
+      "tool": "todo",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "itemId": "chatcmpl-resp_004d2291a98805f5016acbb6f61cf081919095f95f3df15aae:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "itemId": "call_c1b4e26e812943498756b9dab0a2dc5f",
+      "type": "dynamicToolCall",
+      "tool": "eval"
+    },
+    {
+      "kind": "failure",
+      "stage": "turn_observations",
+      "error": {
+        "name": "AssertionError",
+        "code": "ERR_ASSERTION",
+        "message": "Unowned full output path"
+      }
+    },
+    {
+      "kind": "rpc",
+      "id": 4,
+      "method": "turn/interrupt"
+    },
+    {
+      "kind": "owned_turn_interrupt",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "status": "interrupted"
+    },
+    {
+      "kind": "result",
+      "stage": "turn_observations",
+      "status": "failed",
+      "threadId": "01a12bc2-9ffe-724a-8c25-1d5a2c30bca9",
+      "turnId": "b44a2a57-d260-40cd-a74d-de297e7232bd",
+      "sharedDaemonUntouched": true
+    }
+  ]
+}

@@ -1,0 +1,93 @@
+diff --git a/packages/omo-senpi/src/components/thread/live-surface.ts b/packages/omo-senpi/src/components/thread/live-surface.ts
+--- a/packages/omo-senpi/src/components/thread/live-surface.ts
++++ b/packages/omo-senpi/src/components/thread/live-surface.ts
+@@ -292,7 +292,7 @@
+     // the only record of its threads when it stops answering.
+     const isLegacy = (endpoint: KnownEndpoint) => resolve(endpoint.socket) === resolve(legacy)
+     const legacyPaths = [...new Set(found.filter(isLegacy).flatMap((endpoint) => endpoint.paths))]
+-    return [{ socket: legacy, paths: legacyPaths, kind: endpointKindOf(legacy, recorded), verdict: {} }, ...found.filter((endpoint) => !isLegacy(endpoint))]
++    return [{ socket: legacy, paths: legacyPaths, kind: endpointKindOf(legacy, recorded), verdict: found.find(isLegacy)?.verdict ?? {} }, ...found.filter((endpoint) => !isLegacy(endpoint))]
+   }
+ 
+   const endpoints = async (): Promise<readonly KnownEndpoint[]> => {
+@@ -319,7 +319,7 @@
+     const tui = endpoint.kind === "tui"
+-    // The engine already probed a terminal under its 1.5 s budget and found it not answering: a
+-    // suspended or remote terminal is reported, never dialed again, reaped or reopened elsewhere.
+-    if (tui && endpoint.verdict.alive === false) return degraded(endpoint, new Error(endpoint.verdict.reason ?? "live_unresponsive"), endpoint.verdict.reason ?? "live_unresponsive")
++    // The engine already probed this endpoint and found it not answering: report its verdict
++    // without dialing it again, reaping it or reopening its sessions elsewhere.
++    if (endpoint.verdict.alive === false) return degraded(endpoint, new Error(endpoint.verdict.reason ?? "live_unresponsive"), endpoint.verdict.reason ?? "live_unresponsive")
+     try {
+       const [{ sessions }, commands] = await Promise.all([
+         callOn<{ sessions: ThreadHostSession[] }>(endpoint.socket, "list_sessions", tui ? {} : OBSERVE, tui ? TUI_REQUEST_TIMEOUT_MS : ENDPOINT_LIST_TIMEOUT_MS),
+diff --git a/packages/omo-senpi/src/components/thread/live-surface-tui.test.ts b/packages/omo-senpi/src/components/thread/live-surface-tui.test.ts
+--- a/packages/omo-senpi/src/components/thread/live-surface-tui.test.ts
++++ b/packages/omo-senpi/src/components/thread/live-surface-tui.test.ts
+@@ -367,6 +367,66 @@
+   })
+ })
+ 
++describe("host enumeration verdict reuse", () => {
++  test.each(["legacy", "shard"] as const)("negative %s RPC verdict avoids all requests and retains responsive peers", async (target) => {
++    const dir = tempDir("thr-tui-")
++    const legacy = join(dir, "rpc.sock")
++    const shard = join(dir, "i-0123456789abcdef.sock")
++    const tui = join(dir, "t-0123456789abcdef.sock")
++    const unavailable = target === "legacy" ? legacy : shard
++    const responsive = target === "legacy" ? shard : legacy
++    const sessionPath = join(dir, "offline.jsonl")
++    writeFileSync(sessionPath, `${JSON.stringify({ type: "session", version: 3, id: "dur-offline", timestamp: "2026-09-28T04:19:00.000Z", cwd: process.cwd() })}\n`)
++    const stopped = await hostEndpoint(unavailable)
++    const host = await hostEndpoint(responsive)
++    const terminal = await tuiEndpoint(tui, { id: "dur-tui", path: join(dir, "tui.jsonl"), name: "terminal" })
++    const w = surfaceFor(legacy, [
++      { socket: unavailable, reachable: false, session_paths: [sessionPath], endpoint_kind: "rpc_host", alive: false, reason: "live_unresponsive" },
++      { socket: responsive, reachable: true, session_paths: [], endpoint_kind: "rpc_host", alive: true, reason: null },
++      { socket: tui, reachable: true, session_paths: [], endpoint_kind: "tui", alive: true, reason: null },
++    ])
++
++    const threads = threadsOf(await w.run("thread_list", { all_scope: true }))
++
++    expect(threads.find((thread) => thread.thread_id === "dur-offline")).toMatchObject({ status: "resumable", alive: false, error_note: "live_unresponsive" })
++    expect(threads.find((thread) => thread.thread_id === "dur-host")).toMatchObject({ status: "live", alive: true })
++    expect(threads.find((thread) => thread.thread_id === "dur-tui")).toMatchObject({ status: "live", alive: true, surface: "tui" })
++    expect(stopped.frames).toEqual([])
++    expect(w.dialed).not.toContain(unavailable)
++    expect(host.frames.filter((frame) => frame.type === "list_sessions")).toHaveLength(1)
++    expect(terminal.frames.filter((frame) => frame.type === "list_sessions")).toHaveLength(1)
++  })
++
++  test("an unknown RPC verdict still lists a reachable host even if reachable was false", async () => {
++    const dir = tempDir("thr-tui-")
++    const legacy = join(dir, "rpc.sock")
++    const host = await hostEndpoint(legacy)
++    const w = surfaceFor(legacy, [{ socket: legacy, reachable: false, session_paths: [], endpoint_kind: "rpc_host" }])
++
++    expect(threadsOf(await w.run("thread_list", { all_scope: true }))).toMatchObject([{ thread_id: "dur-host", status: "live" }])
++    expect(w.dialed).toEqual([legacy])
++    expect(host.frames).toEqual([{ id: expect.any(String), type: "list_sessions", observe: true }])
++  })
++
++  test.each(["dead", "live_unresponsive"] as const)("all-unavailable %s verdicts retain failures and offline host rows without requests", async (reason) => {
++    const dir = tempDir("thr-tui-")
++    const legacy = join(dir, "rpc.sock")
++    const shard = join(dir, "i-0123456789abcdef.sock")
++    const legacyHost = await hostEndpoint(legacy)
++    const shardHost = await hostEndpoint(shard)
++    const w = surfaceFor(legacy, [legacy, shard].map((socket) => ({ socket, reachable: false, session_paths: [], endpoint_kind: "rpc_host" as const, alive: false, reason })))
++
++    await expect(w.surface.listSessions()).rejects.toThrow(reason)
++    const offline = await w.surface.listView?.({ offline: true })
++
++    expect(offline?.sessions).toEqual([])
++    expect(offline?.hosts).toMatchObject([{ socket: legacy, alive: false, reason, error: reason }, { socket: shard, alive: false, reason, error: reason }])
++    expect(w.dialed).toEqual([])
++    expect(legacyHost.frames).toEqual([])
++    expect(shardHost.frames).toEqual([])
++  })
++})
++
+ describe("host status --all rows with endpoint kinds", () => {
+   test("#given a tui row with owner and a host row with a liveness verdict #when parsed #then kind, alive, reason and the owner's session path are kept", () => {
+     const line = JSON.stringify({

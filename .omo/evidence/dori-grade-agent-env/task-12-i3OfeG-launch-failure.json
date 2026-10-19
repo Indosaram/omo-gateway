@@ -1,0 +1,31 @@
+{
+  "schema": "omon-task12-launch-failure-v1",
+  "root": "/private/tmp/omon-lane-scratch-qa-i3OfeG",
+  "preparedSha256": "6ce3a1ff5e86d02df269df70b9a7b0f2dc79f9fb44a8807eefdd579c9bf8ca3d",
+  "binarySha256": "3b852fbd4d5f93911a3200fe07bb8bb7d037f317c24a7bc46fcc60a5b314b933",
+  "manifestSha256": "0d3fc34abc10daa6d15f4de0745762ff26e6e3afcfb39137e347b6b70095b9ee",
+  "scopeAttempts": [
+    {
+      "type": "monitor missing private env",
+      "exit": 1,
+      "receipt": "scope-probe-receipts-1791743857448-1ef96e2c0d35.json",
+      "remoteThreadCreated": false
+    },
+    {
+      "type": "explicit-env Bun.spawn",
+      "pid": 59128,
+      "exit": 143,
+      "stdoutBytes": 0,
+      "stderrBytes": 0,
+      "terminalReceiptAbsent": true,
+      "remoteOutcome": "unknown; not inferred from missing receipt"
+    }
+  ],
+  "scopeVerified": false,
+  "laneRuntimeStarted": false,
+  "databaseAbsent": true,
+  "executionMarkerAbsent": true,
+  "sharedDaemonUntouched": true,
+  "disposition": "No scope replay because terminated authenticated launcher did not preserve remote correlation. Root retained for authoritative daemon reconciliation.",
+  "releaseLimitations": "Backend2 pending/8baseline failures retained; not all green"
+}

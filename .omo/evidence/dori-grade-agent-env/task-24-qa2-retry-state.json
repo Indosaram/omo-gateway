@@ -1,0 +1,53 @@
+{
+  "todo": 24,
+  "scenario": "corrected-preparation-retry",
+  "root": "/private/tmp/omon-task24-qa2-K6WyJH",
+  "dbPath": "/private/tmp/omon-task24-qa2-K6WyJH/qa.db",
+  "status": "blocked",
+  "exitCode": 1,
+  "error": "Execution monitor timed_out; no final scenario receipt emitted. No relaunch.",
+  "state": {
+    "items": {
+      "n": 166
+    },
+    "classes": [],
+    "usage": [],
+    "lanes": [],
+    "cursors": [
+      {
+        "source": "mail",
+        "cursor": "",
+        "updated_at": "2026-10-12T00:18:52.647005+00:00",
+        "error": "tool execution error: zele exited exit status: 1: error: No accounts registered. Run: zele login\n\n    at getClients (file:///Users/indo/.bun/install/global/node_modules/zele/dist/auth.js:503:15)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async command:mail list (file:///Users/indo/.bun/install/global/node_modules/zele/dist/commands/mail.js:99:25)\n    at async Goke.parse (file:///Users/indo/.bun/install/global/node_modules/goke/dist/goke.js:1480:13)\n\nRun \"zele mail list --help\" for usage information."
+      },
+      {
+        "source": "kakao",
+        "cursor": "",
+        "updated_at": "2026-10-12T00:23:09.585159+00:00",
+        "error": "configuration error: inbox source returned an empty source reference or snippet"
+      },
+      {
+        "source": "imessage",
+        "cursor": "2026-10-11T10:57:55.385+00:00",
+        "updated_at": "2026-10-12T00:19:07.822133+00:00",
+        "error": null
+      },
+      {
+        "source": "discord",
+        "cursor": "",
+        "updated_at": "2026-10-12T00:19:07.823615+00:00",
+        "error": null
+      }
+    ]
+  },
+  "cleanup": [
+    {
+      "pid": 41738,
+      "code": null,
+      "pidAbsent": true,
+      "socketRemoved": true
+    }
+  ],
+  "scratchRetained": true,
+  "binarySha256": "5b765f9394354022dde3006252f8d874c74801ee2c54bd373758b54b7eb20f97"
+}

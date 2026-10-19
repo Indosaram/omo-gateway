@@ -1,0 +1,15 @@
+# Minimal reopen race port
+
+Work verification monitor: mon_D5FNSTRQ4SCCM5B6, session bash_20, batch PID 60540 recorded in race-port-20261011T145201Z-gates.started. Grouped scoped rustfmt exit 0. Settled hashes: src/lanes/runner.rs 83c41285631ebe74eb63d91f77ccf6c967464139cd1622b43f8a616783d7136c; tests/test_lane_reopen.rs b6b255f85049762a2a900c49cab708c6c2e14375dd1f65642da73afb6a25bb1a. Only these two source paths differ from the prior guard repair manifest.
+
+Worktree: dori-work only. Source comparison read exact current work/next diff before edits. Work already has per-turn JoinSet, CAPTURE_GENERATION, and generation-aware inbox handling; no next-only architecture dependency. Only the backend spawn/selection/notification hunk ported. No settlement field, APIs, ticker, tasks, or verified_done lifecycle hook imported.
+
+Pre-port hashes: runner.rs 64a930e43459b12ebd291247ec6f1a876e9743798430d46600e719250374f5dc; test_lane_reopen.rs 11e1f9e8a098463edceab0beccb87edadbc869bc70e006640ed0510f25be08a7. Pre-port source snapshots and post-port unified diffs are under this prefix.
+
+Exact string comparison after port: per-turn JoinSet/backend/notification block equals settled dori-next block; ClosingBackend and the existing reopen regression equal settled dori-next source. No whole-file copying. All prior assertions and old-turn steer panic preserved; cancellation acknowledgement registered before notify, old invocation held on semaphore until acknowledgement, committed reopened status and single-old-call assertions retained.
+
+Additional completed-turn invariant not covered by cancellation test: current-thread CompletedBackend enqueues a fresh message, claims done, then notifies and returns without an intervening await. Runner's notification is registered while awaiting the spawned backend. This specific ordering leaves completion and notification ready on return to runner; steer panics if invoked and pending inbox/count/status are asserted. No sleeps, polling, or timing luck. Does not prove all possible completed-turn interleavings or general race freedom.
+
+Fresh Rust LSP diagnostics timed out on both changed paths; do not interpret this as a clean LSP result. Requested strict Clippy will provide compiler/lint evidence. Harness syntax checked before launch. Existing receipts and task-7.log independently hash-preserved; source set rehashed against prior guard-repair manifest before/after. Unique TMPDIR captures local fixtures/socket cleanup. No external DB, service, Discord or repository git mutation.
+
+User supplied next results: next-clippy145201Z exit 0, next-focused145256Z exit 0 with reopen 4/4 and runner 11 passed/1 ignored. These are context only, not work port execution evidence. Work runs one grouped scoped rustfmt, one strict Clippy, and one two-target focused command with --no-fail-fast, on existing target-w4 with 2 build jobs. No full/inbox/state/shell replay. Monitor deadline 1800000 ms; durable started PID prevents command relaunch after restoration.

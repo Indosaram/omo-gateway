@@ -1,0 +1,25 @@
+thread 'agent_result_uses_scheduler_delivery' (32617931) panicked at tests/test_cron_executor_parity.rs:330:5:
+  left: 0
+ right: 1
+test agent_result_uses_scheduler_delivery ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 1.49s
+
+=====
+test sync_isolates_bad_jobs_and_rearms_changed_once ... FAILED
+thread 'sync_isolates_bad_jobs_and_rearms_changed_once' (32616953) panicked at tests/test_cron_boundary_parity.rs:538:5:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 2.69s
+
+=====
+test test_omo_backend_aborts_turn_on_repeated_approval_denials ... FAILED
+thread 'test_omo_backend_aborts_turn_on_repeated_approval_denials' (32616923) panicked at tests/test_omo_backend.rs:2891:5:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out; finished in 3.02s
+
+=====
+test test_omo_backend_deadline_interrupts_looping_turn ... FAILED
+thread 'test_omo_backend_deadline_interrupts_looping_turn' (32615871) panicked at tests/test_omo_backend.rs:2447:5:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out; finished in 9.93s
+
+=====
+test rejected_model_settings_return_typed_error_without_starting_turn ... FAILED
+thread 'rejected_model_settings_return_typed_error_without_starting_turn' (32618034) panicked at tests/test_omo_backend.rs:292:6:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out; finished in 5.04s

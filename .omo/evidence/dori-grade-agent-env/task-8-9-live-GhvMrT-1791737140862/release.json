@@ -1,0 +1,53 @@
+{
+  "schema": "omon-lane-qa-release-v1",
+  "preparedSha256": "474e375d4f307f594efc29e92e7b8eeaf798980a6c317dc75e71e12e1561b1d4",
+  "root": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+  "dbPath": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+  "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+  "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binarySha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+  "manifestSha256": "45200128b3b5cd63fbc956b36e01daaa82f817b63607d176ef6751d89f486718",
+  "gate": {
+    "status": "released",
+    "evidence": {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/fixture-repair-20261011T161103Z-handoff.md",
+      "sha256": "d813d2286848be1576a4891465d6128d941302f1d627f93a3171f94cb606ef03"
+    },
+    "grouped": {
+      "path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/grouped-repairs-20261011T160343Z-handoff.md",
+      "sha256": "7c8b4feb7da7aadb4b438c9d79f3abfcfc9b0132b24a251b54237b125c6f235b"
+    }
+  },
+  "backendScope": {
+    "status": "verified",
+    "endpoint": "ws://127.0.0.1:19742",
+    "root": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+    "dbPath": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+    "cwd": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo"
+    ],
+    "threadId": "01a12bda-284a-7964-ba5e-31ef191c6a5b",
+    "observedAt": "2026-10-11T16:45:01.176Z",
+    "inheritedDatabaseUrlEqual": false,
+    "controlChild": {
+      "executable": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+      "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+      "databaseUrlEqual": true,
+      "envOverride": true,
+      "exitCode": 0,
+      "sha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "--help"
+      ],
+      "stdoutBytes": 447,
+      "stderrBytes": 0
+    },
+    "evidence": {
+      "path": "/private/tmp/omon-lane-scratch-qa-GhvMrT/scope-probe.json",
+      "sha256": "7cbea26b2a2a740193104d541e4ee7f6f7d4196a6bbc99bdec3edecaaa101e07"
+    }
+  }
+}

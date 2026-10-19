@@ -1,0 +1,45 @@
+--test test_cron_executor_parity agent_result_uses_scheduler_delivery
+test agent_result_uses_scheduler_delivery ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 4 filtered out; finished in 2.74s
+
+=====
+--test test_cron_boundary_parity sync_isolates_bad_jobs_and_rearms_changed_once
+test sync_isolates_bad_jobs_and_rearms_changed_once ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3 filtered out; finished in 3.82s
+
+=====
+--test test_omo_backend test_omo_backend_aborts_turn_on_repeated_approval_denials
+test test_omo_backend_aborts_turn_on_repeated_approval_denials ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out; finished in 3.08s
+
+=====
+--test test_omo_backend test_omo_backend_deadline_interrupts_looping_turn
+test test_omo_backend_deadline_interrupts_looping_turn ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out; finished in 10.12s
+
+=====
+--test test_omo_backend rejected_model_settings_return_typed_error_without_starting_turn
+test rejected_model_settings_return_typed_error_without_starting_turn ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 54 filtered out; finished in 0.01s
+
+
+--test test_omo_backend test_omo_backend_e2e_thread_lifecycle_and_streaming
+
+=====
+--test test_wiring_e2e test_e2e_actor_omo_backend_persists_assistant_message
+
+
+=== HEAD wiring_e2e: FAILED (Must emit stream chunks to dispatcher)
+=== HEAD thread_lifecycle:
+assertion `left == right` failed
+  left: Some(true)
+ right: Some(false)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    test_omo_backend_e2e_thread_lifecycle_and_streaming
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 54 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `--test test_omo_backend`

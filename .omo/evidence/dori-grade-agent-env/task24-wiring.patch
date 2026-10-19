@@ -1,0 +1,31 @@
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1620,4 +1620,14 @@
+     let pool = pool.clone();
+     let watcher_tx = event_tx.clone();
++    let triage = omon_gateway::inbox::triage::Triage::new(
++        pool.clone(),
++        Arc::new(omon_gateway::inbox::triage::production_judge(pool.clone())),
++        Arc::new(omon_gateway::inbox::triage::SmallModelWriter::new(
++            omon_gateway::agent::OmoBackendConfig::from_env()?,
++        )),
++        std::env::var("OMON_LANE_DEFAULT_LEAD")
++            .map_err(|_| OmonError::Config("OMON_LANE_DEFAULT_LEAD is required for inbox triage".into()))?,
++    );
++    let triage_shutdown = shutdown.clone();
+     let task = tokio::spawn(async move {
+         let mut tasks = tokio::task::JoinSet::new();
+@@ -1634,11 +1644,7 @@
+                 Some(shutdown.clone()),
+             ),
+         );
+-        tasks.spawn(async move {
+-            while let Some(results) = progress_rx.recv().await {
+-                log_inbox_results(results);
+-            }
+-        });
++        tasks.spawn(triage.serve(progress_rx, triage_shutdown));
+         tasks.spawn(run_imessage_event_watcher(
+             pool.clone(),
+             watcher_tx.clone(),

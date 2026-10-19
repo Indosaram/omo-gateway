@@ -1,0 +1,1 @@
+clippy	0	cargo clippy -j 2 --all-targets --all-features -- -D warnings

@@ -1,0 +1,30 @@
+[
+ {
+  "name": "Trello (Atlassian)",
+  "url": "https://trello.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "보드·리스트·카드 기반 클라우드 칸반 도구, Butler 자동화 지원",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Standard $5, Premium $10/사용자/월(연간)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 원격 MCP·커뮤니티 MCP·REST API·웹훅",
+  "status": "활발(Atlassian 운영 SaaS)",
+  "pros": "직관적인 칸반 모델; 공식 원격 MCP 엔드포인트 제공; 넉넉한 무료 플랜과 오프라인 동기화 모바일 앱",
+  "cons": "셀프호스팅 불가; 공식 MCP는 연결당 워크스페이스 1개만 지원; API 속도 제한(토큰당 10초 100회)",
+  "sources": [
+   "https://trello.com/pricing",
+   "https://trello.com/platforms",
+   "https://trello.com/mcp",
+   "https://developer.atlassian.com/cloud/trello/rest/",
+   "https://developer.atlassian.com/cloud/trello/guides/rest-api/api-introduction/",
+   "https://developer.atlassian.com/cloud/trello/guides/rest-api/rate-limits/",
+   "https://github.com/atlassian/trello-mcp-server",
+   "https://github.com/delorenj/mcp-server-trello",
+   "https://apps.apple.com/us/app/trello-manage-anything/id461504587",
+   "https://play.google.com/store/apps/details?id=com.trello"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,88 @@
+{
+  "task": 8,
+  "status": "ready_for_rereview_incident_disposition_pending",
+  "supersedes": "task-8-doneclaim.json",
+  "source_sha256": "f2e24aa47e5d0e5f99d41cd2a91af032c73a037890f3d6667cc1c5fbdbe778cf  src/lanes/runner.rs\ne1e767e2c4ce686dfa1b4cbd033eca815a2e8f693c8d44351032b78a5419c88c  src/lanes/cli.rs\n61d2372a708d7419506f5d7f9b661add6c7c208f15574e265e07377358f02fcc  src/lanes/mod.rs\n4dcc57e21cb313c536b8d883c7f70f10cc597b94cce2ea88f859ce15f8d57c74  src/entry.rs\n9042612cab01242bb07a351c736fe5ece8a436387224f25bcae8940743384ffa  src/main.rs\nfce5d60c3679821da3e88c387c9861ad47f3b4576e9d156bf2f2d90cd1759fcb  tests/test_lane_runner.rs\ne01e27c4e749211cb7bf8cdd528daa59aa8d3c2c5f7be115aa9b3616e17b79cc  tests/test_lane_cli.rs\n23b2da40d3e21b685dbeb3da929fba00a137738cbdec47ee2d917a1b5bc19791  migrations/0033_lane_inbox.sql\n3d1db0fd55b2ab51eeecd957d762253543445a43cc24f83da9ea00ed4ae190a2  Cargo.toml\n",
+  "changes": [
+    "OMON_DISCORD_ENABLED=false ordinary gateway mode uses shared production lane startup/shutdown",
+    "Discord-enabled gateway observes lane-service failure and shuts down clients instead of silently losing workers"
+  ],
+  "tests": {
+    "scoped": "14 passed, 1 explicit live harness ignored; exit 0; task-8-revision-tests.txt",
+    "clippy": "exact --all-targets --all-features -- -D warnings; exit 0; task-8-revision-gates.txt",
+    "format": "owned main.rs and runner.rs Rust 2021 check exit 0; pre-existing backend.rs global formatting difference not edited"
+  },
+  "qa": {
+    "artifact": "task-8-real-gateway.json",
+    "actual_gateway": true,
+    "endpoint_substitution": "authorized disposable 29749",
+    "turns": 1,
+    "outcome": "completed",
+    "claim": "done_claimed",
+    "done_file": "qa complete",
+    "invalid_exit": 2,
+    "startup_failure_exit": 1,
+    "forced_close_exit": 0,
+    "gateway_shutdown_exit": 0
+  },
+  "cleanup": {
+    "scratchAbsent": true,
+    "socketAbsent": true,
+    "lockAbsent": true,
+    "pids_absent": [
+      63508,
+      61137
+    ],
+    "port_29749_clear": true
+  },
+  "incident": {
+    "report": "task-8-live-db-incident.md",
+    "confirmed": "repository DB migrations 31-33 and stray qa-1 with zero persisted activity",
+    "disposition": "pending owner approval; no live cleanup"
+  },
+  "adversarial": [
+    {
+      "class": "malformed input",
+      "result": "invalid_done_exits_two_without_a_lane passed; actual CLI exit 2"
+    },
+    {
+      "class": "prompt injection",
+      "result": "chains_until_claim_and_captures_without_discord passed; literal $(touch SHOULD_NOT_EXIST) never executed by runner"
+    },
+    {
+      "class": "cancel/resume",
+      "result": "repeated_cancellation_keeps_lane_resumable and service_recovers_file_database_and_shutdown_releases_socket passed"
+    },
+    {
+      "class": "stale state",
+      "result": "stale_lane_binding_prefers_durable_session_binding passed"
+    },
+    {
+      "class": "dirty worktree",
+      "result": "dirty_worktree_is_preserved_by_claim passed; claim cannot verify or clean files"
+    },
+    {
+      "class": "hung commands",
+      "result": "fake backend blocked on zero-permit semaphore cancelled under bounded timeout; repeated_cancellation_keeps_lane_resumable passed"
+    },
+    {
+      "class": "flaky tests",
+      "result": "14 final-source tests pass in one run, semaphore/channel handshakes with bounded timeouts; no test sleeps/polls"
+    },
+    {
+      "class": "misleading success output",
+      "result": "misleading_success_output_never_verifies_or_closes_lane passed"
+    },
+    {
+      "class": "repeated interruptions",
+      "result": "three repeated cancellations retain working status and thread binding; test passed"
+    }
+  ],
+  "coverage_limits": [
+    "fake cancellation is not proof of real remote tool interrupt",
+    "actual gateway shutdown demonstrated after idle completed turn, not active remote interrupt",
+    "startup lock failure exercised; arbitrary runtime socket/DB faults not injected",
+    "guard concurrent-slot race and streaming snapshot dedupe remain later integration concerns"
+  ],
+  "review": "task8gate-review.md rejection read and B1 remedy completed; B2 remains operationally pending"
+}

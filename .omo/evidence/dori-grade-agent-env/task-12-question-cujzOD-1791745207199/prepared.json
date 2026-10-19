@@ -1,0 +1,39 @@
+{
+  "schema": "omon-lane-qa-prepared-v1",
+  "root": "/private/tmp/omon-lane-scratch-qa-cujzOD",
+  "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binarySha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+  "sourceRoot": "/Users/indo/code/project/omon-gateway-wt/dori-work",
+  "manifestSha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+  "judge": {
+    "path": "/Users/indo/.cargo/bin/typesafe-judge",
+    "sha256": "daacff0341e0f0f1f86e4fa9335af723603a0515732ec72ed8aad2c4c6aa0fe6"
+  },
+  "createdAt": "2026-10-11T18:59:08.766Z",
+  "dbPath": "/private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+  "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+  "repo": "/private/tmp/omon-lane-scratch-qa-cujzOD/qa-repo",
+  "env": {
+    "HOME": "/private/tmp/omon-lane-scratch-qa-cujzOD/home",
+    "USER": "lane-qa",
+    "LOGNAME": "lane-qa",
+    "TMPDIR": "/private/tmp/omon-lane-scratch-qa-cujzOD",
+    "PATH": "/private/tmp/omon-lane-scratch-qa-cujzOD/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    "XDG_CONFIG_HOME": "/private/tmp/omon-lane-scratch-qa-cujzOD/home/.config",
+    "XDG_DATA_HOME": "/private/tmp/omon-lane-scratch-qa-cujzOD/home/.local/share",
+    "XDG_CACHE_HOME": "/private/tmp/omon-lane-scratch-qa-cujzOD/home/.cache",
+    "DATABASE_URL": "sqlite:///private/tmp/omon-lane-scratch-qa-cujzOD/qa.db",
+    "OMON_DISCORD_ENABLED": "false",
+    "OMON_LANES_ENABLED": "true",
+    "OMON_KIBITZER_ENABLED": "false",
+    "DASHBOARD_ENABLED": "false",
+    "OMON_WORKSPACE_ROOT": "/private/tmp/omon-lane-scratch-qa-cujzOD/workspaces",
+    "OMON_LANE_KEYWORDS": "",
+    "OMON_OMO_APPSERVER_URL": "ws://127.0.0.1:19742",
+    "OMON_PIRATETALK_URL": "http://127.0.0.1:1",
+    "OMON_INBOX_KAKAO_ROOMS": "",
+    "RUST_LOG": "info",
+    "NO_COLOR": "1"
+  },
+  "manifestPath": "/private/tmp/omon-lane-scratch-qa-cujzOD/source-manifest.sha256"
+}

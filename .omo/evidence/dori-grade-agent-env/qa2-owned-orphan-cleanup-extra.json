@@ -1,0 +1,16 @@
+{
+  "groups": [
+    41397,
+    41402,
+    42057
+  ],
+  "membersBefore": [
+    "41397     1 41397 /Users/indo/.bun/bin/bun /Users/indo/.bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/cli.js app-server --listen ws://127.0.0.1:55814 --ws-auth /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-QwMGg9/ws-token --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin",
+    "41402     1 41402 /Users/indo/.bun/bin/bun /Users/indo/.bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/cli.js app-server --listen ws://127.0.0.1:55815 --ws-auth /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/omon-qa-owned-appserver-D0D6xY/ws-token --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin",
+    "42040 41402 41402 /Users/indo/.bun/bin/bun /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/runtime/ast-grep-mcp/cli.js mcp",
+    "42057 41402 42057 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --internal-rpc-host-supervisor --socket /Users/indo/.omo/agent/rpc/shards/p-e104caa10591dba0.sock --owner-fd 3 --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js",
+    "42099 42057 42057 /Users/indo/.bun/bin/bun /Users/indo/.omo/agent/runtime/dd11217900179eb7-6e4044c3d021/dist/bundle/cli.js --mode rpc --multi-session --listen unix:///private/tmp/omon-task26-qa2-7Glkdp/senpi-rpc-host-internal-da3a06de/host.sock --session-runtime in-process --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin --extension /Users/indo/.bun/install/global/node_modules/omo-ai/plugin/extensions/omo-member.js"
+  ],
+  "signal": "SIGKILL",
+  "reason": "Remaining execution monitors terminated runner; only backends and RPC group belonging to retained task24/task26 roots stopped"
+}

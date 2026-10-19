@@ -1,0 +1,73 @@
+[
+ {
+  "name": "AgentBox",
+  "url": "https://agent-box.sh/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "AI 코딩 에이전트를 격리된 Docker 샌드박스·클라우드 microVM에서 실행하는 오케스트레이터",
+  "mobile": "반응형 웹(네이티브 앱 없음)",
+  "pricing": "무료(OSS), 클라우드는 사용자 계정 종량제",
+  "selfhost": "가능(로컬 Docker/원격 SSH/VPS 허브)",
+  "license": "MIT",
+  "agent": "CLI·REST API·SSE; Claude Code, Codex, OpenCode, Pi, OpenClaw",
+  "status": "활발한 개발 중(2026)",
+  "pros": "컨테이너/microVM 격리로 호스트 보호; 1초 미만 체크포인트 복원·자동 일시정지; 로컬·멀티클라우드 지원",
+  "cons": "칸반 컬럼 보드 없음; Docker Desktop/OrbStack 필요; 초기 이미지 약 1GB",
+  "sources": [
+   "https://agent-box.sh/",
+   "https://agent-box.sh/docs",
+   "https://agent-box.sh/docs/cli",
+   "https://agent-box.sh/docs/hub",
+   "https://agent-box.sh/docs/api",
+   "https://agent-box.sh/docs/core-concepts",
+   "https://github.com/madarco/agentbox",
+   "https://yetanotherorchestrator.app/apps/agentbox/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "dmux",
+  "url": "https://dmux.ai/",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "tmux와 git worktree로 여러 AI 코딩 에이전트를 병렬 실행하는 터미널 멀티플렉서",
+  "mobile": "없음(터미널 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(npm 설치)",
+  "license": "MIT",
+  "agent": "CLI; Claude Code, Codex, Gemini CLI 등 12개 이상 에이전트",
+  "status": "활발(v5.11.1, 2026)",
+  "pros": "worktree 격리로 충돌 방지; 12개 이상 CLI 에이전트 지원; AI 충돌 해결 자동 병합",
+  "cons": "칸반 보드 없음; tmux·단축키 숙련 필요; Windows 지원 제한(WSL 필요)",
+  "sources": [
+   "https://dmux.ai/",
+   "https://github.com/formkit/dmux",
+   "https://github.com/standardagents/dmux",
+   "https://yetanotherorchestrator.app/apps/dmux/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Gas Town",
+  "url": "https://github.com/gastownhall/gastown",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "20~30개 이상 AI 코딩 에이전트를 git worktree·Beads로 조율하는 멀티에이전트 관리자",
+  "mobile": "반응형 웹 대시보드(네이티브 앱 없음)",
+  "pricing": "무료(OSS) / 엔터프라이즈 유료 티어 존재(가격 미확인)",
+  "selfhost": "가능(Homebrew/Go/Docker Compose)",
+  "license": "MIT",
+  "agent": "CLI·Beads·Claude Code 훅·OTel; Claude Code, Codex, Copilot 등",
+  "status": "매우 활발(2026)",
+  "pros": "역할 기반 멀티에이전트 구조; worktree 훅으로 상태 유지·복구; 자동 병합 큐로 main 빌드 보호",
+  "cons": "칸반 보드 없음; 개념 복잡·학습 곡선 가파름; 무거운 의존성·높은 토큰 소비",
+  "sources": [
+   "https://github.com/gastownhall/gastown",
+   "https://gastownhall.com",
+   "https://gascity.com",
+   "https://yetanotherorchestrator.app/apps/gastown/",
+   "https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04"
+  ],
+  "confidence": "높음"
+ }
+]

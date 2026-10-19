@@ -1,0 +1,11 @@
+fix(lanes,inbox,judge): deploy follow-ups for gateway lanes
+
+- judge: find typesafe-judge in ~/.cargo/bin when the launchd PATH lacks it
+- lanes: status refresh skips closed lanes (archived threads reject edits) and
+  one lane's Discord failure no longer stops the lane service
+- lanes: every lane-thread Discord call is bounded; a rename Discord holds
+  (two renames per ten minutes) is skipped so close/reopen and the lane loop
+  never stall on it
+- inbox: Discord collection skips messages written by any registered bot
+
+Plan: .omo/plans/dori-grade-agent-env.md

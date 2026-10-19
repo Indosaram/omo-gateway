@@ -1,0 +1,31 @@
+[
+ {
+  "name": "Vibe Kanban",
+  "url": "https://www.vibekanban.com/",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "코딩 에이전트 실행을 Git 워크트리 격리 환경에서 계획·리뷰·실행하는 칸반 플랫폼",
+  "mobile": "반응형 웹(Cloud/원격 접속), 네이티브 앱 없음",
+  "pricing": "무료(OSS), 유료 클라우드 구독 종료·환불",
+  "selfhost": "가능(로컬 CLI, Docker Compose)",
+  "license": "Apache-2.0",
+  "agent": "MCP 서버·CLI·REST API; Claude Code·Codex 등 10+ 에이전트",
+  "status": "상용 종료(2026-04-10), 커뮤니티 OSS",
+  "pros": "Git 워크트리 격리로 병렬 에이전트 충돌 방지; 내장 diff 리뷰·인라인 코멘트; MCP로 이슈 생성·실행 자동화",
+  "cons": "개발사 종료로 유지보수는 자원봉사자 의존; 호스팅 클라우드 중단, 셀프호스팅 필요; 코딩·Git 워크플로 전용",
+  "sources": [
+   "https://www.vibekanban.com/",
+   "https://github.com/BloopAI/vibe-kanban",
+   "https://vibekanban.com/blog/shutdown",
+   "https://vibekanban.com/docs",
+   "https://vibekanban.com/docs/integrations/vibe-kanban-mcp-server.md",
+   "https://vibekanban.com/docs/self-hosting/deploy-docker.md",
+   "https://vibekanban.com/docs/remote-access.md",
+   "https://raw.githubusercontent.com/BloopAI/vibe-kanban/main/LICENSE",
+   "https://api.github.com/repos/BloopAI/vibe-kanban",
+   "https://goodguyapps.com/blog/vibe-kanban-sunsetting/",
+   "https://goodguyapps.com/compare/kanban-pro-vs-vibe-kanban/"
+  ],
+  "confidence": "높음"
+ }
+]

@@ -1,0 +1,58 @@
+[
+ {
+  "name": "Coder Mux (Xum)",
+  "url": "https://github.com/coder/mux",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "병렬 코딩 에이전트용 오픈소스 데스크톱/헤드리스 멀티플렉서(격리 워크스페이스·git 모니터링)",
+  "mobile": "반응형 웹(xum server 경유)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 앱·헤드리스 서버)",
+  "license": "AGPL-3.0",
+  "agent": "MCP·ACP·CLI·REST/WS; Claude·GPT·Grok·Ollama 등",
+  "status": "활발(v0.31.0, 2026-10)",
+  "pros": "에이전트 전용 병렬 워크스페이스 오케스트레이션; worktree·SSH·Docker 지원; MCP·ACP 표준 프로토콜 지원",
+  "cons": "칸반 보드 아닌 사이드바/채팅 UI; 모바일은 브라우저만(푸시 없음); 신생 프로젝트(Mux→Xum 개명)",
+  "sources": [
+   "https://github.com/coder/mux",
+   "https://github.com/coder/xum",
+   "https://raw.githubusercontent.com/coder/mux/main/README.md",
+   "https://mux.coder.com",
+   "https://xum.cdr.dev/llms.txt",
+   "https://xum.cdr.dev/index.md",
+   "https://xum.cdr.dev/reference/cli.md",
+   "https://xum.cdr.dev/config/server-access.md",
+   "https://xum.cdr.dev/config/mcp-servers.md",
+   "https://xum.cdr.dev/integrations/acp.md",
+   "https://xum.coder.com/integrations/vscode-extension.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Coder Agents (formerly Coder Tasks)",
+  "url": "https://coder.com/docs/ai-coder/agents",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Coder 플랫폼 내장 엔터프라이즈 셀프호스트 AI 코딩 에이전트 실행·오케스트레이션",
+  "mobile": "반응형 웹",
+  "pricing": "Community 무료(동시 5개) / Premium 영업 문의",
+  "selfhost": "가능(K8s·Docker·바이너리)",
+  "license": "AGPL-3.0(코어)+상용 확장",
+  "agent": "MCP 거버넌스·CLI·REST·웹훅; Agent Relay(Claude Code·Cursor)",
+  "status": "활발(주간 릴리스)",
+  "pros": "격리 샌드박스·에이전트 방화벽 거버넌스; Coder 템플릿 기반 환경; Agent Relay로 외부 에이전트 안전 실행",
+  "cons": "칸반 아닌 대화/타임라인 UI; Coder 인프라 구축 부담; 고급 보안·무제한 동시성은 유료",
+  "sources": [
+   "https://coder.com/pricing",
+   "https://coder.com/pricing.md",
+   "https://coder.com/docs/ai-coder/agents",
+   "https://coder.com/docs/ai-coder/agents/licensing-usage",
+   "https://coder.com/docs/ai-coder/agents/tasks-to-chats-migration",
+   "https://coder.com/docs/ai-coder/agent-relay",
+   "https://coder.com/blog/launch-week-2025-introducing-coder-tasks",
+   "https://coder.com/blog/automate-coder-tasks-via-cli-and-api",
+   "https://github.com/coder/coder"
+  ],
+  "confidence": "높음"
+ }
+]

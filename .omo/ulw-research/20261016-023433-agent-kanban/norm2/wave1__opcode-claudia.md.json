@@ -1,0 +1,30 @@
+[
+ {
+  "name": "opcode (formerly Claudia, getAsterisk, Gooey)",
+  "url": "https://github.com/winfunc/opcode",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Claude Code용 오픈소스 GUI 데스크톱 앱·웹서버(에이전트·세션·MCP·비용 관리)",
+  "mobile": "반응형 웹(opcode-web, 네이티브 앱 없음)",
+  "pricing": "무료(OSS, API 키/구독 별도)",
+  "selfhost": "가능(로컬 데스크톱·웹서버 바이너리)",
+  "license": "AGPL-3.0",
+  "agent": "Claude Code CLI 연동, MCP 관리, REST/WebSocket API, 커스텀 에이전트",
+  "status": "활발(★22.4k, 2026 커밋)",
+  "pros": "Tauri 기반 빠른 네이티브 UI; 분기 체크포인트·타임라인 복원; 웹서버 모드로 폰 원격 제어",
+  "cons": "네이티브 모바일 앱 없음; 릴리스 바이너리 지연(소스 빌드 필요); Claude Code 생태계에 종속",
+  "sources": [
+   "https://github.com/winfunc/opcode",
+   "https://github.com/winfunc/opcode/blob/main/README.md",
+   "https://github.com/winfunc/opcode/blob/main/LICENSE",
+   "https://github.com/winfunc/opcode/blob/main/web_server.design.md",
+   "https://github.com/winfunc/opcode/blob/main/cc_agents/README.md",
+   "https://github.com/winfunc/opcode/blob/main/src-tauri/Cargo.toml",
+   "https://github.com/winfunc/opcode/blob/main/src-tauri/src/web_main.rs",
+   "https://github.com/winfunc/opcode/blob/main/src-tauri/src/web_server.rs",
+   "https://winfunc.com/",
+   "https://claudelog.com/mcps-and-add-ons/claudia"
+  ],
+  "confidence": "높음"
+ }
+]

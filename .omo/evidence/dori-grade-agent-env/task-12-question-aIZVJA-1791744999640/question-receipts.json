@@ -1,0 +1,275 @@
+[
+  {
+    "kind": "identity",
+    "preparedSha256": "03882acfa7cfe3a694cb498bc7b9e832ad85bf08e9d01f318bcc87a9dcf73abb",
+    "binarySha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+    "manifestSha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+    "validationCode": 0,
+    "authPresent": true,
+    "scratch": "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+    "at": "2026-10-11T18:56:39.641Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 28006,
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "at": "2026-10-11T18:56:39.721Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/usr/bin/git",
+      "-C",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+      "init",
+      "qa-repo"
+    ],
+    "code": 0,
+    "stdout": "Initialized empty Git repository in /private/tmp/omon-lane-scratch-qa-aIZVJA/qa-repo/.git/\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "at": "2026-10-11T18:56:39.721Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 28012,
+    "argv": [
+      "/usr/bin/curl",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "at": "2026-10-11T18:56:39.728Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/usr/bin/curl",
+      "--fail",
+      "--max-time",
+      "10",
+      "http://127.0.0.1:19742/readyz"
+    ],
+    "code": 0,
+    "stdout": "ok\n",
+    "stderr": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\r100     3    0     3    0     0   4087      0 --:--:-- --:--:-- --:--:--  3000\n",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "at": "2026-10-11T18:56:39.728Z"
+  },
+  {
+    "kind": "shared_ready",
+    "output": "ok\n",
+    "at": "2026-10-11T18:56:39.728Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 28018,
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "28015",
+      "-Fn"
+    ],
+    "code": 0,
+    "at": "2026-10-11T18:56:39.799Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/usr/sbin/lsof",
+      "-a",
+      "-p",
+      "28015",
+      "-Fn"
+    ],
+    "code": 0,
+    "stdout": "p28015\nfcwd\nn/private/tmp/omon-lane-scratch-qa-aIZVJA\nftxt\nn/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway\nftxt\nn/usr/lib/dyld\nftxt\nn/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db-shm\nf0\nn/dev/null\nf1\nn->0xff8e552657f37e7d\nf2\nn->0x73d0c64b6839aa61\nf3\nncount=0, state=0xa\nf4\nncount=0, state=0xa\nf5\nncount=0, state=0xa\nf6\nn->0x86cdf0c2092c393b\nf7\nn->0x9a026ff228ceb259\nf8\nn->0x86cdf0c2092c393b\nf9\nn/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db\nf10\nn/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db-wal\nf11\nn/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db-shm\nf12\nn/private/tmp/omon-lanes-16d4a7da207e7f588adec7ed.lock\nf13\nn/tmp/omon-lanes-16d4a7da207e7f588adec7ed.sock\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "at": "2026-10-11T18:56:39.801Z"
+  },
+  {
+    "kind": "database_verified",
+    "pragma": [
+      {
+        "seq": 0,
+        "name": "main",
+        "file": "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db"
+      }
+    ],
+    "paths": [
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "/usr/lib/dyld",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db-shm",
+      "/dev/null",
+      "->0xff8e552657f37e7d",
+      "->0x73d0c64b6839aa61",
+      "count=0, state=0xa",
+      "count=0, state=0xa",
+      "count=0, state=0xa",
+      "->0x86cdf0c2092c393b",
+      "->0x9a026ff228ceb259",
+      "->0x86cdf0c2092c393b",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db-wal",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db-shm",
+      "/private/tmp/omon-lanes-16d4a7da207e7f588adec7ed.lock",
+      "/tmp/omon-lanes-16d4a7da207e7f588adec7ed.sock"
+    ],
+    "gatewayPid": 28015,
+    "at": "2026-10-11T18:56:39.802Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 28022,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-1",
+      "--title",
+      "Question QA",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/question-brief.md",
+      "--done",
+      "file unused-question-signal",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 0,
+    "at": "2026-10-11T18:56:41.964Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "start",
+      "qa-1",
+      "--title",
+      "Question QA",
+      "--brief",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/question-brief.md",
+      "--done",
+      "file unused-question-signal",
+      "--cwd",
+      "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa-repo",
+      "--lead",
+      "4:lane|-|4:lead|-|9:lane:lead"
+    ],
+    "code": 0,
+    "stdout": "{\"lane\":{\"brief_path\":\"/private/tmp/omon-lane-scratch-qa-aIZVJA/question-brief.md\",\"claim_at\":null,\"claim_evidence\":null,\"created_at\":\"2026-10-11T18:56:41.962763Z\",\"cwd\":\"/private/tmp/omon-lane-scratch-qa-aIZVJA/qa-repo\",\"done_signals\":\"file unused-question-signal\",\"key\":\"qa-1\",\"last_activity_at\":\"2026-10-11T18:56:41.962763Z\",\"last_report\":null,\"last_turn_outcome\":null,\"lead_session_key\":\"4:lane|-|4:lead|-|9:lane:lead\",\"model\":\"inferhub/cb/deepseek-v4.1-flash\",\"objection\":null,\"omo_thread_id\":null,\"parent_channel_id\":null,\"session_key\":\"4:lane|-|4:qa-1|-|9:lane:qa-1\",\"stale_posted_at\":null,\"status\":\"working\",\"status_message_id\":null,\"thread_channel_id\":null,\"title\":\"Question QA\",\"turns_run\":0,\"updated_at\":\"2026-10-11T18:56:41.962763Z\"},\"reasons\":[]}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "at": "2026-10-11T18:56:41.967Z"
+  },
+  {
+    "kind": "failure",
+    "message": "undefined is not an object (evaluating 'state?.row.omo_thread_id')",
+    "at": "2026-10-11T18:56:41.967Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 28169,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: dedicated question QA cleanup"
+    ],
+    "code": 0,
+    "at": "2026-10-11T18:56:41.982Z"
+  },
+  {
+    "kind": "cli",
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "lane",
+      "close",
+      "qa-1",
+      "--force",
+      "--note",
+      "forced: dedicated question QA cleanup"
+    ],
+    "code": 0,
+    "stdout": "{\"key\":\"qa-1\",\"status\":\"closed\"}\n",
+    "stderr": "",
+    "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "at": "2026-10-11T18:56:41.982Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 28006,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T18:56:41.982Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 28012,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T18:56:41.982Z"
+  },
+  {
+    "kind": "process_exit",
+    "pid": 28015,
+    "argv": [
+      "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "run"
+    ],
+    "code": 0,
+    "at": "2026-10-11T18:56:41.983Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 28015,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T18:56:41.988Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 28018,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T18:56:41.988Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 28022,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T18:56:41.988Z"
+  },
+  {
+    "kind": "owned_process_cleanup",
+    "pid": 28169,
+    "code": 0,
+    "absent": true,
+    "at": "2026-10-11T18:56:41.988Z"
+  },
+  {
+    "kind": "cleanup",
+    "sharedDaemonUntouched": true,
+    "scratchRetained": "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+    "status": "failure",
+    "at": "2026-10-11T18:56:41.992Z"
+  }
+]

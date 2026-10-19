@@ -1,0 +1,10 @@
+peek(Space)=false
+keys=["tracker.timeline.team:OMO:all"]
+display=true timelineClick=true timelineRendered=true
+desktop-1440 peekOpened=true
+desktop-1440 peekClosedBySpace=true
+iphone-14 peekOpened=true
+iphone-14 peekClosedBySpace=true
+mobile-peek {"w":1440,"peek":true,"peekW":1440,"hscroll":false}
+mobile-peek {"w":1440,"peek":true,"peekW":1440,"hscroll":false,"narrow":false}
+mobile-peek {"w":390,"peek":true,"peekW":390,"hscroll":false,"narrow":true}

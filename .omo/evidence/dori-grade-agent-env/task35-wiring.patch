@@ -1,0 +1,135 @@
+*** Begin Patch
+*** Update File: src/entry.rs
+@@
+     Sessions(SessionsArgs),
++    Usage(omon_gateway::usage::UsageArgs),
+ }
+@@
+     let command = Cli::parse().into_command();
++    if let Command::Usage(args) = command {
++        std::process::exit(omon_gateway::usage::run(args).await);
++    }
+     if let Command::Lane(args) = command {
+@@
+         Command::Sessions(args) => std::process::exit(run_sessions(args).await),
++        Command::Usage(args) => std::process::exit(omon_gateway::usage::run(args).await),
+     }
+*** Update File: src/lanes/cli.rs
+@@
+     insert_lane(pool, &lane).await?;
++    crate::usage::capture_lane_start(
++        pool, &lane.key, &cwd,
++        match purpose {
++            ModelPurpose::LaneSmall => crate::usage::Purpose::LaneSmall,
++            ModelPurpose::LaneLarge => crate::usage::Purpose::LaneLarge,
++            _ => unreachable!("lane selection only yields lane purposes"),
++        },
++    ).await?;
+     if !decision.is_hold() {
+*** Update File: src/lanes/runner.rs
+@@
+             session.state.active_model = self.lane(key).await?.model;
++            if lane.model.as_deref() != session.state.active_model.as_deref() {
++                sqlx::query("UPDATE lane_usage_context SET purpose='lane_large' WHERE lane_key=?")
++                    .bind(key).execute(&self.pool).await?;
++            }
+             let inbox = self.pending(key).await?;
+*** Update File: src/agent/omo_backend.rs
+@@
+             match method.as_str() {
++                "thread/tokenUsage/updated" => {
++                    if turn_started_ack {
++                        if let (Some(pool), Some(turn_id)) = (&self.pool, turn_id.as_deref()) {
++                            if let Some(purpose) = crate::usage::session_purpose(pool, session).await? {
++                                crate::usage::record_notification(
++                                    pool, &session.key.storage_key(), purpose,
++                                    model.unwrap_or("unknown"), &thread_id, turn_id,
++                                    &val, chrono::Utc::now(),
++                                ).await?;
++                            }
++                        }
++                    }
++                }
+                 "turn/started" => {
+*** Update File: src/inbox/digest.rs
+@@
+-    if owner.is_empty() && bot.is_empty() && errors.is_empty() { return Ok(None); }
++    let usage = crate::usage::yesterday(pool, now).await?;
++    if owner.is_empty() && bot.is_empty() && errors.is_empty()
++        && usage.tiers.is_empty() && usage.judge_calls == 0 && usage.inbox_collected == 0 {
++        return Ok(None);
++    }
+     let mut message = format!("## Owner tasks\n{}\n\n## Bot proposals\n{}", render(&owner), render(&bot));
++    message.push_str(&format!("\n\n{}", usage.digest_line()));
+*** Update File: src/lanes/kibitzer.rs
+@@
+-        let backend = Arc::new(OmoBackend::new(config, capture.clone()));
++        let backend = Arc::new(OmoBackend::new(config, capture.clone()).with_pool(pool.clone()));
+@@
+         let mut session = SessionContext::new(key.clone());
++        session.state.metadata.insert("usage_purpose".into(), serde_json::json!("kibitzer"));
+*** Update File: src/inbox/triage.rs
+@@
+ pub struct SmallModelWriter {
+     config: crate::agent::OmoBackendConfig,
++    pool: Option<SqlitePool>,
+     model: String,
+ }
+@@
+         Self {
+             config,
++            pool: None,
+             model: crate::agent::model_for_purpose(crate::agent::ModelPurpose::InboxWrite),
+@@
+     }
++    pub fn with_pool(mut self, pool: SqlitePool) -> Self {
++        self.pool = Some(pool);
++        self
++    }
+ }
+@@
+-        let backend = crate::agent::OmoBackend::new(config, capture.clone());
++        let mut backend = crate::agent::OmoBackend::new(config, capture.clone());
++        if let Some(pool) = &self.pool {
++            backend = backend.with_pool(pool.clone());
++        }
+*** Update File: src/judge/mod.rs
+@@
+ pub struct Fallback {
+     config: crate::agent::OmoBackendConfig,
++    pool: Option<SqlitePool>,
+ }
+@@
+     pub fn new(config: crate::agent::OmoBackendConfig) -> Self {
+-        Self { config }
++        Self { config, pool: None }
+     }
++    pub fn with_pool(mut self, pool: SqlitePool) -> Self {
++        self.pool = Some(pool);
++        self
++    }
+@@
+-        let backend = crate::agent::OmoBackend::new(config, capture.clone());
++        let mut backend = crate::agent::OmoBackend::new(config, capture.clone());
++        if let Some(pool) = &self.pool {
++            backend = backend.with_pool(pool.clone());
++        }
+@@
+         let today = current_kst_date();
++        let fallback_pool = pool.clone();
+@@
+-                    .map(|config| Arc::new(Fallback::new(config)) as Arc<dyn JudgeFallback>)
++                    .map(|config| {
++                        let mut fallback = Fallback::new(config);
++                        if let Some(pool) = fallback_pool {
++                            fallback = fallback.with_pool(pool);
++                        }
++                        Arc::new(fallback) as Arc<dyn JudgeFallback>
++                    })
+*** Update File: src/main.rs
+@@
+         Arc::new(omon_gateway::inbox::triage::SmallModelWriter::new(
+             omon_gateway::agent::OmoBackendConfig::from_env()?,
+-        )),
++        ).with_pool(pool.clone())),
+*** End Patch

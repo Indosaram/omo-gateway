@@ -1,0 +1,8 @@
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select count(*) from action_proposals where origin='inbox'; select id, origin, effect, state, tainted, substr(summary,1,60) from action_proposals order by id"
+[exit 0]
+2
+1|inbox|draft|expired|1|#1 imessage:  -> 하수구 트랩 관리·해결 방법과 구매할 의자 후보를 조사해 요약 정리
+[draf
+2|inbox|draft|expired|1|#2 kakao: 여신님😍 -> 재고 확인: 해당 품목 재고 조회 결과를 정리해 초안으로 제시
+[draft]
+

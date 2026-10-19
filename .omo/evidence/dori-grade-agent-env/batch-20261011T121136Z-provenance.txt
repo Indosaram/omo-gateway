@@ -1,0 +1,22 @@
+run_id=20261011T121136Z
+worktree=/Users/indo/code/project/omon-gateway-wt/dori-work
+git_head=245a5876138acdd1f4a2c31416121f39e95bf416
+rustc=rustc 1.92.0 (ded5c06cf 2025-12-08)
+binary: rustc
+commit-hash: ded5c06cf21d2b93bffd5d884aa6e96934ee4234
+commit-date: 2025-12-08
+host: aarch64-apple-darwin
+release: 1.92.0
+LLVM version: 21.1.3
+cargo=cargo 1.92.0 (344c4567c 2025-10-21)
+target=/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4
+jobs=2
+cargo_metadata_targets=39
+manifest_policy=src tests migrations .cargo bot_profiles profiles blocks docs/AGENTS_DELEGATE.md root Cargo/build/toolchain and persona/profile inputs plus shallow toml/yaml config, sorted per-file SHA-256
+safe_environment_names_begin
+CARGO_BUILD_JOBS
+CARGO_TARGET_DIR
+DATABASE_URL
+OMON_TOOL_ROOTS
+OMON_WORKSPACE_ROOT
+safe_environment_names_end

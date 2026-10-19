@@ -1,0 +1,21 @@
+status: completed exit_code: 0
+2026-10-11T07:16:22.627012Z  INFO omon_gateway::agent::omo_backend: injected instant steer into active turn session=4:lane|-|10:gateway-qa|-|15:lane:gateway-qa thread_id=01a129d1-437e-7c61-8747-161b450cf0b7 turn_id=caaff707-4a04-45ad-8acf-982a6c031745
+2026-10-11T07:17:20.514068Z  INFO omo_gateway::legacy: gateway lane service stopped
+
+status: completed exit_code: 0
+QA_TARGET=sqlite:///tmp/omon-task8-review-Fy6m13/qa.db
+QA_CHILD_PID=63515
+    Blocking waiting for file lock on package cache
+    Checking omo-gateway v0.1.0 (/Users/indo/code/project/omon-gateway-wt/dori-work)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 06s
+
+{
+  "processReceiptR8": {
+    "out": "  PID COMMAND\n",
+    "exit": 1
+  },
+  "portReceiptR8": {
+    "out": "",
+    "exit": 1
+  }
+}

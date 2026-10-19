@@ -1,0 +1,290 @@
+{
+  "todo": 27,
+  "status": "actual-gateway-live-QA-passed-newer-upstream",
+  "runtime": {
+    "omo": "5.1.30",
+    "engine": "senpi 2026.10.11",
+    "sdk_sha256": "f3bb6a7edd235c22673835932c8bef353429ec0e4c92f9a65dbe834d860d557e",
+    "candidate_installation": "intentionally skipped by owner"
+  },
+  "provenance": "mon_RRFMASB7XQQ1GA2N; one happy and one unreachable invocation; runner exit 0",
+  "scenarios": [
+    {
+      "scenario": "happy",
+      "binary_sha256": "71c37a9081d9eeccc61723a1add08ce79dde12dfa380dca58bec225835110d86",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "sessions",
+        "list",
+        "--json"
+      ],
+      "cwd": "/private/tmp/omon-task27-qa.7NWyFr",
+      "exit_code": 0,
+      "elapsed_ms": 10948.827709,
+      "counts": {
+        "local": 23,
+        "omarchy": 3
+      },
+      "errors": [],
+      "stderr_bytes": 0,
+      "passed": true,
+      "sessions_by_machine": {
+        "local": [
+          {
+            "name": "Start Development Server",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "패스트캠퍼스 스타일 상세페이지 검토",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "Lost worktree red prohibited icon",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Clean up stale worktrees and add rule",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/ferryx-past",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "CLIProxyAPI 업스트림 기능 캐시 프록시 비교",
+            "cwd": "/Volumes/T9-Mac/project/mahoquot"
+          },
+          {
+            "name": "Check PirateTalk MCP chat history range",
+            "cwd": "/Users/indo/code/project/omon-gateway"
+          },
+          {
+            "name": "Troubleshoot Release Notes Download Error",
+            "cwd": "/Users/indo/code/project/maho-workspace"
+          },
+          {
+            "name": "Resume Lectures Project Session",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "슬라이드 소스코드 책 페이지 참조로 변경",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "인프런 슬라이드 시각화 개선안",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "Debug invalid native tool call order",
+            "cwd": "/Volumes/T9-Mac/project/mahoquot"
+          },
+          {
+            "name": "",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "Goal: run one already-built Ferryx test binary inside the IN",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Ferryx repo /Volumes/T9-Mac/project/ferryx (shared tree; pre",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Personal Identity Ontology Update",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "mass ulw research plan 국내/해외 크라우드펀딩 사이트에서 노션 템플릿과 같이 단순 템플릿 ",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "Oliver Heldens AI Music Production",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "Ferryx repo /Volumes/T9-Mac/project/ferryx (shared tree; pre",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Ferryx repo /Volumes/T9-Mac/project/ferryx (shared tree; pre",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "User requires batch repair of all existing diagnostics befor",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Investigate Windows live SSH test failed74587 A/B candidate.",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "User requires all diagnostics repaired as one batch followed",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          }
+        ],
+        "omarchy": [
+          {
+            "name": "오픈채팅방 누락 기능 식별 및 구현",
+            "cwd": "/home/indo/piratetalk"
+          },
+          {
+            "name": "Finalize merge push and deploy",
+            "cwd": "/home/projects/mhc"
+          },
+          {
+            "name": "CLI 프롬프트 색상 및 네온 이펙트",
+            "cwd": "/home/projects/mhc"
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "unreachable",
+      "binary_sha256": "71c37a9081d9eeccc61723a1add08ce79dde12dfa380dca58bec225835110d86",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "sessions",
+        "list",
+        "--json"
+      ],
+      "cwd": "/private/tmp/omon-task27-qa.7NWyFr",
+      "exit_code": 0,
+      "elapsed_ms": 5725.626332999998,
+      "counts": {
+        "local": 23,
+        "omarchy": 4
+      },
+      "errors": [
+        {
+          "machine": "127.0.0.1",
+          "code": 3,
+          "message": "omo thread list failed with exit code 255"
+        }
+      ],
+      "stderr_bytes": 0,
+      "passed": true,
+      "sessions_by_machine": {
+        "local": [
+          {
+            "name": "Start Development Server",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "패스트캠퍼스 스타일 상세페이지 검토",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "Lost worktree red prohibited icon",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Clean up stale worktrees and add rule",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/ferryx-past",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "CLIProxyAPI 업스트림 기능 캐시 프록시 비교",
+            "cwd": "/Volumes/T9-Mac/project/mahoquot"
+          },
+          {
+            "name": "Check PirateTalk MCP chat history range",
+            "cwd": "/Users/indo/code/project/omon-gateway"
+          },
+          {
+            "name": "Troubleshoot Release Notes Download Error",
+            "cwd": "/Users/indo/code/project/maho-workspace"
+          },
+          {
+            "name": "Resume Lectures Project Session",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "슬라이드 소스코드 책 페이지 참조로 변경",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "인프런 슬라이드 시각화 개선안",
+            "cwd": "/Users/indo/code/project/lectures"
+          },
+          {
+            "name": "Debug invalid native tool call order",
+            "cwd": "/Volumes/T9-Mac/project/mahoquot"
+          },
+          {
+            "name": "",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "Goal: run one already-built Ferryx test binary inside the IN",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Ferryx repo /Volumes/T9-Mac/project/ferryx (shared tree; pre",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Personal Identity Ontology Update",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "mass ulw research plan 국내/해외 크라우드펀딩 사이트에서 노션 템플릿과 같이 단순 템플릿 ",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "Oliver Heldens AI Music Production",
+            "cwd": "/Users/indo/code/project"
+          },
+          {
+            "name": "Ferryx repo /Volumes/T9-Mac/project/ferryx (shared tree; pre",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Ferryx repo /Volumes/T9-Mac/project/ferryx (shared tree; pre",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "User requires batch repair of all existing diagnostics befor",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "Investigate Windows live SSH test failed74587 A/B candidate.",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          },
+          {
+            "name": "User requires all diagnostics repaired as one batch followed",
+            "cwd": "/Volumes/T9-Mac/project/ferryx"
+          }
+        ],
+        "omarchy": [
+          {
+            "name": "오픈채팅방 누락 기능 식별 및 구현",
+            "cwd": "/home/indo/piratetalk"
+          },
+          {
+            "name": "Finalize merge push and deploy",
+            "cwd": "/home/projects/mhc"
+          },
+          {
+            "name": "CLI 프롬프트 색상 및 네온 이펙트",
+            "cwd": "/home/projects/mhc"
+          },
+          {
+            "name": "Linux 샌드박스 잠금파일 오류 분석",
+            "cwd": "/home/projects/mhc"
+          }
+        ]
+      }
+    }
+  ],
+  "cleanup": {
+    "remaining_owned_children": 0,
+    "scratch_db_files": [],
+    "listener_closed": true
+  },
+  "historical_failure": "task-27-historical-failure.json",
+  "details": "task-27-live-qa.md"
+}

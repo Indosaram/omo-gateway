@@ -1,0 +1,9 @@
+$ /Users/indo/.omon/bin/omo-gateway autonomy classify --json "$(cat tests/fixtures/approval_frames/agents-auto-git_push.json)"
+[exit 0]
+{"effect":"vcs_remote","program":"git push","target":"~/.omon/workspace/agents/spike-approval","signature":"vcs_remote:git push:~/.omon/workspace/agents/spike-approval","summary":"git push origin lane/x"}
+
+
+$ /Users/indo/.omon/bin/omo-gateway autonomy classify --json "$(cat tests/fixtures/approval_frames/agents-auto-git_push_main.json)"
+[exit 0]
+{"effect":"vcs_protected","program":"git push","target":"~/.omon/workspace/agents/spike-approval","signature":"vcs_protected:git push:~/.omon/workspace/agents/spike-approval","summary":"git push origin main"}
+

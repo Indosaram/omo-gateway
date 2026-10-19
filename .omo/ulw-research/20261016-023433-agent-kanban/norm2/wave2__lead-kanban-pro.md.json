@@ -1,0 +1,21 @@
+[
+ {
+  "name": "Kanban Pro (Good Guy Apps)",
+  "url": "https://goodguyapps.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "로컬 우선 데스크톱 칸반, Markdown 티켓·5가지 뷰·내장 에이전트 터미널",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(가입·구독 없음)",
+  "selfhost": "로컬 전용",
+  "license": "미확인",
+  "agent": "Markdown 파일 직접 읽기/쓰기; 내장 터미널로 Claude Code·Codex 등",
+  "status": "Vibe Kanban 종료 후 대안으로 언급",
+  "pros": "완전 무료·계정 불필요; 에이전트가 Markdown 직접 읽고 씀; 5가지 뷰와 내장 터미널",
+  "cons": "모바일 앱 없음; 오픈소스 여부 불명; 팀 협업은 클라우드 폴더 동기화 의존",
+  "sources": [
+   "https://goodguyapps.com"
+  ],
+  "confidence": "중간"
+ }
+]

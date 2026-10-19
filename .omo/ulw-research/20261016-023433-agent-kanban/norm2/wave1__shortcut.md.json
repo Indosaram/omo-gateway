@@ -1,0 +1,36 @@
+[
+ {
+  "name": "Shortcut",
+  "url": "https://shortcut.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "엔지니어링 팀용 이슈 트래킹·칸반/스프린트 SaaS, AI 에이전트 협업 지원",
+  "mobile": "반응형 웹·PWA(네이티브 앱 내려감)",
+  "pricing": "무료(10명) / Team $8.50 / Business $12/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "호스팅 MCP(OAuth)·REST API v3·웹훅; Claude Code·Cursor·Devin",
+  "status": "활발(MCP 저장소는 아카이브)",
+  "pros": "호스팅 MCP로 OAuth만으로 즉시 연동; 방대한 MCP 도구 세트·git 브랜치 연계; 10명까지 무료 티어",
+  "cons": "셀프호스트 불가로 폐쇄망 부적합; 네이티브 모바일 앱 없음; API 속도 제한 200회/분",
+  "sources": [
+   "https://www.shortcut.com/",
+   "https://www.shortcut.com/pricing",
+   "https://www.shortcut.com/agents/",
+   "https://www.shortcut.com/blog/shortcut-for-agents/",
+   "https://www.shortcut.com/blog/why-we-built-the-shortcut-mcp-server/",
+   "https://www.shortcut.com/help/integrations/mcp-server/",
+   "https://mcp.shortcut.com/mcp",
+   "https://developer.shortcut.com",
+   "https://github.com/useshortcut/mcp-server-shortcut",
+   "https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/package.json",
+   "https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/LICENSE",
+   "https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/src/server.ts",
+   "https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/src/server-http.ts",
+   "https://raw.githubusercontent.com/useshortcut/mcp-server-shortcut/main/src/tools/stories.ts",
+   "https://registry.npmjs.org/@shortcut/mcp/latest",
+   "https://www.shortcut.com/blog/announcing-clubhouse-for-ios-c91bab1b74f7/"
+  ],
+  "confidence": "높음"
+ }
+]

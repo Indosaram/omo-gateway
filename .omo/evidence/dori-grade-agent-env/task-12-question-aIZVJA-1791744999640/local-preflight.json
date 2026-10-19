@@ -1,0 +1,98 @@
+{
+  "schema": "omon-lane-local-preflight-v1",
+  "preflight": {
+    "kind": "local-authenticated-preflight-v1",
+    "status": "observed",
+    "purpose": "task12-question",
+    "preparedSha256": "03882acfa7cfe3a694cb498bc7b9e832ad85bf08e9d01f318bcc87a9dcf73abb",
+    "root": "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+    "dbPath": "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+    "cwd": "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa-repo",
+    "endpoint": "ws://127.0.0.1:19742",
+    "binarySha256": "f81c077ee6a1252d647b7fc8f45758f8499b687dc9d2bb84d57bb3b512f15912",
+    "manifestSha256": "a9570ea35fb0d696bffd5f7c5154f5f01a3663fd6c59ff26f0cd0acbedb3d06d",
+    "observedAt": "2026-10-11T18:55:29.197Z",
+    "localChild": {
+      "executable": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "--help"
+      ],
+      "cwd": "/private/tmp/omon-lane-scratch-qa-aIZVJA/qa-repo",
+      "explicitEnv": {
+        "HOME": "/private/tmp/omon-lane-scratch-qa-aIZVJA/home",
+        "USER": "lane-qa",
+        "LOGNAME": "lane-qa",
+        "TMPDIR": "/private/tmp/omon-lane-scratch-qa-aIZVJA",
+        "PATH": "/private/tmp/omon-lane-scratch-qa-aIZVJA/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "XDG_CONFIG_HOME": "/private/tmp/omon-lane-scratch-qa-aIZVJA/home/.config",
+        "XDG_DATA_HOME": "/private/tmp/omon-lane-scratch-qa-aIZVJA/home/.local/share",
+        "XDG_CACHE_HOME": "/private/tmp/omon-lane-scratch-qa-aIZVJA/home/.cache",
+        "DATABASE_URL": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+        "OMON_DISCORD_ENABLED": "false",
+        "OMON_LANES_ENABLED": "true",
+        "OMON_KIBITZER_ENABLED": "false",
+        "DASHBOARD_ENABLED": "false",
+        "OMON_WORKSPACE_ROOT": "/private/tmp/omon-lane-scratch-qa-aIZVJA/workspaces",
+        "OMON_LANE_KEYWORDS": "",
+        "OMON_OMO_APPSERVER_URL": "ws://127.0.0.1:19742",
+        "OMON_PIRATETALK_URL": "http://127.0.0.1:1",
+        "OMON_INBOX_KAKAO_ROOMS": "",
+        "RUST_LOG": "info",
+        "NO_COLOR": "1"
+      },
+      "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-aIZVJA/qa.db",
+      "exitCode": 0,
+      "stdoutSha256": "4dc462fd0b537bb7b5e27428ca85c30f62cd632ea86786fc6fd1e04074bc5961",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "protocol": {
+      "authenticated": true,
+      "requestId": "task12-local-initialize",
+      "method": "initialize",
+      "response": {
+        "userAgent": "task12-local-preflight/2026.10.10-11 (Darwin 27.0.0; arm64) senpi_app_server",
+        "codexHome": "/Users/indo/.omo/agent",
+        "platformFamily": "unix",
+        "platformOs": "macos"
+      }
+    },
+    "remoteEnvironmentObserved": false,
+    "remoteTurnCreated": false,
+    "databaseIsolation": "must be proven by gateway descriptor and PRAGMA before lane trigger"
+  },
+  "receipts": [
+    {
+      "kind": "local_child",
+      "pid": 22857,
+      "exitCode": 0,
+      "stdoutSha256": "4dc462fd0b537bb7b5e27428ca85c30f62cd632ea86786fc6fd1e04074bc5961",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "kind": "authenticated_initialize",
+      "request": {
+        "id": "task12-local-initialize",
+        "method": "initialize",
+        "params": {
+          "capabilities": {
+            "experimentalApi": true
+          },
+          "clientInfo": {
+            "name": "task12-local-preflight",
+            "version": "1"
+          }
+        }
+      },
+      "response": {
+        "id": "task12-local-initialize",
+        "result": {
+          "userAgent": "task12-local-preflight/2026.10.10-11 (Darwin 27.0.0; arm64) senpi_app_server",
+          "codexHome": "/Users/indo/.omo/agent",
+          "platformFamily": "unix",
+          "platformOs": "macos"
+        }
+      }
+    }
+  ]
+}

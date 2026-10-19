@@ -1,0 +1,76 @@
+[
+ {
+  "name": "Pane",
+  "url": "https://runpane.com",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "여러 AI 코딩 에이전트를 git 워크트리로 격리해 병렬 실행하는 데스크톱 앱·CLI",
+  "mobile": "반응형 웹(네이티브 앱 출시 예정)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(원격 데몬 선택 가능)",
+  "license": "AGPL-3.0",
+  "agent": "MCP·CLI(77개 명령)·REST; Claude Code·Codex·Cursor 등",
+  "status": "활발(거의 매일 릴리스)",
+  "pros": "계정 없는 로컬 우선 구조; git 워크트리 자동 격리; 풍부한 CLI/MCP 연동",
+  "cons": "칸반 보드 없음; 메모리 사용량 큼(~780MB); 텔레메트리 기본 활성화",
+  "sources": [
+   "https://runpane.com",
+   "https://runpane.com/pricing.md",
+   "https://runpane.com/agents.md",
+   "https://runpane.com/docs/runpane-cli",
+   "https://runpane.com/.well-known/mcp/server-card.json",
+   "https://runpane.com/docs/security",
+   "https://runpane.com/compare/vibe-kanban",
+   "https://runpane.com/compare/superset",
+   "https://github.com/greenfield-inc/Pane"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Maude",
+  "url": "https://maude.pilotdev.fr",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "사용자 VPS에서 AI 코딩 에이전트를 24시간 실행·감독하는 모바일 우선 원격 제어 앱",
+  "mobile": "iOS·Android 앱",
+  "pricing": "$2.99/주 또는 $29.99/년(무료 체험), 평생 플랜",
+  "selfhost": "일부(하이브리드)",
+  "license": "상용",
+  "agent": "SSH 원격 데몬; Claude Code·Codex·OpenCode·Grok·Antigravity",
+  "status": "활발(v2.1.0, 2026-10)",
+  "pros": "노트북 없이 24시간 실행; 푸시 알림으로 원탭 승인/거부; 서버 자동 설정",
+  "cons": "칸반 보드 없음; 유료 구독 필요; 자체 VPS 필요·공개 MCP/API 없음",
+  "sources": [
+   "https://maude.pilotdev.fr",
+   "https://apps.apple.com/app/id6759869262",
+   "https://play.google.com/store/apps/details?id=com.pilotdev.maude",
+   "https://maude.pilotdev.fr/compare/claude-code-vs-codex-vs-opencode/",
+   "https://maude.pilotdev.fr/compare/maude-vs-claude-code-remote-control/"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "CodeAgent Mobile",
+  "url": "https://www.codeagent-mobile.com",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "티켓·채팅을 에이전트 실행으로 전환하는 모바일 감독·원격 제어 플랫폼",
+  "mobile": "iOS·Android 앱 + 웹 대시보드",
+  "pricing": "무료 / Pro $19.99/월($191.99/년)",
+  "selfhost": "일부(Pro: 자체 서버, 릴레이는 SaaS)",
+  "license": "상용",
+  "agent": "IDE 확장·CLI(ACP); Claude Code·Codex·Copilot 등",
+  "status": "활발(2026-10 업데이트)",
+  "pros": "QR로 IDE/CLI 간편 연동; Jira·Linear·Slack에서 작업 시작; 모바일 PR 리뷰·병합",
+  "cons": "전통적 칸반 대신 작업 그래프(Beads); 무료 티어 제한(일 3작업); 릴레이 완전 자체 호스팅 불가",
+  "sources": [
+   "https://www.codeagent-mobile.com",
+   "https://www.codeagent-mobile.com/pricing",
+   "https://www.codeagent-mobile.com/faq",
+   "https://www.codeagent-mobile.com/terms",
+   "https://marketplace.visualstudio.com/items?itemName=CodeAgentMobile.codeagent-mobile",
+   "https://plugins.jetbrains.com/plugin/30697-codeagent-mobile/versions/stable/1181091"
+  ],
+  "confidence": "높음"
+ }
+]

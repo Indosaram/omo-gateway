@@ -1,0 +1,78 @@
+$ /Users/indo/.omon/bin/omo-gateway inbox collect --source github --dry-run --json 2>&1 | head -c 3000
+[exit 0]
+{
+  "changes": [],
+  "dry_run": true,
+  "open_prs": [
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "Tiny Voyage: 3D world, generate_image UI art, codex/presets/shop, audio slots, save/receipt verification",
+      "updated_at": "2026-10-15T15:42:24Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/34"
+    },
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "Slime Draft: lane definition-of-done pass (world, features, UI art, sound slots, save/receipt)",
+      "updated_at": "2026-10-15T15:39:19Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/33"
+    },
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "Scrap Clash: M5/M6 + definition of done (3D world, art, sound slots, receipts)",
+      "updated_at": "2026-10-15T15:38:36Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/37"
+    },
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "Ember Keep: 3D field, art UI, rewards, audio slots and save/receipt proof",
+      "updated_at": "2026-10-15T15:33:41Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/38"
+    },
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "Trap Heist: M4-M6 ranked/PvP/Elo/codex/receipts, 3D vault world, generated UI art",
+      "updated_at": "2026-10-15T15:19:23Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/35"
+    },
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "Kitchen Clash: M4-M6, 3D world, generated UI art, sound slots, save/receipt",
+      "updated_at": "2026-10-15T12:39:22Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/36"
+    },
+    {
+      "ci": "SUCCESS",
+      "repo": "Indosaram/webtoon-shorts",
+      "title": "EP11: 회장실에 쳐들어온 내연녀의 거짓 임신",
+      "updated_at": "2026-10-15T11:57:11Z",
+      "url": "https://github.com/Indosaram/webtoon-shorts/pull/7"
+    },
+    {
+      "ci": null,
+      "repo": "Indosaram/roblox-mon-battle",
+      "title": "kit: SoundIds slots + DoD 3/5 support (Layout audit, Settings volumes, Cosmetics sanitize, PersistenceProof)",
+      "updated_at": "2026-10-15T06:56:00Z",
+      "url": "https://github.com/Indosaram/roblox-mon-battle/pull/32"
+    }
+  ],
+  "source": "github",
+  "stored": null
+}
+
+
+$ env PATH=/usr/bin:/bin /Users/indo/.omon/bin/omo-gateway inbox collect --source github --dry-run --json 2>&1 | head -5
+[exit 0]
+tool execution error: github source unavailable: gh could not start: No such file or directory (os error 2)
+
+
+$ env PATH=/usr/bin:/bin /Users/indo/.omon/bin/omo-gateway inbox collect --source github --dry-run --json; echo "real_exit=$?"
+[exit 0]
+real_exit=2
+tool execution error: github source unavailable: gh could not start: No such file or directory (os error 2)
+

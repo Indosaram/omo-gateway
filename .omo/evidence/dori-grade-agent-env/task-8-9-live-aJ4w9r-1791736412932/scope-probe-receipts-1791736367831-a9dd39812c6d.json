@@ -1,0 +1,122 @@
+{
+  "schema": "omon-lane-qa-scope-receipts-v1",
+  "preparedSha256": "f4ac854d5966292c5fac3b6c9febd3a2953c25aaf8c5eb0f84b40d61e04ae298",
+  "receipts": [
+    {
+      "kind": "connection_attempt",
+      "stage": "websocket_construct",
+      "endpoint": "ws://127.0.0.1:19742",
+      "authPresent": true
+    },
+    {
+      "kind": "websocket_open",
+      "stage": "websocket_open"
+    },
+    {
+      "kind": "rpc",
+      "id": 1,
+      "method": "initialize"
+    },
+    {
+      "kind": "rpc",
+      "id": 2,
+      "method": "thread/start"
+    },
+    {
+      "kind": "thread_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa-repo",
+      "runtimeWorkspaceRoots": [
+        "/private/tmp/omon-lane-scratch-qa-aJ4w9r/qa-repo"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "id": 3,
+      "method": "turn/start"
+    },
+    {
+      "kind": "turn_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "c6194ca9-2283-4ef3-bdda-f799a66f9cab",
+      "type": "userMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "chatcmpl-resp_08bfb9540fa94619016acbba309b68819185027c4c22ac522a:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "call_b62e54c5a6bf4bffbd6d20ec2ed3fdaf",
+      "type": "dynamicToolCall",
+      "tool": "todo"
+    },
+    {
+      "kind": "incidental_only",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "call_b62e54c5a6bf4bffbd6d20ec2ed3fdaf",
+      "tool": "todo",
+      "status": "completed"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "chatcmpl-resp_07a0b8c26c52d19c016acbba347ee88191b408250761062152:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "call_56957bd8ac8f4f3aa5d15e160d524369",
+      "type": "dynamicToolCall",
+      "tool": "eval"
+    },
+    {
+      "kind": "full_output_followed",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "call_56957bd8ac8f4f3aa5d15e160d524369",
+      "path": "/Users/indo/.omo/sessions/--private-tmp-omon-lane-scratch-qa-aJ4w9r-qa-repo--/2026-10-11T16-32-47-833Z_01a12bcf-4ad9-7c5f-8644-beffe20bbd77-artifacts/eval-dc2dfe8a-9d0a-4820-b532-5e98167a57a7.log",
+      "sha256": "48ff0f8ea9b01cd56f96c5d5677762da20479719b731692951ab81685827217f"
+    },
+    {
+      "kind": "tool_result",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "call_56957bd8ac8f4f3aa5d15e160d524369",
+      "type": "dynamicToolCall",
+      "exitCode": null,
+      "childExitCode": 0,
+      "outputSha256": "a79c2ce6d93ed120a75135f3b963bb26b9f717eb4700f77eb971ce213ffeec04"
+    },
+    {
+      "kind": "item_started",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "itemId": "chatcmpl-resp_0ff350aa37225db9016acbba3ac49887d0a01609910bb15b87:0",
+      "type": "agentMessage"
+    },
+    {
+      "kind": "result",
+      "stage": "turn_observations",
+      "status": "observed",
+      "threadId": "01a12bcf-4ad9-7c5f-8644-beffe20bbd77",
+      "turnId": "cd25e4ae-cb14-4110-a217-36d9b5b5c0f3",
+      "sharedDaemonUntouched": true
+    }
+  ]
+}

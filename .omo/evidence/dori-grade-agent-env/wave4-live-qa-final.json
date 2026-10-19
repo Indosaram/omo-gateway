@@ -1,0 +1,92 @@
+{
+  "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "beforeHash": "71c37a9081d9eeccc61723a1add08ce79dde12dfa380dca58bec225835110d86",
+  "afterHash": "71c37a9081d9eeccc61723a1add08ce79dde12dfa380dca58bec225835110d86",
+  "match": true,
+  "cleanup": [
+    {
+      "root": "/private/tmp/omon-wave4-task16-PM73Ue",
+      "retained": true,
+      "dbRetained": true,
+      "socket": "/tmp/omon-lanes-f0cfec1d8179f1f7127fa646.sock",
+      "socketRemoved": true
+    },
+    {
+      "root": "/private/tmp/omon-wave4-task17-qFthYh",
+      "retained": true,
+      "dbRetained": true,
+      "socket": "/tmp/omon-lanes-3b943bb75a6a7c9c9869c94b.sock",
+      "socketRemoved": true
+    },
+    {
+      "root": "/private/tmp/omon-wave4-task18-9s7z9y",
+      "retained": true,
+      "dbRetained": true,
+      "socket": "/tmp/omon-lanes-778742ec8712cf19b4dc544a.sock",
+      "socketRemoved": true
+    },
+    {
+      "root": "/private/tmp/omon-wave4-task20-mh8Ez9",
+      "retained": true,
+      "dbRetained": true,
+      "socket": "/tmp/omon-lanes-21c9dc624f183ef43622d023.sock",
+      "socketRemoved": true
+    },
+    {
+      "root": "/private/tmp/omon-wave4-task24-3dgqEt",
+      "retained": true,
+      "dbRetained": true,
+      "socket": "/tmp/omon-lanes-7d5f7f51bea0622432f97acf.sock",
+      "socketRemoved": true
+    },
+    {
+      "root": "/private/tmp/omon-wave4-task30-BmUGd6",
+      "retained": true,
+      "dbRetained": true,
+      "socket": "/tmp/omon-lanes-d0f2b46aa51b3444955c5ff2.sock",
+      "socketRemoved": true
+    }
+  ],
+  "pids": [
+    {
+      "pid": 96068,
+      "absent": true
+    },
+    {
+      "pid": 96166,
+      "absent": true
+    },
+    {
+      "pid": 96128,
+      "absent": true
+    },
+    {
+      "pid": 96084,
+      "absent": true
+    },
+    {
+      "pid": 96153,
+      "absent": true
+    },
+    {
+      "pid": 96187,
+      "absent": true
+    },
+    {
+      "pid": 961,
+      "absent": true
+    },
+    {
+      "pid": 1031,
+      "absent": true
+    }
+  ],
+  "sourceLimits": {
+    "runnerChangedSinceManifest": true,
+    "personaBlockChangedSinceManifest": true,
+    "entryMatchesManifest": true,
+    "mainMatchesManifest": true,
+    "discordThreadsMatchesManifest": true
+  },
+  "validation": "Live QA only; no product edits, rebuilds or automated suite. LSP for JS harness unavailable: no TypeScript installation."
+}

@@ -1,0 +1,25 @@
+[
+ {
+  "name": "Claude Squad",
+  "url": "https://smtg-ai.github.io/claude-squad",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "tmux·git worktree 기반으로 여러 AI 코딩 에이전트를 병렬 관리하는 Go TUI",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용",
+  "license": "AGPL-3.0",
+  "agent": "CLI(tmux 세션)로 Claude Code·Codex·Aider·Gemini 실행; MCP/API 없음",
+  "status": "활발(v1.0.20, 2026-08-20)",
+  "pros": "가벼운 단일 바이너리 TUI; worktree 자동 격리; 내장 diff·실시간 미리보기",
+  "cons": "칸반·웹 대시보드 없음; 모바일·원격 접근 불가; 팀 협업 기능 없음",
+  "sources": [
+   "https://github.com/smtg-ai/claude-squad",
+   "https://smtg-ai.github.io/claude-squad/",
+   "https://api.github.com/repos/smtg-ai/claude-squad",
+   "https://api.github.com/repos/smtg-ai/claude-squad/releases/latest",
+   "https://formulae.brew.sh/formula/claude-squad"
+  ],
+  "confidence": "높음"
+ }
+]

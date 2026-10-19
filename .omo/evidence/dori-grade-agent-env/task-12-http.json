@@ -1,0 +1,176 @@
+{
+  "schema": "omon-task12-local-http-observed-v1",
+  "status": "observed",
+  "provenance": {
+    "run": "combined-current-20261011T173003Z",
+    "focused_log": "combined-current-20261011T173003Z-focused.log",
+    "focused_log_sha256": "0b4ad2f58224dcf2b315b12154eb73eb301a1769cb5f769a846c5924807fd258",
+    "status_file": "combined-current-20261011T173003Z-status.tsv",
+    "status_sha256": "a3dac4d7c5bf6dde3b7d69031bd68214a6fbbd449e1033007650f0ef7258e555",
+    "focused_exit": 0,
+    "source_manifest_sha256": "966ee6e8fcbfb4036f0f4c4761b7c9a89893868e6a2c3ea6f59fcc64aa56f5ab",
+    "source_inputs": 196,
+    "pre_post_identical": true,
+    "rerun": false
+  },
+  "test": {
+    "target": "test_lane_post_transport",
+    "passed": 2,
+    "failed": 0
+  },
+  "observations": [
+    {
+      "after_ack_or_close": {
+        "body": "done.txt created.",
+        "error": null,
+        "message_id": "400",
+        "nonce": "f1252c872b89473aa8c351bf3",
+        "source": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0:1",
+        "state": "sent",
+        "thread": "300"
+      },
+      "after_restart": {
+        "body": "done.txt created.",
+        "error": null,
+        "message_id": "400",
+        "nonce": "f1252c872b89473aa8c351bf3",
+        "source": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0:1",
+        "state": "sent",
+        "thread": "300"
+      },
+      "cleanup": {
+        "listener_closed": true,
+        "owned_db_closed": true,
+        "server_task_joined": true
+      },
+      "completed_item": "lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0",
+      "endpoint": "127.0.0.1:58126",
+      "helper_sha256": "1fae41cfbc3ad5598c0e729b408939181c504a2fcb4501be63afaac255002d0a",
+      "input": "declared replay of GhvMrT completed REPORT; no new backend capture",
+      "original_thread": "01a12bdb-1fe5-7345-ae81-738e3573330f",
+      "posts_sha256": "7cc0a2caf6a8ccc288f9001737e2c59ddecc83993d5232ffc00028ea2ddd9230",
+      "request": {
+        "body": {
+          "allowed_mentions": {
+            "parse": [
+              "users"
+            ],
+            "replied_user": true,
+            "roles": [],
+            "users": []
+          },
+          "attachments": [],
+          "content": "done.txt created.",
+          "embeds": [],
+          "enforce_nonce": true,
+          "nonce": "f1252c872b89473aa8c351bf3",
+          "sticker_ids": [],
+          "tts": false
+        },
+        "method": "POST",
+        "path": "/api/v10/channels/300/messages"
+      },
+      "request_count": 1,
+      "restart_send_count": 0,
+      "surface": "local real Serenity HTTP + persisted post ledger; not live Discord",
+      "test_sha256": "a347f2debc764f63be06f103f20dcbb761076134112be0ef251768632803bde5"
+    },
+    {
+      "after_ack_or_close": {
+        "body": "done.txt created.",
+        "error": "configuration error: lane post transport: Error while sending HTTP request.",
+        "message_id": null,
+        "nonce": "daf4c1bf09774323b3edde996",
+        "source": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0:1",
+        "state": "uncertain",
+        "thread": "300"
+      },
+      "after_restart": {
+        "body": "done.txt created.",
+        "error": "configuration error: lane post transport: Error while sending HTTP request.",
+        "message_id": null,
+        "nonce": "daf4c1bf09774323b3edde996",
+        "source": "0:lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0:1",
+        "state": "uncertain",
+        "thread": "300"
+      },
+      "cleanup": {
+        "listener_closed": true,
+        "owned_db_closed": true,
+        "server_task_joined": true
+      },
+      "completed_item": "lane-item:e983ce62-dbff-4095-977d-558557c8599c:chatcmpl-resp_01766c0e2f8bb957016acbbd5ac8908191b5484d6894ea977d:0",
+      "endpoint": "127.0.0.1:58127",
+      "helper_sha256": "1fae41cfbc3ad5598c0e729b408939181c504a2fcb4501be63afaac255002d0a",
+      "input": "declared replay of GhvMrT completed REPORT; no new backend capture",
+      "original_thread": "01a12bdb-1fe5-7345-ae81-738e3573330f",
+      "posts_sha256": "7cc0a2caf6a8ccc288f9001737e2c59ddecc83993d5232ffc00028ea2ddd9230",
+      "request": {
+        "body": {
+          "allowed_mentions": {
+            "parse": [
+              "users"
+            ],
+            "replied_user": true,
+            "roles": [],
+            "users": []
+          },
+          "attachments": [],
+          "content": "done.txt created.",
+          "embeds": [],
+          "enforce_nonce": true,
+          "nonce": "daf4c1bf09774323b3edde996",
+          "sticker_ids": [],
+          "tts": false
+        },
+        "method": "POST",
+        "path": "/api/v10/channels/300/messages"
+      },
+      "request_count": 1,
+      "restart_send_count": 0,
+      "surface": "local real Serenity HTTP + persisted post ledger; not live Discord",
+      "test_sha256": "a347f2debc764f63be06f103f20dcbb761076134112be0ef251768632803bde5"
+    }
+  ],
+  "coverage": {
+    "current_events": {
+      "target": "test_lane_events",
+      "passed": 25,
+      "failed": 0,
+      "ignored": 1,
+      "exit": 0,
+      "source_sha256": "c60891e2488b0294d868e383d3691a3ebee8ddab0221732ac94017e36398e797",
+      "question_pause": [
+        "runner_question_pauses_after_one_turn_without_outcome_lock_deadlock",
+        "question_and_blocker_pause_with_one_persistent_event"
+      ],
+      "stale": [
+        "quiet_threshold_and_restart_are_idempotent",
+        "ordinary_activity_rearms_stale_but_idle_turns_never_fire"
+      ],
+      "owner_answer_preservation": "agent_post_and_event_scrub_token_but_owner_answer_stays_exact",
+      "resume_limit": "Exact resumed backend owner prompt not demonstrated by current events25 pass; owner answer persistence is not resumed-turn proof"
+    },
+    "three_error": {
+      "test": "three_errors_fail_with_dead_event",
+      "status": "historical passed, not executed in173003Z batch",
+      "log": "fixture-repair-20261011T161103Z-runner.log",
+      "status_file": "fixture-repair-20261011T161103Z-status.tsv",
+      "runner_exit": 0,
+      "current_runner_hash": "5d39a341a4025ea9ba84dcb0e1fc3058c7c3f7980d8b916cec4fb6509bdd4ebc",
+      "final_current_gate": "pending parent"
+    },
+    "actual_capture": {
+      "artifact": "task-8-9-live-GhvMrT-1791737815001/task8.json",
+      "sha256": "adb3695a8dead30c7d1a0bb47f9fac0560b10359f2c628330d6e84e8be6bc564",
+      "report_at": "2026-10-11T16:46:25.303987+00:00",
+      "classification": "actual backend capture; separate from local replay sink"
+    },
+    "final_gate": {
+      "status": "pending",
+      "recorded_clippy_exit": 101,
+      "reason": "unused SessionActor::run; parent repair then strict clippy/build"
+    }
+  },
+  "scope": "actual local HTTP sink + owned SQLite replay; not new capture or external Discord"
+}

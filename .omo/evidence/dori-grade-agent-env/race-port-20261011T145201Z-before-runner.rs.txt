@@ -1,0 +1,900 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use chrono::Utc;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::SqlitePool;
+use tokio::net::UnixDatagram;
+use tokio::sync::Notify;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
+
+use crate::agent::{AgentBackend, OmoBackend, OmoBackendConfig};
+use crate::judge::{JevCli, Judge};
+use crate::multiplexer::OutboundDispatcher;
+use crate::storage::{get_lane, list_lanes, read_transcript, Lane};
+use crate::work_heartbeat::SystemClock;
+use crate::{InboundEvent, OmonError, OutboundAction, Result, SessionContext, SessionKey};
+
+use super::activity::{LaneActivity, StreamCapture};
+use super::posts::{self, PostSink};
+
+tokio::task_local! {
+    static CAPTURE_GENERATION: i64;
+}
+
+pub const DEFAULT_MAX_TURNS: i64 = 24;
+
+async fn reopen_generation(pool: &SqlitePool, key: &str) -> Result<i64> {
+    let (generation,): (i64,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened'",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await?;
+    Ok(generation)
+}
+
+async fn reopen_marker(pool: &SqlitePool, key: &str) -> Result<Option<(i64, String)>> {
+    Ok(sqlx::query_as("SELECT id, at FROM lane_history WHERE lane_key = ? AND reason = 'reopened' ORDER BY id DESC LIMIT 1")
+        .bind(key).fetch_optional(pool).await?)
+}
+
+pub async fn reopen(pool: &SqlitePool, key: &str, text: Option<&str>) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    let (from,): (String,) = sqlx::query_as("SELECT status FROM lanes WHERE key = ?")
+        .bind(key)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| OmonError::Config(format!("lane not found: {key}")))?;
+    if !matches!(from.as_str(), "closed" | "failed") {
+        return Err(OmonError::Config(format!(
+            "IllegalTransition: {from} -> reopened"
+        )));
+    }
+    let now = Utc::now();
+    let changed = sqlx::query("UPDATE lanes SET status = 'working', turns_run = 0, last_turn_outcome = NULL, claim_evidence = NULL, claim_at = NULL, objection = NULL, updated_at = ? WHERE key = ? AND status = ?")
+        .bind(now)
+        .bind(key)
+        .bind(&from)
+        .execute(&mut *tx)
+        .await?;
+    if changed.rows_affected() != 1 {
+        return Err(OmonError::Config("concurrent reopen".into()));
+    }
+    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, 'working', 'reopened')")
+        .bind(key).bind(now).bind(from).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM lane_inbox WHERE lane_key = ? AND consumed_at IS NULL")
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("INSERT INTO lane_inbox(lane_key, text, at) VALUES (?, ?, ?)")
+        .bind(key)
+        .bind(text.unwrap_or("The lane was reopened; re-check state and continue"))
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(super) fn io_error(error: std::io::Error) -> OmonError {
+    OmonError::Config(format!("lane I/O: {error}"))
+}
+
+pub fn lane_key(key: &str) -> SessionKey {
+    SessionKey::new(
+        "lane",
+        None::<String>,
+        key,
+        None::<String>,
+        format!("lane:{key}"),
+    )
+}
+
+/// Captures lane output only; this dispatcher has no Discord transport.
+pub struct CapturingDispatcher {
+    pool: SqlitePool,
+    streams: tokio::sync::Mutex<HashMap<(String, uuid::Uuid), StreamCapture>>,
+    posts_ready: Arc<Notify>,
+}
+
+impl CapturingDispatcher {
+    pub fn new(pool: SqlitePool) -> Self {
+        Self {
+            pool,
+            streams: tokio::sync::Mutex::new(HashMap::new()),
+            posts_ready: Arc::new(Notify::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl OutboundDispatcher for CapturingDispatcher {
+    async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+        let message = match action {
+            OutboundAction::SendMessage {
+                session, content, ..
+            } => Some((session, content, uuid::Uuid::new_v4().to_string())),
+            OutboundAction::EditMessage {
+                session,
+                content,
+                platform_message_id,
+            } => Some((session, content, platform_message_id)),
+            OutboundAction::Stream { session, chunk } => {
+                if session.platform != "lane" {
+                    return Err(OmonError::Config("non-lane stream sent to capture".into()));
+                }
+                let generation = match CAPTURE_GENERATION.try_with(|generation| *generation) {
+                    Ok(generation) => generation,
+                    Err(_) => reopen_generation(&self.pool, &session.channel_id).await?,
+                };
+                LaneActivity::new(self.pool.clone(), Arc::new(SystemClock))
+                    .captured_generation(&session.channel_id, "", Some(generation))
+                    .await?;
+                let mut streams = self.streams.lock().await;
+                let stream_key = (session.channel_id.clone(), chunk.stream_id);
+                let content = streams
+                    .entry(stream_key.clone())
+                    .or_default()
+                    .accept(&chunk)
+                    .map(str::to_owned);
+                if chunk.is_final {
+                    streams.remove(&stream_key);
+                }
+                content.map(|content| (session, content, format!("stream:{}", chunk.stream_id)))
+            }
+            OutboundAction::UploadFile { session, path } => Some((
+                session,
+                format!("[file] {}", path.display()),
+                uuid::Uuid::new_v4().to_string(),
+            )),
+            OutboundAction::ApprovalRequest { .. } => {
+                return Err(OmonError::Config(
+                    "lane approval requires lead intervention".into(),
+                ));
+            }
+            OutboundAction::DeleteMessage { .. }
+            | OutboundAction::Typing { .. }
+            | OutboundAction::React { .. }
+            | OutboundAction::ExpireApproval { .. } => None,
+        };
+        if let Some((session, content, identity)) = message {
+            if session.platform != "lane" {
+                return Err(OmonError::Config(
+                    "non-lane output sent to lane capture".into(),
+                ));
+            }
+            let generation = match CAPTURE_GENERATION.try_with(|generation| *generation) {
+                Ok(generation) => generation,
+                Err(_) => reopen_generation(&self.pool, &session.channel_id).await?,
+            };
+            let activity = LaneActivity::new(self.pool.clone(), Arc::new(SystemClock));
+            activity
+                .captured_item(&session.channel_id, &content, generation, &identity)
+                .await?;
+            sqlx::query("INSERT INTO lane_transcript(lane_key, at, role, text) SELECT ?, ?, 'agent', ? WHERE (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                .bind(&session.channel_id).bind(Utc::now()).bind(&content).bind(&session.channel_id).bind(generation).execute(&self.pool).await?;
+            self.posts_ready.notify_one();
+        }
+        Ok(())
+    }
+}
+
+/// The socket is only a wake hint. The database remains authoritative across restarts.
+async fn socket_path(pool: &SqlitePool) -> Result<PathBuf> {
+    let databases: Vec<(i64, String, String)> = sqlx::query_as("PRAGMA database_list")
+        .fetch_all(pool)
+        .await?;
+    let path = databases
+        .into_iter()
+        .find(|(_, name, _)| name == "main")
+        .map(|(_, _, path)| path)
+        .filter(|path| !path.is_empty())
+        .ok_or_else(|| OmonError::Config("lane service requires a file-backed database".into()))?;
+    let path = tokio::fs::canonicalize(path).await.map_err(io_error)?;
+    let digest = format!("{:x}", Sha256::digest(path.as_os_str().as_encoded_bytes()));
+    Ok(PathBuf::from("/tmp").join(format!("omon-lanes-{}.sock", &digest[..24])))
+}
+
+pub async fn wake(pool: &SqlitePool) -> Result<()> {
+    let path = socket_path(pool).await?;
+    let socket = UnixDatagram::unbound().map_err(io_error)?;
+    match socket.send_to(b"wake", path).await {
+        Ok(_) => Ok(()),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(io_error(error)),
+    }
+}
+
+struct WakeSocket {
+    socket: UnixDatagram,
+    path: PathBuf,
+    _lock: std::fs::File,
+}
+
+impl WakeSocket {
+    async fn bind(pool: &SqlitePool) -> Result<Self> {
+        let path = socket_path(pool).await?;
+        let lock_path = path.with_extension("lock");
+        let lock = tokio::task::spawn_blocking(move || -> Result<std::fs::File> {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(lock_path)
+                .map_err(io_error)?;
+            fs2::FileExt::try_lock_exclusive(&file).map_err(|error| {
+                OmonError::Config(format!("lane runner already owns this database: {error}"))
+            })?;
+            Ok(file)
+        })
+        .await
+        .map_err(|error| OmonError::Config(error.to_string()))??;
+        match tokio::fs::remove_file(&path).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io_error(error)),
+        }
+        let socket = UnixDatagram::bind(&path).map_err(io_error)?;
+        Ok(Self {
+            socket,
+            path,
+            _lock: lock,
+        })
+    }
+}
+
+impl Drop for WakeSocket {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            tracing::warn!(%error, "remove lane wake socket");
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct LaneRunner {
+    pool: SqlitePool,
+    backend: Arc<dyn AgentBackend>,
+    max_turns: i64,
+    keywords: String,
+    judge: Arc<dyn Judge>,
+    post_sink: Option<Arc<dyn PostSink>>,
+    posts_ready: Arc<Notify>,
+    capture: Option<Arc<CapturingDispatcher>>,
+}
+
+impl LaneRunner {
+    pub fn new(pool: SqlitePool, backend: Arc<dyn AgentBackend>) -> Self {
+        Self {
+            judge: Arc::new(JevCli::new(None, Some(pool.clone()), None, None)),
+            pool,
+            backend,
+            max_turns: DEFAULT_MAX_TURNS,
+            keywords: "ulw set goal and work".into(),
+            post_sink: None,
+            posts_ready: Arc::new(Notify::new()),
+            capture: None,
+        }
+    }
+
+    pub fn with_judge(mut self, judge: Arc<dyn Judge>) -> Self {
+        self.judge = judge;
+        self
+    }
+
+    pub fn with_post_sink(mut self, sink: Arc<dyn PostSink>) -> Self {
+        self.post_sink = Some(sink);
+        self
+    }
+
+    pub fn from_env(pool: SqlitePool) -> Result<Self> {
+        let config = OmoBackendConfig::lane_from_env()?;
+        if config.total_timeout.is_zero() {
+            return Err(OmonError::Config(
+                "OMON_LANE_TURN_SECS must be positive".into(),
+            ));
+        }
+        let capture = Arc::new(CapturingDispatcher::new(pool.clone()));
+        let backend = OmoBackend::new(config, capture.clone()).with_pool(pool.clone());
+        let mut runner = Self::new(pool, Arc::new(backend));
+        runner.posts_ready = capture.posts_ready.clone();
+        runner.capture = Some(capture);
+        runner.post_sink = Some(Arc::new(
+            super::discord_threads::DiscordThreads::from_env()
+                .map_err(|error| OmonError::Config(error.to_string()))?,
+        ));
+        if let Ok(value) = std::env::var("OMON_LANE_MAX_TURNS") {
+            runner.max_turns = value
+                .parse()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| OmonError::Config("OMON_LANE_MAX_TURNS must be positive".into()))?;
+        }
+        if let Ok(keywords) = std::env::var("OMON_LANE_KEYWORDS") {
+            runner.keywords = keywords;
+        }
+        Ok(runner)
+    }
+
+    pub async fn serve(self, shutdown: CancellationToken) -> Result<()> {
+        let socket = WakeSocket::bind(&self.pool).await?;
+        posts::recover(&self.pool).await?;
+        if let Some(sink) = &self.post_sink {
+            posts::drain(&self.pool, sink.as_ref()).await?;
+        }
+        tracing::info!(socket = %socket.path.display(), "gateway lane service ready");
+        let mut tasks = JoinSet::new();
+        let mut active: HashMap<String, Arc<Notify>> = HashMap::new();
+        let mut bytes = [0; 64];
+        loop {
+            if shutdown.is_cancelled() {
+                break;
+            }
+            for lane in list_lanes(&self.pool, &["working", "not_done"]).await? {
+                if !active.contains_key(&lane.key) {
+                    let notify = Arc::new(Notify::new());
+                    active.insert(lane.key.clone(), notify.clone());
+                    let runner = self.clone();
+                    let cancellation = shutdown.child_token();
+                    let generation = reopen_generation(&self.pool, &lane.key).await?;
+                    tasks.spawn(async move {
+                        let result = runner.run_lane(&lane.key, notify, cancellation).await;
+                        (lane.key, generation, result)
+                    });
+                }
+            }
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = self.posts_ready.notified() => {
+                    if let Some(sink) = &self.post_sink { posts::drain(&self.pool, sink.as_ref()).await?; }
+                }
+                result = socket.socket.recv(&mut bytes) => {
+                    result.map_err(io_error)?;
+                    for notify in active.values() { notify.notify_one(); }
+                }
+                Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+                    let (key, generation, outcome) = result.map_err(|error| OmonError::Multiplexer(error.to_string()))?;
+                    active.remove(&key);
+                    if let Err(error) = outcome {
+                        tracing::error!(%key, %error, "lane task failed");
+                        self.fail(&key, "dead", &error.to_string(), generation).await?;
+                    }
+                }
+            }
+        }
+        shutdown.cancel();
+        while let Some(result) = tasks.join_next().await {
+            let (key, _, outcome) =
+                result.map_err(|error| OmonError::Multiplexer(error.to_string()))?;
+            if let Err(error) = outcome {
+                tracing::warn!(%key, %error, "lane shutdown outcome");
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn run_lane(
+        &self,
+        key: &str,
+        notify: Arc<Notify>,
+        shutdown: CancellationToken,
+    ) -> Result<()> {
+        let initial = self.lane(key).await?;
+        let mut session = SessionContext::new(lane_key(key));
+        session
+            .state
+            .metadata
+            .insert("lane_cwd".into(), json!(initial.cwd));
+        let stored: Option<(String,)> =
+            sqlx::query_as("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(session.key.storage_key())
+                .fetch_optional(&self.pool)
+                .await?;
+        let stored_id = stored
+            .map(|(state,)| serde_json::from_str::<serde_json::Value>(&state))
+            .transpose()
+            .map_err(|error| OmonError::Config(error.to_string()))?
+            .and_then(|state| {
+                state["metadata"]["omo_thread_id"]
+                    .as_str()
+                    .map(str::to_owned)
+            });
+        if let Some(id) = stored_id.or(initial.omo_thread_id) {
+            session
+                .state
+                .metadata
+                .insert("omo_thread_id".into(), json!(id));
+        }
+        let mut generation = reopen_generation(&self.pool, key).await?;
+        let mut was_reopened = generation != 0;
+        let mut reopen_at = reopen_marker(&self.pool, key).await?.map(|(_, at)| at);
+        let mut resume_fallback = false;
+        let mut errors = 0;
+        let activity = LaneActivity::new(self.pool.clone(), Arc::new(SystemClock));
+        loop {
+            let current_generation = reopen_generation(&self.pool, key).await?;
+            if current_generation != generation {
+                generation = current_generation;
+                was_reopened = generation != 0;
+                reopen_at = reopen_marker(&self.pool, key).await?.map(|(_, at)| at);
+                resume_fallback = false;
+                errors = 0;
+            }
+            let lane = self.lane(key).await?;
+            if shutdown.is_cancelled() || !matches!(lane.status.as_str(), "working" | "not_done") {
+                return Ok(());
+            }
+            if lane.status == "not_done" {
+                let mut tx = self.pool.begin().await?;
+                let changed = sqlx::query("UPDATE lanes SET status = 'working', updated_at = ? WHERE key = ? AND status = 'not_done' AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                    .bind(Utc::now()).bind(key).bind(key).bind(generation).execute(&mut *tx).await?;
+                if changed.rows_affected() == 1 {
+                    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, 'not_done', 'working', 'resuming work')")
+                        .bind(key).bind(Utc::now()).execute(&mut *tx).await?;
+                }
+                tx.commit().await?;
+            }
+            if lane.turns_run >= self.max_turns && !(was_reopened && lane.turns_run == 0) {
+                return self
+                    .fail(key, "turn_cap", "lane turn cap reached", generation)
+                    .await;
+            }
+            if errors >= 3 {
+                return self
+                    .fail(key, "dead", "three consecutive turn errors", generation)
+                    .await;
+            }
+            if lane.model.as_deref()
+                == Some(&crate::agent::model_for_purpose(
+                    crate::agent::ModelPurpose::LaneSmall,
+                ))
+            {
+                let (failed_checks,): (i64,) = sqlx::query_as("SELECT count(*) FROM lane_history WHERE lane_key = ? AND to_status = 'not_done'")
+                    .bind(key).fetch_one(&self.pool).await?;
+                if failed_checks >= 2 {
+                    let mut tx = self.pool.begin().await?;
+                    let changed = sqlx::query("UPDATE lanes SET model = ? WHERE key = ? AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                        .bind(crate::agent::model_for_purpose(
+                            crate::agent::ModelPurpose::LaneLarge,
+                        ))
+                        .bind(key)
+                        .bind(key).bind(generation)
+                        .execute(&mut *tx)
+                        .await?;
+                    if changed.rows_affected() == 0 {
+                        tx.rollback().await?;
+                        continue;
+                    }
+                    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, 'working', 'working', 'escalated')")
+                        .bind(key).bind(Utc::now()).execute(&mut *tx).await?;
+                    tx.commit().await?;
+                }
+            }
+            session.state.active_model = self.lane(key).await?.model;
+            let inbox = self.pending(key).await?;
+            if inbox.is_empty() && lane.last_turn_outcome.as_deref() == Some("idle_without_claim") {
+                tokio::select! {
+                    _ = shutdown.cancelled() => return Ok(()),
+                    _ = notify.notified() => continue,
+                }
+            }
+            let prompt = if lane.turns_run == 0 && was_reopened && !resume_fallback {
+                inbox
+                    .iter()
+                    .map(|(_, text)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else if lane.turns_run == 0 || resume_fallback {
+                let brief = tokio::fs::read_to_string(&lane.brief_path)
+                    .await
+                    .map_err(io_error)?;
+                let databases: Vec<(i64, String, String)> = sqlx::query_as("PRAGMA database_list")
+                    .fetch_all(&self.pool)
+                    .await?;
+                let database = databases
+                    .into_iter()
+                    .find(|(_, name, _)| name == "main")
+                    .map(|(_, _, path)| path)
+                    .unwrap_or_default();
+                let executable = std::env::current_exe().map_err(io_error)?;
+                format!("{}\n\n{}{}{}\n\n{}\nControl executable (one argv element): {}\nControl DATABASE_URL: {}\nUse this DATABASE_URL explicitly for every lane command; do not use another gateway database.\n{}", self.keywords, brief, if was_reopened { "\n\nReopened lane; continue with prior context." } else { "" }, if resume_fallback { "\n\nResumed lane; previous thread unavailable" } else { "" }, brief_footer(&lane), json!(executable), json!(format!("sqlite://{database}")), inbox.iter().map(|(_, text)| text.as_str()).collect::<Vec<_>>().join("\n"))
+            } else if !inbox.is_empty() {
+                inbox
+                    .iter()
+                    .map(|(_, text)| text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                "Continue the lane. Report progress with [REPORT] lines; when every Done signal holds, run the claim command.".into()
+            };
+            sqlx::query("INSERT INTO lane_transcript(lane_key, at, role, text) SELECT ?, ?, 'user', ? WHERE (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                .bind(key).bind(Utc::now()).bind(&prompt).bind(key).bind(generation).execute(&self.pool).await?;
+            sqlx::query("UPDATE lanes SET last_turn_outcome = NULL WHERE key = ? AND last_turn_outcome = 'idle_without_claim' AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                .bind(key).bind(key).bind(generation).execute(&self.pool).await?;
+            let event = InboundEvent::message(
+                session.key.clone(),
+                uuid::Uuid::new_v4().to_string(),
+                prompt,
+            );
+            let steering_session = session.clone();
+            let turn_cancel = shutdown.child_token();
+            let (transcript_start,): (i64,) = sqlx::query_as(
+                "SELECT COALESCE(MAX(id), 0) FROM lane_transcript WHERE lane_key = ?",
+            )
+            .bind(key)
+            .fetch_one(&self.pool)
+            .await?;
+            let mut quiet_check = tokio::time::interval(std::time::Duration::from_secs(60));
+            quiet_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut turn_tasks = JoinSet::new();
+            let backend = self.backend.clone();
+            let cancellation = turn_cancel.clone();
+            let _cancel_on_exit = turn_cancel.clone().drop_guard();
+            turn_tasks.spawn(async move {
+                CAPTURE_GENERATION
+                    .scope(generation, async move {
+                        let outcome = backend
+                            .run_cancelable(&mut session, event, cancellation)
+                            .await;
+                        (session, outcome)
+                    })
+                    .await
+            });
+            let outcome = {
+                loop {
+                    tokio::select! {
+                        result = turn_tasks.join_next() => {
+                            let (returned_session, outcome) = result
+                                .ok_or_else(|| OmonError::Multiplexer("lane turn task missing".into()))?
+                                .map_err(|error| OmonError::Multiplexer(format!("lane turn task: {error}")))?;
+                            session = returned_session;
+                            break outcome;
+                        },
+                        _ = quiet_check.tick() => {
+                            if reopen_generation(&self.pool, key).await? != generation {
+                                turn_cancel.cancel();
+                                continue;
+                            }
+                            activity.quiet_generation(key, true, Some(generation)).await?;
+                            if reopen_generation(&self.pool, key).await? != generation {
+                                turn_cancel.cancel();
+                                continue;
+                            }
+                            self.posts_ready.notify_one();
+                        }
+                        _ = notify.notified() => {
+                            let current = self.lane(key).await?;
+                            let current_generation = reopen_generation(&self.pool, key).await?;
+                            if current_generation != generation || !matches!(current.status.as_str(), "working" | "not_done") {
+                                turn_cancel.cancel();
+                                continue;
+                            }
+                            for (id, text) in self.pending(key).await? {
+                                if inbox.iter().any(|(sent, _)| *sent == id) { continue; }
+                                if reopen_generation(&self.pool, key).await? != generation { break; }
+                                match self.backend.steer(&steering_session, &text).await {
+                                    Ok(true) if reopen_generation(&self.pool, key).await? == generation => {
+                                        sqlx::query("UPDATE lane_inbox SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                                            .bind(Utc::now()).bind(id).bind(key).bind(generation).execute(&self.pool).await?;
+                                    },
+                                    Ok(true) => break,
+                                    Ok(false) => {},
+                                    Err(error) => tracing::warn!(%key, %error, "steer deferred to next turn"),
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            let current_generation = reopen_generation(&self.pool, key).await?;
+            if let Some(capture) = &self.capture {
+                capture
+                    .streams
+                    .lock()
+                    .await
+                    .retain(|(lane, _), _| lane != key);
+            }
+            if current_generation != generation {
+                generation = current_generation;
+                was_reopened = generation != 0;
+                reopen_at = reopen_marker(&self.pool, key).await?.map(|(_, at)| at);
+                resume_fallback = false;
+                errors = 0;
+                continue;
+            }
+            if reopen_at.as_deref()
+                != reopen_marker(&self.pool, key)
+                    .await?
+                    .as_ref()
+                    .map(|(_, at)| at.as_str())
+            {
+                generation = reopen_generation(&self.pool, key).await?;
+                was_reopened = true;
+                reopen_at = reopen_marker(&self.pool, key).await?.map(|(_, at)| at);
+                resume_fallback = false;
+                errors = 0;
+                continue;
+            }
+            let (resume_generation,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened'")
+                .bind(key).fetch_one(&self.pool).await?;
+            if !resume_fallback
+                && was_reopened
+                && resume_generation == generation
+                && outcome
+                    .as_ref()
+                    .err()
+                    .is_some_and(|error| error.to_string().contains("continuity_error"))
+            {
+                if self.clear_failed_resume(key, generation).await? {
+                    session.state.metadata.remove("omo_thread_id");
+                    resume_fallback = true;
+                }
+                continue;
+            }
+            let id = session
+                .state
+                .metadata
+                .get("omo_thread_id")
+                .and_then(|value| value.as_str());
+            let outcome_text = match &outcome {
+                Ok(()) => "completed".into(),
+                Err(error) => format!("error: {error}"),
+            };
+            let mut tx = self.pool.begin().await?;
+            sqlx::query("UPDATE lanes SET updated_at = updated_at WHERE key = ?")
+                .bind(key)
+                .execute(&mut *tx)
+                .await?;
+            let (committed_generation,): (i64,) = sqlx::query_as(
+            "SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened'",
+        )
+        .bind(key)
+        .fetch_one(&mut *tx)
+        .await?;
+            let (committed_status,): (String,) =
+                sqlx::query_as("SELECT status FROM lanes WHERE key = ?")
+                    .bind(key)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if committed_generation != generation
+                || !matches!(
+                    committed_status.as_str(),
+                    "working" | "not_done" | "blocked" | "done_claimed"
+                )
+            {
+                tx.rollback().await?;
+                generation = committed_generation;
+                was_reopened = generation != 0;
+                reopen_at = reopen_marker(&self.pool, key).await?.map(|(_, at)| at);
+                resume_fallback = false;
+                errors = 0;
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO lane_transcript(lane_key, at, role, text) VALUES (?, ?, 'outcome', ?)",
+            )
+            .bind(key)
+            .bind(Utc::now())
+            .bind(if shutdown.is_cancelled() {
+                "interrupted"
+            } else {
+                &outcome_text
+            })
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("UPDATE lanes SET turns_run = turns_run + 1, omo_thread_id = ?, last_turn_outcome = CASE WHEN last_turn_outcome = 'idle_without_claim' THEN last_turn_outcome ELSE ? END, updated_at = ? WHERE key = ?")
+                .bind(id).bind(&outcome_text).bind(Utc::now()).bind(key).execute(&mut *tx).await?;
+            tx.commit().await?;
+            self.posts_ready.notify_one();
+            if outcome.is_ok() {
+                for (id, _) in inbox {
+                    sqlx::query("UPDATE lane_inbox SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND EXISTS (SELECT 1 FROM lanes WHERE key = ? AND status IN ('working', 'not_done')) AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                        .bind(Utc::now()).bind(id).bind(key).bind(key).bind(generation).execute(&self.pool).await?;
+                }
+            }
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
+            errors = if outcome.is_err() { errors + 1 } else { 0 };
+            if errors >= 3 {
+                return self.fail(key, "dead", &outcome_text, generation).await;
+            }
+            if outcome.is_ok() && self.lane(key).await?.status == "working" {
+                if reopen_generation(&self.pool, key).await? != generation {
+                    generation = reopen_generation(&self.pool, key).await?;
+                    was_reopened = true;
+                    resume_fallback = false;
+                    errors = 0;
+                    continue;
+                }
+                let transcript = read_transcript(&self.pool, key, None).await?;
+                let messages: Vec<_> = transcript
+                    .iter()
+                    .filter(|entry| entry.id > transcript_start && entry.role == "agent")
+                    .collect();
+                let reports: Vec<_> = messages
+                    .iter()
+                    .flat_map(|entry| super::activity::reports(key, &entry.text))
+                    .collect();
+                let pause = if reports.is_empty() {
+                    activity
+                        .unreported_turn_generation(
+                            key,
+                            messages.last().map_or("", |entry| entry.text.as_str()),
+                            self.judge.as_ref(),
+                            generation,
+                        )
+                        .await?
+                        .pause
+                } else {
+                    reports
+                        .iter()
+                        .any(|report| report.kind == super::activity::ReportKind::Done)
+                };
+                if pause
+                    && reopen_generation(&self.pool, key).await? == generation
+                    && self.lane(key).await?.status == "working"
+                {
+                    sqlx::query("UPDATE lanes SET last_turn_outcome = 'idle_without_claim' WHERE key = ? AND status = 'working' AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+                        .bind(key).bind(key).bind(generation).execute(&self.pool).await?;
+                }
+            }
+        }
+    }
+
+    async fn lane(&self, key: &str) -> Result<Lane> {
+        get_lane(&self.pool, key)
+            .await?
+            .ok_or_else(|| OmonError::Config(format!("lane not found: {key}")))
+    }
+
+    async fn clear_failed_resume(&self, key: &str, generation: i64) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let changed = sqlx::query("UPDATE lanes SET omo_thread_id = NULL, last_turn_outcome = 'thread_resume_failed', updated_at = ? WHERE key = ? AND status = 'working' AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
+            .bind(Utc::now()).bind(key).bind(key).bind(generation).execute(&mut *tx).await?;
+        if changed.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        sqlx::query("UPDATE sessions SET state_json = json_remove(state_json, '$.metadata.omo_thread_id') WHERE session_key = ?")
+            .bind(lane_key(key).storage_key()).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, 'working', 'working', 'Resumed lane; previous thread unavailable')")
+            .bind(key).bind(Utc::now()).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    async fn pending(&self, key: &str) -> Result<Vec<(i64, String)>> {
+        Ok(sqlx::query_as("SELECT id, text FROM lane_inbox WHERE lane_key = ? AND consumed_at IS NULL ORDER BY id")
+            .bind(key).fetch_all(&self.pool).await?)
+    }
+
+    async fn fail(&self, key: &str, kind: &str, reason: &str, generation: i64) -> Result<()> {
+        let body: String = super::scrub::scrub(reason).chars().take(2000).collect();
+        let mut tx = self.pool.begin().await?;
+        let lane: Option<Lane> = sqlx::query_as("UPDATE lanes SET updated_at = updated_at WHERE key = ? AND status IN ('working', 'blocked', 'queued') AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? RETURNING *")
+            .bind(key).bind(key).bind(generation).fetch_optional(&mut *tx).await?;
+        if let Some(lane) = lane {
+            sqlx::query("UPDATE lanes SET status = 'failed', updated_at = ? WHERE key = ?")
+                .bind(Utc::now())
+                .bind(key)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, 'failed', ?)")
+                .bind(key).bind(Utc::now()).bind(lane.status).bind(reason).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) VALUES (?, ?, ?, ?, ?)")
+                .bind(key).bind(lane.lead_session_key).bind(kind).bind(body).bind(Utc::now()).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+}
+
+pub fn brief_footer(lane: &Lane) -> String {
+    format!("Lane key: {}\nDone = {}\n[REPORT] {} | milestone|blocker|question|done | <text>\nClaim command: omo-gateway lane claim-done {} --evidence \"<evidence>\"\n\nLane done protocol\nWhen every Done signal is live and every change is pushed, run the claim command from your own session. For local or QA-only work the signals can be a command, file or URL. Run them yourself first: the watcher re-runs every signal and never takes your word for it. The lane key above is required.\nAfter claiming, stay idle and start no new work. The lead receives a done_claimed event. A claim starts a five-minute objection window. Before closing, the watcher reads every signal live and refuses uncommitted tracked changes or commits on no remote. Closing marks the thread done and removes lane-owned worktrees.\nIf the lead objects or a check fails, you receive [LEAD] not done: <reasons>; keep working, claim again when fixed. Fix every reason, then claim again for a fresh five-minute window.", lane.key, lane.done_signals, lane.key, lane.key)
+}
+
+#[cfg(test)]
+mod activity_generation_tests {
+    use super::*;
+
+    struct UnusedBackend;
+
+    #[async_trait]
+    impl AgentBackend for UnusedBackend {
+        async fn run(&self, _: &mut SessionContext, _: InboundEvent) -> Result<()> {
+            panic!("failure fencing does not run a backend")
+        }
+    }
+
+    #[tokio::test]
+    async fn old_third_error_cannot_fail_reopened_lane() {
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut lane = Lane::new(
+            "fence",
+            "Fence",
+            "lead",
+            "/tmp",
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "closed".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        reopen(db.pool(), "fence", Some("new work")).await.unwrap();
+        let runner = LaneRunner::new(db.pool().clone(), Arc::new(UnusedBackend));
+        runner
+            .fail("fence", "dead", "third old error", 0)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_lane(db.pool(), "fence").await.unwrap().unwrap().status,
+            "working"
+        );
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM lane_events")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn stale_fallback_preserves_new_durable_binding() {
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut lane = Lane::new(
+            "fence",
+            "Fence",
+            "lead",
+            "/tmp",
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "closed".into();
+        lane.omo_thread_id = Some("new-binding".into());
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        let key = lane_key("fence");
+        sqlx::query("INSERT INTO sessions(session_key, platform, channel_id, user_id, state_json, created_at, updated_at) VALUES (?, 'lane', 'fence', 'lane:fence', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+            .bind(key.storage_key()).bind(json!({"metadata":{"omo_thread_id":"new-binding"}}).to_string()).execute(db.pool()).await.unwrap();
+        reopen(db.pool(), "fence", None).await.unwrap();
+        let runner = LaneRunner::new(db.pool().clone(), Arc::new(UnusedBackend));
+        assert!(!runner.clear_failed_resume("fence", 0).await.unwrap());
+        let state: String =
+            sqlx::query_scalar("SELECT state_json FROM sessions WHERE session_key = ?")
+                .bind(key.storage_key())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&state).unwrap()["metadata"]["omo_thread_id"],
+            "new-binding"
+        );
+        assert_eq!(
+            get_lane(db.pool(), "fence")
+                .await
+                .unwrap()
+                .unwrap()
+                .omo_thread_id
+                .as_deref(),
+            Some("new-binding")
+        );
+    }
+}
+

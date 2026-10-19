@@ -1,0 +1,45 @@
+{
+  "schema": "omon-lane-qa-scope-probe-v1",
+  "scope": {
+    "status": "verified",
+    "endpoint": "ws://127.0.0.1:19742",
+    "root": "/private/tmp/omon-lane-scratch-qa-GhvMrT",
+    "dbPath": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+    "cwd": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+    "runtimeWorkspaceRoots": [
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo"
+    ],
+    "threadId": "01a12bda-284a-7964-ba5e-31ef191c6a5b",
+    "observedAt": "2026-10-11T16:45:01.176Z",
+    "inheritedDatabaseUrlEqual": false,
+    "controlChild": {
+      "executable": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+      "cwd": "/private/tmp/omon-lane-scratch-qa-GhvMrT/qa-repo",
+      "databaseUrl": "sqlite:///private/tmp/omon-lane-scratch-qa-GhvMrT/qa.db",
+      "databaseUrlEqual": true,
+      "envOverride": true,
+      "exitCode": 0,
+      "sha256": "60fce5ae8276944e9930bc2c41aa2ff039ad3daa29c05facd79e796cc621bc32",
+      "argv": [
+        "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+        "--help"
+      ],
+      "stdoutBytes": 447,
+      "stderrBytes": 0
+    }
+  },
+  "preparedSha256": "474e375d4f307f594efc29e92e7b8eeaf798980a6c317dc75e71e12e1561b1d4",
+  "helper": {
+    "path": "/private/tmp/omon-lane-scratch-qa-GhvMrT/scope-check.mjs",
+    "sha256": "7b39b4c15850f73ff42e70ab9b311dd03e6ad89022764ee9656e4d13141fbb14",
+    "argv": [
+      "/Users/indo/.bun/bin/bun",
+      "--no-env-file",
+      "/private/tmp/omon-lane-scratch-qa-GhvMrT/scope-check.mjs"
+    ]
+  },
+  "receipt": {
+    "path": "/private/tmp/omon-lane-scratch-qa-GhvMrT/scope-probe-receipts-1791737079880-5f29ab4c52e3.json",
+    "sha256": "d401528ca613112a796b049722ba58e9271faa79b2bf4ad5be5bd4b09f866819"
+  }
+}

@@ -1,0 +1,11 @@
+CORRECTION: This initial shell-prefix invocation hit the inherited repository database, not the intended scratch database. See task-8-live-db-incident.md. A later Bun.spawn invocation with explicit env independently reproduced exit 2 against the actual scratch database.
+omo-gateway lane start qa-2 --title QA --brief /tmp/omon-task8-z4iBTA/brief.md --done 'command ["true"]' --cwd /tmp/omon-task8-z4iBTA/qa-repo --lead '4:lane|-|4:lead|-|9:lane:lead' --model small
+exit_code=2
+stdout={"error":"configuration error: uncheckable command: uncheckable command: [\"true\"]","ok":false}
+stderr was empty.
+
+Named live engine preflight: lsof -nP -iTCP:19742 -sTCP:LISTEN returned no listener; HTTP /readyz connection failed.
+Owned debug gateway with Discord tokens removed and dashboard disabled:
+exit_code=1
+stderr=Error: Config("missing required environment variable DISCORD_BOT_TOKEN")
+No Discord token was supplied because live service/Discord writes are outside this QA authorization.

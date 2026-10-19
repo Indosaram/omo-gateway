@@ -1,0 +1,169 @@
+{
+  "schema": "omon-task10-local-http-observed-v1",
+  "status": "observed",
+  "provenance": {
+    "run": "combined-current-20261011T173003Z",
+    "focused_log": "combined-current-20261011T173003Z-focused.log",
+    "focused_log_sha256": "0b4ad2f58224dcf2b315b12154eb73eb301a1769cb5f769a846c5924807fd258",
+    "status_file": "combined-current-20261011T173003Z-status.tsv",
+    "status_sha256": "a3dac4d7c5bf6dde3b7d69031bd68214a6fbbd449e1033007650f0ef7258e555",
+    "focused_exit": 0,
+    "source_manifest_sha256": "966ee6e8fcbfb4036f0f4c4761b7c9a89893868e6a2c3ea6f59fcc64aa56f5ab",
+    "source_inputs": 196,
+    "pre_post_identical": true,
+    "rerun": false
+  },
+  "test": {
+    "target": "test_lane_thread_transport",
+    "passed": 1,
+    "failed": 0
+  },
+  "observation": {
+    "cleanup": {
+      "listener_closed": true,
+      "server_task_joined": true
+    },
+    "endpoint": "127.0.0.1:58132",
+    "failure": {
+      "discord_code": 10003,
+      "http_status": 404
+    },
+    "message_id": 400,
+    "source_sha256": "1fae41cfbc3ad5598c0e729b408939181c504a2fcb4501be63afaac255002d0a",
+    "starter_id": 300,
+    "surface": "local Serenity HTTP seam; not live Discord",
+    "test_sha256": "6a0dddcacf5fda802dd84f91ad8e4bc79f515d6e14a17c83cf6d7f2ccd0729d2",
+    "thread_id": 300,
+    "trace": [
+      {
+        "body": {
+          "allowed_mentions": {
+            "parse": [
+              "users"
+            ],
+            "replied_user": true,
+            "roles": [],
+            "users": []
+          },
+          "attachments": [],
+          "content": "lane qa-local: 한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한",
+          "embeds": [],
+          "enforce_nonce": false,
+          "sticker_ids": [],
+          "tts": false
+        },
+        "method": "POST",
+        "path": "/api/v10/channels/200/messages"
+      },
+      {
+        "body": {
+          "name": "🔄 한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한"
+        },
+        "method": "POST",
+        "path": "/api/v10/channels/200/messages/300/threads"
+      },
+      {
+        "body": null,
+        "method": "GET",
+        "path": "/api/v10/channels/300"
+      },
+      {
+        "body": {
+          "name": "✅ 한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한한"
+        },
+        "method": "PATCH",
+        "path": "/api/v10/channels/300"
+      },
+      {
+        "body": {
+          "archived": true
+        },
+        "method": "PATCH",
+        "path": "/api/v10/channels/300"
+      },
+      {
+        "body": null,
+        "method": "GET",
+        "path": "/api/v10/channels/300"
+      },
+      {
+        "body": {
+          "archived": false
+        },
+        "method": "PATCH",
+        "path": "/api/v10/channels/300"
+      },
+      {
+        "body": null,
+        "method": "GET",
+        "path": "/api/v10/channels/300"
+      },
+      {
+        "body": {
+          "allowed_mentions": {
+            "parse": [
+              "users"
+            ],
+            "replied_user": true,
+            "roles": [],
+            "users": []
+          },
+          "attachments": [],
+          "content": "@everyone @here <@&777>",
+          "embeds": [],
+          "enforce_nonce": false,
+          "sticker_ids": [],
+          "tts": false
+        },
+        "method": "POST",
+        "path": "/api/v10/channels/300/messages"
+      },
+      {
+        "body": {
+          "allowed_mentions": {
+            "parse": [
+              "users"
+            ],
+            "replied_user": true,
+            "roles": [],
+            "users": []
+          },
+          "content": "edited @everyone <@&777>"
+        },
+        "method": "PATCH",
+        "path": "/api/v10/channels/300/messages/400"
+      },
+      {
+        "body": {
+          "allowed_mentions": {
+            "parse": [
+              "users"
+            ],
+            "replied_user": true,
+            "roles": [],
+            "users": []
+          },
+          "attachments": [],
+          "content": "invalid local channel",
+          "embeds": [],
+          "enforce_nonce": false,
+          "sticker_ids": [],
+          "tts": false
+        },
+        "method": "POST",
+        "path": "/api/v10/channels/999/messages"
+      }
+    ]
+  },
+  "historical_live": {
+    "path": "task-10.log",
+    "sha256": "56712c2df3edef24edccda7c1ec2d127dcba1e47accb2ee087f2eb27b5a6ccbb",
+    "preserved": true
+  },
+  "scope": "local HTTP only; not external Discord",
+  "final_gate": {
+    "status": "pending",
+    "recorded_clippy_exit": 101,
+    "reason": "unused SessionActor::run; parent repair then strict clippy/build"
+  }
+}

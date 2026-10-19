@@ -1,0 +1,17 @@
+{
+  "status": "released",
+  "scope": "Wave 3/4 integrated source: task13 runner repair + task16/17/18/20/24/27/30 + wave4 runner/main wiring",
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binary_sha256": "71c37a9081d9eeccc61723a1add08ce79dde12dfa380dca58bec225835110d86",
+  "manifest_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/wave4-strict-gate2-post.sha256",
+  "manifest_sha256": "60a3af1024eb2eae6975aae5a2e542c3ecad762bc918183c5e7b92f75e005517",
+  "manifest_entries": 212,
+  "fmt_exit": 0,
+  "clippy_exit": 0,
+  "clippy_command": "cargo clippy --all-targets --all-features --offline -j2 -- -D warnings",
+  "build_exit": 0,
+  "source_cmp": 0,
+  "first_attempt": "wave4-strict-gate-diagnostics.md: clippy 101, nonminimal_bool at src/inbox/triage.rs:173 and src/lanes/kibitzer.rs:220; fixed by equivalent is_none_or rewrites",
+  "tests_attribution": "wave4-integration-source-settled.md 13-target gate exit 0, 117 passed / 0 failed / 4 ignored, on source before the two boolean-equivalent rewrites; not rerun",
+  "limits": "LSP freshness unavailable (daemon timeouts). Historical backend: 8 baseline failures and 2 timeout-unverified tests remain; no whole-suite green claim. Live QA per todo still required."
+}

@@ -1,0 +1,32 @@
+[
+ {
+  "name": "Taiga",
+  "url": "https://taiga.io/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "칸반·스크럼 백로그·이슈 추적을 제공하는 오픈소스 애자일 프로젝트 관리 플랫폼",
+  "mobile": "공식 앱 없음(부분 반응형 웹, 커뮤니티 Android 앱)",
+  "pricing": "무료(OSS 셀프호스팅) / Cloud 5€·20€·60€/월",
+  "selfhost": "가능(Docker)",
+  "license": "MPL-2.0",
+  "agent": "커뮤니티 MCP 서버·REST API; Claude Code·Cursor·Codex 연동",
+  "status": "활발한 유지보수(2026-10 커밋)",
+  "pros": "OSS로 셀프호스팅 기능 제한 없음; WIP 제한·스윔레인 등 풍부한 칸반; 클라우드 전 플랜 사용자 무제한",
+  "cons": "공식 모바일 앱 없음; 공식 MCP 서버 없음; 셀프호스팅 구성 요소 복잡",
+  "sources": [
+   "https://taiga.io/",
+   "https://taiga.io/deployment-pricing-options/",
+   "https://github.com/taigaio/taiga-back",
+   "https://github.com/taigaio/taiga-docker",
+   "https://docs.taiga.io/",
+   "https://docs.taiga.io/api.html",
+   "https://community.taiga.io/t/proposal-mobile-app/257",
+   "https://community.taiga.io/t/feature-request-official-mcp-server-for-taiga-ai-agent-integration/8931",
+   "https://community.taiga.io/t/mobile-android-app-for-taiga/8707",
+   "https://github.com/talhaorak/pytaiga-mcp",
+   "https://github.com/adriapedralbes/mcpTAIGA",
+   "https://www.npmjs.com/package/taiga-mcp-server"
+  ],
+  "confidence": "높음"
+ }
+]

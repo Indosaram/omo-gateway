@@ -1,0 +1,95 @@
+[
+ {
+  "name": "Devin (Cognition) Sessions Dashboard",
+  "url": "https://app.devin.ai",
+  "category": "에이전트 전용",
+  "kanban": "부분",
+  "what": "Devin 자율 코딩 세션 실시간 대시보드(IDE·셸·브라우저·작업로그)",
+  "mobile": "반응형 웹",
+  "pricing": "무료 / Pro $20/월 / Max $200/월 / Teams 최소 $80/월",
+  "selfhost": "일부(하이브리드, Outposts)",
+  "license": "상용",
+  "agent": "REST API v3, 공식 MCP 서버, CLI, Handoff(Claude Code·Codex·Cursor)",
+  "status": "활발(2026-10 릴리스)",
+  "pros": "IDE·셸·브라우저 통합 작업공간; 공식 MCP·핸드오프로 타 에이전트 연동; RBAC·감사·Outposts",
+  "cons": "독점 코어, 완전 셀프호스팅 불가; 대량 작업 시 고비용; 네이티브 모바일 앱 없음",
+  "sources": [
+   "https://devin.ai",
+   "https://docs.devin.ai",
+   "https://docs.devin.ai/admin/billing/self-serve.md",
+   "https://docs.devin.ai/work-with-devin/devin-session-tools.md",
+   "https://docs.devin.ai/work-with-devin/devin-mcp.md",
+   "https://docs.devin.ai/work-with-devin/devin-handoff.md",
+   "https://docs.devin.ai/cloud/outposts/overview.md",
+   "https://github.com/club-cog/devin-handoff",
+   "https://github.com/CognitionAI/devin-outpost-k8s",
+   "https://docs.devin.ai/release-notes/overview.md"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Devin + Linear",
+  "url": "https://linear.app",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Linear 이슈·칸반에서 Devin 세션 배정, 진행·PR을 카드에 표시",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Standard $8~10/사용자/월 / Plus $14~16 (Devin 별도)",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "네이티브 Agent 세션, OAuth, GraphQL API, CLI, 웹훅, MCP",
+  "status": "매우 활발",
+  "pros": "뛰어난 UI·키보드 중심 칸반; 카드 내 실시간 에이전트 진행·PR; 보드에서 중지·프롬프트 가능",
+  "cons": "셀프호스팅 불가; Devin 비용 외 좌석 비용; 고급 자동화는 유료",
+  "sources": [
+   "https://docs.devin.ai/integrations/linear.md",
+   "https://docs.devin.ai/product-guides/automations.md",
+   "https://linear.app/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Devin + Jira",
+  "url": "https://www.atlassian.com/software/jira",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Jira 칸반/스크럼 카드로 Devin 세션 트리거, 상태·PR 회신",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(10명) / Standard $7.75 / Premium $15.25/사용자/월",
+  "selfhost": "일부(Data Center, 연동 제한)",
+  "license": "상용",
+  "agent": "Forge 앱(Rovo 에이전트), OAuth, REST API v3, 웹훅, MCP",
+  "status": "매우 활발",
+  "pros": "엔터프라이즈 컴플라이언스·워크플로; 카드 내 에이전트 패널; 다양한 트리거",
+  "cons": "설정·권한 복잡; Rovo 기능은 Cloud 전용; UI 무거움",
+  "sources": [
+   "https://docs.devin.ai/integrations/jira.md",
+   "https://marketplace.atlassian.com/4162823004",
+   "https://docs.devin.ai/product-guides/automations.md",
+   "https://www.atlassian.com/software/jira/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Devin + Slack",
+  "url": "https://slack.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "부분",
+  "what": "Slack 채널·스레드로 Devin 세션 배정·상태 모니터링",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료 / Pro $7.25~8.75 / Business+ $12.50~15/사용자/월",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "공식 Devin Slack 앱, Web API, Bolt SDK, CLI, 웹훅, MCP",
+  "status": "활발",
+  "pros": "팀 대화 공간에서 즉시 가시성; Code Channels 상태 배지; 인라인 승인 버튼",
+  "cons": "정식 칸반 보드 아님; 스레드 난잡; 알림 피로",
+  "sources": [
+   "https://docs.devin.ai/integrations/slack.md",
+   "https://docs.devin.ai/product-guides/automations.md",
+   "https://docs.devin.ai/tutorial-library/slack-bug-fix.md",
+   "https://slack.com/pricing"
+  ],
+  "confidence": "높음"
+ }
+]

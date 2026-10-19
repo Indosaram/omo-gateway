@@ -1,0 +1,20 @@
+{
+  "schema": "omon-task12-helper-static-review-v1",
+  "helper": "lane-question-qa.mjs",
+  "sha256": "ff4e828a3cb58d0f284b7a9897662b6364528ac954a5df818e1508fb65770622",
+  "syntax": "Bun.Transpiler js parsed; no execution",
+  "lsp": "unavailable: missing TypeScript installation",
+  "auth_source": "src/agent/omo_config.rs:249-254 primary OMON_OMO_APPSERVER_AUTH_TOKEN trimmed; no token logged",
+  "fixed": [
+    "null directory filename triggers query",
+    "WAL rename reattaches subscription",
+    "watcher errors fail closed",
+    "terminal and user counts included in observer predicate",
+    "failed/extra-turn/duplicate-event rejection",
+    "finite nonnegative question event deadline",
+    "success emitted only after postcleanup authoritative DB preservation and gateway numeric0"
+  ],
+  "workflow": "task-12-next-binary-release.md",
+  "runtime": "not started; pending worker67 binary/gate and parent release",
+  "remaining": "current three-error/dead runner regression pending; historical proof not upgraded"
+}

@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+content-type: text/plain; charset=utf-8
+Date: Sun, 11 Oct 2026 15:53:29 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+ok

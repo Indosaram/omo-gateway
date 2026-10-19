@@ -1,0 +1,22 @@
+Command: zele mail watch --help
+Captured: 2026-10-11, read-only help invocation after batch monitor timeout
+Tool status: completed
+
+zele/0.8.0
+
+Usage:
+  $ zele mail watch
+
+Options:
+  --interval [interval]  Poll interval in seconds (default: 15)
+  --folder [folder]      Folder to watch (default: inbox)
+  --filter [filter]      Filter messages (from:, to:, cc:, subject:, is:unread, is:starred, has:attachment, -negate).
+                         See https://support.google.com/mail/answer/7190
+  --timeout [timeout]    Max seconds to wait before exiting with code 1 (default: no timeout)
+  --account [account]    Filter by email account (repeatable)
+  -h, --help             Display this message
+
+Description:
+  Wait for a new email matching the filter, print it and exit
+(node:68594) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)

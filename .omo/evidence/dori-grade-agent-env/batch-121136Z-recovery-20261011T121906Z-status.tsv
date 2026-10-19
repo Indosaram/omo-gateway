@@ -1,0 +1,2 @@
+full	101	cargo test -j 2 --all-targets --all-features --no-fail-fast
+dashboard	0	cargo test -j 2 --test test_review_dashboard

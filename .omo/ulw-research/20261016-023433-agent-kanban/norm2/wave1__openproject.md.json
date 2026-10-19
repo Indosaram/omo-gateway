@@ -1,0 +1,29 @@
+[
+ {
+  "name": "OpenProject",
+  "url": "https://www.openproject.org",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "칸반·간트·스크럼·시간/비용 추적을 갖춘 오픈소스 프로젝트 관리(Jira 대안)",
+  "mobile": "iOS·Android 앱(베타), 반응형 웹",
+  "pricing": "무료(Community) / Enterprise €5.95~/사용자/월",
+  "selfhost": "가능(Docker·DEB/RPM·Helm)",
+  "license": "GPL-3.0",
+  "agent": "내장 MCP(유료)·REST API v3·웹훅; Claude Code·Cursor 등",
+  "status": "활발(v17.9.2, 2026-10)",
+  "pros": "공식 내장 MCP 서버로 작업 검색·생성·수정 지원; 완전 셀프호스팅 가능, GDPR·데이터 주권 중시; 칸반·간트·스크럼 등 기능 풍부",
+  "cons": "MCP는 Professional 이상 유료 플랜 전용; 유료 플랜 최소 25명 이상 조건; Rails/PostgreSQL 기반으로 무겁고 설치·운영 복잡",
+  "sources": [
+   "https://www.openproject.org",
+   "https://www.openproject.org/pricing/",
+   "https://www.openproject.org/docs/api/",
+   "https://www.openproject.org/docs/system-admin-guide/integrations/mcp-server/",
+   "https://www.openproject.org/docs/mobile-app-guide/",
+   "https://www.openproject.org/docs/installation-and-operations/installation/",
+   "https://www.openproject.org/docs/faq/",
+   "https://github.com/opf/openproject",
+   "https://github.com/opf/openproject/releases"
+  ],
+  "confidence": "높음"
+ }
+]

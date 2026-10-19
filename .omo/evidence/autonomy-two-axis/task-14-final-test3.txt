@@ -1,0 +1,2479 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.73s
+     Running unittests src/lib.rs (target/debug/deps/omon_gateway-e129d555675071bf)
+
+running 950 tests
+test agent::agent_workspace::tests::test_slug_when_dashboard_or_web_platform ... ok
+test agent::agent_workspace::tests::test_slug_when_cron_user_id ... ok
+test agent::agent_workspace::tests::slack_bot_shares_the_persona_bot_workspace ... ok
+test agent::agent_workspace::tests::test_slug_when_bot_session ... ok
+test agent::agent_workspace::tests::test_slug_when_snowflake_cron_vs_bot_collision ... ok
+test agent::agent_workspace::tests::test_slug_when_both_missing ... ok
+test agent::agent_workspace::tests::test_resolve_workspace_returns_cwd_and_roots ... ok
+test agent::llm::stream_decode_tests::llm_config_debug_redacts_api_key ... ok
+test agent::llm::stream_decode_tests::multibyte_split_across_chunks_decodes_intact ... ok
+test agent::agent_workspace::tests::fixr1_case_folded_ids_do_not_collide ... ok
+test agent::agent_workspace::tests::test_slug_when_length_greater_than_48_gets_hash_tail ... ok
+test agent::agent_workspace::tests::test_slug_when_sanitize_and_hash_unicode_user_id ... ok
+test agent::omo_activity::tests::test_command_execution_line ... ok
+test agent::omo_activity::tests::test_file_change_line ... ok
+test agent::omo_activity::tests::test_mcp_tool_call_line ... ok
+test agent::omo_activity::tests::test_message_and_reasoning_items_are_none ... ok
+test agent::omo_activity::tests::test_unknown_type_falls_back_to_bolt ... ok
+test agent::omo_activity::tests::test_web_search_uses_for_connector ... ok
+test agent::omo_backend::active_turn_staleness_tests::agent_progress_excludes_steer_echoes_and_bookkeeping ... ok
+test agent::omo_activity::tests::test_command_without_command_field_is_none ... ok
+test agent::omo_backend::active_turn_staleness_tests::entry_older_than_budget_plus_margin_is_stale ... ok
+test agent::omo_backend::active_turn_staleness_tests::fresh_entry_within_turn_budget_is_not_stale ... ok
+test agent::omo_activity::tests::test_long_command_is_truncated ... ok
+test agent::omo_backend::fixr5_agent_tests::interim_reports_are_the_ack_then_spaced_updates ... ok
+test agent::omo_backend::fixr5_agent_tests::steer_acks_and_unrelated_frames_do_not_count_as_turn_progress ... ok
+test agent::omo_backend::fixr5_agent_tests::only_missing_turn_events_count_as_a_backend_stall ... ok
+test agent::omo_backend::fixr5_agent_tests::transport_reset_matching_identifies_ws_and_connection_errors ... ok
+test agent::llm::fixr1_tests::fixr5_anthropic_tool_result_is_a_user_message ... ok
+test agent::omo_activity::tests::test_reasoning_blockquote_truncates_and_collapses ... ok
+test agent::omo_activity::tests::test_command_output_excerpt_collapses_and_truncates ... ok
+test agent::omo_config::tests::fixr5_default_workspace_root_precedence_and_empty_rejection ... ok
+test agent::omo_config::tests::fixr1_zero_timeouts_are_rejected ... ok
+test agent::omo_config::tests::test_cron_from_env_honours_overrides_and_inherits_credentials ... ok
+test agent::omo_config::tests::test_cron_from_env_shares_multiplexed_daemon ... ok
+test agent::omo_config::tests::test_from_env_defaults_to_local_daemon_when_env_absent ... ok
+test agent::omo_config::tests::test_fallback_model_env_contract ... ok
+test agent::omo_config::tests::test_lane_turn_timeout_env_contract ... ok
+test agent::omo_config::tests::test_omo_backend_config_from_env_parses_url_and_token ... ok
+test agent::omo_config::tests::test_per_agent_workspace_and_workspace_root_env_parsing ... ok
+test agent::omo_config::tests::test_turn_stream_timeout_env_contract ... ok
+test agent::llm::fixr1_tests::fixr5_openai_repeated_tool_name_is_not_concatenated ... ok
+test agent::omo_config::tests::test_omo_backend_config_validates_websocket_scheme ... ok
+test agent::omo_config::tests::test_validate_agent_backend_env_contract ... ok
+test agent::omo_config::tests::fixr5_backend_config_debug_and_serialize_hide_auth_token ... ok
+test agent::llm::fixr1_tests::fixr5_ollama_tool_calls_across_chunks_are_all_kept ... ok
+test agent::llm::fixr1_tests::fixr1_http_client_has_read_timeout_and_no_total_timeout ... ok
+test agent::llm::endpoint_tests::versioned_base_urls_skip_v1_append ... ok
+test agent::llm::fixr1_tests::fixr5_credentials_are_marked_sensitive ... ok
+test agent::omo_daemon::tests::fixr5_daemon_log_is_owner_only_and_rotated ... ok
+test agent::omo_backend::fixr5_agent_tests::cron_settings_json_is_merged_atomically_and_never_clobbered ... ok
+test agent::llm::fixr1_tests::fixr1_openai_in_stream_error_frame_yields_err ... ok
+test agent::llm::fixr1_tests::fixr1_anthropic_in_stream_error_frame_yields_err ... ok
+test agent::llm::fixr1_tests::fixr1_normal_stream_still_ends_with_final_chunk ... ok
+test agent::omo_daemon::tests::readiness_wait_grows_per_unready_restart_and_is_capped ... ok
+test agent::omo_daemon::tests::restart_backoff_grows_exponentially_and_is_capped ... ok
+test agent::omo_daemon::tests::senpi_patch_detection_reads_the_worker_bundle ... ok
+test agent::omo_daemon::tests::test_is_local_url ... ok
+test agent::llm::fixr1_tests::fixr5_stream_closed_without_terminator_is_an_error ... ok
+test agent::llm::fixr1_tests::fixr5_provider_specific_terminators_complete_the_stream ... ok
+test agent::omo_daemon::tests::test_resolve_daemon_bin_falls_back_to_known_install_paths ... ok
+test agent::omo_protocol::tests::test_thread_start_request_when_workspace_none ... ok
+test agent::omo_protocol::tests::test_thread_start_request_when_workspace_some ... ok
+test agent::omo_daemon::tests::test_probe_readyz_detects_http_200_and_refusal ... ok
+test context::pack::tests::kill_switch_defaults_on_and_parses_off_values ... ok
+test context::pack::tests::render_keeps_every_section_even_when_empty ... ok
+test cron::ack::tests::failing_command_reports_failure_without_panicking ... ok
+test agent::omo_daemon::tests::daemon_ensure_external_local_surface ... ok
+test agent::omo_daemon::tests::test_daemon_command_arguments ... ok
+test agent::omo_daemon::tests::test_daemon_command_path_prepends_dirs ... ok
+test cron::ack::tests::runs_command_and_captures_output ... ok
+test agent::omo_daemon::tests::fixr1_daemon_command_uses_token_file_when_token_configured ... ok
+test cron::executor::slack_session_tests::payload_session_platform_follows_the_deliver_prefix ... ok
+test agent::omo_daemon::tests::unrelated_pid_in_the_pidfile_is_never_killed ... ok
+test cron::guard::tests::test_allows_benign_commands ... ok
+test cron::health::lead_tests::unset_or_blank_lead_falls_back_to_the_owner_dm ... ok
+test cron::guard::tests::test_rejects_gateway_lifecycle_self_restart_patterns ... ok
+test agent::omo_daemon::tests::forced_restart_since_reports_restarts_at_or_after_deadline ... ok
+test cron::health::tests::switch_defaults_on_and_disables_false_like_values ... ok
+test cron::health::tests::signature_ignores_timestamps_pids_and_ids_but_keeps_the_fault ... ok
+test cron::health::tests::signature_is_bounded_and_uses_first_and_last_line ... ok
+test cron::ack::tests::timeout_bounds_runaway_command ... ok
+test cron::executor::tests::notepads_written_under_default_profile_reach_jobs_with_derived_profile ... ok
+test agent::workspace_migration::tests::wipe_omo_thread_bindings_clears_only_omo_thread_id_and_preserves_other_metadata ... ok
+test cron::scheduler::tests::failure_backoff_scales_exponentially_and_clamps ... ok
+test cron::executor::slack_session_tests::hermes_agent_session_uses_the_destination_platform ... ok
+test cron::scheduler::tests::five_field_weekdays_use_unix_numbering ... ok
+test cron::scheduler::tests::interval_arithmetic_does_not_panic_on_overflow ... ok
+test cron::scheduler::tests::backoff_retry_of_cron_expression_job_is_not_a_missed_occurrence ... ok
+test cron::scheduler::tests::next_run_after_failure_advances_interval_and_applies_backoff ... ok
+test cron::scheduler::tests::next_run_after_failure_cron_expression_respects_schedule_and_backoff ... ok
+test cron::scheduler::tests::next_run_tz_evaluates_wall_clock_and_tracks_dst_offset ... ok
+test cron::remediate::tests::needs_owner_mints_no_token_for_an_already_fixed_problem ... ok
+test cron::scheduler::tests::complete_success_retires_job_with_no_further_occurrence ... ok
+test cron::scheduler::tests::redact_owner_tokens_strips_only_the_token ... ok
+test agent::omo_daemon::tests::daemon_ensure_owned_local_surface ... ok
+test cron::scheduler::tests::expired_lease_owned_by_this_pid_but_not_running_here_is_reclaimed ... ok
+test cron::scheduler::tests::slack_session_key_yields_profile ... ok
+test agent::omo_daemon::tests::daemon_unready_replacement_is_killed_and_retried ... ok
+test cron::scheduler::tests::fan_out_deliveries_in_one_millisecond_keep_distinct_obligations ... ok
+test cron::scheduler::tests::explicit_slack_destination_without_dispatcher_fails_instead_of_succeeding ... ok
+test cron::scheduler::tests::run_due_jobs_isolates_a_job_whose_claim_errors ... ok
+test cron::scheduler::tests::test_delivery_fan_out_parsing ... ok
+test cron::scheduler::tests::owner_token_is_redacted_from_cron_outputs_and_mirrored_transcript ... ok
+test cron::scheduler::tests::predecessor_fallback_does_not_read_non_cron_sessions ... ok
+test cron::scheduler::tests::test_format_context_from_block ... ok
+test cron::scheduler::tests::slack_destination_dispatches_slack_session_with_thread ... ok
+test cron::scheduler::tests::test_increment_repeat_completed ... ok
+test cron::scheduler::tests::test_is_cron_silence_response_matches_sentinels_and_variants ... ok
+test cron::scheduler::tests::test_is_cron_silence_response_preserves_mid_sentence_content ... ok
+test cron::scheduler::tests::monitor_change_is_committed_only_after_successful_delivery ... ok
+test cron::scheduler::tests::test_oneshot_grace_window ... ok
+test cron::scheduler::tests::test_parse_context_from_ids ... ok
+test cron::scheduler::tests::test_parse_wake_gate ... ok
+test cron::scheduler::tests::test_brief_file_read_and_fallback ... ok
+test cron::scheduler::tests::test_catch_up_single_fire_after_simulated_downtime ... ok
+test cron::scheduler::tests::test_claim_job_stores_owner_pid_and_reclaim_skips_live_process ... ok
+test cron::scheduler::tests::test_should_disable_after ... ok
+test cron::scheduler::tests::test_should_reclaim_logic ... ok
+test cron::scheduler::tests::test_deliver_runs_ack_command_after_delivery ... ok
+test cron::scheduler::tests::test_timezone_validation_accepts_and_refuses ... ok
+test cron::scheduler::tests::test_truncate_context_output ... ok
+test cron::store::tests::discord_delivery_uses_profile_home ... ok
+test cron::store::tests::explicit_slack_destination_detection ... ok
+test cron::scheduler::tests::test_idempotent_completion_when_already_finalized ... ok
+test cron::scheduler::tests::test_execute_job_suppresses_delivery_for_silent_and_empty_output ... ok
+test cron::scheduler::tests::test_fan_out_dispatches_each_destination_to_its_own_channel ... ok
+test cron::store::tests::origin_without_discord_home_falls_back_to_slack_home_and_bare_slack_token_resolves ... ok
+test cron::store::tests::parses_cron_script_timeout_secs_from_env ... ok
+test cron::store::tests::parses_full_job_and_resolves_origin_delivery ... ok
+test cron::store::tests::parses_job_timeout_overrides ... ok
+test cron::scheduler::tests::test_mirror_cron_delivery_to_session ... ok
+test cron::scheduler::tests::test_register_with_id_updates_session_key_on_conflict ... ok
+test cron::store::tests::resolves_cron_script_timeout_with_overrides_and_fallbacks ... ok
+test cron::store::tests::slack_home_from_payload_keys_object_or_env ... ok
+test cron::store::tests::supports_interval_and_one_shot_schedules ... ok
+test cron::scheduler::tests::test_repeat_times_disables_job_after_limit_reached ... ok
+test agent::omo_daemon::tests::daemon_owned_by_a_live_process_is_not_reclaimed ... ok
+test agent::omo_daemon::tests::daemon_exiting_child_is_restarted_past_the_old_budget ... ok
+test cron::scheduler::tests::test_resolve_predecessor_output_from_db_and_disk ... ok
+test cron::scheduler::tests::test_thread_destination_parse_and_deliver ... ok
+test cron::store::tests::imports_timezone_and_rejects_invalid_schedule ... ok
+test cron::store::tests::prune_rejects_retention_that_overflows_instead_of_panicking ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::clear_for_bot_reports_only_real_removals ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::coalesce_preserves_author_reference_and_origin ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::dead_target_classification_is_channel_scoped ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::dead_target_peek_does_not_consume_probe_slot ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::final_stream_with_bad_media_keeps_text_and_does_not_repost_on_retry ... ok
+test cron::store::tests::notepad_total_quota_holds_under_concurrent_writers ... ok
+test cron::store::tests::missing_hermes_store_warns_once_per_absence ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::media_directive_requires_boundary_and_uppercase ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::media_path_rejects_cwd_and_secret_files ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::owner_dm_and_edit_content_fit_discord_limits ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::react_with_non_numeric_channel_errors_instead_of_panicking ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::receive_watchdog_tracks_each_client_separately ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::send_message_missing_media_still_delivers_text ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::send_message_strips_reasoning_before_delivery ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::send_message_unauthorized_media_delivers_text_then_errors_without_upload ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::send_message_with_media_lookalike_prose_is_delivered ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::slow_placeholder_send_does_not_block_other_streams ... ok
+test cron::store::tests::prunes_only_old_terminal_cron_runs ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::upload_file_refuses_secret_bearing_files ... ok
+test discord::adapter::receive_watchdog_tests::restart_decision_below_threshold_never_restarts ... ok
+test discord::adapter::receive_watchdog_tests::restart_decision_healthy_runner_restarts_at_ceiling ... ok
+test discord::adapter::receive_watchdog_tests::restart_decision_healthy_runner_skips_until_ceiling ... ok
+test discord::adapter::receive_watchdog_tests::restart_decision_unhealthy_runner_restarts_at_threshold ... ok
+test discord::adapter::receive_watchdog_tests::threshold_defaults_to_1200 ... ok
+test discord::adapter::receive_watchdog_tests::threshold_env_override_applies ... ok
+test discord::adapter::receive_watchdog_tests::threshold_invalid_value_falls_back_to_default ... ok
+test discord::adapter::receive_watchdog_tests::threshold_zero_disables_watchdog ... ok
+test discord::adapter::tests::approval_dead_target_refuses_delivery ... ok
+test discord::adapter::tests::coalesce_empty_returns_none ... ok
+test discord::adapter::tests::coalesce_multiple_split_messages_concatenates_contents_and_unions_attachments ... ok
+test discord::adapter::tests::coalesce_single_message_preserves_event ... ok
+test discord::adapter::tests::compose_reply_context_caps_at_500_chars ... ok
+test discord::adapter::tests::compose_reply_context_empty_body ... ok
+test discord::adapter::tests::compose_reply_context_empty_referenced_content ... ok
+test discord::adapter::tests::compose_reply_context_standard ... ok
+test cron::store::tests::synchronization_does_not_rearm_completed_one_shot ... ok
+test cron::ack::tests::timeout_kills_grandchildren_of_the_ack_shell ... ok
+test discord::adapter::tests::discord_stream_delivers_only_completed_content ... ok
+test agent::omo_daemon::tests::daemon_external_takeover_is_untouched ... ok
+test cron::store::tests::synchronization_does_not_rearm_completed_repeat_times ... ok
+test discord::adapter::tests::test_approval_reason_and_command_truncation ... ok
+test discord::adapter::tests::test_build_approval_embed_and_content ... ok
+test discord::adapter::tests::test_build_approval_mentions ... ok
+test discord::adapter::tests::test_build_voice_metadata ... ok
+test cron::store::tests::synchronization_preserves_scheduler_last_occurrence ... ok
+test discord::adapter::tests::test_dead_target_registry_clear_all ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::table_upload_failure_falls_back_to_original_markdown ... ok
+test cron::store::tests::synchronization_preserves_scheduler_advanced_next_run ... ok
+test discord::adapter::tests::test_derive_forum_post_title ... ok
+test discord::adapter::tests::test_egress_approval_message_tracking_map ... ok
+test discord::adapter::tests::test_extract_forwarded_snapshots ... ok
+test discord::adapter::tests::test_extract_media_directives_mixed_with_text ... ok
+test discord::adapter::tests::test_extract_media_directives_multiple_and_wrapped ... ok
+test discord::adapter::tests::test_extract_media_directives_nonexistent_paths_returned ... ok
+test discord::adapter::tests::test_extract_media_directives_plain_text_unchanged ... ok
+test discord::adapter::tests::test_extract_media_directives_single ... ok
+test discord::adapter::tests::test_extract_media_directives_strips_audio_directives ... ok
+test discord::adapter::tests::test_format_channel_context_collapses_multiline ... ok
+test discord::adapter::tests::test_format_channel_context_empty_and_whitespace ... ok
+test discord::adapter::tests::test_format_channel_context_line_truncation ... ok
+test discord::adapter::tests::test_format_channel_context_standard ... ok
+test discord::adapter::tests::test_format_channel_topic_context ... ok
+test discord::adapter::tests::test_format_runtime_footer_and_append ... ok
+test discord::adapter::tests::test_is_silence_response_negative_cases ... ok
+test discord::adapter::tests::test_is_silence_response_positive_cases ... ok
+test discord::adapter::tests::test_is_voice_audio_file ... ok
+test discord::adapter::tests::test_should_advance_cursor_logic ... ok
+test discord::adapter::tests::test_should_chunk_reference ... ok
+test discord::adapter::tests::test_unauthorized_dm_allowlist_default_matrix ... ok
+test cron::store::tests::synchronization_skips_gateway_lifecycle_violators ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::backfill_replay_of_text_stop_is_not_routed_as_a_prompt ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::bot_cursor_update_is_monotonic_under_immediate_transaction ... ok
+test discord::adapter::tests::typing_refresh_rate_limits_per_channel ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::lane_owner_reply_with_moved_thread_owner_falls_through ... ok
+test discord::adapter::tests::debouncer_cancel_discards_pending_chunks ... ok
+test discord::approval::tests::approval_lifecycle_cleans_all_surfaces_and_isolates_bots ... ok
+test discord::adapter::fix_r5_discord_adapter_tests::live_routing_advances_the_bot_cursor_backfill_reads ... ok
+test discord::adapter::tests::test_dead_target_registry_lifecycle_and_ttl ... ok
+test discord::approval::tests::approval_lifecycle_drop_cleans_pending ... ok
+test discord::approval::tests::decision_is_not_delayed_by_a_hanging_expiry_edit ... ok
+test discord::approval::tests::test_always_approval_cache_applies_globally ... ok
+test discord::approval::tests::test_is_approval_custom_id ... ok
+test discord::approval::tests::test_parse_custom_id_round_trip ... ok
+test discord::approval::tests::approval_display_redacts_credentials_without_changing_execution ... ok
+test discord::adapter::tests::steer_claimed_event_injects_into_active_turn_and_falls_back_when_idle ... ok
+test discord::approval::tests::test_resolve_custom_id_unknown_uuid ... ok
+test discord::approval::tests::test_resolve_session_deny_with_reason ... ok
+test discord::adapter::tests::steer_claimed_event_ledger_failure_after_steer_still_reports_steered ... ok
+test discord::adapter::tests::test_channel_cursor_persistence_roundtrip ... ok
+test discord::approval::tests::test_session_approval_cache_suppresses_repeat_prompts ... ok
+test discord::approval::tests::test_wait_with_heartbeat_fires_periodically_and_stops_on_resolve ... ok
+test discord::adapter::tests::thread_archive_and_unarchive_write_state_json_metadata ... ok
+test discord::attachments::tests::cache_prune_removes_only_stale_files ... ok
+test discord::attachments::tests::test_is_text_attachment_by_content_type ... ok
+test discord::attachments::tests::test_is_text_attachment_by_extension_and_name ... ok
+test discord::attachments::tests::test_is_voice_attachment_detection ... ok
+test discord::attachments::tests::wav_decoder_clamps_streamed_data_size ... ok
+test discord::attachments::tests::wav_decoder_rejects_non_16_bit_or_non_pcm ... ok
+test discord::attachments::tests::wav_decoder_skips_pad_byte_after_odd_sized_chunk ... ok
+test discord::buttons::tests::empty_allow_list_authorizes_nobody ... ok
+test discord::buttons::tests::executed_interaction_lru_deduplicates_and_evicts_oldest ... ok
+test discord::buttons::tests::failed_acknowledgement_does_not_claim_interaction_for_execution ... ok
+test discord::adapter::tests::test_decide_unauthorized_dm_throttling ... ok
+test discord::buttons::tests::loads_only_the_requested_namespace ... ok
+test discord::buttons::tests::long_output_is_trimmed_to_a_discord_message ... ok
+test discord::buttons::tests::nonterminal_done_label_keeps_clicked_button_enabled ... ok
+test discord::buttons::tests::parses_well_formed_custom_ids ... ok
+test discord::buttons::tests::rebuild_disables_action_buttons_but_keeps_links ... ok
+test discord::buttons::tests::rejects_malformed_custom_ids ... ok
+test discord::buttons::tests::reports_failure_output_for_retry ... ok
+test discord::buttons::tests::restore_keeps_originally_disabled_buttons_disabled ... ok
+test discord::approval::tests::test_yolo_toggle_and_auto_approval ... ok
+test discord::commands::pairing_operator_tests::configured_owner_is_a_pairing_operator ... ok
+test discord::buttons::tests::runs_command_with_action_arg_and_cleared_environment ... ok
+test discord::commands::tests::compression_window_is_bounded_but_keeps_at_least_one_row ... ok
+test discord::commands::tests::fix_commands_compress_aborts_on_stream_errors ... ok
+test discord::commands::tests::fix_commands_skill_search_reply_is_chunked ... ok
+test discord::approval::tests::test_requester_heartbeat_invoked_during_approval_wait ... ok
+test discord::adapter::tests::thread_delete_removes_omo_thread_id_from_state_json ... ok
+test discord::adapter::tests::thread_delete_stops_running_turn_keyed_like_inbound_thread_message ... ok
+test discord::commands::tests::pending_write_actions_are_classified_for_ephemeral_defer ... ok
+test discord::adapter::tests::debouncer_coalesces_rapid_events_and_routes_single_event ... ok
+test discord::commands::tests::skill_pending_writes_are_operator_only ... ok
+test discord::commands::tests::synthetic_command_events_carry_no_platform_message_id ... ok
+test discord::commands::tests::test_all_commands_count ... ok
+test discord::commands::tests::test_calculate_compression_stats ... ok
+test discord::approval::tests::approval_caches_are_bounded ... ok
+test discord::approval::tests::approve_always_persists_before_publishing_and_fails_closed ... ok
+test discord::commands::tests::test_fallback_summary_and_prompt_builder ... ok
+test discord::commands::tests::test_format_steer_prompt ... ok
+test discord::commands::tests::test_is_thread_detection ... ok
+test discord::commands::tests::test_preview_text ... ok
+test discord::approval::tests::test_permanent_allowlist_persistence_roundtrip_and_auto_approval ... ok
+test discord::approval::tests::revoked_precedent_drops_cached_grant_and_deny_is_not_overwritten ... ok
+test discord::approval::tests::test_twin_bot_same_dm_yolo_restoration ... ok
+test discord::approval::tests::test_yolo_persistence_roundtrip_and_restart ... ok
+test discord::commands::tests::fix_commands_retry_refused_route_preserves_history ... ok
+test agent::omo_daemon::tests::force_restart_replaces_the_owned_daemon_and_throttles ... ok
+test discord::commands::tests::pending_owner_can_download_apply_and_reject_memory ... ok
+test discord::commands::tests::fix_commands_yolo_reaches_live_actor ... ok
+test discord::commands::tests::pending_review_preserves_session_kind_and_full_payload ... ok
+test discord::commands::tests::retry_rollback_restores_platform_message_id_and_concurrent_rows ... ok
+test discord::commands::tests::test_compress_db_replacement ... ok
+test discord::commands::tests::test_retry_query_and_cleanup ... ok
+test discord::commands::tests::test_compress_preserves_messages_arriving_after_snapshot ... ok
+test discord::buttons::tests::kills_command_after_timeout ... ok
+test discord::commands::tests::test_undo_last_exchange_empty_db ... ok
+test discord::commands::tests::test_undo_last_exchange_full_cycle ... ok
+test discord::pairing::tests::test_code_format_and_normalization ... ok
+test discord::pairing::tests::test_generate_raw_code_alphabet_and_length ... ok
+test discord::pairing::tests::notification_rows_are_pruned_by_window_and_by_pairing ... ok
+test discord::pairing::tests::operator_typos_do_not_invalidate_pending_codes_after_lockout ... ok
+test discord::session_commands::tests::test_owner_allowed ... ok
+test discord::session_commands::tests::test_reply_ephemeral ... ok
+test discord::pairing::tests::pairing_preserves_lockout_across_fresh_requests ... ok
+test discord::table_render::tests::fallback_text_fences_original_tables ... ok
+test discord::pairing::tests::pairing_throttles_notifications_and_preserves_lockout ... ok
+test discord::table_render::tests::malformed_rows_keep_raw_text ... ok
+test discord::table_render::tests::escaped_pipes_and_code_span_pipes_stay_in_one_cell ... ok
+test discord::table_render::tests::test_extract_markdown_tables ... ok
+test discord::table_render::tests::test_render_table_to_svg_and_png ... ok
+test discord::pairing::tests::pairing_throttles_notifications_on_repeated_rejected_dm ... ok
+test discord::throttler::tests::final_update_is_delivered_even_when_typing_fails ... ok
+test discord::throttler::tests::test_chunk_markdown_pagination_multi_chunk_headers ... ok
+test discord::throttler::tests::test_chunk_markdown_pagination_preserves_code_fences ... ok
+test discord::throttler::tests::test_chunk_markdown_pagination_single_chunk_no_header ... ok
+test discord::throttler::tests::test_truncate_live_preview_empty_and_short ... ok
+test discord::throttler::tests::test_chunk_markdown_unpaginated_skips_headers ... ok
+test drain_control::tests::clearing_an_absent_marker_is_not_an_error ... ok
+test drain_control::tests::drain_marker_expiry_is_lenient_and_bounded ... ok
+test drain_control::tests::drain_marker_expiry_local_surface ... ok
+test drain_control::tests::drain_marker_process_helper ... ok
+test drain_control::tests::failed_marker_commit_leaves_no_temp_file ... ok
+test drain_control::tests::missing_marker_reads_as_not_draining ... ok
+test drain_control::tests::test_marker_epoch_validation_fresh_vs_stale ... ok
+test drain_control::tests::test_validate_marker_content ... ok
+test drain_control::tests::test_write_and_clear_drain_request_roundtrip ... ok
+test drain_control::tests::unreadable_drain_marker_is_treated_as_draining ... ok
+test inbox::digest::tests::digest_job_is_never_attached_to_the_session_transcript ... ok
+test discord::pairing::tests::slack_store_pairs_string_ids_into_its_own_table ... ok
+test inbox::digest::tests::slack_channel_thread_or_foreign_user_is_rejected ... ok
+test inbox::digest::tests::slack_owner_dm_is_a_valid_home_and_sets_origin_platform ... ok
+test inbox::prefilter::tests::rules_files_without_slack_fields_load_with_defaults ... ok
+test inbox::prefilter::tests::slack_keeps_dm_mention_and_owner_reply_and_drops_the_rest ... ok
+test inbox::proposals::fix_r5_tests::display_shows_repo_route ... ok
+test inbox::proposals::fix_r5_tests::owner_text_is_bounded_below_discord_limit ... ok
+test inbox::sources::github::tests::api_urls_become_web_links ... ok
+test inbox::sources::github::tests::baseline_then_merge_emits_once ... ok
+test inbox::sources::github::tests::kill_switch_defaults_off ... ok
+test discord::pairing::tests::slack_lockout_is_separate_from_discord ... ok
+test inbox::sources::run_json_tests::dropped_run_json_future_kills_hung_child ... ok
+test drain_control::tests::drain_marker_cross_process_epoch ... ok
+test inbox::watchers::nonblocking_tests::event_drain_does_not_block_on_full_progress_channel ... ok
+test inbox::watchers::nonblocking_tests::gateway_message_collects_discord_and_slack_sources ... ok
+test inbox::watchers::nonblocking_tests::on_gateway_message_returns_promptly_when_channel_full ... ok
+test judge::tests::breaker_trigger_matches_status_tokens_not_substrings ... ok
+test discord::pairing::tests::pairing_bounded_pending_count_and_expiry_cleanup ... ok
+test judge::tests::non_trigger_failures_do_not_reset_the_breaker_streak ... ok
+test judge::tests::state_temp_file_is_owner_only ... ok
+test judge::tests::success_still_clears_the_breaker_streak ... ok
+test discord::pairing::tests::test_atomic_concurrent_approval_single_claim ... ok
+test discord::pairing::tests::test_atomic_concurrent_failed_attempts_lockout ... ok
+test lanes::cli::tests::database_url_must_be_explicit ... ok
+test discord::pairing::tests::test_atomic_concurrent_notifications_single_send_decision ... ok
+test lanes::discord_threads::tests::creation_metadata_subprocess_helper ... ignored, invoked by creation_metadata_scrubs_configured_hosts_in_isolation
+test lanes::discord_threads::tests::qa_gaps_loopback_base_accepts_local_origins ... ok
+test lanes::discord_threads::tests::qa_gaps_loopback_base_rejects_nonlocal_or_ambiguous_origins ... ok
+test lanes::discord_threads::tests::test_ascii_100_char_cap ... ok
+test lanes::discord_threads::tests::test_korean_unicode_char_boundary_cap ... ok
+test lanes::discord_threads::tests::test_live_discord_thread_lifecycle_qa_scenario ... ignored, requires live Discord bot token and DISCORD_HOME_CHANNEL
+test lanes::discord_threads::tests::test_prefix_replace_all_statuses ... ok
+test lanes::discord_threads::tests::test_prefix_variations_and_whitespace ... ok
+test lanes::discord_threads::tests::test_strip_status_prefix ... ok
+test lanes::discord_threads::tests::test_thread_status_conversion_from_lane_status ... ok
+test lanes::discord_threads::tests::test_token_parsing_logic ... ok
+test lanes::guard::tests::helper_hung_child_process ... ignored
+test lanes::guard::tests::test_can_launch_hold_at_7_active_lanes ... ok
+test lanes::guard::tests::test_can_launch_hold_at_disk_10_gb ... ok
+test lanes::guard::tests::test_can_launch_hold_at_mem_10_pct ... ok
+test lanes::guard::tests::test_can_launch_no_hold_at_load_300_alone ... ok
+test lanes::guard::tests::test_fake_active_lane_counter ... ok
+test lanes::guard::tests::test_guard_watcher_memory_and_disk_alerts ... ok
+test lanes::guard::tests::test_guard_watcher_transition_only_reporting ... ok
+test lanes::guard::tests::test_heavy_slot_raii_release_on_cancellation ... ok
+test lanes::guard::tests::test_live_sample_disk_hold_failure ... ignored
+test lanes::guard::tests::test_live_sample_printing_real_numbers ... ignored
+test discord::table_render::tests::fences_and_unbroken_cells_preserve_content ... ok
+test lanes::guard::tests::test_parsers_loadavg_mem_df ... ok
+test lanes::guard::tests::test_parsers_malformed_metric_inputs ... ok
+test lanes::guard::tests::test_slot_takeover_when_holder_pid_is_dead ... ok
+test lanes::guard::tests::zero_heavy_slots_is_clamped_instead_of_waiting_forever ... ok
+test lanes::guard::tests::test_metric_subprocess_timeout_probe ... ok
+test discord::pairing::tests::test_pairing_expiry_and_lockout ... ok
+test lanes::kibitzer::tests::decision_json_in_a_whole_reply_fence_is_accepted ... ok
+test lanes::discord_threads::tests::creation_metadata_scrubs_configured_hosts_in_isolation ... ok
+test lanes::kibitzer::tests::lead_must_be_an_owner_home_dm_on_discord_or_slack ... ok
+test discord::pairing::tests::test_atomic_concurrent_issuance_and_capacity ... ok
+test discord::table_render::tests::table_source_span_and_fence_controls ... ok
+test discord::commands::tests::yolo_toggle_matches_effective_state_across_reset_and_restart ... ok
+test discord::pairing::tests::test_pairing_lifecycle_and_approval ... ok
+test inbox::sources::slack::tests::collect_all_commits_slack_items_through_prefilter ... ok
+test lanes::cli::tests::caller_session_resolves_the_conversation_bound_to_the_agent_session ... ok
+test inbox::digest::tests::executor_guard_accepts_registered_slack_digest ... ok
+test lanes::cli::tests::claim_evidence_cannot_forge_the_reopen_generation_marker ... ok
+test lanes::scrub::tests::test_empty_string ... ok
+test inbox::sources::slack::tests::collects_dm_mention_and_owner_thread_reply_only ... ok
+test lanes::scrub::tests::test_home_dir_regex_does_not_rewrite_url_paths ... ok
+test lanes::scrub::tests::test_preserves_benign_text ... ok
+test lanes::scrub::tests::test_idempotence ... ok
+test lanes::scrub::tests::test_redacts_an_unterminated_private_key_and_scrubs_file_urls_and_dotted_users ... ok
+test lanes::scrub::tests::test_redacts_fake_gh_token_36_chars ... ok
+test lanes::scrub::tests::test_redacts_pkcs8_and_rsa_private_key_blocks ... ok
+test lanes::scrub::tests::test_redacts_security_approval_display_credentials ... ok
+test lanes::scrub::tests::test_scrubs_home_directory_and_private_paths ... ok
+test lanes::scrub::tests::test_redacts_tokens_openai_anthropic_slack_jwt_keys ... ok
+test lanes::scrub::tests::test_scrubs_literal_dollar_home ... ok
+test lanes::scrub::tests::test_scrubs_paths_with_korean_text ... ok
+test lanes::settle::tests::cwd_and_descendants_do_not_query_creation_metadata ... ok
+test lanes::settle::tests::deliverable_drops_operating_rules_and_keeps_the_change ... ok
+test lanes::settle::tests::deliverable_keeps_sentences_that_only_contain_a_process_word_as_a_substring ... ok
+test lanes::settle::tests::external_selection_uses_creation_time_not_modification_time ... ok
+test lanes::scrub::tests::test_scrubs_hostnames_from_omon_scrub_hosts ... ok
+test lanes::kibitzer::tests::arm_owner_is_a_no_op_before_the_state_table_exists ... ok
+test judge::tests::daily_cap_counts_calls_made_by_other_instances ... ok
+test lanes::signals::tests::apostrophe_in_a_path_does_not_swallow_the_next_signal ... ok
+test lanes::signals::tests::helper_signals_hung_child ... ignored
+test lanes::signals::tests::read_tail_keeps_only_the_last_bytes_of_unbounded_output ... ok
+test lanes::signals::tests::secret_env_names_are_recognised ... ok
+test lanes::signals::tests::test_command_caller_cancellation_cleans_up_child ... ok
+test lanes::kibitzer::tests::armed_generation_is_admitted_under_an_advancing_clock ... ok
+test lanes::signals::tests::test_command_execution_behavior_and_constraints ... ok
+test lanes::signals::tests::test_command_failure_detail_keeps_bounded_output_tail ... ok
+test lanes::kibitzer::tests::judge_failure_keeps_generation_armed ... ok
+test lanes::kibitzer::tests::state_document_keeps_owner_dms_inside_the_judge_cap ... ok
+test lanes::signals::tests::test_command_timeout_and_process_cleanup ... ok
+test lanes::signals::tests::test_file_signal_checks ... ok
+test lanes::signals::tests::test_json_path_navigation ... ok
+test lanes::signals::tests::test_parse_ok_all_kinds ... ok
+test lanes::signals::tests::test_parse_quoted_regex_and_nested_json_options ... ok
+test lanes::signals::tests::test_parse_rejects ... ok
+test lanes::signals::tests::test_real_gh_merged_and_open_prs ... ignored
+test lanes::signals::tests::test_url_local_listener ... ok
+test lanes::slack_threads::tests::close_posts_final_reply_and_reopen_is_a_no_op ... ok
+test lanes::slack_threads::tests::create_posts_starter_to_parent_and_returns_root_ref ... ok
+test lanes::slack_threads::tests::delete_thread_removes_the_starter ... ok
+test lanes::posts::tests::held_edit_is_recorded_uncertain_without_a_duplicate_send ... ok
+test lanes::signals::tests::test_command_timeout_kills_whole_process_group ... ok
+test lanes::slack_threads::tests::lazy_bot_id_comes_from_auth_test_once ... ok
+test lanes::settle::tests::prunable_worktree_registration_does_not_block_verification ... ok
+test lanes::slack_threads::tests::refs_and_parents_parse_only_slack_shapes ... ok
+test lanes::slack_threads::tests::router_sends_slack_refs_to_slack_and_refuses_missing_discord ... ok
+test lanes::slack_threads::tests::post_is_threaded_converted_and_never_pings ... ok
+test lanes::slack_threads::tests::status_prefix_is_replaced_in_unicode_and_shortcode_form ... ok
+test lanes::slack_threads::tests::status_edit_maps_message_not_found_to_false ... ok
+test lanes::slack_threads::tests::status_rewrites_starter_emoji_and_swaps_reaction ... ok
+test lanes::posts::tests::held_rename_is_skipped_and_status_still_posts ... ok
+test lanes::settle::tests::lane_in_a_subdirectory_still_sees_its_added_file ... ok
+test lanes::settle::tests::oversize_file_is_skipped_and_later_files_still_reach_the_diff ... ok
+test lanes::runner::activity_generation_tests::interrupted_restoration_without_a_worktree_rolls_back_to_removed ... ok
+test lanes::runner::activity_generation_tests::old_third_error_cannot_fail_reopened_lane ... ok
+test lanes::state::tests::test_force_reason_boundary ... ok
+test lanes::signals::tests::test_fake_gh_and_npm ... ok
+test lanes::runner::activity_generation_tests::parked_owner_reply_notifies_the_lead_once ... ok
+test lanes::state::tests::test_status_display_and_parse_roundtrip ... ok
+test lanes::state::tests::test_table_driven_all_status_pairs_allowed_rejected ... ok
+test lanes::runner::activity_generation_tests::stale_fallback_preserves_new_durable_binding ... ok
+test lanes::slack_threads::tests::owner_reply_in_a_closed_lane_thread_is_consumed ... ok
+test lanes::slack_threads::tests::drain_delivers_queued_post_into_the_slack_thread ... ok
+test lanes::state::tests::test_db_full_valid_cycle ... ok
+test lanes::state::tests::test_concurrent_cas_preserves_engine ... ok
+test lanes::state::tests::test_concurrent_cas_distinct_targets_barrier ... ok
+test migrate::config_import::tests::dedupes_profile_tokens_in_stable_order_and_strips_quotes ... ok
+test migrate::config_import::tests::dotenv_existing_assignments_reload_special_values ... ok
+test migrate::config_import::tests::dotenv_raw_documents_round_trip ... ok
+test migrate::config_import::tests::dotenv_round_trip_special_values ... ok
+test migrate::config_import::tests::dry_run_returns_masked_diff_and_performs_zero_writes ... ok
+test migrate::config_import::tests::env_parser_ignores_comments_and_uses_last_value_in_a_file ... ok
+test migrate::config_import::tests::existing_discord_tokens_survive_when_hermes_supplies_none ... ok
+test migrate::config_import::tests::imported_values_round_trip_through_runtime_environment_parsing ... ok
+test migrate::config_import::tests::imports_effective_discord_policy ... ok
+test migrate::config_import::tests::malformed_hermes_root_path_is_typed_and_never_writes_target ... ok
+test migrate::config_import::tests::malformed_yaml_is_typed_and_never_writes_target ... ok
+test migrate::config_import::tests::merges_into_existing_env_and_backs_up_original ... ok
+test migrate::config_import::tests::omits_missing_and_empty_values ... ok
+test migrate::config_import::tests::profile_access_control_never_imported_globally ... ok
+test migrate::config_import::tests::profile_approval_mode_never_overrides_root_config ... ok
+test migrate::config_import::tests::root_scalar_values_win_over_profile_fallbacks ... ok
+test migrate::config_import::tests::routes_claude_model_to_anthropic_and_maps_runtime_keys ... ok
+test migrate::config_import::tests::routes_non_claude_custom_provider_to_openai_compatible_keys ... ok
+test lanes::state::tests::test_db_forced_prefix_and_boundary_tests_real_sqlite ... ok
+test lanes::signals::tests::test_command_timeout_override ... ok
+test lanes::state::tests::test_db_all_64_status_pairs_allowed_and_rejected_history_unchanged ... ok
+test lanes::state::tests::test_disk_sqlite_manual_runtime_working_to_verified_done_and_cycle_cleanup ... ok
+test lanes::state::tests::test_malformed_unknown_status_in_db ... ok
+test lanes::state::tests::test_manual_runtime_working_to_verified_done_error_with_history_unchanged ... ok
+test ledger::service::tests::legacy_unstamped_obligation_with_current_pid_is_not_skipped_forever ... ok
+test ledger::service::tests::failed_batch_is_reclaimed_and_seen_constituent_does_not_drop_the_rest ... ok
+test migrate::cron_cutover::tests::stale_store_state_is_rejected_before_backup ... ok
+test ledger::service::tests::recovery_continues_past_one_failing_obligation_and_reports_the_error ... ok
+test ledger::service::tests::test_obligation_lifecycle_transitions ... ok
+test migrate::gateway_down::tests::alive_pids_terminate_then_escalate_only_when_still_alive ... ok
+test migrate::gateway_down::tests::dry_run_reports_intended_actions_with_zero_side_effects ... ok
+test migrate::gateway_down::tests::every_matching_plist_is_booted_out_then_renamed_disabled ... ok
+test migrate::gateway_down::tests::failed_bootout_preserves_files_and_never_signals ... ok
+test migrate::gateway_down::tests::kill_timeout_preserves_lock_and_is_bounded ... ok
+test migrate::gateway_down::tests::malformed_locks_refuse_before_side_effects ... ok
+test migrate::gateway_down::tests::matching_start_wrong_live_command_never_signaled ... ok
+test memory::store::tests::search_skips_a_memory_with_corrupt_metadata ... ok
+test migrate::gateway_down::tests::not_loaded_bootout_is_success_and_plist_is_still_disabled ... ok
+test migrate::gateway_down::tests::pid_alive_after_bounded_wait_is_killed ... ok
+test migrate::gateway_down::tests::pid_that_dies_during_bounded_wait_is_not_killed ... ok
+test migrate::gateway_down::tests::reused_pid_during_term_wait_never_receives_kill ... ok
+test migrate::gateway_down::tests::service_unloads_before_verified_signals_and_delayed_kill_exit ... ok
+test migrate::gateway_down::tests::stale_pid_lock_is_removed_and_disabled_plists_remain_a_no_op ... ok
+test migrate::gateway_down::tests::stale_pid_never_signaled ... ok
+test migrate::gateway_down::tests::unknown_or_conflicting_identity_never_authorizes_signals ... ok
+test migrate::gateway_down::tests::valid_and_invalid_gateway_command_lines ... ok
+test migrate::sys::tests::fake_clock_is_injectable ... ok
+test migrate::sys::tests::fake_filesystem_write_read_rename_and_exists_are_coherent ... ok
+test migrate::sys::tests::fake_read_only_path_rejects_writes ... ok
+test migrate::sys::tests::fake_records_process_and_launchctl_calls_without_os_env ... ok
+test migrate::sys::tests::os_env_reads_self_command_line ... ok
+test migrate::sys::tests::subprocess_injected_notifier_failure_kills_and_reaps_child_without_hang ... ok
+test migrate::sys::tests::subprocess_simultaneous_large_stdout_stderr_does_not_deadlock ... ok
+test ledger::service::tests::test_sweep_recoverable_selection_and_pruning ... ok
+test migrate::cron_cutover::fix_r5_tests::store_changed_after_snapshot_settles_receipt_and_restores_authority ... ok
+test migrate::cron_cutover::tests::alias_store_locks_deduplicate_safely ... ok
+test migrate::cron_cutover::tests::dry_run_reports_unverified_jobs_and_performs_zero_writes ... ok
+test migrate::cron_cutover::tests::backup_bytes_equal_the_pre_delete_store ... ok
+test migrate::cron_cutover::tests::malformed_store_returns_typed_error_and_performs_no_writes ... ok
+test migrate::sys::tests::subprocess_timeout_kills_and_reaps_owned_child ... ok
+test migrate::cron_cutover::tests::profiles_are_discovered_from_the_profiles_directory ... ok
+test models::events::tests::constructs_inbound_message_with_attachment ... ok
+test models::events::tests::emoji_by_outcome_selection ... ok
+test models::events::tests::filter_intent_gate_removes_routing_line ... ok
+test models::events::tests::format_inlined_text_delimiters ... ok
+test models::events::tests::render_user_prompt_inlines_text_content ... ok
+test models::events::tests::render_user_prompt_labels_voice_message ... ok
+test models::events::tests::serializes_and_deserializes_react_outbound_action ... ok
+test models::events::tests::serializes_tagged_outbound_action ... ok
+test models::events::tests::stream_chunk_round_trips_through_an_action ... ok
+test models::events::tests::test_format_message_timestamp ... ok
+test models::events::tests::test_strip_leading_message_timestamps ... ok
+test models::events::tests::test_timestamp_strip_format_idempotency ... ok
+test models::messenger_policy::tests::normalization_bounds_operation_limits ... ok
+test models::session::tests::bot_identity_partitions_discord_sessions_without_breaking_legacy_keys ... ok
+test models::session::tests::derives_stable_key_from_every_routing_dimension ... ok
+test models::session::tests::deserializes_pre_identity_session_keys ... ok
+test models::session::tests::differentiates_absent_values_and_separator_like_content ... ok
+test models::session::tests::dm_session_key_includes_user_and_guild_session_key_excludes_user ... ok
+test models::session::tests::storage_key_parser_rejects_malformed_inputs ... ok
+test models::session::tests::storage_key_strict_inverse_round_trip ... ok
+test models::session::tests::supports_hash_based_session_lookup_and_serde_round_trip ... ok
+test migrate::cron_cutover::tests::rerun_on_empty_store_creates_no_second_backup ... ok
+test migrate::cron_cutover::tests::reconcile_refuses_unknown_store_state_without_destroying_source ... ok
+test migrate::cron_cutover::tests::unimported_job_returns_typed_error_without_changing_store ... ok
+test migrate::cron_cutover::tests::verified_jobs_are_backed_up_then_atomically_emptied ... ok
+test mirror::tests::channel_lookup_does_not_fall_back_to_thread_session ... ok
+test mirror::tests::cron_briefings_are_handed_to_the_agent_exactly_once ... ok
+test mirror::tests::cron_briefings_survive_malformed_metadata_and_oversize_backlog ... ok
+test mirror::tests::inbox_digest_mirror_rows_are_never_briefed_to_the_agent ... ok
+test mirror::tests::mirror_refuses_wrong_thread_and_ambiguous_bot ... ok
+test mirror::tests::test_find_session_by_origin_precedence ... ok
+test mirror::tests::test_mirror_to_session_role_preservation ... ok
+test multiplexer::actor::tests::actor_load_applies_profile_routes_to_fresh_and_preserves_explicit_model ... ok
+test agent::omo_daemon::tests::daemon_alive_but_unresponsive_is_replaced ... ok
+test multiplexer::actor::tests::actor_queues_turns_in_order_without_cancellation ... ok
+test multiplexer::actor::tests::actor_stop_cancels_active_turn_immediately ... ok
+test multiplexer::actor::tests::actor_steers_active_turn_and_reports_idle_as_not_steered ... ok
+test multiplexer::actor::tests::slack_owner_lead_covers_owner_dm_and_home_channel ... ok
+test multiplexer::actor::tests::slack_ts_predecessor_is_fixed_width ... ok
+test multiplexer::actor::tests::actor_turn_loop_with_scripted_fake_backend ... ok
+test multiplexer::platform_router::tests::both_transports_keep_discord_as_fallback ... ok
+test multiplexer::platform_router::tests::expiry_reaches_every_platform_and_tolerates_one_failure ... ok
+test multiplexer::platform_router::tests::routes_by_platform_and_falls_back ... ok
+test multiplexer::platform_router::tests::slack_only_router_falls_back_to_slack ... ok
+test multiplexer::profile_routing::tests::allowlist_of_guild_scoped_route_is_enforced_with_full_context ... ok
+test multiplexer::profile_routing::tests::negative_ids_are_rejected_instead_of_widening_the_route ... ok
+test multiplexer::profile_routing::tests::one_bad_route_entry_does_not_drop_the_other_routes ... ok
+test multiplexer::profile_routing::tests::test_apply_to_session_populates_fresh_session ... ok
+test multiplexer::profile_routing::tests::test_apply_to_session_preserves_explicitly_set_model ... ok
+test multiplexer::profile_routing::tests::test_disabled_route_is_ignored ... ok
+test multiplexer::profile_routing::tests::test_json_parsing_valid_empty_and_malformed ... ok
+test multiplexer::profile_routing::tests::test_match_session_key_resolution ... ok
+test multiplexer::profile_routing::tests::test_no_match_returns_none ... ok
+test multiplexer::profile_routing::tests::test_parent_channel_fallback_when_thread_route_misses ... ok
+test multiplexer::profile_routing::tests::test_parse_channel_prompts_json ... ok
+test multiplexer::profile_routing::tests::test_precedence_thread_beats_channel_beats_guild ... ok
+test multiplexer::restart_loop_guard::tests::restart_chain_trips_for_slow_cycles ... ok
+test multiplexer::restart_loop_guard::tests::test_clear_removes_state ... ok
+test multiplexer::restart_loop_guard::tests::test_corrupted_json_fails_open ... ok
+test multiplexer::actor::tests::dropped_slack_message_rewinds_its_cursor_to_the_earliest_constituent ... ok
+test multiplexer::restart_loop_guard::tests::test_quiet_gap_prunes_expired_boots ... ok
+test multiplexer::restart_loop_guard::tests::test_sliding_window_trip_logic ... ok
+test multiplexer::actor::tests::failed_recovery_route_keeps_resume_pending_marker ... ok
+test migrate::gateway_down::tests::migration_entry_retires_service_with_real_files_and_database ... ok
+test multiplexer::actor::tests::idle_reset_keeps_profile_toolset_restriction ... ok
+test readiness::tests::backend_probe_defaults_to_omo_appserver_url ... ok
+test readiness::tests::credential_provider_matches_prefixes_not_substrings ... ok
+test readiness::tests::credentials_require_the_models_own_provider_key ... ok
+test readiness::tests::disk_pressure_uses_absolute_headroom ... ok
+test multiplexer::actor::tests::mid_turn_reset_keeps_actor_serving_the_session ... ok
+test readiness::tests::slack_probe_reports_state_without_tokens ... ok
+test multiplexer::actor::tests::mid_turn_reset_does_not_restore_thread_binding_or_mark_resume_pending ... ok
+test readiness::tests::test_credential_probe_model_logic ... ok
+test multiplexer::actor::tests::interrupt_rollback_keeps_steered_user_rows ... ok
+test readiness::tests::test_disk_headroom_calculation ... ok
+test readiness::tests::test_gateway_probe ... ok
+test security::approval_display::tests::preserves_userinfo_delimiter_and_host_path ... ok
+test security::approval_display::tests::redacts_recognized_credentials_and_preserves_benign_text ... ok
+test security::hardline::deny_bypass_tests::system_directory_spellings_are_all_hardline ... ok
+test security::hardline::deny_bypass_tests::wrapper_prefixed_commands_still_trip_a_deny_glob ... ok
+test security::neutralize::tests::test_neutralize_ansi_and_invisible_unicode ... ok
+test security::neutralize::tests::test_neutralize_backticks_and_code_fences ... ok
+test security::neutralize::tests::test_neutralize_benign_inputs ... ok
+test security::neutralize::tests::test_neutralize_injection_sentinels ... ok
+test security::neutralize::tests::test_neutralize_length_bounding ... ok
+test security::neutralize::tests::test_neutralize_newlines_and_sections ... ok
+test security::neutralize::tests::test_neutralize_strips_tag_and_variation_selector_smuggling ... ok
+test multiplexer::actor::tests::mid_turn_set_yolo_survives_turn_completion ... ok
+test security::review_fix_tests::active_substitution_in_echo_printf_grep_is_still_inspected ... ok
+test security::review_fix_tests::deny_glob_with_trailing_star_also_denies_bare_command ... ok
+test security::review_fix_tests::empty_quote_pairs_do_not_hide_hardline_rm ... ok
+test security::review_fix_tests::escaped_quote_does_not_hide_a_substitution ... ok
+test security::review_fix_tests::invisible_chars_cannot_split_a_sentinel ... ok
+test security::review_fix_tests::kill_all_with_trailing_redirect_or_comment_is_hardline ... ok
+test security::review_fix_tests::kill_hardline_requires_pid_minus_one_as_final_operand ... ok
+test security::review_fix_tests::pattern_key_for_ordinary_commands_is_exact ... ok
+test security::review_fix_tests::verification_artifact_exemption_requires_a_plain_path ... ok
+test security::scan::tests::test_scan_cron_prompt_allows_benign_prompts ... ok
+test security::scan::tests::test_scan_cron_prompt_allows_prose_that_resembles_sql ... ok
+test security::scan::tests::test_scan_cron_prompt_catches_malicious_prompts ... ok
+test security::scan::tests::test_zwnj_allowed_between_script_letters_only ... ok
+test security::tests::test_dangerous_categories ... ok
+test multiplexer::actor::tests::mid_turn_set_model_survives_turn_completion ... ok
+test security::tests::test_dangerous_finding_reasons ... ok
+test security::tests::test_grep_isolation_and_benign_commands ... ok
+test security::tests::test_hardline_commands_and_sudo_guard ... ok
+test security::tests::test_match_user_deny_rule ... ok
+test security::tests::test_wildcard_matching ... ok
+test security::tests::test_inline_interpreter_payloads ... ok
+test security::tirith::tests::scanner_schema_actions_follow_failure_policy ... ok
+test security::tirith::tests::scanner_warning_and_invalid_payload_never_silently_pass ... ok
+test security::tirith::tests::test_scanner_fail_open_vs_fail_closed_on_error ... ok
+test security::tirith::tests::test_scanner_verdict_allow ... ok
+test security::tirith::tests::test_scanner_verdict_deny_and_block ... ok
+test sessions::cli::tests::failure_helper_maps_to_control_error_code_2 ... ok
+test sessions::cli::tests::parse_answer_flags ... ok
+test sessions::cli::tests::parse_overview_defaults ... ok
+test sessions::cli::tests::parse_overview_flags ... ok
+test sessions::cli::tests::parse_watch_and_unwatch ... ok
+test sessions::cli::tests::parse_watch_tick ... ok
+test sessions::control::tests::failed_listing_is_not_reported_as_not_running ... ok
+test sessions::control::tests::output_budget_is_per_call ... ok
+test sessions::control::tests::successful_listing_without_the_session_is_not_running ... ok
+test sessions::external::tests::assistant_items_accepts_seq_and_json_encoded_blocks ... ok
+test sessions::external::tests::error_streak_needs_both_count_and_elapsed_time ... ok
+test sessions::external::tests::next_cursor_prefers_highest_seq_over_paging_cursor ... ok
+test sessions::external::tests::non_text_assistant_entries_are_skipped_not_fatal ... ok
+test sessions::overview::tests::format_detail_renders_state_and_tail ... ok
+test sessions::overview::tests::format_overview_grouping_and_korean_counts ... ok
+test sessions::overview::tests::format_overview_idle_overflow_and_unreachable_host ... ok
+test sessions::overview::tests::format_overview_max_chars_respected_for_200_sessions ... ok
+test sessions::overview::tests::format_overview_question_rendering_with_options ... ok
+test sessions::overview::tests::short_id_distinguishes_sessions_sharing_a_time_prefix ... ok
+test sessions::overview::tests::state_of_detects_all_states ... ok
+test sessions::probe::tests::remote_probe_runs_ssh_argv_locally_once ... ok
+test sessions::probe::tests::test_answers_for_mapping ... ok
+test sessions::probe::tests::test_argv_local_and_remote ... ok
+test sessions::probe::tests::test_exit_codes_and_timeout ... ok
+test sessions::probe::tests::test_snapshot_parses_json_and_fills_machine ... ok
+test sessions::registry::tests::exit_three_is_reported_as_nothing_answering ... ok
+test sessions::registry::tests::expired_stale_success_keeps_exit_three ... ok
+test sessions::registry::tests::hanging_host_times_out_without_blocking_other_hosts ... ok
+test sessions::registry::tests::hosts_file_round_trips_without_touching_home ... ok
+test sessions::registry::tests::local_and_remote_sessions_merge_and_cache ... ok
+test sessions::registry::tests::option_like_hosts_are_rejected_everywhere ... ok
+test sessions::registry::tests::parse_sessions_extracts_and_serializes_planned_fields ... ok
+test sessions::registry::tests::ssh_host_parser_skips_patterns_and_deduplicates ... ok
+test sessions::registry::tests::strict_json_requires_array_and_session_id ... ok
+test sessions::registry::tests::timeout_serves_marked_stale_success_without_refreshing_age ... ok
+test sessions::registry::tests::timeout_without_stale_success_keeps_exit_three ... ok
+test sessions::status_reply::tests::other_requests_do_not_match ... ok
+test multiplexer::actor::tests::redelivery_of_a_completed_turn_is_still_skipped ... ok
+test sessions::status_reply::tests::owner_identity_and_attachments_gate_interception ... ok
+test multiplexer::router::tests::gc_keeps_evicting_after_one_session_fails_to_flush ... ok
+test sessions::status_reply::tests::short_whole_message_intents_match ... ok
+test sessions::status_reply::tests::slack_home_channel_from_owner_is_a_candidate_owner_thread ... ok
+test sessions::status_reply::tests::stalled_listing_returns_one_line_within_timeout ... ok
+test sessions::watch::tests::blocked_question_tells_owner_to_use_the_terminal ... ok
+test multiplexer::actor::tests::redelivery_of_a_failed_turn_runs_again_instead_of_being_skipped ... ok
+test sessions::watch::tests::question_hint_uses_slack_command_syntax_for_slack_owner_dm ... ok
+test multiplexer::actor::tests::shutdown_drain_fails_queued_plain_event_delivery ... ok
+test multiplexer::actor::tests::turn_terminal_paths_release_typing ... ok
+test security::normalize::variant_budget_tests::pathological_input_cannot_explode_variant_memory ... ok
+test sessions::watch::tests::quiet_hours_parse_and_wrap_midnight ... ok
+test multiplexer::router::tests::mark_in_flight_resume_pending_skips_idle_sessions ... ok
+test multiplexer::router::tests::set_model_patches_only_the_model_and_refuses_corrupt_state ... ok
+test slack::api::tests::auth_test_parses_identity ... ok
+test slack::api::tests::connections_open_uses_app_token ... ok
+test slack::api::tests::download_file_follows_redirect_with_bot_auth ... ok
+test slack::api::tests::download_rejects_oversize_and_html_and_removes_partial_file ... ok
+test slack::api::tests::error_message_never_contains_token ... ok
+test slack::api::tests::info_methods_return_inner_objects ... ok
+test slack::api::tests::ok_false_maps_to_multiplexer_error_with_method_and_code ... ok
+test slack::api::tests::post_ephemeral_sends_user ... ok
+test slack::api::tests::post_message_omits_absent_thread_and_blocks ... ok
+test slack::api::tests::post_message_sends_bearer_json_and_returns_ts ... ok
+test slack::api::tests::post_response_url_sends_json_without_auth ... ok
+test multiplexer::router::tests::set_yolo_waits_out_a_retiring_actor_instead_of_dropping_the_change ... ok
+test slack::api::tests::rate_limit_gives_up_after_three_retries ... ok
+test slack::api::tests::reactions_tolerate_idempotent_codes_only ... ok
+test slack::api::tests::rate_limit_retries_after_header_then_succeeds ... ok
+test slack::api::tests::retry_after_defaults_to_one_second_and_caps_at_thirty ... ok
+test slack::api::tests::read_methods_send_form_fields_because_slack_ignores_json_there ... ok
+test slack::api::tests::upload_file_runs_three_step_external_flow ... ok
+test slack::backfill::tests::replay_event_marks_channel_mentions_and_dms ... ok
+test slack::api::tests::upload_file_defaults_title_to_filename_and_fails_on_upload_error ... ok
+test slack::buttons::tests::button_value_reads_value_or_action_id_with_prefix ... ok
+test slack::buttons::tests::executed_action_lru_deduplicates_and_evicts_oldest ... ok
+test slack::buttons::tests::failed_command_restores_buttons_and_reports_retry ... ok
+test slack::buttons::tests::locked_rebuild_keeps_links_and_shows_label ... ok
+test slack::buttons::tests::nonterminal_action_keeps_buttons_clickable ... ok
+test slack::buttons::tests::nonterminal_rebuild_relabels_clicked_button_in_place ... ok
+test slack::buttons::tests::owner_click_runs_command_marks_done_and_replies_in_thread_once ... ok
+test slack::buttons::tests::unauthorized_unconfigured_and_in_flight_clicks_do_not_run ... ok
+test readiness::tests::slack_only_gateway_counts_its_bot_and_adds_a_slack_check ... ok
+test slack::commands::tests::channel_admission_exempts_dms_and_blocks_ignored ... ok
+test readiness::tests::test_database_probe_in_memory ... ok
+test readiness::tests::test_collect_runtime_readiness_overall ... ok
+test slack::commands::tests::help_lists_every_manifest_command ... ok
+test sessions::status_reply::tests::shared_channel_and_normal_chat_fall_through ... ok
+test slack::commands::tests::mrkdwn_bold_converts_pairs_only ... ok
+test sessions::watch::tests::question_notifies_once_and_survives_restart ... ok
+test sessions::status_reply::tests::owner_dm_direct_reply_records_pair_without_backend_turn ... ok
+test slack::commands::tests::parses_every_simple_command ... ok
+test slack::commands::tests::parses_sessions_subcommands ... ok
+test slack::commands::tests::parses_skill_memory_cron_and_thread_arguments ... ok
+test sessions::watch::tests::completion_only_for_watched_sessions_after_a_baseline ... ok
+test slack::commands::tests::session_key_maps_dm_channel_and_thread ... ok
+test sessions::watch::tests::question_is_held_until_unanswered_for_notify_after ... ok
+test sessions::watch::tests::quiet_hours_hold_notices_until_morning ... ok
+test lanes::kibitzer::tests::qa_gaps_kibitzer_serves_external_insert_without_notify ... ok
+test slack::commands::tests::long_replies_use_five_response_url_posts_then_post_message ... ok
+test sessions::watch::tests::reasking_the_same_question_does_not_notify_again ... ok
+test sessions::watch::tests::unreachable_host_does_not_hide_local_notices ... ok
+test slack::debounce::tests::burst_is_coalesced_in_ts_order_with_all_constituents ... ok
+test slack::debounce::tests::cancel_drops_pending_batch_and_flush_all_routes_the_rest ... ok
+test slack::debounce::tests::sessions_flush_independently ... ok
+test slack::egress::tests::approval_command_is_truncated ... ok
+test agent::omo_daemon::tests::leftover_daemon_from_a_previous_gateway_is_reclaimed ... ok
+test slack::egress::tests::approval_posts_buttons_then_expires_once ... ok
+test slack::egress::tests::approval_request_mentions_allowed_users_when_enabled ... ok
+test slack::egress::tests::dashboard_message_id_does_not_become_slack_thread_timestamp ... ok
+test slack::egress::tests::dead_target_reason_matches_channel_level_codes_only ... ok
+test slack::egress::tests::failed_table_upload_falls_back_to_code_block ... ok
+test slack::egress::tests::mark_approval_decided_replaces_buttons_with_label ... ok
+test slack::backfill::tests::replays_since_cursor_holds_on_failure_and_seeds_new_targets ... ok
+test slack::egress::tests::media_directive_in_stream_final_is_uploaded_once ... ok
+test slack::egress::tests::media_directive_uploads_file_and_strips_directive ... ok
+test slack::egress::tests::media_failures_note_in_text_and_report_after_delivery ... ok
+test slack::egress::tests::owner_thread_is_private_requires_private_owner_and_bot_only ... ok
+test slack::egress::tests::react_maps_emoji_and_removes_other_status_reactions ... ok
+test slack::egress::tests::reaction_names ... ok
+test slack::egress::tests::rendered_output_neutralizes_broadcast_mentions ... ok
+test slack::egress::tests::runaway_reply_is_capped_at_eight_messages_with_notice ... ok
+test slack::egress::tests::runtime_footer_is_appended_when_enabled ... ok
+test slack::egress::tests::send_message_posts_converted_text_in_thread_and_skips_silence ... ok
+test slack::egress::tests::silent_final_deletes_placeholder ... ok
+test slack::commands::tests::destructive_slash_confirm_comes_from_deps ... ok
+test slack::egress::tests::stream_posts_placeholder_updates_and_finishes_with_overflow ... ok
+test slack::egress::tests::stream_preview_updates_are_throttled ... ok
+test slack::egress::tests::top_level_channel_reply_threads_under_trigger_but_dm_stays_flat ... ok
+test slack::home::tests::home_follows_explicit_platform_then_discord_presence ... ok
+test slack::egress::tests::upload_guards_reject_secrets_and_oversize_before_reading ... ok
+test slack::commands::tests::ephemeral_without_response_url_uses_post_ephemeral ... ok
+test slack::home::tests::persona_source_defaults_to_wawabot ... ok
+test slack::ingress::tests::channel_lists_bots_and_pairing_control_admission ... ok
+test slack::ingress::tests::files_and_forwarded_shares_become_content_and_attachments ... ok
+test slack::commands::tests::status_replies_in_channel_through_response_url ... ok
+test slack::commands::tests::paired_users_cannot_manage_skill_writes ... ok
+test slack::commands::tests::sessions_is_owner_only_and_unknown_command_shows_help ... ok
+test slack::egress::tests::markdown_table_is_uploaded_as_png_in_the_same_thread ... ok
+test slack::commands::tests::thread_posts_root_persists_session_and_rejects_nested_and_dm ... ok
+test slack::commands::tests::pending_writes_payload_is_uploaded_to_invoker_dm ... ok
+test slack::commands::tests::title_renames_bot_thread_root_and_explains_otherwise ... ok
+test slack::commands::tests::pair_rejects_non_operators_and_reports_bad_codes_privately ... ok
+test slack::ingress::tests::thread_reply_gating_honours_known_thread_and_require_mention ... ok
+test slack::ingress::tests::thread_reply_sets_thread_session_and_referenced_message_id ... ok
+test slack::ingress::tests::top_level_channel_messages_root_their_own_thread_session ... ok
+test slack::ingress::tests::top_level_dm_maps_to_dm_session_without_thread ... ok
+test slack::ingress::tests::ts_key_orders_slack_timestamps ... ok
+test slack::egress::tests::dead_target_is_persisted_skipped_probed_and_cleared ... ok
+test slack::ingress::tests::unsupported_subtypes_self_and_empty_are_dropped ... ok
+test slack::interactive::tests::approval_values_keep_only_approval_buttons ... ok
+test slack::interactive::tests::decision_labels_cover_every_choice ... ok
+test slack::interactive::tests::malformed_unknown_and_non_approval_actions_are_ignored ... ok
+test slack::interactive::tests::owner_click_resolves_pending_approval ... ok
+test slack::interactive::tests::payload_channel_falls_back_to_container ... ok
+test slack::interactive::tests::unauthorized_click_posts_ephemeral_and_keeps_request_pending ... ok
+test slack::commands::tests::unauthorized_user_gets_ephemeral_rejection ... ok
+test slack::lifecycle::tests::classify_maps_lifecycle_events_only ... ok
+test slack::mrkdwn::tests::bound_chunks_caps_count_and_appends_notice ... ok
+test slack::mrkdwn::tests::bound_chunks_trims_last_chunk_and_closes_open_fence ... ok
+test slack::mrkdwn::tests::converted_output_splits_at_message_limit ... ok
+test slack::mrkdwn::tests::converts_bold_italic_and_strike ... ok
+test slack::mrkdwn::tests::converts_headings_and_bullets ... ok
+test slack::mrkdwn::tests::converts_links_and_escapes_url_ampersand ... ok
+test slack::mrkdwn::tests::escapes_control_characters_but_keeps_slack_tokens ... ok
+test slack::mrkdwn::tests::keeps_code_nested_in_list_verbatim ... ok
+test slack::mrkdwn::tests::keeps_fenced_code_verbatim_and_drops_language ... ok
+test slack::mrkdwn::tests::keeps_inline_code_verbatim ... ok
+test slack::mrkdwn::tests::neutralizes_broadcast_mentions_everywhere_but_keeps_user_mentions ... ok
+test slack::mrkdwn::tests::split_breaks_on_line_boundaries ... ok
+test slack::mrkdwn::tests::split_closes_and_reopens_code_fence ... ok
+test slack::mrkdwn::tests::split_does_not_leave_empty_fence_at_chunk_end ... ok
+test slack::mrkdwn::tests::split_hard_splits_inside_fence_and_multibyte_text ... ok
+test slack::mrkdwn::tests::split_hard_splits_overlong_lines ... ok
+test slack::mrkdwn::tests::split_returns_single_chunk_when_short ... ok
+test slack::mrkdwn::tests::wraps_tables_in_code_block ... ok
+test slack::socket::tests::acks_before_forwarding_and_reconnects_after_disconnect ... ok
+test slack::socket::tests::classify_events_api_keeps_existing_team ... ok
+test slack::socket::tests::classify_events_api_merges_team_and_acks ... ok
+test slack::socket::tests::classify_hello_disconnect_and_unknown ... ok
+test slack::socket::tests::classify_slash_and_interactive ... ok
+test slack::socket::tests::shutdown_during_backoff_returns_ok ... ok
+test slack::commands::tests::yolo_persists_state_and_replies_ephemeral ... ok
+test slack::socket::tests::watchdog_env_parsing_defaults_to_1200s ... ok
+test slack::tests::allow_bots_parses_known_modes_only ... ok
+test slack::tests::defaults_match_the_contract ... ok
+test slack::tests::home_channel_is_also_free_response ... ok
+test slack::tests::id_settings_never_inherit_discord_values ... ok
+test slack::tests::slack_settings_win_and_discord_flags_fill_gaps ... ok
+test slack::tests::token_rejects_wrong_prefix_and_trims ... ok
+test slack::ingress::tests::handle_routes_once_reacts_and_dedupes_redelivery ... ok
+test slack::commands::tests::admission_honours_pairing_allow_all_and_channel_lists ... ok
+test slack::ingress::tests::flush_claims_constituents_routes_and_advances_cursor_forward_only ... ok
+test slack::ingress::tests::unauthorized_dm_gets_one_pairing_prompt ... ok
+test slack::home::tests::persona_copies_once_and_never_overwrites ... ok
+test slack::home::tests::owner_dm_key_is_the_persisted_owner_dm ... ok
+test slack::ingress::tests::text_stop_cancels_pending_batch_without_routing ... ok
+test slack::ingress::tests::split_messages_coalesce_into_one_turn_with_constituents ... ok
+test slack::ingress::tests::text_attachments_are_downloaded_and_inlined ... ok
+test slack::ingress::tests::reply_context_channel_context_and_topic_are_prepended ... ok
+test slack::ingress::tests::owner_reply_in_lane_thread_is_consumed_before_routing ... ok
+test slack::ingress::tests::owner_dm_lists_proposals_and_approves_in_thread ... ok
+test slack::lifecycle::tests::archive_marks_bot_sessions_and_delete_clears_thread_binding ... ok
+test storage::db::tests::applies_all_migrations_to_an_in_memory_database ... ok
+test storage::db::tests::enforces_foreign_keys_after_migration ... ok
+test storage::db::tests::durable_thread_ownership_persists_across_restart ... ok
+test storage::db::tests::fetch_resume_pending_skips_unparsable_keys ... ok
+test slack::socket::tests::silent_socket_is_dropped_by_watchdog_and_reconnected ... ok
+test storage::db::tests::inbound_preserves_original_platform_timestamp ... ok
+test storage::db::tests::file_database_serializes_concurrent_writers_without_lock_errors ... ok
+test storage::db::tests::is_session_suspended_fails_closed_on_malformed_state ... ok
+test storage::db::tests::in_memory_pool_never_recycles_its_only_connection ... ok
+test storage::db::tests::mark_session_suspended_preserves_other_state_fields ... ok
+test storage::db::tests::find_last_unfinished_user_turn_skips_mirror_rows ... ok
+test security::tirith::tests::scanner_caps_precede_persistence ... ok
+test storage::db::tests::mark_session_suspended_fails_on_malformed_state_without_overwriting ... ok
+test storage::db::tests::message_sequence_preserves_causality_and_recent_history_window ... ok
+test storage::db::tests::migration_creates_cron_runs_indexes ... ok
+test storage::db::tests::migration_creates_cron_runs_owner_pid_column ... ok
+test storage::db::tests::migration_creates_messages_platform_id_column_and_index ... ok
+test storage::db::tests::migration_creates_discord_bot_cursors_table ... ok
+test storage::db::tests::migration_creates_discord_channel_cursors_table ... ok
+test storage::db::tests::migration_creates_resume_pending_column_and_index ... ok
+test storage::db::tests::migration_creates_pairing_tables_and_indexes ... ok
+test storage::db::tests::test_pending_writes_store_round_trip ... ok
+test storage::message_search::tests::validate_query_requires_a_term ... ok
+test storage::db::tests::migration_creates_pending_writes_table_and_indexes ... ok
+test tools::browser::tests::final_url_check_rejects_internal_and_ignores_non_http ... ok
+test tools::browser::tests::navigate_catches_redirect_that_lands_after_the_first_read ... ok
+test tools::browser::tests::navigate_closes_tab_whose_final_url_is_internal ... ok
+test tools::browser::tests::navigate_fails_closed_when_listing_is_not_an_array ... ok
+test tools::browser::tests::navigate_fails_closed_when_tab_is_missing_from_listing ... ok
+test tools::browser::tests::navigate_fails_closed_when_tab_never_leaves_about_blank ... ok
+test tools::browser::tests::navigate_refuses_internal_destinations_but_allows_public_ones ... ok
+test tools::browser::tests::reserved_and_embedded_ipv4_ranges_are_internal ... ok
+test tools::browser::tests::snapshot_closes_owned_tab_that_moved_to_an_internal_host ... ok
+test tools::browser::tests::snapshot_forgets_tabs_that_no_longer_exist ... ok
+test tools::browser::tests::snapshot_is_scoped_to_the_calling_session ... ok
+test tools::browser::tests::snapshot_only_returns_pages_this_tool_opened ... ok
+test storage::db::tests::test_has_platform_message_id_dedup_query ... ok
+test storage::db::tests::migrations_are_idempotent_for_repeated_connections ... ok
+test storage::db::tests::test_persist_session_binding_persists_durable_binding ... ok
+test storage::db::tests::test_resume_pending_flag_lifecycle_and_queries ... ok
+test storage::db::tests::resume_pending_preserves_bot_identity ... ok
+test tools::file::tests::search_rejects_empty_query ... ok
+test tools::file::tests::search_skips_unreadable_entries_instead_of_aborting ... ok
+test tools::file::tests::test_file_relative_and_extra_root_paths ... ok
+test tools::file::tests::test_is_authorized_temp_layout ... ok
+test tools::file::tests::test_read_oversized_file_is_bounded ... ok
+test tools::file::tests::test_with_authorized_roots_skips_invalid ... ok
+test tools::file::tests::test_write_refuses_hard_linked_file ... ok
+test tools::file::tests::writes_require_approval_by_default_and_can_opt_out ... ok
+test storage::db::tests::staged_memory_failure_retains_pending_without_fabricating_session ... ok
+test tools::mcp::tests::sse_stream_decodes_multibyte_utf8_split_across_chunks ... ok
+test tools::mcp::tests::json_body_stream_is_bounded ... ok
+test tools::mcp::tests::stdio_line_is_bounded ... ok
+test tools::message_context::tests::search_hits_are_neutralized_before_reaching_the_model ... ok
+test tools::mcp::tests::sse_stream_rejects_oversized_frame ... ok
+test storage::db::tests::scoped_approval_does_not_apply_replaced_payload ... ok
+test storage::db::tests::staged_memory_claim_is_atomic ... ok
+test storage::message_search::tests::fts_scopes_channel_and_honors_discord_before_cursor ... ok
+test tools::skills::tests::shadowed_skill_resolves_to_shallowest_path_in_first_root ... ok
+test storage::db::tests::test_find_last_unfinished_user_turn ... ok
+test storage::message_search::tests::transcript_trigger_thread_rows_are_hidden_from_parent_search ... ok
+test storage::message_search::tests::non_numeric_before_cursor_is_rejected ... ok
+test storage::message_search::tests::fts_upsert_search_and_update_round_trip ... ok
+test tools::skills::tests::staged_write_replays_once_to_original_destination ... ok
+test tools::terminal::approval_tests::approval_policy_parses_supported_and_fallback_values ... ok
+test tools::terminal::approval_tests::augmented_path_from_environment_includes_default_homebrew_path ... ok
+test tools::cron::tests::deny_globs_refuse_script_and_ack_command_on_add_and_update ... ok
+test tools::terminal::approval_tests::benign_command_runs_without_request_under_smart_policy ... ok
+test tools::terminal::approval_tests::build_augmented_path_deduplicates_segments ... ok
+test tools::terminal::approval_tests::build_augmented_path_handles_empty_and_missing ... ok
+test tools::terminal::approval_tests::build_augmented_path_prepends_extra_and_preserves_order ... ok
+test storage::message_search::tests::thread_messages_are_not_returned_to_parent_channel_search ... ok
+test tools::terminal::approval_tests::caller_env_cannot_spoof_session_attribution_or_hijack_toolchain ... ok
+test tools::terminal::approval_tests::dangerous_command_classifier_is_conservative ... ok
+test tools::terminal::approval_tests::caller_env_cannot_override_executable_search_or_loader ... ok
+test tools::terminal::approval_tests::gateway_secrets_are_not_inherited_by_children ... ok
+test tools::terminal::approval_tests::hardline_commands_are_rejected_even_under_never_policy ... ok
+test tools::terminal::approval_tests::read_capped_keeps_head_and_ring_tail_with_exact_total ... ok
+test tools::terminal::approval_tests::smart_approval_refuses_rejection_timeout_and_missing_guard ... ok
+test tools::terminal::approval_tests::smart_approval_runs_dangerous_command_after_approval ... ok
+test tools::terminal::approval_tests::test_build_session_environment_mapping ... ok
+test tools::terminal::approval_tests::test_denial_reason_surfaced_in_terminal_error ... ok
+test tools::terminal::approval_tests::test_deny_globs_rejected_unconditionally_and_under_yolo ... ok
+test tools::terminal::approval_tests::test_hardline_rejected_even_under_yolo ... ok
+test tools::terminal::approval_tests::test_is_authorized_layout ... ok
+test tools::terminal::approval_tests::output_over_cap_is_drained_not_killed ... ok
+test tools::terminal::approval_tests::test_terminal_relative_and_extra_root_paths ... ok
+test tools::terminal::approval_tests::test_terminal_subprocess_inherits_session_environment ... ok
+test tools::terminal::approval_tests::test_yolo_bypasses_dangerous_prompt ... ok
+test tools::tests::test_tool_approval_hook_dispatch_approved ... ok
+test tools::tests::test_tool_approval_hook_dispatch_denied ... ok
+test tools::terminal::approval_tests::approval_detector_preserves_executable_semantics ... ok
+test tools::web::tests::duckduckgo_results_honor_max_results ... ok
+test tools::web::tests::duckduckgo_results_parse_live_markup_with_decoded_urls ... ok
+test tools::web::tests::duckduckgo_results_reject_non_http_targets ... ok
+test tools::web::tests::read_bounded_text_decodes_multibyte_split_across_chunks ... ok
+test tools::web::tests::read_bounded_text_invalid_byte_after_budget_does_not_underflow ... ok
+test tools::web::tests::read_bounded_text_stops_reading_once_max_chars_reached ... ok
+test tools::web::tests::redirect_hops_revalidate_scheme_and_are_capped ... ok
+test tools::web::tests::redirect_hops_to_internal_addresses_are_blocked ... ok
+test tools::web::tests::reserved_and_embedded_ipv4_ranges_are_internal ... ok
+test tools::web::tests::web_fetch_targets_url_directly_unless_reader_configured ... ok
+test voice::pipeline::tests::mismatched_pcm_frames_are_rejected_instead_of_dropped ... ok
+test voice::pipeline::tests::openai_stt_request_times_out_when_server_never_responds ... ok
+test voice::pipeline::tests::pcm_frames_are_all_concatenated_for_transcription ... ok
+test tools::skills::tests::staged_skill_rejects_changed_root_and_keeps_pending ... ok
+test storage::messenger_policy::tests::override_round_trip_and_clear ... ok
+test tools::message_context_slack::tests::ids_and_cross_channel_access_are_validated ... ok
+test tools::message_context_slack::tests::replies_and_thread_session_read_conversations_replies_without_root ... ok
+test tools::cron::tests::runs_output_omits_claim_token ... ok
+test tools::terminal::approval_tests::test_terminal_executable_in_extra_root ... ok
+test tools::message_context_slack::tests::recent_reads_history_normalizes_and_indexes ... ok
+test tools::skills::tests::skill_writes_cannot_escape_or_bypass_staging ... ok
+test tools::message_context_slack::tests::search_backfills_history_then_queries_fts ... ok
+test tools::cron::tests::update_rejects_dangerous_ack_command_and_invalid_expression ... ok
+test tools::skills::tests::skill_write_destination_adjacent_controls ... ok
+test tools::cron::tests::test_cron_tool_lifecycle_actions ... ok
+test voice_transcription::tests::bounded_helper_kills_a_stalled_tool ... ok
+test tools::tests::tool_approval_scopes_do_not_cross_rules ... ok
+test tools::terminal::approval_tests::backgrounded_grandchild_does_not_hold_tool_until_timeout ... ok
+test tools::cron::tests::shell_commands_require_approval_unless_policy_is_never ... ok
+
+test result: ok. 943 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 15.86s
+
+     Running unittests src/entry.rs (target/debug/deps/omo_gateway-890c8f6763a989f1)
+
+running 117 tests
+test legacy::dashboard::tests::canonical_session_key_parser_handles_embedded_separators_and_bot_identity ... ok
+test legacy::dashboard::tests::fix_dash_create_cron_job_rejects_duplicate_id ... ok
+test legacy::dashboard::tests::config_endpoint_never_exposes_provider_secret_values ... ok
+test legacy::dashboard::tests::cross_origin_state_changing_http_requests_are_rejected ... ok
+test legacy::dashboard::tests::bot_update_with_only_name_preserves_other_fields ... ok
+test legacy::dashboard::tests::fix_dash_detached_dashboard_reports_gateway_approvals_unavailable ... ok
+test legacy::dashboard::tests::cron_crud_routes_use_scheduler_semantics ... ok
+test legacy::dashboard::tests::deleting_a_session_with_cron_jobs_is_refused ... ok
+test legacy::dashboard::tests::fix_r5_like_pattern_escapes_wildcards ... ok
+test legacy::dashboard::tests::fix_r5_log_ids_are_strictly_increasing_in_snapshot_and_broadcast ... ok
+test legacy::dashboard::tests::fix_r5_readiness_backend_url_prefers_config_then_env_then_default ... ok
+test legacy::dashboard::tests::fix_dash_detached_dashboard_rejects_chat_and_stop_for_messenger_sessions ... ok
+test legacy::dashboard::tests::bot_profile_delete_stays_deleted ... ok
+test legacy::dashboard::tests::fix_r5_session_socket_forwards_expiry_of_its_own_approvals_only ... ok
+test legacy::dashboard::tests::fix_r2_create_bot_normalizes_blank_overrides_to_null ... ok
+test legacy::dashboard::tests::bot_create_with_existing_id_returns_conflict_and_keeps_profile ... ok
+test legacy::dashboard::tests::dashboard_rejects_untrusted_host_and_ws_origin ... ok
+test legacy::dashboard::tests::slack_config_view_lists_settings_without_tokens ... ok
+test legacy::dashboard_runtime::tests::dashboard_config_exposes_message_context_policy_matrix ... ok
+test legacy::dashboard_runtime::tests::slack_view_adds_config_and_policy_only_when_configured ... ok
+test legacy::dashboard_runtime::tests::split_csv_trims_and_drops_empty_values ... ok
+test legacy::dashboard_runtime::tests::standalone_scheduler_is_opt_in ... ok
+test legacy::headless_tests::digest_owner_follows_the_lead_platform ... ok
+test legacy::dashboard::tests::disk_pressure_real_loopback_http_surface ... ok
+test legacy::dashboard::tests::fix_r2_cron_create_without_id_honors_disabled_and_requires_payload ... ok
+test legacy::dashboard::tests::fix_dash_web_dispatcher_fails_closed_for_messenger_delivery ... ok
+test legacy::headless_tests::headless_output_rejects_upload_and_approval ... ok
+test legacy::headless_tests::headless_watcher_cancels_and_joins ... ok
+test legacy::dashboard::tests::approval_lifecycle_local_http_surface ... ok
+test legacy::headless_tests::qa_gaps_headless_inbox_does_not_start_when_disabled ... ok
+test legacy::headless_tests::qa_gaps_headless_inbox_starts_when_enabled_and_joins ... ok
+test legacy::dashboard::tests::fix_r5_cron_create_rejects_empty_id ... ok
+test legacy::dashboard::tests::fix_r2_status_reports_configured_model ... ok
+test legacy::headless_tests::slack_alone_satisfies_the_transport_requirement ... ok
+test legacy::headless_tests::slack_inbox_source_is_added_only_with_slack_identity ... ok
+test legacy::headless_tests::slack_recovery_uses_slack_rules_only ... ok
+test legacy::headless_tests::qa_gaps_headless_cron_socket_is_bound_and_removed_on_shutdown ... ok
+test legacy::dashboard::tests::fix_r5_cron_put_without_payload_keeps_payload_and_session_key ... ok
+test legacy::dashboard::tests::fix_r5_cron_put_on_paused_job_keeps_it_paused_without_next_run ... ok
+test legacy::headless_tests::qa_gaps_kibitzer_disabled_has_no_schema_or_task ... ok
+test legacy::headless_tests::headless_marker_reply_and_joined_shutdown ... ok
+test legacy::runner_tests::cli_defaults_to_run_without_a_subcommand ... ok
+test legacy::runner_tests::cli_maps_explicit_run_to_the_run_path ... ok
+test legacy::runner_tests::cli_parses_migrate_flags ... ok
+test legacy::runner_tests::cli_rejects_unknown_subcommands ... ok
+test legacy::runner_tests::cron_and_interactive_share_one_daemon ... ok
+test legacy::dashboard::tests::sessions_list_and_transcript_are_paginated ... ok
+test legacy::dashboard::tests::fix_r5_cron_list_degrades_per_row_on_corrupt_payload ... ok
+test legacy::headless_tests::headless_active_shutdown_joins_interrupt_and_preserves_binding ... ok
+test legacy::dashboard::tests::fix_r5_session_search_matches_wildcards_literally ... ok
+test legacy::runner_tests::default_model_precedence_matches_dashboard ... ok
+test legacy::dashboard::tests::fix_r5_trigger_missing_job_is_404_and_detached_messenger_job_is_refused ... ok
+test legacy::runner_tests::fix_main_allowlist_rejects_all_invalid_entries ... ok
+test legacy::runner_tests::fix_main_panicked_discord_client_counts_as_failure ... ok
+test legacy::dashboard::tests::health_and_status_endpoints_report_runtime_state ... ok
+test legacy::dashboard::tests::fix_r5_cron_runs_do_not_expose_claim_token ... ok
+test legacy::runner_tests::fix_r5_main_boot_marker_from_a_real_watcher_does_not_end_the_wait ... ok
+test legacy::runner_tests::fix_r5_main_cron_llm_override_never_carries_the_base_key_elsewhere ... ok
+test legacy::runner_tests::fix_r5_main_drain_wait_ignores_clearing_a_boot_time_drain ... ok
+test legacy::runner_tests::fix_r5_main_drain_wait_stays_pending_when_sender_is_gone ... ok
+test legacy::runner_tests::fix_r5_main_full_disk_access_prompt_is_claimed_once ... ok
+test legacy::runner_tests::fix_r5_main_owner_and_mail_account_are_configurable ... ok
+test legacy::runner_tests::fix_r5_main_recovery_event_keeps_id_origin_and_does_not_reattach ... ok
+test legacy::dashboard::tests::fix_r5_readiness_fails_when_chat_backend_is_down ... ok
+test legacy::runner_tests::fix_r5_main_unknown_boolean_tokens_keep_the_default ... ok
+test legacy::runner_tests::fix_r5_main_user_allowlist_must_parse ... ok
+test legacy::runner_tests::fix_r5_main_watcher_backoff_wakes_on_shutdown ... ok
+test legacy::runner_tests::fix_r5_main_watcher_restarts_with_bounded_backoff ... ok
+test legacy::headless_tests::qa_gaps_kibitzer_enabled_initializes_before_spawning ... ok
+test legacy::runner_tests::hermes_skill_dirs_use_documented_roots ... ok
+test legacy::runner_tests::imsg_stdout_error_reaches_the_exit_tail ... ok
+test legacy::runner_tests::maps_hermes_web_toolset_to_both_web_tools ... ok
+test legacy::runner_tests::parses_approval_timeout_secs_from_env ... ok
+test legacy::runner_tests::parses_bool_from_env_variants ... ok
+test legacy::runner_tests::parses_cron_script_timeout_secs_from_env ... ok
+test legacy::runner_tests::parses_extra_tool_roots_colon_separated ... ok
+test legacy::runner_tests::ag07_legacy_guild_startup_replays_preserved_history_once ... ok
+test legacy::runner_tests::cron_monitor_unchanged_skips_agent ... ok
+test legacy::runner_tests::cron_preflight_blocks_unconfigured_discord ... ok
+test legacy::runner_tests::rejects_cron_workdir_outside_authorized_roots ... ok
+test legacy::runner_tests::resolves_cron_script_timeout_with_overrides_and_fallbacks ... ok
+test legacy::runner_tests::cron_script_timeout_reaps_descendants ... ok
+test legacy::runner_tests::startup_recovery_exempts_dms_from_channel_allowlist ... ok
+test legacy::runner_tests::test_build_cron_llm_config_overrides ... ok
+test legacy::runner_tests::test_is_mail_event_line_ignores_comments_and_blank_lines ... ok
+test legacy::runner_tests::test_load_cron_skills_missing_skill_resilience ... ok
+test legacy::runner_tests::cron_notepad_is_durable_and_profile_scoped ... ok
+test legacy::runner_tests::fix_share_combined_dashboard_resolves_gateway_approvals ... ok
+test legacy::runner_tests::drain_is_reversible_and_preserves_accepted_work ... ok
+test legacy::headless_tests::headless_early_shutdown_preserves_accepted_reply ... ok
+test legacy::runner_tests::test_resolve_skill_bundle_and_expansion ... ok
+test legacy::runner_tests::fix_main_recovery_route_error_keeps_resume_pending ... ok
+test legacy::runner_tests::test_resolve_workspace_instructions ... ok
+test legacy::runner_tests::test_stderr_tail_buffer_bounded_capacity ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_collisions_defer_only_ambiguous_lanes ... ok
+test legacy::runner_tests::fix_r5_main_recovery_reuses_message_id_and_ledger_delivery ... ok
+test tests::cli_accepts_dashboard_and_serve_alias ... ok
+test tests::cli_defaults_to_gateway_run ... ok
+test tests::duplicate_gateway_start_is_rejected ... ok
+test tests::runtime_lock_is_private_and_refuses_symlinks ... ok
+test tests::runtime_lock_name_is_scoped_to_the_database ... ok
+test tests::session_cli_output_preserves_aggregate_exit_and_projection ... ok
+test legacy::runner_tests::fix_main_recovery_authorizes_paired_users ... ok
+test legacy::runner_tests::readiness_degrades_when_backend_unavailable ... ok
+test legacy::runner_tests::test_recover_pending_delivery_obligations_redispatches_dead_process_rows ... ok
+test legacy::runner_tests::recovery_preserves_bot_identity ... ok
+test legacy::runner_tests::recovery_rechecks_current_owner_authorization ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_explicit_allowlist_uses_exact_pending_actor ... ok
+test legacy::runner_tests::restart_chain_preserves_pending_until_explicit_input ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_unknown_or_unauthorized_actor_retains_pending ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_upgrade_preserves_references_and_rolls_back ... ok
+test legacy::runner_tests::test_recover_pending_delivery_obligations_preserves_bot_identity ... ok
+test legacy::runner_tests::test_suspended_session_suppresses_auto_resume ... ok
+test legacy::runner_tests::test_recover_resume_pending_sessions_redispatches_unfinished_turn ... ok
+test legacy::runner_tests::test_restart_loop_guard_suppresses_crash_loop_auto_resume ... ok
+test legacy::runner_tests::test_recover_resume_pending_sessions_preserves_bot_identity ... ok
+test tests::attached_dashboard_controls_live_runtime ... ok
+
+test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.08s
+
+     Running tests/test_action_ledger.rs (target/debug/deps/test_action_ledger-1e1120252ea3cf9d)
+
+running 18 tests
+test j_engine_commands_cannot_decide_their_own_proposals ... ok
+test k_context_pack_with_other_peoples_lines_is_foreign ... ok
+test i_eval_cells_with_opaque_side_effects_are_unknown ... ok
+test c_signatures_are_stable_across_flag_order ... ok
+test f_eval_cell_shell_commands_are_classified_from_the_code ... ok
+test g_compound_commands_take_the_worst_segment ... ok
+test h_destructive_signatures_cover_only_the_exact_command ... ok
+test b_at_least_twenty_native_command_samples_map_to_expected_effects ... ok
+test a_every_todo_0_fixture_maps_to_expected_effect ... ok
+test d_migration_copies_legacy_rows_and_release_at_exists ... ok
+test e_fixed_owner_rules_hold ... ok
+test l1_yolo_rows_do_not_count_and_candidate_emits_once_at_third_owner_once ... ok
+test l3_yolo_never_auto_allows_spend ... ok
+test todo8_c_and_d_third_once_emits_one_candidate_and_class_decide_auto_allows_same_effect_and_repo ... ok
+test m1_quiet_hour_decline_expires_the_row_so_a_morning_reply_cannot_approve_it ... ok
+test todo8_g_spend_never_auto_allows_and_emits_no_candidate ... ok
+test todo8_a_and_b_first_request_asks_and_after_always_same_signature_is_auto_allowed ... ok
+test todo8_e_and_f_deny_auto_declines_with_owner_words_and_revoke_returns_to_asking ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+     Running tests/test_action_loop.rs (target/debug/deps/test_action_loop-4d01d1d01d512489)
+
+running 7 tests
+test f_flag_on_means_kibitzer_is_not_started ... ok
+test c_item_with_existing_proposal_makes_none ... ok
+test e_quiet_hour_0300_kst_event_gets_release_at_0800_and_is_not_dispatched_before_then ... ok
+test b_duplicate_item_id_makes_none_including_after_restart ... ok
+test a_three_inbox_rows_in_120s_make_one_event ... ok
+test d_event_over_daily_cap_is_dropped ... ok
+test g_first_enable_baselines_backlog_and_caps_listed_items ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/test_agent_tools.rs (target/debug/deps/test_agent_tools-333b08445e583971)
+
+running 7 tests
+test file_tool_reads_writes_lists_searches_and_blocks_traversal ... ok
+test builds_provider_specific_llm_payloads_and_parses_tool_calls ... ok
+test mcp_stdio_drains_large_stderr_without_blocking_jsonrpc_response ... ok
+test memory_search_ranks_relevant_session_scoped_results ... ok
+test tools_support_multiple_authorized_roots_for_terminal_and_file ... ok
+test terminal_executes_processes_and_captures_status ... ok
+test truncates_oversized_terminal_and_file_tool_outputs ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running tests/test_approval_wait.rs (target/debug/deps/test_approval_wait-532f70ca26bd2ced)
+
+running 8 tests
+test e_synthetic_block_actions_from_allowed_non_owner_is_rejected ... ok
+test f_short_reply_with_one_pending_resolves_once_and_with_two_pending_routes_normal_text ... ok
+test h_lane_native_approval_request_no_longer_fails_the_lane ... ok
+test g_restart_turns_pending_rows_into_expired_and_emits_one_loop_event ... ok
+test d_quiet_hour_path_declines_and_sets_release_at ... ok
+test a_owner_once_within_thirty_minutes_sends_allow_for_req_id ... ok
+test b_timeout_sends_decline_sets_expired_and_leaves_denial_counter_unchanged ... ok
+test c_no_inactivity_interrupt_fires_during_twenty_minute_wait ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+
+     Running tests/test_context_pack.rs (target/debug/deps/test_context_pack-de347f9e8397cf6f)
+
+running 7 tests
+test e_disabled_flag_gives_no_pack ... ok
+test c_non_owner_gets_no_pack ... ok
+test a_unseen_thread_messages_are_listed_oldest_first ... ok
+test d_stored_message_content_is_unchanged ... ok
+test a_more_than_twenty_unseen_keeps_the_latest_twenty ... ok
+test f_at_most_ten_matching_precedents_appear_in_context_pack ... ok
+test b_pack_is_capped_at_4000_chars ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/test_cron_authority_upgrade.rs (target/debug/deps/test_cron_authority_upgrade-e1f20f06beaae458)
+
+running 1 test
+test test_migration_0022_backfill_legacy_imported_rows ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/test_cron_boundary_parity.rs (target/debug/deps/test_cron_boundary_parity-ea4b7ec7fa13ee2b)
+
+running 4 tests
+test target_forms_resolve ... ok
+test lifecycle_guard_covers_rest_and_script_body ... ok
+test imported_skill_injection_is_blocked ... ok
+test sync_isolates_bad_jobs_and_rearms_changed_once ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+     Running tests/test_cron_delivery_parity.rs (target/debug/deps/test_cron_delivery_parity-c6f7d02c91335dee)
+
+running 1 test
+test ack_requires_complete_output_delivery ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/test_cron_egress_parity.rs (target/debug/deps/test_cron_egress_parity-bd0621b755befaa2)
+
+running 3 tests
+test cron_final_obligation_recovers ... ok
+test reminder_retains_bot_and_thread ... ok
+test dead_targets_are_scoped_and_recoverable ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+     Running tests/test_cron_executor_parity.rs (target/debug/deps/test_cron_executor_parity-482f3aef2d267450)
+
+running 5 tests
+test native_cron_suppresses_direct_emission_and_returns_output ... ok
+test skill_only_bundle_runs ... ok
+test overrides_are_honored_or_rejected ... ok
+test script_gate_is_silent_in_both_modes ... ok
+test agent_result_uses_scheduler_delivery ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running tests/test_cron_health.rs (target/debug/deps/test_cron_health-03643ff6900fb83c)
+
+running 16 tests
+test delivery_lead_subprocess_helper ... ignored, invoked with isolated lead configuration by the parent test
+test disabled_health_switch_subprocess_helper ... ignored, invoked by disabled_health_switch_writes_no_problems_or_events in an isolated environment
+test recurrence_subprocess_helper ... ignored, invoked with isolated lead configuration by the parent test
+test hook_has_no_timer_loop ... ok
+test disabled_health_switch_writes_no_problems_or_events ... ok
+test identical_failure_recurs_with_one_new_event ... ok
+test completed_delivery_error_is_emitted_once_after_failure_commit ... ok
+test existing_late_run_in_occurrence_window_is_not_missed ... ok
+test run_without_expect_creates_no_empty_success_problem ... ok
+test startup_scan_records_unrun_recurring_occurrence_once ... ok
+test health_preparation_error_does_not_change_committed_run_status ... ok
+test delivery_failure_uses_committed_terminal_outcome ... ok
+test health_problem_insert_error_does_not_change_committed_run_status ... ok
+test failed_run_opens_problem_in_same_scheduler_execution ... ok
+test expected_output_problem_is_opened_and_fixed_by_clean_success ... ok
+test stale_lease_reclaim_creates_stuck_problem ... ok
+
+test result: ok. 13 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/test_cron_remediation.rs (target/debug/deps/test_cron_remediation-ff8fb7af3f455123)
+
+running 12 tests
+test natural_success_verifies_lane_without_execution ... ok
+test script_failure_opens_one_lane_with_native_done_signal ... ok
+test transient_uses_one_machine_verified_rerun_and_no_lane ... ok
+test brief_includes_diagnostic_data_with_bounded_unicode_logs ... ok
+test fourth_attempt_needs_owner_without_execution ... ok
+test failed_machine_receipt_requires_owner_instead_of_stalling ... ok
+test quota_diagnosis_checks_mahoquot_before_owner_task ... ok
+test publishing_prepares_file_and_owner_task_without_rerun ... ok
+test invalid_verification_regex_ends_with_failed_evidence ... ok
+test lane_cwd_uses_job_cwd_and_script_command_line ... ok
+test rerun_errors_preserve_reserved_attempt_and_require_owner_without_retry ... ok
+test diagnostic_errors_end_with_durable_failure_and_no_phantom_lane ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/test_cron_report.rs (target/debug/deps/test_cron_report-6d0c40cee02a75ae)
+
+running 5 tests
+test persona_block_exposes_health_command_sentinel ... ok
+test outcome_contains_native_run_id_and_machine_evidence ... ok
+test digest_consolidates_outcomes_and_ignores_old_problems ... ok
+test empty_cron_state_omits_digest_section ... ok
+test seeded_health_collapses_ok_jobs_and_lists_problem_lane ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/test_cron_schedule_parity.rs (target/debug/deps/test_cron_schedule_parity-65fd27f5f0d5f7d1)
+
+running 3 tests
+test predecessor_is_profile_scoped ... ok
+test imported_cron_retains_timezone ... ok
+test finite_budget_survives_failure_and_restart ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+     Running tests/test_cron_tool_parity.rs (target/debug/deps/test_cron_tool_parity-0641eeac9a247f34)
+
+running 2 tests
+test runs_and_status_are_exposed ... ok
+test mutations_preserve_contract ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/test_discord_adapter.rs (target/debug/deps/test_discord_adapter-60516944ac43c4bb)
+
+running 59 tests
+test chunks_markdown_at_discord_limit_and_balances_code_fences ... ok
+test completed_response_has_bounded_message_count ... ok
+test approval_guard_resolves_all_four_buttons_and_times_out ... ok
+test final_live_edit_deletes_surplus_chunk_messages ... ok
+test coalesces_split_messages_and_unions_attachments ... ok
+test final_live_edit_preempts_a_sleeping_intermediate_update ... ok
+test authorization_surface_matrix ... ok
+test channel_allow_and_ignore_lists ... ok
+test every_explicitly_mentioned_bot_owns_exactly_its_target ... ok
+test every_bot_answers_its_own_direct_messages_regardless_of_primary_bot ... ok
+test converts_serenity_dm_mentions_threads_and_attachments ... ok
+test live_edits_use_typing_and_debounce_subsequent_updates ... ok
+test only_primary_bot_owns_unmentioned_threads_and_free_channels ... ok
+test discord_egress_dispatches_upload_file_to_target_channel ... ok
+test rejects_discord_attachment_over_size_limit_before_network ... ok
+test encodes_supported_images_as_openai_and_anthropic_vision_blocks ... ok
+test hydrate_does_not_inline_binary_attachment ... ok
+test downloads_discord_attachment_once_and_reuses_cache ... ok
+test reply_parent_attachment_reaches_prompt ... ok
+test scoped_thread_participation_gates_unmentioned_and_allows_mentioned ... ok
+test single_preview_during_streaming_truncates_without_sending_extra_messages ... ok
+test slash_authorization_defaults_open_and_enforces_allowlist ... ok
+test renders_complete_attachment_context_for_attachment_only_turns ... ok
+test renders_downloaded_attachment_local_path ... ok
+test runtime_footer_toggle_is_wired ... ok
+test slash_skill_read_unicode_and_long_output ... ok
+test hydrates_and_inlines_small_text_attachment ... ok
+test test_allow_bots_policy_modes ... ok
+test test_approval_buttons_and_parse_custom_id ... ok
+test test_compose_reply_context ... ok
+test test_dead_target_short_circuit_in_egress ... ok
+test test_derive_auto_thread_name_formatting_and_capping ... ok
+test final_media_directive_uploads ... ok
+test test_dm_accepted_when_channel_type_private_regardless_of_guild_id_or_secondary_bot ... ok
+test final_output_filters_controls ... ok
+test test_format_channel_context_empty_and_skip_empty_lines ... ok
+test test_format_channel_context_ordering_and_truncation ... ok
+test test_inbound_hydrates_reply_context_and_attachments ... ok
+test test_is_authorized_clicker ... ok
+test test_safe_allowed_mentions ... ok
+test test_shared_vs_per_user_thread_sessions ... ok
+test test_thread_require_mention_option ... ok
+test user_authorization_allow_all_and_roles ... ok
+test test_forwarded_message_snapshots_routing ... ok
+test voice_note_transcription_is_wired ... ok
+test discord_egress_handles_typing_start_and_stop ... ok
+test final_stream_references_trigger ... ok
+test dedicated_thread_owner_and_channel_identity ... ok
+test discord_delivery_claims_deduplicate_per_target_bot ... ok
+test destructive_slash_waits_for_confirmation ... ok
+test reconnect_replays_only_owned_transport_failures ... ok
+test slash_controls_change_authoritative_session ... ok
+test dead_target_is_identity_and_resource_scoped ... ok
+test native_voice_wire_metadata_and_fallback ... ok
+test test_dis006_approval_scoped_dead_targets_and_persistence ... ok
+test tables_survive_forum_and_attachment_limits ... ok
+test startup_recovery_preserves_work_and_source_time ... ok
+test processing_lifecycle_cleans_up ... ok
+test split_batch_replay_and_generation ... ok
+
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.47s
+
+     Running tests/test_discord_thread_lifecycle.rs (target/debug/deps/test_discord_thread_lifecycle-7c858a019498ce93)
+
+running 3 tests
+test test_thread_unarchive_updates_metadata ... ok
+test test_thread_delete_cleans_up_omo_thread_id_preserving_session ... ok
+test test_thread_archive_updates_metadata_and_stops_multiplexer ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+     Running tests/test_e2e_stress.rs (target/debug/deps/test_e2e_stress-5be60f75f79f6baa)
+
+running 3 tests
+test delivery_ledger_is_idempotent_during_a_128_way_duplicate_storm ... ok
+test routes_120_messages_in_order_per_session_and_in_parallel_across_sessions ... ok
+test scale_to_zero_evicts_all_sessions_during_high_turnover ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/test_fix_fix_cron_exec.rs (target/debug/deps/test_fix_fix_cron_exec-cc068b9349c1f674)
+
+running 9 tests
+test non_ascii_deliver_target_does_not_panic ... ok
+test log_tail_is_bounded ... ok
+test lane_cwd_fallback_is_not_a_developer_path ... ok
+test sync_keeps_mirror_jobs_when_entry_invalid_or_store_missing ... ok
+test needs_owner_reopens_closed_inbox_decision ... ok
+test context_from_reads_scheduler_written_output_key ... ok
+test ack_runs_only_after_successful_scheduler_delivery ... ok
+test monitor_snapshot_is_committed_only_after_successful_run ... ok
+test timed_out_cron_script_kills_whole_process_tree_including_new_process_group ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.10s
+
+     Running tests/test_fix_fix_cron_scheduler.rs (target/debug/deps/test_fix_fix_cron_scheduler-d4942909a2b00724)
+
+running 6 tests
+test predecessor_lookup_escapes_like_wildcards ... ok
+test huge_catch_up_hours_does_not_panic_scheduler ... ok
+test success_advances_schedule_after_mid_run_payload_edit ... ok
+test repeat_limit_reached_by_manual_run_disables_job ... ok
+test failure_advances_schedule_after_mid_run_payload_edit ... ok
+test failure_backoff_and_resume_respect_schedule_timezone ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/test_fix_fix_deploy.rs (target/debug/deps/test_fix_fix_deploy-879b6faf82a72be3)
+
+running 5 tests
+test builder_installs_native_build_deps_for_audiopus_sys ... ok
+test runtime_installs_fonts_for_table_rendering ... ok
+test builder_rust_image_satisfies_package_rust_version_and_locked_floor ... ok
+test builder_copies_every_top_level_dir_the_manifest_paths_need ... ok
+test compose_uses_named_volumes_not_root_owned_bind_mounts ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_fix_fix_lanes.rs (target/debug/deps/test_fix_fix_lanes-a19f5e683d618506)
+
+running 5 tests
+test start_rechecks_lane_cap_atomically_with_insert ... ok
+test forced_close_after_failed_unforced_intent_rearms_with_force ... ok
+test post_without_thread_reaches_terminal_state ... ok
+test uncertain_status_receipt_unblocks_after_bounded_interval ... ok
+test milestone_status_failure_does_not_abort_drain ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running tests/test_fix_fix_lanes_guard.rs (target/debug/deps/test_fix_fix_lanes_guard-8b6b1b2a7126642b)
+
+running 6 tests
+test discord_thread_creation_does_not_hold_the_db_connection ... ok
+test promoted_thread_is_bound_to_the_creating_bot ... ok
+test queued_lanes_are_promoted_oldest_first ... ok
+test lane_closed_during_thread_creation_is_recorded_not_launched ... ok
+test failed_launch_is_retried_after_the_backoff ... ok
+test one_lanes_discord_failure_neither_aborts_the_pass_nor_reposts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+
+     Running tests/test_fix_fix_migrate.rs (target/debug/deps/test_fix_fix_migrate-e15f151d2a47f608)
+
+running 3 tests
+test cutover_validation_failure_leaves_hermes_gateway_running ... ok
+test cutover_still_rejects_changed_source_timezone ... ok
+test cutover_accepts_jobs_imported_with_config_timezone_and_home_channel ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/test_fix_fix_mirror_voice.rs (target/debug/deps/test_fix_fix_mirror_voice-58f98f35c0fe4961)
+
+running 1 test
+test local_transcription_reports_missing_prerequisites ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_fix_fix_omo_backend.rs (target/debug/deps/test_fix_fix_omo_backend-2edc7630987fc80a)
+
+running 3 tests
+test turn_error_and_invalid_frame_release_active_turn ... ok
+test reset_thread_binding_starts_fresh_thread_instead_of_cached_one ... ok
+test deadline_drain_strips_intent_gate_for_cron ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+
+     Running tests/test_fix_fix_security.rs (target/debug/deps/test_fix_fix_security-80c69d4f7a94814a)
+
+running 7 tests
+test approval_display_redacts_any_authorization_scheme ... ok
+test hardline_rm_protected_path_after_other_operands ... ok
+test apostrophe_in_echo_comment_is_not_hardline ... ok
+test hardline_catches_path_qualified_and_wrapped_programs ... ok
+test escaped_hash_does_not_hide_execution_flags ... ok
+test dangerous_git_branch_long_flags_with_n_in_branch_name ... ok
+test variant_budget_exhaustion_is_a_finding ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+
+     Running tests/test_fix_fix_sessions_judge.rs (target/debug/deps/test_fix_fix_sessions_judge-ad94ad7a027ab35b)
+
+running 9 tests
+test remote_check_transport_error_becomes_reason ... ok
+test drive_tolerates_two_transient_errors ... ok
+test persisted_counts_exclude_calls_before_kst_midnight ... ok
+test read_new_records_activity_after_reopen ... ok
+test release_closes_lane_and_writes_history ... ok
+test drive_fails_immediately_when_session_not_running ... ok
+test sends_run_outside_transactions ... ok
+test done_diff_over_4000_chars_reaches_judge_untruncated ... ok
+test done_diff_returns_when_judge_never_reads_a_large_stdin ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.14s
+
+     Running tests/test_fix_fix_settle.rs (target/debug/deps/test_fix_fix_settle-8a0fe0a431e1e15d)
+
+running 2 tests
+test per_lane_check_error_rejects_lane_and_settle_continues ... ok
+test other_branches_unpushed_commits_do_not_block_lane ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/test_fix_fix_tools_context.rs (target/debug/deps/test_fix_fix_tools_context-79af004146df1398)
+
+running 8 tests
+test message_context_defaults_to_thread_for_thread_sessions ... ok
+test message_context_defaults_to_channel_without_thread ... ok
+test web_fetch_rejects_internal_destinations ... ok
+test cron_update_rejects_imported_jobs ... ok
+test cron_add_rejects_existing_and_imported_ids ... ok
+test cron_add_from_thread_session_delivers_to_thread ... ok
+test cron_script_rejects_hardline_and_dangerous_commands ... ok
+test cron_ack_command_rejects_hardline_and_dangerous_commands ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/test_fix_r5_agent.rs (target/debug/deps/test_fix_r5_agent-500e2ee489cf9515)
+
+running 3 tests
+test mid_turn_status_is_a_visible_message_not_a_stream_chunk_or_the_reply ... ok
+test only_the_first_status_is_relayed_then_the_final_answer ... ok
+test cron_briefings_survive_a_model_fallback_and_are_consumed_after_the_ack ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/test_fix_r5_cron_exec.rs (target/debug/deps/test_fix_r5_cron_exec-867bf64bb05e250e)
+
+running 8 tests
+test varying_error_noise_maps_to_one_problem_and_stale_remediating_reopens ... ok
+test stale_remediating_rows_without_a_live_lane_are_escalated ... ok
+test approval_after_exhausted_budget_grants_one_more_attempt ... ok
+test native_socket_rejects_tokenless_approval_and_bounds_request_size ... ok
+test failed_transient_rerun_escalates_exactly_once ... ok
+test health_output_never_exposes_the_approval_digest ... ok
+test approval_requires_the_one_time_owner_token ... ok
+test error_text_is_scrubbed_in_inbox_brief_and_digest ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/test_fix_r5_inbox_migrate.rs (target/debug/deps/test_fix_r5_inbox_migrate-fdad35a426799bb4)
+
+running 10 tests
+test kakao_attachment_only_message_is_skipped_but_still_pages ... ok
+test mail_thread_without_snippet_does_not_fail_the_batch ... ok
+test imessage_attachment_only_message_is_skipped_and_cursor_advances ... ok
+test intra_day_usage_window_counts_same_kst_day_drops ... ok
+test heartbeat_message_is_bounded_below_discord_limit ... ok
+test dropped_items_are_counted_under_the_kst_day ... ok
+test heartbeat_failing_item_does_not_starve_later_items ... ok
+test mail_follow_up_in_collected_thread_refreshes_item_and_retriages ... ok
+test deleting_a_message_purges_only_its_search_document ... ok
+test deleting_a_session_purges_its_search_documents ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s
+
+     Running tests/test_fix_r5_lanes.rs (target/debug/deps/test_fix_r5_lanes-618384ca5a4cf3b2)
+
+running 1 test
+test refused_rename_does_not_block_an_owner_reopen ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/test_fix_r5_sessions_judge.rs (target/debug/deps/test_fix_r5_sessions_judge-a1f4558f140e9eb0)
+
+running 3 tests
+test remote_command_done_signal_gets_more_than_twenty_seconds ... ok
+test remote_multiline_goal_is_flattened_and_sent ... ok
+test failed_remote_listing_does_not_fail_an_adopted_lane ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/test_github_source.rs (target/debug/deps/test_github_source-ae360a8863650cbd)
+
+running 3 tests
+test ci_flip_gives_one_item ... ok
+test unchanged_response_gives_no_items ... ok
+test gh_exit_one_is_a_source_error ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/test_inbox_cli_digest.rs (target/debug/deps/test_inbox_cli_digest-c6f3b92d5f341940)
+
+running 11 tests
+test digest_rejects_shared_channels_threads_and_other_users ... ok
+test invalid_cli_values_are_rejected_at_boundary ... ok
+test unknown_set_returns_exit_two ... ok
+test set_records_each_terminal_status_without_executing_actions ... ok
+test approval_without_prepared_proposal_is_rejected_without_status_change ... ok
+test digest_empty_lists_produce_no_output ... ok
+test digest_statistics_without_owner_work_produce_no_output ... ok
+test cli_filters_and_orders_due_then_received_on_seeded_database ... ok
+test cli_class_filters_include_bot_proposals_and_fyi ... ok
+test auth_only_digest_is_suppressed_after_success_and_returns_next_kst_day ... ok
+test digest_registers_one_gateway_job_at_nine_kst_and_bypasses_models ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/test_inbox_ledger.rs (target/debug/deps/test_inbox_ledger-b05b97eabdf2a5d1)
+
+running 6 tests
+test e_startup_pass_is_idempotent ... ok
+test b_draft_with_no_precedent_posts_one_card ... ok
+test d_tainted_external_send_with_only_class_precedent_still_asks ... ok
+test a_lookup_auto_runs_with_no_card ... ok
+test c_exact_recipient_precedent_auto_runs_the_draft ... ok
+test m4_production_call_without_card_sink_runs_lookup_and_leaves_draft_pending ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/test_inbox_proposals.rs (target/debug/deps/test_inbox_proposals-edfc8fbf35825fb6)
+
+running 11 tests
+test approval_parser_accepts_only_one_positive_number_and_explicit_verb ... ok
+test unauthenticated_ambiguous_or_unmatched_replies_never_execute ... ok
+test numbering_and_snapshot_survive_relisting_and_restart ... ok
+test disabled_auto_lookup_leaves_work_unstarted ... ok
+test local_approval_starts_one_linked_lane_and_repeat_is_claimed ... ok
+test failed_execution_is_recorded_and_not_retried_after_restart ... ok
+test concurrent_duplicate_approval_runs_exactly_once ... ok
+test explicit_owner_reply_starts_lane_and_persists_outcome ... ok
+test approved_drafts_and_lookups_return_only_owner_text ... ok
+test enabled_auto_lookup_executes_only_lookup_once ... ok
+test changed_or_dismissed_or_status_only_approved_proposals_do_not_run ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s
+
+     Running tests/test_inbox_sources.rs (target/debug/deps/test_inbox_sources-8cc35fd0c65ac070)
+
+running 30 tests
+test fixture_files_contain_only_sanitized_personal_text ... ok
+test imessage_decodes_captured_rows_in_observed_ndjson_framing ... ok
+test imessage_rejects_missing_history_and_bad_timestamps ... ok
+test kakao_rejects_invalid_numeric_time_even_when_alias_valid ... ok
+test kakao_numeric_seconds_take_precedence_when_alias_conflicts ... ok
+test kakao_parses_authenticated_numeric_seconds_capture ... ok
+test kakao_numeric_seconds_when_synthetic_contract_row_has_no_alias ... ok
+test kakao_rejects_send_at_when_supported_timestamp_absent ... ok
+test kakao_skips_invalid_time_when_message_at_or_below_floor ... ok
+test live_discord_source_fetch_once ... ignored
+test live_imessage_source_fetch_once ... ignored
+test live_kakao_source_fetch_once ... ignored
+test live_mail_source_fetch_once ... ignored
+test mail_parses_authenticated_empty_capture_without_populated_substitution ... ok
+test mail_parses_sanitized_thread_and_builds_read_only_cursor_command ... ok
+test mail_rejects_missing_shape_and_empty_cursor_is_stable ... ok
+test mail_rfc3339_internal_date_advances_cursor_from_parsed_timestamp ... ok
+test imessage_uses_only_read_subcommands_and_skips_own_messages ... ok
+test imessage_parses_multi_item_ndjson_history ... ok
+test imessage_parses_authenticated_sanitized_chat_and_history ... ok
+test imessage_accepts_single_object_output_and_numeric_rowids ... ok
+test kakao_rfc3339_aliases_when_numeric_time_absent ... ok
+test kakao_production_parser_and_per_room_cursor ... ok
+test kakao_fetches_authenticated_historical_room_on_owned_loopback ... ok
+test kakao_fetches_authenticated_room_and_numeric_page_on_owned_loopback ... ok
+test kakao_event_driven_paging_loop ... ok
+test discord_parses_authenticated_sanitized_indexed_row ... ok
+test discord_producer_event_to_adapter_end_to_end ... ok
+test discord_behavioral_db_cases_and_cursor ... ok
+test kakao_bad_endpoint_collects_other_three_sources_and_preserves_cursor ... ok
+
+test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+     Running tests/test_inbox_store.rs (target/debug/deps/test_inbox_store-130565096f6e91dd)
+
+running 11 tests
+test pure_prefilter_discord_rules_and_author_excludes ... ok
+test pure_prefilter_mail_kakao_imessage_rules ... ok
+test filter_defaults_are_created_only_at_requested_path ... ok
+test invalid_source_item_aborts_items_and_cursor_transaction ... ok
+test imessage_cursor_timestamp_and_watcher_rowid_consistency ... ok
+test failed_item_upsert_rolls_back_cursor_advance ... ok
+test empty_kakao_rows_are_skipped_without_losing_valid_items_or_cursor ... ok
+test source_failure_isolated_and_preserves_cursor ... ok
+test repeated_collection_deduplicates_and_caps_snippets ... ok
+test watcher_event_callback_dispatches_without_sleep ... ok
+test prefilter_drops_and_counts_rules_and_keeps_required_passes ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/test_inbox_triage.rs (target/debug/deps/test_inbox_triage-083479594fcced9a)
+
+running 15 tests
+test deadlines_parse_without_model_in_owner_timezone ... ok
+test idle_collection_and_kill_switch_do_not_arm_or_call ... ok
+test stale_relative_deadline_raises_no_urgent_event ... ok
+test bot_triage_creates_numbered_executable_proposal_in_ordinary_list ... ok
+test persistent_writer_failure_settles_immediately_without_retry_loop ... ok
+test one_owner_item_waits_for_deadline_and_enqueues_once ... ok
+test writing_failure_persists_all_items_with_fallback_without_retry_loop ... ok
+test fallback_or_capped_judgment_never_reaches_writer ... ok
+test recovering_writer_settles_at_first_deadline_with_fallback ... ok
+test invalid_writing_and_unknown_ids_persist_with_fallback_reason ... ok
+test escaped_unicode_payload_is_bounded_without_extra_turns ... ok
+test writer_error_persists_fallback_reason_and_clears_pending ... ok
+test burst_classifies_every_item_and_batches_only_actionable_writing ... ok
+test informational_batches_never_call_chat_model ... ok
+test zero_fallback_cap_still_admits_successful_jev_classification ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+     Running tests/test_judge.rs (target/debug/deps/test_judge-bdd5ac52d2d118ae)
+
+running 25 tests
+test test_dead_url_fallback_probe ... ignored
+test test_live_12_samples_replay ... ignored
+test test_live_small_model_fallback_inference ... ignored
+test test_diff_metric_boundary_validation ... ok
+test test_diff_caps_ordering_disabled_jev ... ok
+test test_kill_switch_omon_jev_enabled_false ... ok
+test test_scrub_for_external ... ok
+test test_choice_rejects_output_outside_options_and_falls_back ... ok
+test test_fallback_turn_cancellation ... ok
+test test_circuit_breaker_5_failures_open_breaker_and_6th_does_not_spawn_cli ... ok
+test test_circuit_breaker_alert_scrubs_secrets_in_stderr ... ok
+test test_state_under_500_chars_uses_dash_s ... ok
+test test_scrub_prevents_fake_tokens_in_cli_argv_or_file ... ok
+test test_state_over_500_chars_uses_file ... ok
+test test_judge_calls_table_recorded_in_db ... ok
+test test_prompt_injection_resistance_choice ... ok
+test test_diff_sanitized_input_path ... ok
+test test_choice_noul_diff_parse_q_outputs ... ok
+test test_one_owner_alert_per_day ... ok
+test test_concurrent_daily_caps_and_fallback_exhaustion ... ok
+test test_restart_persistent_accounting ... ok
+test test_noul_rejects_non_finite_and_out_of_range_values ... ok
+test test_malicious_machine_contract_boundaries ... ok
+test test_timeout_triggers_fallback ... ok
+test test_daily_cap_301st_call_returns_capped_outcome_without_spawning_cli ... ok
+
+test result: ok. 22 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 7.04s
+
+     Running tests/test_lane_cli.rs (target/debug/deps/test_lane_cli-b13801cf02ea029b)
+
+running 7 tests
+test reopen_command_queues_exact_owner_text_without_premature_reset ... ok
+test object_resumes_captured_question_with_owner_text_first ... ok
+test forced_close_claimed_lane_requires_explicit_force_and_note ... ok
+test invalid_done_exits_two_without_a_lane ... ok
+test object_preserves_claimed_objection_and_rejects_other_states ... ok
+test reopen_command_requires_lane_and_illegal_state_exits_two ... ok
+test hold_exits_four_and_persists_queued_small_lane ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+
+     Running tests/test_lane_close.rs (target/debug/deps/test_lane_close-41abf064fea162f7)
+
+running 28 tests
+test event_restart::origin_defaults_for_legacy_events_and_roundtrips_system ... ok
+test duplicate_thread_identity_is_rejected_by_migration ... ok
+test event_restart::jev_below_threshold_marks_digest_only_without_turn ... ok
+test event_restart::duplicate_lane_kind_pairs_collapse_to_latest_body ... ok
+test event_restart::three_events_within_ten_seconds_coalesce_into_one_turn ... ok
+test event_restart::event_during_in_flight_turn_waits_until_turn_ends ... ok
+test event_restart::reconstructed_dispatcher_redelivers_persisted_undelivered_event_once ... ok
+test event_restart::user_admitted_after_idle_probe_refuses_system_turn ... ok
+test event_restart::done_claimed_delivers_immediately_after_idle_delivery_slot ... ok
+test event_restart::route_error_keeps_events_undelivered_for_retry ... ok
+test external_cwd_skipped_and_main_worktree_registration_refused ... ok
+test adapter_preserves_admission_owner_bot_and_stop_boundaries ... ok
+test distinct_original_generation_replies_enter_inbox_once ... ok
+test event_restart::system_event_triggers_no_outbound_reaction ... ok
+test event_restart::two_done_claims_five_seconds_apart_wait_thirty_seconds ... ok
+test dirty_untracked_removal_fails_once_and_preserves_verified_done ... ok
+test forced_failure_preserves_original_status_and_normal_close_refuses ... ok
+test held_thread_rename_does_not_block_close ... ok
+test interrupted_removal_reconciles_only_authorized_absence ... ok
+test transport_failure_never_commits_closed_or_removes_cwd ... ok
+test missing_removal_proof_and_branch_deny_recreation ... ok
+test occupied_restore_path_keeps_lane_closed_and_reply_pending ... ok
+test missing_preserved_branch_denies_restoration_without_creating_branch ... ok
+test service_cancels_and_joins_before_thread_and_git_effects ... ok
+test tracked_dirty_worktree_retains_verified_done_and_branch ... ok
+test verified_reply_closes_before_reopening_without_direct_transition ... ok
+test registered_cwd_removed_and_owner_reply_restores_same_branch_once ... ok
+test replacement_registration_and_ambiguous_restoration_are_not_adopted ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s
+
+     Running tests/test_lane_control.rs (target/debug/deps/test_lane_control-cfdddb0065e0b020)
+
+running 6 tests
+test c_paused_lane_gets_no_nudge_and_no_stale_post ... ok
+test e_one_nudge_per_silence ... ok
+test a_pause_cancels_the_running_turn_and_starts_no_next_turn ... ok
+test b_resume_allows_the_next_turn ... ok
+test d_nudge_is_skipped_while_a_tool_is_in_flight ... ok
+test f_resume_on_an_unpaused_lane_exits_2_with_not_paused ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/test_lane_dispatch.rs (target/debug/deps/test_lane_dispatch-9991346d53ef1605)
+
+running 10 tests
+test origin_defaults_for_legacy_events_and_roundtrips_system ... ok
+test system_event_triggers_no_outbound_reaction ... ok
+test route_error_keeps_events_undelivered_for_retry ... ok
+test user_admitted_after_idle_probe_refuses_system_turn ... ok
+test done_claimed_delivers_immediately_after_idle_delivery_slot ... ok
+test two_done_claims_five_seconds_apart_wait_thirty_seconds ... ok
+test event_during_in_flight_turn_waits_until_turn_ends ... ok
+test jev_below_threshold_marks_digest_only_without_turn ... ok
+test duplicate_lane_kind_pairs_collapse_to_latest_body ... ok
+test three_events_within_ten_seconds_coalesce_into_one_turn ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/test_lane_done.rs (target/debug/deps/test_lane_done-72c9311d270072f9)
+
+running 11 tests
+test claim_then_object_queues_reasons_and_returns_not_done ... ok
+test passing_signals_and_clean_tree_verify_only_after_five_minutes ... ok
+test failing_signal_returns_not_done_with_live_detail ... ok
+test interrupted_settlement_recovers_without_replaying_signals ... ok
+test settlement_event_scrubs_generated_detail_and_preserves_local_reason ... ok
+test dirty_tracked_file_returns_uncommitted_reason ... ok
+test runner_restart_uses_persisted_deadline_and_settles_once ... ok
+test unpushed_commit_with_local_bare_remote_returns_not_done ... ok
+test settlement_error_and_normal_stop_join_active_backend_and_checker ... ok
+test same_timestamp_reclaim_rejects_old_success_and_failure_results ... ok
+test service_storage_errors_cancel_and_join_backend_and_checker ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s
+
+     Running tests/test_lane_events.rs (target/debug/deps/test_lane_events-b898557576f76072)
+
+running 26 tests
+test configured_host_subprocess_helper ... ignored, invoked by configured_hosts_scrub_stored_and_delivered_values_in_isolation
+test cumulative_snapshots_replace_content_and_finalize_once ... ok
+test backend_captures_completed_lane_items_with_stable_identity ... ok
+test configured_hosts_scrub_stored_and_delivered_values_in_isolation ... ok
+test invalid_judge_choice_leaves_registry_unchanged ... ok
+test parser_rejects_foreign_malformed_and_empty_reports ... ok
+test acknowledged_post_is_not_sent_again_after_recovery ... ok
+test concurrent_claim_wins_over_judge_response ... ok
+test ambiguous_post_stays_uncertain_without_retry ... ok
+test notification_does_not_suspend_backend_holding_sqlite_connection ... ok
+test milestone_posts_without_waking_lead ... ok
+test claimed_lane_suppresses_done_and_question_events ... ok
+test event_insert_failure_rolls_back_block_and_report ... ok
+test old_generation_item_cannot_enqueue_post ... ok
+test missing_destination_never_calls_sink ... ok
+test done_report_requires_claim_and_never_verifies_lane ... ok
+test interrupted_send_becomes_uncertain_on_restart ... ok
+test failed_post_enqueue_rolls_back_stale_event_and_latch ... ok
+test agent_post_and_event_scrub_token_but_owner_answer_stays_exact ... ok
+test agent_claim_event_scrubs_and_bounds_without_changing_internal_evidence ... ok
+test ordinary_activity_rearms_stale_but_idle_turns_never_fire ... ok
+test quiet_threshold_and_restart_are_idempotent ... ok
+test runner_question_pauses_after_one_turn_without_outcome_lock_deadlock ... ok
+test stable_item_replay_does_not_duplicate_post ... ok
+test question_and_blocker_pause_with_one_persistent_event ... ok
+test unreported_intents_are_bounded_scrubbed_and_typed ... ok
+
+test result: ok. 25 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+     Running tests/test_lane_guard_alerts.rs (target/debug/deps/test_lane_guard_alerts-d573b3cd281607c3)
+
+running 5 tests
+test launch_event_failure_rolls_back_lane_and_history ... ok
+test failed_event_write_preserves_watcher_state ... ok
+test events_are_emitted_once_per_transition ... ok
+test queued_lane_launches_when_guard_recovers_even_at_high_cpu ... ok
+test retries_recount_active_lanes_and_do_not_duplicate_launches ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/test_lane_kibitzer.rs (target/debug/deps/test_lane_kibitzer-ebfd5a007e058fce)
+
+running 9 tests
+test strict_parser_rejects_missing_duplicate_wrapped_and_wrong_fields ... ok
+test admission_spacing_survives_reinitialization_and_hours_are_kst ... ok
+test lane_filter_and_owner_transaction_arm_only_committed_input ... ok
+test oversized_unicode_document_is_bounded ... ok
+test one_turn_and_event_when_new_inbox_passes_gate ... ok
+test no_turns_when_unarmed_for_a_day_or_disabled ... ok
+test seventh_wake_is_suppressed_and_kst_day_resets ... ok
+test no_event_when_reply_is_invalid_or_false ... ok
+test no_turn_when_gate_is_low_or_nonfinite ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+
+     Running tests/test_lane_post_transport.rs (target/debug/deps/test_lane_post_transport-bd6de0811d915b7d)
+
+running 2 tests
+test accepted_request_without_ack_is_uncertain_and_never_blindly_retried ... ok
+test actual_http_ack_is_persisted_and_not_reposted_after_restart ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/test_lane_reopen.rs (target/debug/deps/test_lane_reopen-37b036751dfc7c59)
+
+running 5 tests
+test completed_turn_with_ready_notification_keeps_inbox_pending ... ok
+test closed_reopen_resumes_id_with_exact_owner_message ... ok
+test close_reopen_discards_old_turn_and_delivers_new_owner_text_first ... ok
+test missing_thread_falls_back_once_and_records_history ... ok
+test working_and_verified_done_reopen_are_illegal ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running tests/test_lane_runner.rs (target/debug/deps/test_lane_runner-d27f9ff9fe84c861)
+
+running 13 tests
+test live_qa_runner_process ... ignored, requires a disposable app-server and explicit QA database
+
+running 1 test
+test startup_discord_flag_controls_token_requirement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.07s
+
+
+running 1 test
+test startup_discord_flag_controls_token_requirement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.05s
+
+
+running 1 test
+test startup_discord_flag_controls_token_requirement ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.05s
+
+test startup_discord_flag_controls_token_requirement ... ok
+test repeated_cancellation_keeps_lane_resumable ... ok
+test three_errors_fail_with_dead_event ... ok
+test misleading_success_output_never_verifies_or_closes_lane ... ok
+test restart_uses_persistent_thread_and_idle_message ... ok
+test stale_lane_binding_prefers_durable_session_binding ... ok
+test active_send_steers_and_consumes_only_after_ack ... ok
+test two_failed_checks_escalate_small_lane_only_once ... ok
+test chains_until_claim_and_captures_without_discord ... ok
+test dirty_worktree_is_preserved_by_claim ... ok
+test twenty_four_turn_cap_fails_with_event ... ok
+test service_recovers_file_database_and_shutdown_releases_socket ... ok
+
+test result: ok. 12 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.64s
+
+     Running tests/test_lane_scrub.rs (target/debug/deps/test_lane_scrub-ec88cf04e41bcefd)
+
+running 6 tests
+test test_lane_scrub_benign ... ok
+test test_lane_scrub_gh_token_fake_36_chars ... ok
+test test_lane_scrub_home_paths_and_korean ... ok
+test test_lane_scrub_credentials ... ok
+test test_lane_scrub_literal_home ... ok
+test test_lane_scrub_hosts ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/test_lane_status_transport.rs (target/debug/deps/test_lane_status_transport-420903b9a835edf9)
+
+running 1 test
+test milestones_status_replacement_and_restart_use_owned_loopback ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/test_lane_thread_transport.rs (target/debug/deps/test_lane_thread_transport-d215c71795d96b23)
+
+running 2 tests
+test lifecycle_and_typed_failure_use_only_owned_loopback_http ... ok
+test lane_start_creates_and_binds_thread_when_only_loopback_is_configured ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/test_lane_worktree_auto.rs (target/debug/deps/test_lane_worktree_auto-eb785f7b2b631c49)
+
+running 4 tests
+test non_git_cwd_creates_no_worktree ... ok
+test two_lanes_get_distinct_worktree_paths ... ok
+test sweep_removes_clean_orphan_and_keeps_dirty_one ... ok
+test dirty_lane_does_not_block_another_lanes_claim ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/test_lanes_storage.rs (target/debug/deps/test_lanes_storage-47ff4a4005a72346)
+
+running 7 tests
+test real_data_migration_preserves_work_items_and_adds_lanes_tables ... ok
+test lane_events_queue_take_and_mark_delivered ... ok
+test key_bad_key_rejected_by_check_constraint ... ok
+test concurrent_transitions_exactly_one_succeeds_and_history_recorded ... ok
+test migration_0031_creates_four_tables_and_indexes ... ok
+test transcript_append_and_read_ordering ... ok
+test lane_crud_and_status_filtering ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+
+     Running tests/test_message_context.rs (target/debug/deps/test_message_context-48a9dbdba3ea6590)
+
+running 9 tests
+test cross_channel_policy_checks_allowlist_and_same_guild_metadata ... ok
+test replies_prefers_native_thread_and_exposes_forum_post_metadata ... ok
+test get_message_returns_single_message_and_conversation_metadata ... ok
+test persisted_policy_override_applies_without_rebuilding_provider ... ok
+test replies_scans_ordinary_references_when_no_thread_exists ... ok
+test transcript_insert_trigger_populates_fts_index ... ok
+test persisted_policy_limits_are_enforced_per_operation ... ok
+test recent_pagination_and_fts_rest_backfill_are_integrated ... ok
+test replies_rejects_when_child_thread_or_parent_is_in_ignored_channels ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+     Running tests/test_migrate.rs (target/debug/deps/test_migrate-886788bceb99fc64)
+
+running 10 tests
+test provider_override_is_not_silently_dropped ... ok
+test secret_files_are_private_and_backup_unique ... ok
+test cutover_survives_startup_sync ... ok
+test cutover_second_store_failure_preserves_bytes_and_receipt ... ok
+test changed_payload_blocks_cutover ... ok
+test private_migration_os_surface_controls ... ok
+test dry_run_without_database_reports_creation_without_creating_it ... ok
+test dry_run_projects_every_step_with_zero_writes_or_side_effects ... ok
+test full_migration_imports_config_and_cron_before_cutover ... ok
+test dry_run_reports_nonimportable_jobs ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s
+
+     Running tests/test_model_routing.rs (target/debug/deps/test_model_routing-65f476e5e2f3d281)
+
+running 6 tests
+test test_purpose_env_overrides_isolated ... ok
+test test_actor_is_owner_lead_session_matrix ... ok
+test test_purpose_defaults_isolated ... ok
+test test_unknown_small_model_fallback_to_deepseek_never_opus_mock_appserver ... ok
+test test_actor_load_context_model_resolution_matrix ... ok
+test test_owner_dm_turn_start_routes_to_opus_mock_appserver ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/test_multiplexer.rs (target/debug/deps/test_multiplexer-35045673f4a5ed6a)
+
+running 19 tests
+test delivery_ledger_deduplicates_concurrent_claims_and_records_latency ... ok
+test gc_does_not_evict_an_actor_with_an_active_turn ... ok
+test guild_lane_is_shared_per_bot_not_author ... ok
+test live_controls_change_authoritative_session ... ok
+test events_arriving_during_running_turn_are_queued_and_processed_in_order ... ok
+test stop_immediately_cancels_the_active_turn ... ok
+test route_reports_actor_startup_failure_instead_of_acknowledging_a_lost_event ... ok
+test persistence_failure_never_acknowledges_turn_on_user_insert ... ok
+test scale_to_zero_evicts_and_flushes_idle_sessions ... ok
+test routes_multiple_sessions_in_parallel ... ok
+test stop_cancels_active_turn_and_clears_queued_events ... ok
+test dropping_multiplexer_releases_actor_cycle_and_flushes_dirty_state ... ok
+test persistence_failure_never_acknowledges_turn_on_session_update ... ok
+test handles_events_sequentially_within_one_session ... ok
+test flush_failure_replays_completed_turn_on_restart ... ok
+test terminal_outcomes_release_typing ... ok
+test thread_inherits_parent_profile ... ok
+test persistence_failure_never_acknowledges_turn ... ok
+test transcript_level_inbound_dedup_skips_duplicate_platform_message_id ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+     Running tests/test_omo_backend.rs (target/debug/deps/test_omo_backend-a074f7c420765738)
+
+running 55 tests
+test lane_live_daemon_turn_against_mktemp_repo ... ignored
+test lane_missing_cwd_returns_error ... ok
+test fallback_one_shot_guard_never_refalls_back_from_fallback ... ok
+test discord_silent_turn_interrupted_after_45s ... ok
+test error_assistant_message_surfaces_provider_error_on_completed_turn ... ok
+test missing_rollout_fails_with_continuity_error ... ok
+test correlation_distinguishes_interrupted_and_failed ... ok
+test completed_tool_only_finalizes_once_with_empty_result_fallback ... ok
+test omo_approval_roundtrip_uses_session_policy ... ok
+test already_delivered_agent_message_completes_without_placeholder_or_retry ... ok
+test correlation_requires_ack_and_ignores_subscription_replay ... ok
+test lane_thread_start_carries_cwd_and_no_typing ... ok
+test lane_silent_turn_not_interrupted_after_50s ... ok
+test intended_model_is_applied_before_each_turn ... ok
+test model_rejected_failure_triggers_fallback_to_deepseek_and_persists_marker ... ok
+test lane_thread_resumes_on_subsequent_turn ... ok
+test rejected_model_settings_return_typed_error_without_starting_turn ... ok
+test profile_tool_restrictions_are_enforced ... ok
+test queued_prompt_follows_successor_after_pre_ack_completion ... ok
+test rejects_foreign_and_stale_turn_frames ... ok
+test test_omo_backend_aborts_turn_on_repeated_approval_denials ... ok
+test test_omo_backend_cron_sessions_always_start_fresh_thread ... ok
+test test_omo_backend_cron_session_suppresses_activity_lines_and_delivers_only_final_result ... ok
+test initial_silence_interrupts_remote_turn_without_losing_thread_binding ... ok
+test test_omo_backend_accepts_received_completion_at_deadline_edge ... ok
+test test_omo_backend_emits_hermes_activity_lines ... ok
+test test_omo_backend_e2e_thread_lifecycle_and_streaming ... ok
+test test_omo_backend_ignores_turn_completed_for_other_thread ... ok
+test test_omo_backend_ignores_turn_completed_without_content ... ok
+test test_omo_backend_omits_workspace_when_per_agent_disabled ... ok
+test test_omo_backend_deadline_fires_on_ping_only_stream ... ok
+test test_omo_backend_provisions_agent_workspace_and_passes_to_thread_start ... ok
+test test_omo_backend_replaces_stale_cached_thread ... ok
+test accepted_disconnect_does_not_resubmit_turn ... ok
+test completed_item_finalizes_once_at_turn_terminal ... ok
+test interactive_deadline_bounds_all_protocol_phases ... ok
+test test_omo_backend_skips_ack_when_delivery_fails ... ok
+test test_omo_backend_surfaces_turn_start_rpc_error_immediately ... ok
+test test_omo_backend_runs_ack_command_after_cron_delivery ... ok
+test test_omo_backend_waits_for_final_message_after_tool_activity ... ok
+test failed_final_delivery_is_not_acknowledged ... ok
+test persistence_failure_prevents_turn_submission ... ok
+test stop_interrupts_remote_turn_before_ack ... ok
+test pending_start_stop_public_surface ... ok
+test stop_before_start_ack_never_reports_uncancelled_success ... ok
+test stop_interrupts_remote_turn ... ok
+test pre_ack_disconnect_does_not_resubmit_turn ... ok
+test failed_first_turn_keeps_durable_binding ... ok
+test test_omo_backend_persists_without_preexisting_session_row ... ok
+test test_omo_backend_empty_terminal_past_grace_fails_fast ... ok
+test test_omo_backend_deadline_interrupts_looping_turn ... ok
+test test_omo_backend_retries_once_after_connection_drop ... ok
+test pre_submit_disconnect_retries_and_succeeds ... ok
+test test_omo_backend_requires_turn_terminal_even_after_final_agent_message ... ok
+test test_omo_backend_unreachable_daemon_error ... ok
+
+test result: ok. 54 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 31.05s
+
+     Running tests/test_profile_blocks.rs (target/debug/deps/test_profile_blocks-f2abc5a11500d58d)
+
+running 4 tests
+test block_with_other_markers_is_rejected ... ok
+test applying_autonomy_keeps_lanes_block_byte_identical ... ok
+test reapplying_autonomy_block_is_idempotent ... ok
+test cli_block_flag_applies_named_block_and_keeps_lanes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/test_profile_import.rs (target/debug/deps/test_profile_import-62a3ffc8ea682d86)
+
+running 7 tests
+test export_returns_complete_profile_as_json ... ok
+test unknown_bot_has_exit_code_two_and_writes_nothing ... ok
+test replaces_only_marked_region_and_preserves_surrounding_text ... ok
+test appends_once_and_is_idempotent_with_prompt_only_update ... ok
+test replacement_ignores_block_framing_and_preserves_owner_prefix_suffix ... ok
+test malformed_markers_return_error_without_changing_row ... ok
+test cli_applies_block_with_named_flags_on_scratch_profile ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running tests/test_profile_routing.rs (target/debug/deps/test_profile_routing-873a28f8da4a6f74)
+
+running 7 tests
+test test_json_parsing_edge_cases ... ok
+test test_profile_router_hierarchical_precedence ... ok
+test routed_tools_reach_daemon ... ok
+test imported_profiles_preserve_bot_policy ... ok
+test runtime_footer_flag_reaches_final_egress ... ok
+test test_multiplexer_does_not_clobber_existing_explicit_model ... ok
+test test_multiplexer_routes_inbound_with_profile_defaults ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/test_report_claims.rs (target/debug/deps/test_report_claims-2313e38e68b85dea)
+
+running 7 tests
+test f_restart_with_stale_pending_row_gives_unmeasurable ... ok
+test d_git_push_argv_is_refused_and_not_run ... ok
+test g_only_allowlisted_read_only_programs_are_remeasured ... ok
+test b_mismatch_posts_exactly_one_correction_in_thread ... ok
+test e_spawn_failure_gives_unmeasurable ... ok
+test c_match_posts_nothing ... ok
+test a_marker_split_across_two_stream_chunks_is_stripped_and_one_row_is_stored ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/test_review_agent.rs (target/debug/deps/test_review_agent-1a3c79e6ad82046b)
+
+running 6 tests
+
+running 1 test
+test ag15_endpoint_fallback::custom_interactive_endpoint_is_inherited_without_cron_override ... 
+running 1 test
+test ag15_endpoint_fallback::explicit_supported_cron_endpoint_override_is_preserved ... {"{"case":"case":"ag15_endpoint_fallback::explicit_supported_cron_endpoint_override_is_preserved","cron_url":"ws://127.0.0.1:29999","endpoint_equal":false,"interactive_url"ag15_endpoint_fallback::custom_interactive_endpoint_is_inherited_without_cron_override","cron_url":"ws://127.0.0.1:29998","endpoint_equal":true:"ws://127.0.0.1:29998"}
+,"interactive_url":"ws://127.0.0.1:29998"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered outok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+; finished in 0.00s
+
+test ag15_endpoint_fallback::explicit_supported_cron_endpoint_override_is_preserved ... ok
+test ag15_endpoint_fallback::custom_interactive_endpoint_is_inherited_without_cron_override ... ok
+test ag13_outbox_insert_failure_prevents_final_send ... ok
+test ag13_cron_outbox_write_faults ... ok
+test sec02_recovery_write_faults ... ok
+test sec02_outbox_write_faults ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+
+     Running tests/test_review_dashboard.rs (target/debug/deps/test_review_dashboard-5f1ebd03f883865f)
+
+running 121 tests
+test legacy::dashboard::tests::canonical_session_key_parser_handles_embedded_separators_and_bot_identity ... ok
+test legacy::dashboard::tests::bot_create_with_existing_id_returns_conflict_and_keeps_profile ... ok
+test legacy::dashboard::tests::fix_dash_create_cron_job_rejects_duplicate_id ... ok
+test legacy::dashboard::tests::fix_r2_cron_create_without_id_honors_disabled_and_requires_payload ... ok
+test legacy::dashboard::tests::bot_profile_delete_stays_deleted ... ok
+test legacy::dashboard::tests::deleting_a_session_with_cron_jobs_is_refused ... ok
+test legacy::dashboard::tests::fix_dash_detached_dashboard_rejects_chat_and_stop_for_messenger_sessions ... ok
+test legacy::dashboard::tests::disk_pressure_real_loopback_http_surface ... ok
+test legacy::dashboard::tests::fix_r5_like_pattern_escapes_wildcards ... ok
+test legacy::dashboard::tests::fix_r5_log_ids_are_strictly_increasing_in_snapshot_and_broadcast ... ok
+test legacy::dashboard::tests::fix_r5_readiness_backend_url_prefers_config_then_env_then_default ... ok
+test legacy::dashboard::tests::config_endpoint_never_exposes_provider_secret_values ... ok
+test legacy::dashboard::tests::approval_lifecycle_local_http_surface ... ok
+test legacy::dashboard::tests::fix_r5_session_socket_forwards_expiry_of_its_own_approvals_only ... ok
+test legacy::dashboard::tests::fix_dash_detached_dashboard_reports_gateway_approvals_unavailable ... ok
+test legacy::dashboard::tests::cross_origin_state_changing_http_requests_are_rejected ... ok
+test legacy::dashboard::tests::fix_dash_web_dispatcher_fails_closed_for_messenger_delivery ... ok
+test legacy::dashboard::tests::slack_config_view_lists_settings_without_tokens ... ok
+test legacy::dashboard_runtime::tests::dashboard_config_exposes_message_context_policy_matrix ... ok
+test legacy::dashboard_runtime::tests::slack_view_adds_config_and_policy_only_when_configured ... ok
+test legacy::dashboard_runtime::tests::split_csv_trims_and_drops_empty_values ... ok
+test legacy::dashboard_runtime::tests::standalone_scheduler_is_opt_in ... ok
+test legacy::headless_tests::digest_owner_follows_the_lead_platform ... ok
+test legacy::dashboard::tests::cron_crud_routes_use_scheduler_semantics ... ok
+test legacy::dashboard::tests::fix_r2_create_bot_normalizes_blank_overrides_to_null ... ok
+test legacy::dashboard::tests::dashboard_rejects_untrusted_host_and_ws_origin ... ok
+test legacy::headless_tests::headless_output_rejects_upload_and_approval ... ok
+test legacy::headless_tests::headless_watcher_cancels_and_joins ... ok
+test legacy::dashboard::tests::bot_update_with_only_name_preserves_other_fields ... ok
+test legacy::headless_tests::qa_gaps_headless_inbox_does_not_start_when_disabled ... ok
+test legacy::headless_tests::qa_gaps_headless_inbox_starts_when_enabled_and_joins ... ok
+test legacy::dashboard::tests::fix_r5_cron_list_degrades_per_row_on_corrupt_payload ... ok
+test legacy::dashboard::tests::fix_r5_cron_put_without_payload_keeps_payload_and_session_key ... ok
+test legacy::headless_tests::slack_alone_satisfies_the_transport_requirement ... ok
+test legacy::headless_tests::slack_inbox_source_is_added_only_with_slack_identity ... ok
+test legacy::headless_tests::slack_recovery_uses_slack_rules_only ... ok
+test legacy::dashboard::tests::fix_r5_cron_create_rejects_empty_id ... ok
+test legacy::headless_tests::qa_gaps_headless_cron_socket_is_bound_and_removed_on_shutdown ... ok
+test legacy::dashboard::tests::fix_r5_readiness_fails_when_chat_backend_is_down ... ok
+test legacy::headless_tests::qa_gaps_kibitzer_disabled_has_no_schema_or_task ... ok
+test legacy::dashboard::tests::fix_r5_cron_runs_do_not_expose_claim_token ... ok
+test legacy::runner_tests::cli_defaults_to_run_without_a_subcommand ... ok
+test legacy::dashboard::tests::fix_r5_session_search_matches_wildcards_literally ... ok
+test legacy::runner_tests::cli_maps_explicit_run_to_the_run_path ... ok
+test legacy::runner_tests::cli_rejects_unknown_subcommands ... ok
+test legacy::runner_tests::cli_parses_migrate_flags ... ok
+test legacy::runner_tests::cron_and_interactive_share_one_daemon ... ok
+test legacy::dashboard::tests::fix_r5_cron_put_on_paused_job_keeps_it_paused_without_next_run ... ok
+test legacy::dashboard::tests::fix_r5_trigger_missing_job_is_404_and_detached_messenger_job_is_refused ... ok
+test legacy::dashboard::tests::fix_r2_status_reports_configured_model ... ok
+test legacy::runner_tests::default_model_precedence_matches_dashboard ... ok
+test legacy::dashboard::tests::health_and_status_endpoints_report_runtime_state ... ok
+test legacy::runner_tests::fix_main_allowlist_rejects_all_invalid_entries ... ok
+test legacy::runner_tests::fix_main_panicked_discord_client_counts_as_failure ... ok
+test legacy::dashboard::tests::sessions_list_and_transcript_are_paginated ... ok
+test legacy::headless_tests::headless_marker_reply_and_joined_shutdown ... ok
+test legacy::runner_tests::fix_r5_main_boot_marker_from_a_real_watcher_does_not_end_the_wait ... ok
+test legacy::runner_tests::fix_r5_main_cron_llm_override_never_carries_the_base_key_elsewhere ... ok
+test legacy::runner_tests::fix_r5_main_drain_wait_ignores_clearing_a_boot_time_drain ... ok
+test legacy::runner_tests::fix_r5_main_drain_wait_stays_pending_when_sender_is_gone ... ok
+test legacy::runner_tests::fix_r5_main_full_disk_access_prompt_is_claimed_once ... ok
+test legacy::runner_tests::fix_r5_main_owner_and_mail_account_are_configurable ... ok
+test legacy::runner_tests::fix_r5_main_recovery_event_keeps_id_origin_and_does_not_reattach ... ok
+test legacy::headless_tests::headless_active_shutdown_joins_interrupt_and_preserves_binding ... ok
+test legacy::runner_tests::fix_r5_main_unknown_boolean_tokens_keep_the_default ... ok
+test legacy::runner_tests::fix_r5_main_user_allowlist_must_parse ... ok
+test legacy::runner_tests::fix_r5_main_watcher_backoff_wakes_on_shutdown ... ok
+test legacy::runner_tests::fix_r5_main_watcher_restarts_with_bounded_backoff ... ok
+test legacy::runner_tests::fix_main_recovery_authorizes_paired_users ... ok
+test legacy::runner_tests::hermes_skill_dirs_use_documented_roots ... ok
+test legacy::runner_tests::imsg_stdout_error_reaches_the_exit_tail ... ok
+test legacy::runner_tests::maps_hermes_web_toolset_to_both_web_tools ... ok
+test legacy::runner_tests::parses_approval_timeout_secs_from_env ... ok
+test legacy::runner_tests::parses_bool_from_env_variants ... ok
+test legacy::runner_tests::parses_cron_script_timeout_secs_from_env ... ok
+test legacy::runner_tests::parses_extra_tool_roots_colon_separated ... ok
+test legacy::headless_tests::qa_gaps_kibitzer_enabled_initializes_before_spawning ... ok
+test legacy::runner_tests::fix_main_recovery_route_error_keeps_resume_pending ... ok
+test legacy::runner_tests::cron_monitor_unchanged_skips_agent ... ok
+test legacy::runner_tests::rejects_cron_workdir_outside_authorized_roots ... ok
+test legacy::runner_tests::resolves_cron_script_timeout_with_overrides_and_fallbacks ... ok
+test legacy::runner_tests::cron_preflight_blocks_unconfigured_discord ... ok
+test legacy::runner_tests::startup_recovery_exempts_dms_from_channel_allowlist ... ok
+test legacy::runner_tests::test_build_cron_llm_config_overrides ... ok
+test legacy::runner_tests::test_is_mail_event_line_ignores_comments_and_blank_lines ... ok
+test legacy::runner_tests::test_load_cron_skills_missing_skill_resilience ... ok
+test legacy::runner_tests::cron_notepad_is_durable_and_profile_scoped ... ok
+test legacy::runner_tests::drain_is_reversible_and_preserves_accepted_work ... ok
+test legacy::runner_tests::cron_script_timeout_reaps_descendants ... ok
+test legacy::runner_tests::ag07_legacy_guild_startup_replays_preserved_history_once ... ok
+test legacy::runner_tests::test_resolve_skill_bundle_and_expansion ... ok
+test legacy::runner_tests::test_resolve_workspace_instructions ... ok
+test legacy::runner_tests::fix_r5_main_recovery_reuses_message_id_and_ledger_delivery ... ok
+test legacy::runner_tests::test_stderr_tail_buffer_bounded_capacity ... ok
+test legacy::runner_tests::fix_share_combined_dashboard_resolves_gateway_approvals ... ok
+test r_ag_15::dash_011_012_runtime_and_surface ... ok
+test r_dash_001::dash_001_chat_protocol_ingress_and_contract ... FAILED
+test r_dash_002::dash_002_live_logs_envelope_decoding_contract ... ok
+test r_dash_003::dash_003_session_search_parameter_alignment_contract ... ok
+test legacy::runner_tests::readiness_degrades_when_backend_unavailable ... ok
+test tests::cli_accepts_dashboard_and_serve_alias ... ok
+test tests::cli_defaults_to_gateway_run ... ok
+test tests::duplicate_gateway_start_is_rejected ... ok
+test tests::runtime_lock_is_private_and_refuses_symlinks ... ok
+test tests::runtime_lock_name_is_scoped_to_the_database ... ok
+test tests::session_cli_output_preserves_aggregate_exit_and_projection ... ok
+test legacy::headless_tests::headless_early_shutdown_preserves_accepted_reply ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_collisions_defer_only_ambiguous_lanes ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_explicit_allowlist_uses_exact_pending_actor ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_upgrade_preserves_references_and_rolls_back ... ok
+test legacy::runner_tests::test_recover_pending_delivery_obligations_preserves_bot_identity ... ok
+test legacy::runner_tests::ag07_upgrade_tests::ag07_unknown_or_unauthorized_actor_retains_pending ... ok
+test legacy::runner_tests::test_suspended_session_suppresses_auto_resume ... ok
+test legacy::runner_tests::test_recover_pending_delivery_obligations_redispatches_dead_process_rows ... ok
+test legacy::runner_tests::recovery_preserves_bot_identity ... ok
+test legacy::runner_tests::recovery_rechecks_current_owner_authorization ... ok
+test legacy::runner_tests::restart_chain_preserves_pending_until_explicit_input ... ok
+test legacy::runner_tests::test_restart_loop_guard_suppresses_crash_loop_auto_resume ... ok
+test legacy::runner_tests::test_recover_resume_pending_sessions_redispatches_unfinished_turn ... ok
+test legacy::runner_tests::test_recover_resume_pending_sessions_preserves_bot_identity ... ok
+test tests::attached_dashboard_controls_live_runtime ... ok
+
+failures:
+
+---- r_dash_001::dash_001_chat_protocol_ingress_and_contract stdout ----
+handlerProbeSource stdout:
+DASH-001-ws-input GREEN
+DASH-001-http GREEN
+DASH-002 GREEN
+DASH-003 GREEN
+
+
+thread 'r_dash_001::dash_001_chat_protocol_ingress_and_contract' (55438252) panicked at tests/test_review_dashboard.rs:807:9:
+DASH-001-ws-final must be GREEN
+
+
+failures:
+    r_dash_001::dash_001_chat_protocol_ingress_and_contract
+
+test result: FAILED. 120 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.72s
+
+error: test failed, to rerun pass `--test test_review_dashboard`
+     Running tests/test_review_discord.rs (target/debug/deps/test_review_discord-f3e63f968671c4fb)
+
+running 5 tests
+test ag04_registered_thread_starter_uses_parent_lane ... ok
+test ag04_registered_thread_stop_surface ... ok
+test dis001_registered_thread_stop_interrupts_message_lane ... ok
+test dis001_registered_thread_stop_surface ... ok
+test ag04_registered_thread_stop_interrupts_message_lane ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s
+
+     Running tests/test_review_security.rs (target/debug/deps/test_review_security-7bbc27c6c76eba65)
+
+running 8 tests
+test sec05_disabled_root_config_import::disabled_root_does_not_activate_env_token ... ok
+test sec03::replacement_payload_rejects_unjournaled_current_time ... ok
+test sec03::replacement_payload_legacy_original_stays_pending ... ok
+test sec03::replacement_payload_corruption_preserves_all_stores ... ok
+test sec03::replacement_payload_legacy_replaced_stays_pending ... ok
+test sec03::repeated_cutover_recovery ... ok
+test sec03::replacement_payload_replays_exact_per_store_bytes ... ok
+test sec01::same_method_client_consent ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/test_session_registry.rs (target/debug/deps/test_session_registry-bbbd9b1d70fa690e)
+
+running 7 tests
+test parser_rejects_non_array_and_missing_ids ... ok
+test parser_and_serializer_preserve_exact_planned_fields ... ok
+test malformed_host_and_runner_error_do_not_leak_diagnostics ... ok
+test cache_reuses_instance_until_exactly_fifteen_seconds ... ok
+test list_all_merges_local_and_remote_and_reports_exit_three ... ok
+test timeout_drops_child_future_deterministically_without_sleeps ... ok
+test all_host_failures_keep_taxonomy_and_partial_empty_success_is_usable ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_session_registry_task27.rs (target/debug/deps/test_session_registry_task27-660a6abb1a576060)
+
+running 2 tests
+test upstream_liveness_fields_are_typed_without_expanding_public_output ... ok
+test parallel_listing_retains_successes_when_one_host_times_out ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_sessions_control.rs (target/debug/deps/test_sessions_control-1347249862525ceb)
+
+running 10 tests
+test resolve_missing_session_returns_not_running ... ok
+test resolve_unique_prefix_ok ... ok
+test exit_three_retains_not_running_message ... ok
+test missing_send_control_does_not_send ... ok
+test local_send_has_exact_argv_and_idempotency_key ... ok
+test remote_send_multiline_preserves_newline_inside_quoted_word ... ok
+test remote_send_preserves_text_and_exact_ssh_words ... ok
+test resolve_ambiguous_prefix_errors ... ok
+test resolve_daemon_session_uses_durable_id_as_canonical_target ... ok
+test adopted_lane_reads_claim_then_settles_after_objection_window ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/test_source_health.rs (target/debug/deps/test_source_health-15007fc897ab7024)
+
+running 4 tests
+test healthy_long_run_resets_to_initial ... ok
+test auth_failing_long_runs_keep_doubling_to_the_cap ... ok
+test zele_auth_errors_are_detected ... ok
+test three_auth_failures_give_one_event_and_a_fourth_same_day_gives_none ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/test_status_message.rs (target/debug/deps/test_status_message-aa6ec08a894946c7)
+
+running 3 tests
+test short_turn_sends_nothing ... ok
+test long_turn_posts_once_edits_once_and_finalizes ... ok
+test restart_mid_turn_reuses_stored_message ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/test_tracker_api.rs (target/debug/deps/test_tracker_api-8d230fb61248d8be)
+
+running 6 tests
+test lanes_mirror_into_agent_team_states ... ok
+test reopen_request_holds_state_only_while_pending ... ok
+test bootstrap_seeds_workspace_and_agent_team ... ok
+test create_patch_and_detail_record_activity ... ok
+test lane_linked_state_changes_are_guarded ... ok
+test comments_relations_views_and_search_round_trip ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.37s
+
+     Running tests/test_usage_done_gate.rs (target/debug/deps/test_usage_done_gate-3021775c092de343)
+
+running 7 tests
+test done_diff_disabled_and_capped_never_call_model_fallback ... ok
+test usage_json_matches_seeded_judge_rows_and_since_window ... ok
+test yesterday_uses_kst_day_and_inbox_filter_counts ... ok
+test threshold_verdict_allows_verified_done ... ok
+test unavailable_judge_proceeds_with_signals_and_records_skip ... ok
+test unrelated_diff_reopens_claim_with_numbers ... ok
+test high_risk_diff_reopens_claim ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+     Running tests/test_voice_cron.rs (target/debug/deps/test_voice_cron-c8c51a9e617fa7d9)
+
+running 13 tests
+test audio_frame_buffer_serializes_without_losing_pcm_samples ... ok
+test failure_delivery_uses_its_own_lane ... ok
+test failed_interval_advances_next_run_and_applies_backoff ... ok
+test failed_one_shot_due_run_disables_job_and_records_failed_lease ... ok
+test acknowledged_failure_signature_stays_silent ... ok
+test dead_process_expired_lease_is_reclaimed_by_scheduler ... ok
+test live_process_expired_lease_is_not_reclaimed_and_completes_successfully ... ok
+test active_lease_blocks_duplicate_claims_until_success_commits_one_shot ... ok
+test cron_scheduler_registers_triggers_and_manages_jobs ... ok
+test repeated_failures_scale_backoff_deterministically ... ok
+test background_scheduler_executes_due_interval_and_notifies_channel ... ok
+test persisted_oneshot_past_grace_is_retired ... ok
+test overdue_oneshot_retirement_is_atomic_against_concurrent_claim_and_rearm ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s
+
+     Running tests/test_voice_transcription.rs (target/debug/deps/test_voice_transcription-bd4cf3705eccfc1c)
+
+running 3 tests
+test test_is_audio_attachment_by_content_type ... ok
+test test_is_audio_attachment_by_extension ... ok
+test test_transcribe_audio_fallback_missing_file_or_binary ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/test_wiring_e2e.rs (target/debug/deps/test_wiring_e2e-2ea02edc58a70ae6)
+
+running 2 tests
+test test_boot_time_backend_selection_parsing ... ok
+test test_e2e_actor_omo_backend_persists_assistant_message ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/test_work_heartbeat.rs (target/debug/deps/test_work_heartbeat-a27e048bea0883d2)
+
+running 7 tests
+test heartbeat_dead_worker_escalation_posts_single_line_warning ... ok
+test heartbeat_post_restart_recovers_without_spamming_stale_items ... ok
+test migration_0030_creates_work_items_table_with_expected_columns ... ok
+test heartbeat_15_minute_threshold_triggers_single_post_and_subsequent_step_skips ... ok
+test heartbeat_disabled_by_config_skips_processing ... ok
+test heartbeat_scans_tasks_with_status_running ... ok
+test heartbeat_discord_rest_payload_contract_matches_serenity_spec ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/test_workspace_settings.rs (target/debug/deps/test_workspace_settings-3825fe15cf52f0be)
+
+running 2 tests
+test provisioning_with_flag_false_leaves_file_unchanged ... ok
+test provisioning_adds_permission_preset_and_keeps_default_model ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omon_gateway
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `--test test_review_dashboard`

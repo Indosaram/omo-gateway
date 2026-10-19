@@ -1,0 +1,49 @@
+[
+ {
+  "name": "Focalboard",
+  "url": "https://www.focalboard.com",
+  "category": "범용 칸반",
+  "kanban": "예",
+  "what": "Mattermost가 만든 오픈소스 칸반·테이블·갤러리·캘린더 프로젝트 관리 도구",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker)",
+  "license": "AGPL-3.0",
+  "agent": "REST API(v2)만 지원, MCP·CLI 없음; HTTP로 에이전트 연동",
+  "status": "유지보수 중단(커뮤니티 이관)",
+  "pros": "완전 무료·셀프호스팅; 칸반·테이블·캘린더 등 다중 뷰; OpenAPI 기반 REST API",
+  "cons": "공식 유지보수 중단; 네이티브 모바일 앱 없음; MCP 서버 없음",
+  "sources": [
+   "https://github.com/mattermost/focalboard",
+   "https://raw.githubusercontent.com/mattermost/focalboard/main/README.md",
+   "https://raw.githubusercontent.com/mattermost/focalboard/main/CHANGELOG.md",
+   "https://raw.githubusercontent.com/mattermost/focalboard/main/LICENSE.txt",
+   "https://github.com/mattermost-community/focalboard/issues/5038"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Mattermost Boards",
+  "url": "https://mattermost.com/marketplace/boards/",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "Mattermost 협업 플랫폼에 통합된 채널 연동 칸반·작업 관리 플러그인",
+  "mobile": "iOS·Android 앱",
+  "pricing": "무료(Free/Community) / Professional·Enterprise 별도 견적",
+  "selfhost": "가능(Docker)",
+  "license": "AGPL-3.0",
+  "agent": "REST API, Mattermost Agents 공식 MCP 서버, mmctl CLI",
+  "status": "활발히 개발 중",
+  "pros": "Mattermost 채널·Agents와 긴밀 통합; RBAC·ABAC 엔터프라이즈 권한; 공식 MCP 서버",
+  "cons": "전체 Mattermost 서버 필요; 고급 기능은 유료 Enterprise; 모바일 칸반 UI 제한적",
+  "sources": [
+   "https://mattermost.com/pricing/",
+   "https://mattermost.com/blog/mattermost-mcp-server/",
+   "https://github.com/mattermost/mattermost-plugin-boards",
+   "https://github.com/mattermost/mattermost-plugin-agents",
+   "https://raw.githubusercontent.com/mattermost/mattermost-plugin-boards/master/README.md",
+   "https://raw.githubusercontent.com/mattermost/mattermost-plugin-boards/master/plugin.json"
+  ],
+  "confidence": "높음"
+ }
+]

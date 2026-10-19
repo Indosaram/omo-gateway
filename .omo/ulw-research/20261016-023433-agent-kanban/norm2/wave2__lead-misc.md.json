@@ -1,0 +1,97 @@
+[
+ {
+  "name": "CodeAgentSwarm",
+  "url": "https://www.codeagentswarm.com",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "여러 코딩 에이전트를 병렬 실행하는 데스크톱 ADE, 에이전트용 작업 보드 내장",
+  "mobile": "없음(데스크톱 전용)",
+  "pricing": "무료(베타 중 Pro 포함) / 정식 Pro 미확인",
+  "selfhost": "로컬 전용",
+  "license": "상용(미확인)",
+  "agent": "병렬 코딩 에이전트; Muse Code·Pi·Devin CLI 지원",
+  "status": "오픈 베타(v2.4.0)",
+  "pros": "에이전트가 직접 쓰는 작업 보드; 실시간 diff·대화 기록 검색; 3개 OS 지원",
+  "cons": "모바일 없음; 베타 이후 가격 불명; 소스 비공개",
+  "sources": [
+   "https://www.codeagentswarm.com/en"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "Hamster (tryhamster.com, Task Master 클라우드)",
+  "url": "https://tryhamster.com",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "부분",
+  "what": "목표를 전략·이니셔티브·브리프로 쪼개는 팀용 AI 기획 플랫폼",
+  "mobile": "미확인(웹 앱)",
+  "pricing": "무료 월 10 브리프 / 유료 미확인",
+  "selfhost": "불가(SaaS)",
+  "license": "상용",
+  "agent": "사용자 에이전트 연동; Task Master MCP/CLI 연결",
+  "status": "활발",
+  "pros": "Task Master와 연동; 목표→이니셔티브 구조화; 무료 시작 가능",
+  "cons": "유료 가격 불명; 셀프호스팅 불가; 순수 칸반 도구는 아님",
+  "sources": [
+   "https://tryhamster.com"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "OpenTerra (KaiStephens/OpenTerra)",
+  "url": "https://github.com/KaiStephens/OpenTerra",
+  "category": "에이전트 전용",
+  "kanban": "미확인",
+  "what": "백그라운드 Claude Code 에이전트 Terragon의 오픈소스 버전",
+  "mobile": "미확인",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(소스 실행)",
+  "license": "미확인",
+  "agent": "Claude Code 에이전트",
+  "status": "사실상 중단(마지막 push 2025-07)",
+  "pros": "Terragon 대안으로 셀프호스팅 가능; 무료",
+  "cons": "개발 중단 상태; 커뮤니티 매우 작음; 문서 부족",
+  "sources": [
+   "https://github.com/KaiStephens/OpenTerra"
+  ],
+  "confidence": "낮음"
+ },
+ {
+  "name": "Claude Code on the web",
+  "url": "https://code.claude.com/docs/en/claude-code-on-the-web",
+  "category": "에이전트 전용",
+  "kanban": "아니오",
+  "what": "Anthropic 클라우드 샌드박스에서 Claude Code를 비동기 실행·세션 상태 확인",
+  "mobile": "Claude 모바일 앱·웹(세부 교차확인 필요)",
+  "pricing": "Claude 유료 구독(Pro/Max/Team/Enterprise) 포함",
+  "selfhost": "불가(Anthropic 관리형)",
+  "license": "상용",
+  "agent": "Claude Code(공식); GitHub 저장소 연동",
+  "status": "활발(공식)",
+  "pros": "설치 없이 클라우드 병렬 실행; 공식 지원; 구독에 포함",
+  "cons": "칸반 아닌 세션 목록; Claude 전용; 셀프호스팅 불가",
+  "sources": [
+   "https://code.claude.com/docs/en/claude-code-on-the-web"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "Groma.md (MrLesk/Groma.md)",
+  "url": "https://github.com/MrLesk/Groma.md",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "부분",
+  "what": "Git 속 Markdown·C4 맵으로 아키텍처 관리, Backlog.md 작업을 맵에 투영",
+  "mobile": "없음",
+  "pricing": "무료(OSS)",
+  "selfhost": "로컬 전용(Git 저장소)",
+  "license": "MIT",
+  "agent": "에이전트가 소스 스캔·큐레이션; Backlog.md 연동",
+  "status": "271스타·최근 push 2026-10",
+  "pros": "Backlog.md와 연계; Git 기반 에이전트 친화적; 무료",
+  "cons": "칸반 아닌 아키텍처 맵; 모바일 없음; 신생 프로젝트",
+  "sources": [
+   "https://github.com/MrLesk/Groma.md"
+  ],
+  "confidence": "중간"
+ }
+]

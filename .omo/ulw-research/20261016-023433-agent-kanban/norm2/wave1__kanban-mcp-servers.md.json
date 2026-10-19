@@ -1,0 +1,260 @@
+[
+ {
+  "name": "kanban-mcp (multidimensionalcats)",
+  "url": "https://github.com/multidimensionalcats/kanban-mcp",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "AI 코딩 에이전트용 DB 기반 칸반, 40+ MCP 도구·로컬 시맨틱 검색·웹 UI",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(pipx/Docker, 로컬)",
+  "license": "MIT",
+  "agent": "MCP(stdio) 40+ 도구; Claude Code·Cursor·Codex·OpenCode",
+  "status": "활발(★83, 2026-03 v0.2.0)",
+  "pros": "에이전트 워크플로 전용 설계; API 키 없는 로컬 ONNX 벡터 검색; 에픽·의존성 등 40+ 도구",
+  "cons": "모바일은 localhost 웹뿐; SQLite 모드에 다중 사용자 권한 없음; 첫 검색 시 약 140MB 모델 다운로드",
+  "sources": [
+   "https://github.com/multidimensionalcats/kanban-mcp"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Planka MCP (gogogadgetbytes)",
+  "url": "https://github.com/gogogadgetbytes/planka-mcp",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "Planka 2.0+ 자체 호스팅 칸반을 REST API로 AI 에이전트에 연결하는 MCP 서버",
+  "mobile": "반응형 웹(Planka 웹 UI)",
+  "pricing": "무료 / Planka Pro €7.20/사용자/월~",
+  "selfhost": "가능(Planka Docker/K8s, npx)",
+  "license": "MIT",
+  "agent": "MCP(stdio, npx) 13개 도구; Claude Code·Claude Desktop",
+  "status": "안정(★11, 2026-02 v1.0.0)",
+  "pros": "Planka의 다중 사용자 칸반 UI 활용; Zod 기반 타입 안전; npx로 빌드 없이 실행",
+  "cons": "실행 중인 Planka 인스턴스 필요; 실시간 이벤트 푸시 없음; 에이전트 전용 계정 필요",
+  "sources": [
+   "https://github.com/gogogadgetbytes/planka-mcp",
+   "https://planka.app",
+   "https://planka.app/pricing",
+   "https://github.com/plankanban/planka"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Kanban MCP (bradrisse)",
+  "url": "https://github.com/bradrisse/kanban-mcp",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "Cursor·Claude를 Planka 칸반에 연결하는 TS MCP 브리지, Docker Compose 포함",
+  "mobile": "반응형 웹(Planka 웹)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker Compose)",
+  "license": "MIT",
+  "agent": "MCP(stdio); 카드·체크리스트·시간 추적; Cursor·Claude Desktop",
+  "status": "안정(★61, 2025-03 커밋)",
+  "pros": "즉시 실행 가능한 Docker Compose 포함; Cursor 설정 템플릿 제공; 시간 추적·체크리스트 지원",
+  "cons": "신규 Planka 2.x 브리지보다 유지보수 느림; Planka+PostgreSQL 스택 필요; npm 패키지 없음(직접 빌드)",
+  "sources": [
+   "https://github.com/bradrisse/kanban-mcp",
+   "https://planka.app"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "MCP Server Trello (delorenj)",
+  "url": "https://github.com/delorenj/mcp-server-trello",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "Trello 보드·카드·체크리스트를 57개 도구로 관리하는 TS/Bun MCP 서버",
+  "mobile": "iOS·Android 앱(Trello)",
+  "pricing": "무료 / Trello Standard $5/사용자/월~",
+  "selfhost": "일부(MCP만 로컬, Trello는 SaaS)",
+  "license": "MIT",
+  "agent": "MCP 57개 도구, 공식 레지스트리 등재; Claude Code·Cursor",
+  "status": "매우 활발(★446, 2026-10 커밋)",
+  "pros": "가장 성숙한 57개 도구; Trello 요청 한도 처리 내장; 네이티브 모바일 앱 활용",
+  "cons": "독점 SaaS(Trello) 의존; API 키·토큰 수동 발급 필요; 무료 플랜 10명 제한",
+  "sources": [
+   "https://github.com/delorenj/mcp-server-trello",
+   "https://trello.com/pricing",
+   "https://registry.modelcontextprotocol.io"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Trello MCP Server (m0xai)",
+  "url": "https://github.com/m0xai/trello-mcp-server",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "Trello 보드·리스트·카드를 관리하는 경량 Python MCP 서버",
+  "mobile": "iOS·Android 앱(Trello)",
+  "pricing": "무료 / Trello Standard $5/사용자/월~",
+  "selfhost": "일부(MCP만 로컬, Trello는 SaaS)",
+  "license": "MIT(LICENSE 파일 없음)",
+  "agent": "MCP(stdio, uv); 카드 CRUD; Claude Desktop·Claude Code",
+  "status": "안정(★54, 2026-06 커밋)",
+  "pros": "Node/Bun 없이 Python으로 구현; uv로 간단 설정; 최소한의 도구 구성",
+  "cons": "delorenj 대비 도구 수 크게 적음; 인수조건 파싱·요청 한도 백오프 없음",
+  "sources": [
+   "https://github.com/m0xai/trello-mcp-server",
+   "https://trello.com/pricing"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "WeKan MCP Server (namar0x0309)",
+  "url": "https://github.com/namar0x0309/wekan-mcp",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "자체 호스팅 WeKan 보드·스윔레인·카드에 에이전트 접근을 주는 MCP 서버",
+  "mobile": "반응형 웹(WeKan, PWA 지원)",
+  "pricing": "무료(OSS) / WeKan 상용 지원 €50/년~",
+  "selfhost": "가능(WeKan Docker/Snap 등)",
+  "license": "ISC",
+  "agent": "MCP(stdio); 카드 생성·이동·댓글; 토큰 생성 스크립트",
+  "status": "안정(★6, 2026-06 커밋)",
+  "pros": "텔레메트리 없는 완전 OSS 칸반 연결; 스윔레인 지원; API 토큰 자동 추출 스크립트",
+  "cons": "커뮤니티 작음; 기본 CRUD만 지원; 카드 선점·의존성 기능 없음",
+  "sources": [
+   "https://github.com/namar0x0309/wekan-mcp",
+   "https://wekan.fi",
+   "https://wekan.fi/commercial-support/",
+   "https://github.com/wekan/wekan"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "WeKan MCP Server (omriza5)",
+  "url": "https://github.com/omriza5/wekan-mcp-server",
+  "category": "MCP 서버",
+  "kanban": "부분",
+  "what": "WeKan 사용자·보드·카드 읽기 전용 Python/FastAPI MCP 서버",
+  "mobile": "반응형 웹(WeKan 웹)",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker, MongoDB 직접 연결)",
+  "license": "MIT",
+  "agent": "MCP(HTTP/stdio); 읽기 전용 조회; Claude Desktop",
+  "status": "PoC·휴면(★0, 2025-10 커밋)",
+  "pros": "MongoDB 직접 연결 옵션; Dockerfile·compose 포함",
+  "cons": "읽기 전용(생성·수정·이동 불가); 개발 중단; 커뮤니티 없음",
+  "sources": [
+   "https://github.com/omriza5/wekan-mcp-server",
+   "https://wekan.fi"
+  ],
+  "confidence": "중간"
+ },
+ {
+  "name": "Flux (sirsjg)",
+  "url": "https://github.com/sirsjg/flux",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "인간·AI용 Git 네이티브 칸반, 단일 JSON 파일에 작업 저장, MCP·CLI·웹 UI",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker/Bun/Node, Git 동기화)",
+  "license": "MIT",
+  "agent": "MCP(stdio·HTTP) 25+ 도구, CLI·REST; Claude Code·Codex",
+  "status": "활발(★104, 2026-08 v0.6.0)",
+  "pros": "Git 기반 저장으로 CI·오프라인 친화; 에이전트 메모리·의존성 지원; CLI와 MCP 기능 동등",
+  "cons": "대규모 다중 에이전트 시 병합 충돌 우려; 모바일 알림 없음",
+  "sources": [
+   "https://github.com/sirsjg/flux"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Collattice (MrBildo)",
+  "url": "https://github.com/MrBildo/collattice",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "SQLite·SSE·MCP 내장 단일 실행파일 인간-에이전트 협업 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(단일 바이너리)",
+  "license": "MIT",
+  "agent": "내장 MCP(HTTP); Claude Code·Cursor·Codex",
+  "status": "활발(★8, 2026-10 v3.2.3)",
+  "pros": "Docker·DB 없는 단일 바이너리 배포; SSE로 에이전트 작업 실시간 표시; HMAC 웹훅",
+  "cons": "신생 프로젝트로 사용자 적음; 다중 프로젝트 관리 부족; 분산 구성 미지원",
+  "sources": [
+   "https://github.com/MrBildo/collattice"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "LokalBoards (florian-strasser)",
+  "url": "https://github.com/florian-strasser/LokalBoards",
+  "category": "범용 칸반+에이전트 연동",
+  "kanban": "예",
+  "what": "실시간 협업·SSO·MCP 내장 Nuxt 기반 자체 호스팅 칸반, 카드 원자적 선점",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Node.js+MySQL, Docker)",
+  "license": "MIT",
+  "agent": "내장 MCP(/mcp), API 키·OAuth; 에이전트 계정",
+  "status": "활발(★17, 2026-10 v0.40.2)",
+  "pros": "원자적 카드 선점으로 인간·에이전트 충돌 방지; SSO 무료 포함; 실시간 접속 표시",
+  "cons": "MySQL 필요; 단일 바이너리 대비 운영 부담 큼; 모바일은 웹 전용",
+  "sources": [
+   "https://github.com/florian-strasser/LokalBoards"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Taskboard (tcarac)",
+  "url": "https://github.com/tcarac/taskboard",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "칸반 웹 UI·CLI·내장 터미널·22개 MCP 도구의 로컬 우선 PM 도구",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(단일 Go 바이너리, Homebrew)",
+  "license": "MIT",
+  "agent": "내장 MCP 22개 도구, CLI; Claude Code·opencode",
+  "status": "안정(★37, 2026-02 v0.6.0)",
+  "pros": "보드에서 에이전트 직접 실행하는 내장 터미널; 의존성 없는 단일 바이너리; CLI·MCP 동등",
+  "cons": "로컬 1인 개발 중심; 모바일 푸시·네이티브 앱 없음",
+  "sources": [
+   "https://github.com/tcarac/taskboard"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "Moo Tasks (dizlexic)",
+  "url": "https://github.com/dizlexic/moo-tasks",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "보드별 MCP 엔드포인트를 갖춘 Nuxt 4 다중 사용자·다중 보드 칸반",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(Docker Compose+MySQL)",
+  "license": "MIT",
+  "agent": "보드별 MCP(Bearer 토큰); 작업 수락·생성",
+  "status": "활발(★45, 2026-06 커밋)",
+  "pros": "초대·역할 기반 다중 사용자; 수정 요청용 하위 작업; 보드별 에이전트 지침",
+  "cons": "MySQL·Docker 필요; 폴링 기반 동기화; 모바일은 브라우저 전용",
+  "sources": [
+   "https://github.com/dizlexic/moo-tasks"
+  ],
+  "confidence": "높음"
+ },
+ {
+  "name": "kanban-mcp (eyalzh)",
+  "url": "https://github.com/eyalzh/kanban-mcp",
+  "category": "에이전트 전용",
+  "kanban": "예",
+  "what": "세션 간 작업 기억용 SQLite 기반 경량 칸반 MCP 서버, 선택적 웹 UI",
+  "mobile": "반응형 웹",
+  "pricing": "무료(OSS)",
+  "selfhost": "가능(로컬 Node.js/Docker)",
+  "license": "MIT",
+  "agent": "MCP(stdio); WIP 제한·프롬프트; Claude Desktop",
+  "status": "정체(★41, 2025-07 커밋)",
+  "pros": "에이전트 작업에 WIP 제한 적용; 관찰용 웹 UI; 경량 SQLite",
+  "cons": "최근 업데이트 없음; UI 별도 빌드·실행 필요; 도구 기본적",
+  "sources": [
+   "https://github.com/eyalzh/kanban-mcp"
+  ],
+  "confidence": "높음"
+ }
+]

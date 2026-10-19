@@ -1,0 +1,11 @@
+{
+  "status": "released",
+  "task": 13,
+  "binary": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binarySha256": "d162f7808bf8e9c10699e3903a9bc494e7041af3c2b785a985ccb13fb56f1e0f",
+  "manifest": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task13-gate-20261011T191500Z-build-post-manifest.sha256",
+  "manifestSha256": "6714ccfa445bd656ade0c9f23746152c6727004867463b712c83fe645e3b5243",
+  "parentReceipt": "task13-gate-20261011T191500Z-release.json",
+  "authorization": "Actual happy agent file and claim plus actual premature failure claim, real five minute windows once",
+  "limitations": "Prior eight backend failures and two timeout-unverified tests remain; no broad green claim"
+}

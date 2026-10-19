@@ -1,0 +1,14 @@
+[
+  "discord-adapter: st_01a13564",
+  "discord-ui: st_01a13565",
+  "main-entry: st_01a13566",
+  "dashboard: st_01a13567",
+  "multiplexer: st_01a13568",
+  "agent: st_01a13569",
+  "cron: st_01a1356b",
+  "tools: st_01a1356a",
+  "security: st_01a1356c",
+  "lanes: st_01a1356d",
+  "sessions-judge: st_01a1356e",
+  "inbox-migrate: st_01a1356f"
+]

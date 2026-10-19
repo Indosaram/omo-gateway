@@ -1,0 +1,24 @@
+{
+  "binary_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/target-w4/debug/omo-gateway",
+  "binary_sha256": "d162f7808bf8e9c10699e3903a9bc494e7041af3c2b785a985ccb13fb56f1e0f",
+  "manifest_path": "/Users/indo/code/project/omon-gateway-wt/dori-work/.omo/evidence/dori-grade-agent-env/task13-gate-20261011T191500Z-build-post-manifest.sha256",
+  "manifest_sha256": "6714ccfa445bd656ade0c9f23746152c6727004867463b712c83fe645e3b5243",
+  "manifest_entries": 207,
+  "fmt_exit": 0,
+  "clippy_exit": 0,
+  "build_exit": 0,
+  "source_cmp": 0,
+  "build_cmp": 0,
+  "cleanup": 0,
+  "source_settled_receipt_sha256": "46c0664a34dd4731b613858b8cac9bab02e277034da70c466dce233038f668bc",
+  "related_tests_receipt": "task13-applied-source-settled.md",
+  "related_tests": {
+    "done_passed": 10,
+    "reopen_passed": 5,
+    "runner_passed": 12,
+    "runner_ignored": 1,
+    "replayed": false
+  },
+  "live_qa_run": false,
+  "baseline_limits": "Prior eight backend failures and two timeout-unverified tests remain; no broad green claim."
+}

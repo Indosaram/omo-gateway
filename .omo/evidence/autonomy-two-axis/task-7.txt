@@ -1,0 +1,24 @@
+task-7 / task-8 live approval QA (Slack owner DM, bot-1465 workspace)
+
+Finding before fix (rev 9041b6e):
+- DM model runs shell through the `eval` tool (Bun.$). The engine raises a bare eval approval frame
+  (command:null, reason "Tool: eval\n\nPatterns:\n  - *"). src/agent/omo_backend.rs auto-allowed every
+  bare eval frame, so 4 `git push origin lane/qa-approvalN` requests ran with 0 action_proposals rows.
+
+Fix: 8e888ae "classify eval approval frames by their code instead of auto-allowing"
+- omo_backend tracks the latest item/started tool=="eval" arguments.code; a bare eval frame is classified
+  from the shell commands in that code (src/autonomy/effect.rs classify_eval_code / eval_shell_commands).
+  A cell with no side-effecting shell command keeps the old auto-allow; anything else goes through the ledger.
+- 22b5e24 keeps the `cd` target so precedents are scoped to the repo.
+- test f_eval_cell_shell_commands_are_classified_from_the_code (tests/test_action_ledger.rs) passes.
+
+Live run after deploy 8e888ae (2026-10-18 15:23 UTC):
+- DM: "QA 테스트: /tmp/qa-approval 에서 git checkout -B lane/qa-approval5 && git push origin lane/qa-approval5 실행해줘"
+- action_proposals row #3: origin=engine_approval, effect=vcs_remote, signature=vcs_remote:git push:,
+  summary "git push origin lane/qa-approval5 2>&1", state=pending.
+- Engine tool result: "The user rejected permission ... quiet hours; proposal #3 will be asked at 08:00"
+  (quiet hours = KST 0-8 owner rule; ask deferred durably, not dropped).
+- Bot reply: "승인이 거절돼서 실행하지 않았어요 ... 제안 #3으로 08:00에 다시 승인을 물을 예정이에요."
+- Remote /tmp/qa-approval-remote.git: lane/qa-approval5 absent (push did NOT run).
+- `omo-gateway autonomy decide 3 always --words "QA: 이 브랜치 push는 항상 해도 돼"` -> proposal #3 approved,
+  action_precedents #6 (vcs_remote:git push:, allow, exact, origin owner_decide, owner words recorded).

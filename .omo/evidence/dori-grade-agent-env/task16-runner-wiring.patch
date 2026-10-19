@@ -1,0 +1,26 @@
+*** Begin Patch
+*** Update File: src/lanes/runner.rs
+@@
+     posts_ready: Arc<Notify>,
+     capture: Option<Arc<CapturingDispatcher>>,
+     settler: super::settle::Settler,
++    kibitzer_hint: Option<Arc<Notify>>,
+ }
+@@
+             posts_ready: Arc::new(Notify::new()),
+             capture: None,
++            kibitzer_hint: None,
+         }
+     }
++
++    pub fn with_kibitzer_hint(mut self, hint: Arc<Notify>) -> Self {
++        self.kibitzer_hint = Some(hint);
++        self
++    }
+@@
+                 result = socket.socket.recv(&mut bytes) => {
+                     result.map_err(io_error)?;
+                     for notify in active.values() { notify.notify_one(); }
++                    if let Some(hint) = &self.kibitzer_hint { hint.notify_one(); }
+                 }
+*** End Patch
