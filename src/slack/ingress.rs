@@ -204,6 +204,7 @@ impl SlackIngress {
                 .handle_owner_proposals(&event, &user, &channel, &ts)
                 .await?
         {
+            advance_cursor(&s.pool, &inbound).await;
             return Ok(());
         }
 
@@ -213,6 +214,7 @@ impl SlackIngress {
             .intercept_session_status(&inbound, private_owner)
             .await?
         {
+            advance_cursor(&s.pool, &inbound).await;
             return Ok(());
         }
 
@@ -1844,5 +1846,51 @@ mod tests {
             h.rx.try_recv().is_err(),
             "proposal commands never start a turn"
         );
+    }
+
+    #[tokio::test]
+    async fn reconcile_does_not_replay_a_proposal_command_handled_live() {
+        use crate::inbox::proposals::{Action, Proposals, OWNER_ID};
+        let responder: Arc<Responder> = Arc::new(|method: &str, body: &Value| match method {
+            "conversations.open" => json!({ "ok": true, "channel": { "id": "D1" } }),
+            "conversations.history" if body["channel"] == "D1" => json!({ "ok": true, "messages": [
+                { "type": "message", "user": OWNER, "text": "제안", "ts": "1.100000" }
+            ]}),
+            "conversations.history" | "conversations.replies" => {
+                json!({ "ok": true, "messages": [] })
+            }
+            _ => json!({ "ok": true, "ts": "1800000000.000001" }),
+        });
+        let mut h = harness(config(), responder).await;
+        sqlx::query("INSERT INTO inbox_items (id, source, source_ref, title, snippet, received_at, link, raw_hash, collected_at) VALUES ('i1', 'mail', 'r1', 'Invoice', 's', CURRENT_TIMESTAMP, 'https://l', 'h', CURRENT_TIMESTAMP)")
+            .execute(&h.pool).await.unwrap();
+        sqlx::query("INSERT INTO inbox_decisions (item_id, class, reason, proposed_action, status, decided_at) VALUES ('i1', 'bot', 'r', 'check invoice', 'open', CURRENT_TIMESTAMP)")
+            .execute(&h.pool).await.unwrap();
+        Proposals::new(h.pool.clone(), OWNER_ID)
+            .await
+            .unwrap()
+            .propose("i1", "D1", &Action::Lookup)
+            .await
+            .unwrap();
+        write_cursor(&h.pool, BOT, "D1", "", "1.000000")
+            .await
+            .unwrap();
+
+        let ingress = h.ingress.with_inbox_actions(Arc::new(LookupActions));
+        ingress.handle(dm("제안", "1.100000")).await.unwrap();
+        assert_eq!(
+            read_cursor(&h.pool, BOT, "D1", "")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1.100000")
+        );
+
+        let routed = crate::slack::backfill::run_settled(&ingress, Some(Duration::from_secs(60)))
+            .await
+            .unwrap();
+        assert_eq!(routed, 0, "a command answered live must not be replayed");
+        ingress.flush().await;
+        assert!(h.rx.try_recv().is_err());
     }
 }
