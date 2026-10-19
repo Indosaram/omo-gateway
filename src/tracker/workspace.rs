@@ -80,7 +80,8 @@ async fn load_team(pool: &SqlitePool, id: &str) -> ApiResult<Team> {
     .ok_or_else(|| TrackerError::not_found("team"))
 }
 
-const STATE_COLUMNS: &str = "id, team_id, name, type, color, position, lane_status, description";
+const STATE_COLUMNS: &str =
+    "id, team_id, name, type, color, position, lane_status, description, session_state";
 
 async fn load_state(pool: &SqlitePool, id: &str) -> ApiResult<WorkflowState> {
     sqlx::query_as(&format!(

@@ -165,7 +165,9 @@ pub async fn me_id(pool: &SqlitePool) -> ApiResult<String> {
 
 pub async fn prepare(pool: &SqlitePool) -> ApiResult<String> {
     let me = me_id(pool).await?;
+    seed::ensure_sessions_team(pool).await?;
     lanes::sync(pool).await?;
+    sessions::sync_issues(pool).await;
     Ok(me)
 }
 

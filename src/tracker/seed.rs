@@ -76,6 +76,76 @@ pub async fn seed_agent_states(
     Ok(())
 }
 
+/// (name, type, color, position, session_state) for the system team that mirrors omo sessions.
+pub const SESSION_STATES: [(&str, &str, &str, f64, &str); 5] = [
+    ("Needs answer", "started", "#eb5757", 1.0, "question"),
+    ("Blocked", "started", "#fc7840", 2.0, "blocked"),
+    ("Working", "started", "#f2c94c", 3.0, "working"),
+    ("Idle", "unstarted", "#e2e2e2", 4.0, "idle"),
+    ("Ended", "completed", "#95a2b3", 5.0, "ended"),
+];
+
+/// Creates the SES system team and any missing session states; safe to call on every request
+/// and independent of the one-time `seeded` marker so existing workspaces gain the team.
+pub async fn ensure_sessions_team(pool: &SqlitePool) -> Result<String> {
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT id FROM tracker_teams WHERE key = 'SES'")
+            .fetch_optional(pool)
+            .await?;
+    if let Some(id) = existing {
+        let seeded: i64 = sqlx::query_scalar(
+            "SELECT COUNT(DISTINCT session_state) FROM tracker_states WHERE team_id = ? AND session_state IS NOT NULL",
+        )
+        .bind(&id)
+        .fetch_one(pool)
+        .await?;
+        if seeded >= SESSION_STATES.len() as i64 {
+            return Ok(id);
+        }
+    }
+
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    sqlx::query(
+        "INSERT INTO tracker_teams (id, key, name, icon, color, issue_seq, system, cycles_enabled, cycle_weeks, triage_enabled, created_at, sort_order)
+         VALUES (?, 'SES', 'Sessions', 'terminal', '#5e6ad2', 0, 1, 0, 2, 0, ?, 0.5)
+         ON CONFLICT(key) DO NOTHING",
+    )
+    .bind(Uuid::new_v4().to_string())
+    .bind(now_utc())
+    .execute(&mut *tx)
+    .await?;
+    let team_id: String = sqlx::query_scalar("SELECT id FROM tracker_teams WHERE key = 'SES'")
+        .fetch_one(&mut *tx)
+        .await?;
+    for (name, state_type, color, position, session_state) in SESSION_STATES {
+        let present: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM tracker_states WHERE team_id = ? AND session_state = ? LIMIT 1",
+        )
+        .bind(&team_id)
+        .bind(session_state)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if present.is_some() {
+            continue;
+        }
+        sqlx::query(
+            "INSERT INTO tracker_states (id, team_id, name, type, color, position, lane_status, description, session_state)
+             VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&team_id)
+        .bind(name)
+        .bind(state_type)
+        .bind(color)
+        .bind(position)
+        .bind(session_state)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(team_id)
+}
+
 pub async fn ensure_seeded(pool: &SqlitePool) -> Result<()> {
     let seeded: Option<String> =
         sqlx::query_scalar("SELECT value FROM tracker_meta WHERE key = 'seeded'")

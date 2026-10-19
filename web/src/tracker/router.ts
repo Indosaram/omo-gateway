@@ -25,7 +25,6 @@ export type Route =
   | { name: 'issue'; identifier: string }
   | { name: 'search'; q: string }
   | { name: 'settings'; section: SettingsSection; teamKey: string | null }
-  | { name: 'sessions'; sessionKey: string | null }
   | { name: 'home' }
 
 const PREFIX = '#/tracker'
@@ -43,8 +42,6 @@ export function parseRoute(path: string): Route {
   const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent)
   const [head, a, b] = parts
   switch (head) {
-    case 'sessions':
-      return { name: 'sessions', sessionKey: a ?? null }
     case 'inbox':
       return { name: 'inbox', notificationId: a ?? null }
     case 'my-issues': {
@@ -110,8 +107,6 @@ export function routePath(route: Route): string {
       return route.q ? `/search?q=${encodeURIComponent(route.q)}` : '/search'
     case 'settings':
       return route.teamKey ? `/settings/${route.section}/${route.teamKey}` : `/settings/${route.section}`
-    case 'sessions':
-      return route.sessionKey ? `/sessions/${encodeURIComponent(route.sessionKey)}` : '/sessions'
     case 'home':
       return '/'
   }

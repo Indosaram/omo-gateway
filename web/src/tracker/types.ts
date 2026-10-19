@@ -47,6 +47,8 @@ export interface WorkflowState {
   color: string
   position: number
   lane_status: LaneStatus | null
+  /** Set on SES team states: the omo session state this column mirrors. */
+  session_state: string | null
   description: string | null
 }
 
@@ -156,6 +158,9 @@ export interface Issue {
   sub_issue_completed: number
   comment_count: number
   lane: LaneSummary | null
+  /** "<machine>:<session_id>" for issues mirrored from an omo session. */
+  session_ref: string | null
+  session: SessionSummary | null
 }
 
 export interface IssueCreate {
@@ -279,6 +284,7 @@ export interface IssueDetail {
   links: Link[]
   subscriber_ids: ID[]
   lane_detail: LaneDetail | null
+  session_detail: SessionDetail | null
 }
 
 export interface ViewFilters {
@@ -443,7 +449,7 @@ export const LANE_STATUS_LABELS: Record<LaneStatus, string> = {
   failed: 'Failed',
 }
 
-export type SessionState = 'working' | 'question' | 'blocked' | 'idle'
+export type SessionState = 'working' | 'question' | 'blocked' | 'idle' | 'ended'
 
 export interface SessionQuestionItem {
   id: string
@@ -471,6 +477,23 @@ export interface OmoSession {
   last_assistant: string
   questions: SessionQuestion[]
   updated_at: string | null
+}
+
+export interface SessionSummary {
+  machine: string
+  session_id: string
+  state: SessionState
+  streaming: boolean
+  message_count: number
+  pending_messages: number
+  cwd: string | null
+  updated_at: string | null
+  questions: SessionQuestion[]
+}
+
+export interface SessionDetail extends SessionSummary {
+  last_user: string
+  last_assistant: string
 }
 
 export interface SessionMachine {

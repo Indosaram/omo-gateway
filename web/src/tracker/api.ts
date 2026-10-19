@@ -125,7 +125,9 @@ export const trackerApi = {
 
   createTeam: (input: { key: string; name: string; icon?: string; color?: string }) => post<Team>('/teams', input),
   updateTeam: (id: ID, input: Partial<Team>) => patch<Team>(`/teams/${enc(id)}`, input),
-  createState: (input: Omit<WorkflowState, 'id' | 'lane_status' | 'description' | 'position'> & { position?: number }) =>
+  createState: (
+    input: Omit<WorkflowState, 'id' | 'lane_status' | 'session_state' | 'description' | 'position'> & { position?: number },
+  ) =>
     post<WorkflowState>('/states', input),
   updateState: (id: ID, input: Partial<WorkflowState>) => patch<WorkflowState>(`/states/${enc(id)}`, input),
   deleteState: (id: ID) => del(`/states/${enc(id)}`),

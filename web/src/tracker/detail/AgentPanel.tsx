@@ -7,6 +7,7 @@ import type { DelegateInput, IssueDetail, LaneAction, LaneStatus } from '../type
 import { LANE_STATUS_LABELS } from '../types'
 import { AgentGlyph, Button, toast } from '../ui'
 import { errorMessage } from './shared'
+import { SessionAgentPanel } from './SessionAgentPanel'
 
 const LANE_COLORS: Record<LaneStatus, string> = {
   queued: '#e2e2e2',
@@ -58,6 +59,9 @@ export function AgentPanel({
   compact?: boolean
 }) {
   const issue = detail.issue
+  if (detail.session_detail) {
+    return <SessionAgentPanel detail={detail} onDetail={onDetail} compact={compact} />
+  }
   if (issue.lane_key || detail.lane_detail) {
     return <LanePanel detail={detail} onDetail={onDetail} compact={compact} />
   }

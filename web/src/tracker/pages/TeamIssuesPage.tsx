@@ -3,7 +3,7 @@ import { IssueCollection } from '../issues/IssueCollection'
 import type { IssueTab } from '../router'
 import { PageHeader } from '../shell/Header'
 import { useTracker } from '../store'
-import type { StateType } from '../types'
+import type { StateType, ViewDisplay } from '../types'
 import { TeamIcon } from '../ui'
 
 const TAB_TYPES: Record<IssueTab, StateType[] | undefined> = {
@@ -19,6 +19,9 @@ const TAB_LABELS: Record<IssueTab, string> = {
   backlog: 'Backlog',
   triage: 'Triage',
 }
+
+/** omo sessions mirror into the system team SES; its states are live session states, so a board reads best. */
+const SESSIONS_DISPLAY: Partial<ViewDisplay> = { layout: 'board', grouping: 'status', show_empty_groups: true }
 
 export function TeamIssuesPage({ teamKey, tab }: { teamKey: string; tab: IssueTab }) {
   const t = useTracker()
@@ -46,7 +49,7 @@ export function TeamIssuesPage({ teamKey, tab }: { teamKey: string; tab: IssueTa
       viewKey={`team:${teamKey}:${tab}`}
       teamId={team.id}
       stateTypes={types}
-      defaultDisplay={tab === 'backlog' ? { show_empty_groups: false } : undefined}
+      defaultDisplay={teamKey === 'SES' ? SESSIONS_DISPLAY : tab === 'backlog' ? { show_empty_groups: false } : undefined}
       renderHeader={(toolbar) => (
         <PageHeader
           crumbs={[{ label: team.name, icon: <TeamIcon color={team.color} name={team.name} size={16} />, href: `/team/${team.key}/all` }]}

@@ -15,8 +15,10 @@ use crate::tracker::model::{
     Reaction, Relation, RelationDetail,
 };
 use crate::tracker::seed::now_utc;
+use crate::tracker::sessions;
 
 const ISSUE_SELECT: &str = "SELECT i.*,
+    (SELECT s.session_state FROM tracker_states s WHERE s.id = i.state_id) AS session_state,
     (SELECT COUNT(*) FROM tracker_issues c WHERE c.parent_id = i.id AND c.archived_at IS NULL) AS sub_issue_count,
     (SELECT COUNT(*) FROM tracker_issues c JOIN tracker_states s ON s.id = c.state_id
        WHERE c.parent_id = i.id AND c.archived_at IS NULL AND s.type IN ('completed','canceled')) AS sub_issue_completed,
@@ -55,6 +57,15 @@ fn issue_from_row(row: &sqlx::sqlite::SqliteRow) -> Issue {
         sub_issue_completed: row.get("sub_issue_completed"),
         comment_count: row.get("comment_count"),
         lane: None,
+        session_ref: row.get("session_ref"),
+        session: row
+            .get::<Option<String>, _>("session_ref")
+            .and_then(|reference| {
+                sessions::session_summary(
+                    &reference,
+                    row.get::<Option<String>, _>("session_state").as_deref(),
+                )
+            }),
     }
 }
 
@@ -453,6 +464,12 @@ pub async fn apply_patch(
                 "illegal_lane_transition",
             ));
         }
+        if current.session_ref.is_some() {
+            return Err(TrackerError::conflict(
+                "a session issue cannot move to another team",
+                "system_team",
+            ));
+        }
         let team: Option<(String, bool)> =
             sqlx::query_as("SELECT key, system FROM tracker_teams WHERE id = ?")
                 .bind(team_id)
@@ -511,37 +528,43 @@ pub async fn apply_patch(
         if state_team != team_now {
             return Err(TrackerError::bad_request("state belongs to another team"));
         }
-        if let Some(key) = current.lane_key.as_deref() {
-            lanes::handle_lane_state_transition(
+        if let Some(reference) = current.session_ref.as_deref() {
+            // Sync owns SES states; the one allowed move (Ended on a streaming session)
+            // interrupts it and the re-sync records whatever state the session lands in.
+            sessions::manual_state_move(pool, reference, state_id).await?;
+        } else {
+            if let Some(key) = current.lane_key.as_deref() {
+                lanes::handle_lane_state_transition(
+                    pool,
+                    key,
+                    &state_type,
+                    patch.force_note.as_deref(),
+                )
+                .await
+                .map_err(lane_error)?;
+            }
+            let now = now_utc();
+            let (started, completed, canceled) =
+                timestamps_for(&state_type, current.started_at.clone(), &now);
+            sqlx::query("UPDATE tracker_issues SET state_id = ?, started_at = ?, completed_at = ?, canceled_at = ? WHERE id = ?")
+                .bind(state_id)
+                .bind(&started)
+                .bind(&completed)
+                .bind(&canceled)
+                .bind(issue_id)
+                .execute(pool)
+                .await?;
+            record_activity(
                 pool,
-                key,
-                &state_type,
-                patch.force_note.as_deref(),
+                issue_id,
+                Some(me),
+                "state",
+                Some(&current.state_id),
+                Some(state_id),
             )
-            .await
-            .map_err(lane_error)?;
-        }
-        let now = now_utc();
-        let (started, completed, canceled) =
-            timestamps_for(&state_type, current.started_at.clone(), &now);
-        sqlx::query("UPDATE tracker_issues SET state_id = ?, started_at = ?, completed_at = ?, canceled_at = ? WHERE id = ?")
-            .bind(state_id)
-            .bind(&started)
-            .bind(&completed)
-            .bind(&canceled)
-            .bind(issue_id)
-            .execute(pool)
             .await?;
-        record_activity(
-            pool,
-            issue_id,
-            Some(me),
-            "state",
-            Some(&current.state_id),
-            Some(state_id),
-        )
-        .await?;
-        touched = true;
+            touched = true;
+        }
     }
 
     if let Some(title) = patch.title.as_deref() {
@@ -929,6 +952,7 @@ pub async fn fetch_issue_detail(pool: &SqlitePool, issue_id: &str) -> ApiResult<
         Some(key) => lanes::load_lane_detail(pool, key).await?,
         None => None,
     };
+    let session_detail = issue.session.as_ref().map(sessions::session_detail);
     Ok(IssueDetail {
         issue,
         children,
@@ -939,6 +963,7 @@ pub async fn fetch_issue_detail(pool: &SqlitePool, issue_id: &str) -> ApiResult<
         links,
         subscriber_ids,
         lane_detail,
+        session_detail,
     })
 }
 

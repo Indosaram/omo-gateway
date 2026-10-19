@@ -1,5 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::sessions::probe::PendingQuestion;
+
 fn deserialize_nullable<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     T: Deserialize<'de>,
@@ -49,6 +51,7 @@ pub struct WorkflowState {
     pub position: f64,
     pub lane_status: Option<String>,
     pub description: Option<String>,
+    pub session_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
@@ -160,6 +163,31 @@ pub struct Issue {
     pub sub_issue_completed: i64,
     pub comment_count: i64,
     pub lane: Option<LaneSummary>,
+    pub session_ref: Option<String>,
+    pub session: Option<SessionSummary>,
+}
+
+/// Live view of the omo session mirrored by an SES issue; `state` is one of
+/// question|blocked|working|idle|ended.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub machine: String,
+    pub session_id: String,
+    pub state: String,
+    pub streaming: bool,
+    pub message_count: u64,
+    pub pending_messages: u64,
+    pub cwd: Option<String>,
+    pub updated_at: Option<String>,
+    pub questions: Vec<PendingQuestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDetail {
+    #[serde(flatten)]
+    pub summary: SessionSummary,
+    pub last_user: String,
+    pub last_assistant: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,6 +297,7 @@ pub struct IssueDetail {
     pub links: Vec<Link>,
     pub subscriber_ids: Vec<String>,
     pub lane_detail: Option<LaneDetail>,
+    pub session_detail: Option<SessionDetail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

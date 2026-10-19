@@ -42,3 +42,38 @@ Files: bot_profiles/blocks/autonomy.md.
 cargo fmt --check; cargo clippy --all-targets -D warnings; cargo test --no-fail-fast (known pre-existing fail r_dash_001); cd web && bun run build.
 ## Live QA
 Tracker opens on Sessions with the 9 real sessions and correct states; send/interrupt on a scratch session; Slack DM reaction + failure line; disk alert dedupe unit; quiet-hour owner-active ask unit.
+
+## Track G — Sessions as Linear issues (supersedes the separate Sessions page)
+
+Owner decision 2026-10-19: tracker stays Linear parity. omo sessions are mirrored as issues in a system team,
+viewed through the existing team list/board/filters, managed from the issue detail agent panel.
+
+Schema (lead, done): migrations/0053_tracker_sessions.sql
+- tracker_issues.session_ref TEXT UNIQUE (format "<machine>:<session_id>")
+- tracker_states.session_state TEXT ('question'|'blocked'|'working'|'idle'|'ended')
+
+Contract:
+- Team key 'SES', name 'Sessions', icon 'terminal', system=1, sort_order 0.5. States (name, type, color, position, session_state):
+  Needs answer/started/#eb5757/1/question, Blocked/started/#fc7840/2/blocked, Working/started/#f2c94c/3/working,
+  Idle/unstarted/#e2e2e2/4/idle, Ended/completed/#95a2b3/5/ended. Seeded idempotently even when tracker_meta.seeded=1
+  (an ensure_sessions_team fn called from prepare()).
+- Issue fields: title = session name (if name empty or starts with '/', use basename(cwd), else short id);
+  description = markdown: "**Machine** local · **Directory** `~/...` · **Session** `id`\n\n### Last user message\n...\n\n### Last assistant message\n...";
+  assignee = agent user named after machine via lanes::ensure_agent_user-like helper (model = "omo@<machine>");
+  identifier SES-<n>; session_ref set.
+- Model: Issue gains `session_ref: Option<String>` and `session: Option<SessionSummary>`;
+  SessionSummary { machine, session_id, state, streaming, message_count, pending_messages, cwd, updated_at, questions: Vec<PendingQuestion> }.
+  IssueDetail gains `session_detail: Option<SessionSummary + last_user + last_assistant>` (name it SessionDetail).
+- Sync: sessions::sync_issues(pool) in prepare(): uses the existing 15s cache in src/tracker/sessions.rs (collect when stale).
+  Machines whose snapshot failed: leave their issues untouched. Sessions present -> upsert (title/description/state/updated_at
+  only when changed; activity 'session_state' row on state change; notification for me when entering question/blocked).
+  Issues whose session disappeared from a machine that answered -> state Ended (completed_at now). Ended issue whose session
+  returns -> back to its live state. Never delete issues. Sync must not fail the request if collection errors (log + skip).
+- Human state moves on SES issues: patch to a state with session_state 'ended' while session is streaming -> call interrupt;
+  any other manual move -> 409 conflict code "session_state_managed". Team moves into/out of SES rejected (system team rule already).
+- Existing endpoints kept: /api/tracker/sessions (list), /sessions/{machine}/{id}/send|interrupt|answer.
+- Frontend: remove SessionsPage.tsx/sessions.css usage, the 'sessions' route, and the Sidebar Sessions entry.
+  Home redirect -> /team/SES/all with default display layout 'board' grouped by status for viewKey team:SES:*.
+  AgentPanel: if detail.session_detail -> SessionAgentPanel (state, machine, cwd, last messages, question option buttons,
+  answer box, send box with Cmd+Enter, Interrupt when streaming) using trackerApi.sessions.*; after an action call refresh.
+  Issue rows/cards for SES issues show the existing assignee avatar; no new row component.

@@ -14,6 +14,8 @@ struct Harness {
 
 impl Harness {
     async fn new() -> Self {
+        // The harness must never mirror the developer machine's live omo sessions into its DB.
+        std::env::set_var(omon_gateway::tracker::sessions::SYNC_ENV, "0");
         let dir = tempfile::tempdir().unwrap();
         let url = format!("sqlite://{}", dir.path().join("tracker.db").display());
         let database = Database::connect(&url).await.unwrap();

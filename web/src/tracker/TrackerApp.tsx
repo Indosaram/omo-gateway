@@ -20,7 +20,6 @@ import { ProjectPage } from './pages/ProjectPage'
 import { CyclesPage } from './pages/CyclesPage'
 import { CyclePage } from './pages/CyclePage'
 import { InboxPage } from './pages/InboxPage'
-import { SessionsPage } from './pages/SessionsPage'
 
 function routeKey(route: Route): string {
   switch (route.name) {
@@ -61,15 +60,14 @@ function NotFound({ message }: { message: string }) {
 
 function RouteView({ route }: { route: Route }) {
   const t = useTracker()
+  const hasSessionsTeam = t.teamsByKey.has('SES')
   useEffect(() => {
-    if (route.name === 'home') navigate('/sessions', { replace: true })
-  }, [route.name])
+    if (route.name === 'home') navigate(hasSessionsTeam ? '/team/SES/all' : '/my-issues/assigned', { replace: true })
+  }, [route.name, hasSessionsTeam])
 
   switch (route.name) {
     case 'home':
       return null
-    case 'sessions':
-      return <SessionsPage sessionKey={route.sessionKey} />
     case 'inbox':
       return <InboxPage notificationId={route.notificationId ?? undefined} />
     case 'my-issues':
@@ -166,8 +164,6 @@ function Shell() {
   useEffect(() => {
     const title = (() => {
       switch (route.name) {
-        case 'sessions':
-          return 'Sessions'
         case 'inbox':
           return 'Inbox'
         case 'my-issues':
