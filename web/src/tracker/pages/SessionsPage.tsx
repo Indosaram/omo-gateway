@@ -4,6 +4,8 @@ import {
   ArrowLeft,
   ChevronDown,
   CircleStop,
+  Columns3,
+  LayoutList,
   MessageSquare,
   MessageSquareReply,
   RefreshCw,
@@ -141,12 +143,32 @@ interface Group {
 }
 
 const IDLE_COLLAPSE_THRESHOLD = 8
+const LAYOUT_KEY = 'tracker.sessions.layout'
+type SessionsLayout = 'list' | 'board'
+
+function readLayout(): SessionsLayout {
+  try {
+    return window.localStorage.getItem(LAYOUT_KEY) === 'board' ? 'board' : 'list'
+  } catch {
+    return 'list'
+  }
+}
 
 export function SessionsPage({ sessionKey: openKey }: { sessionKey: string | null }) {
   const { data, error, loading } = useSessionsStore()
   const mobile = useIsMobile()
   const [idleOpenChoice, setIdleOpenChoice] = useState<boolean | null>(null)
   const [cursor, setCursor] = useState<string | null>(openKey)
+  const [layoutChoice, setLayoutChoice] = useState<SessionsLayout>(readLayout)
+  const layout: SessionsLayout = mobile ? 'list' : layoutChoice
+  const setLayout = useCallback((next: SessionsLayout) => {
+    setLayoutChoice(next)
+    try {
+      window.localStorage.setItem(LAYOUT_KEY, next)
+    } catch {
+      // Private mode: the choice just lasts for this page.
+    }
+  }, [])
   const [, setTick] = useState(0)
 
   usePolling(15_000)
@@ -175,9 +197,21 @@ export function SessionsPage({ sessionKey: openKey }: { sessionKey: string | nul
   const idleCount = groups.find((g) => g.id === 'idle')?.sessions.length ?? 0
   const idleOpen = idleOpenChoice ?? idleCount <= IDLE_COLLAPSE_THRESHOLD
 
+  const columns = useMemo<Group[]>(() => {
+    const pick = (id: GroupId) => groups.find((g) => g.id === id)?.sessions ?? []
+    return [
+      { id: 'attention' as const, title: 'Needs answer', sessions: pick('attention') },
+      { id: 'working' as const, title: 'Working', sessions: pick('working') },
+      { id: 'idle' as const, title: 'Idle', sessions: pick('idle') },
+    ]
+  }, [groups])
+
   const visible = useMemo(
-    () => groups.flatMap((g) => (g.id === 'idle' && !idleOpen ? [] : g.sessions)),
-    [groups, idleOpen],
+    () =>
+      layout === 'board'
+        ? columns.flatMap((g) => g.sessions)
+        : groups.flatMap((g) => (g.id === 'idle' && !idleOpen ? [] : g.sessions)),
+    [layout, columns, groups, idleOpen],
   )
 
   const openSession = openKey ? sessions.find((s) => sessionKey(s) === openKey) ?? null : null
@@ -202,6 +236,7 @@ export function SessionsPage({ sessionKey: openKey }: { sessionKey: string | nul
   useHotkey(['k', 'arrowup'], () => step(-1))
   useHotkey('enter', () => cursor && open(cursor), { enabled: Boolean(cursor) && cursor !== openKey })
   useHotkey('escape', close, { enabled: Boolean(openKey), preventDefault: false })
+  useHotkey('mod+b', () => setLayout(layout === 'board' ? 'list' : 'board'), { enabled: !mobile, allowInInputs: false })
 
   const counts = data?.counts
   const failedMachines = data?.machines.filter((m) => !m.ok) ?? []
@@ -229,6 +264,32 @@ export function SessionsPage({ sessionKey: openKey }: { sessionKey: string | nul
             </span>
           ) : null}
         </span>
+      ) : null}
+      {!mobile ? (
+        <div className="lic-seg" role="group" aria-label="Layout">
+          <Tooltip content="List" kbd={['⌘', 'B']}>
+            <button
+              type="button"
+              className={`lic-seg-btn${layout === 'list' ? ' lic-seg-btn--on' : ''}`}
+              aria-pressed={layout === 'list'}
+              aria-label="List layout"
+              onClick={() => setLayout('list')}
+            >
+              <LayoutList size={14} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Board" kbd={['⌘', 'B']}>
+            <button
+              type="button"
+              className={`lic-seg-btn${layout === 'board' ? ' lic-seg-btn--on' : ''}`}
+              aria-pressed={layout === 'board'}
+              aria-label="Board layout"
+              onClick={() => setLayout('board')}
+            >
+              <Columns3 size={14} />
+            </button>
+          </Tooltip>
+        </div>
       ) : null}
       <IconButton
         label="Refresh"
@@ -283,7 +344,35 @@ export function SessionsPage({ sessionKey: openKey }: { sessionKey: string | nul
                 </div>
               </div>
             ) : null}
-            {groups.map((group) => {
+            {layout === 'board' && data && sessions.length > 0 ? (
+              <div className="ss-board">
+                {columns.map((column) => (
+                  <section key={column.id} className="ss-col" aria-label={column.title}>
+                    <div className="ss-col-head">
+                      <StateDot state={column.id === 'attention' ? 'question' : column.id} />
+                      <span>{column.title}</span>
+                      <span className="ss-group-count">{column.sessions.length}</span>
+                    </div>
+                    <div className="ss-col-body">
+                      {column.sessions.length === 0 ? <div className="ss-col-empty">None</div> : null}
+                      {column.sessions.map((session) => (
+                        <SessionCard
+                          key={sessionKey(session)}
+                          session={session}
+                          selected={sessionKey(session) === openKey}
+                          cursor={sessionKey(session) === cursor}
+                          onOpen={() => {
+                            setCursor(sessionKey(session))
+                            open(sessionKey(session))
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            ) : null}
+            {layout === 'list' && groups.map((group) => {
               const collapsible = group.id === 'idle'
               const groupOpen = !collapsible || idleOpen
               return (
@@ -339,6 +428,54 @@ export function SessionsPage({ sessionKey: openKey }: { sessionKey: string | nul
         )
       ) : null}
     </div>
+  )
+}
+
+function SessionCard({
+  session,
+  selected,
+  cursor,
+  onOpen,
+}: {
+  session: OmoSession
+  selected: boolean
+  cursor: boolean
+  onOpen: () => void
+}) {
+  const key = sessionKey(session)
+  const question = session.questions[0]?.questions[0]?.question
+  const preview = (session.state === 'question' && question ? firstLine(question) : '') || lastLine(session.last_assistant) || lastLine(session.last_user)
+  return (
+    <a
+      href={hrefFor({ name: 'sessions', sessionKey: key })}
+      data-session-key={key}
+      aria-selected={selected}
+      className={`ss-card ${selected ? 'is-selected' : ''} ${cursor && !selected ? 'is-cursor' : ''}`}
+      onClick={(event) => {
+        event.preventDefault()
+        onOpen()
+      }}
+    >
+      <span className="ss-card-title">
+        <StateDot state={session.state} />
+        <span className="ss-card-name">{sessionTitle(session)}</span>
+      </span>
+      {preview ? <span className={`ss-card-preview ${session.state === 'question' ? 'is-question' : ''}`}>{preview}</span> : null}
+      <span className="ss-card-meta">
+        <span className="ss-chip">{session.machine}</span>
+        <span className="ss-card-cwd" title={session.cwd ?? undefined}>
+          {basename(session.cwd)}
+        </span>
+        <span className="ss-card-right">
+          {session.pending_messages > 0 ? <span title="Queued messages">+{session.pending_messages}</span> : null}
+          <span title="Messages">
+            <MessageSquare size={11} />
+            {session.message_count}
+          </span>
+          {session.updated_at ? <span title={session.updated_at}>{relativeTime(session.updated_at)}</span> : null}
+        </span>
+      </span>
+    </a>
   )
 }
 

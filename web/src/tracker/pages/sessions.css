@@ -324,3 +324,72 @@
 .lin .ss-input::placeholder,
 .lin .ss-textarea::placeholder { color: var(--text-4); }
 .lin .ss-send-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--text-4); }
+
+/* Board layout: one column per state, cards instead of rows. */
+.lin .ss-board {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(240px, 1fr));
+  gap: 12px;
+  padding: 12px 16px 24px;
+  align-items: start;
+}
+.lin .ss-col {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-subtle, rgba(255, 255, 255, 0.02));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.lin .ss-col-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 510;
+  color: var(--text-1);
+}
+.lin .ss-col-body { display: flex; flex-direction: column; gap: 6px; padding: 0 8px 8px; }
+.lin .ss-col-empty { padding: 10px 4px; font-size: 12px; color: var(--text-4); }
+.lin .ss-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--bg-elevated, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  text-decoration: none;
+  outline: none;
+  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
+}
+.lin .ss-card:hover,
+.lin .ss-card.is-cursor { background: var(--bg-hover); }
+.lin .ss-card.is-selected { background: var(--bg-selected); border-color: var(--border-strong); }
+.lin .ss-card:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.lin .ss-card-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lin .ss-card-name {
+  font-size: 13px;
+  font-weight: 510;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lin .ss-card-preview {
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--text-3);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+.lin .ss-card-preview.is-question { color: var(--text-2); }
+.lin .ss-card-meta { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--text-4); }
+.lin .ss-card-cwd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lin .ss-card-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.lin .ss-card-right span { display: inline-flex; align-items: center; gap: 3px; }
