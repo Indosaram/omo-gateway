@@ -953,6 +953,10 @@ async fn api_status(State(state): State<DashboardState>) -> Result<Json<Value>, 
         .multiplexer
         .as_ref()
         .map_or(0, SessionMultiplexer::active_sessions);
+    let busy_sessions = match state.multiplexer.as_ref() {
+        Some(mux) => mux.busy_sessions().await,
+        None => 0,
+    };
     let (disk_total, disk_available) = state.sample_disk();
     let memory_bytes = process_memory_bytes();
     let (disk_headroom_status, disk_used_percent, disk_pressure) =
@@ -980,6 +984,7 @@ async fn api_status(State(state): State<DashboardState>) -> Result<Json<Value>, 
         "uptime_seconds": state.started_at.elapsed().as_secs(),
         "bot_connections": state.bot_connections,
         "active_sessions": active_sessions,
+        "busy_sessions": busy_sessions,
         "chat_available": state.multiplexer.is_some(),
         "database": {
             "sessions": stored_sessions,

@@ -6283,3 +6283,120 @@ async fn lane_live_daemon_turn_against_mktemp_repo() {
         "reply from live daemon must contain the mktemp path '{tmp_path}', got: {full_reply}"
     );
 }
+
+/// A turn the engine starts on its own after the gateway turn ended (a detached cell
+/// finishing) reaches the messenger through the follower subscription.
+#[tokio::test]
+async fn engine_started_turn_after_the_gateway_turn_is_delivered() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let peer = tokio::spawn(async move {
+        // The gateway turn's own connection.
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        for method in ["initialize", "thread/resume", "turn/start"] {
+            let request: Value =
+                serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            let result = if method == "turn/start" {
+                json!({"turn":{"id":"t1","status":"inProgress"}})
+            } else {
+                json!({"thread":{"id":"r1"}})
+            };
+            ws.send(Message::text(
+                json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+            ))
+            .await
+            .unwrap();
+        }
+        for frame in [
+            json!({"method":"turn/started","params":{"threadId":"r1","turn":{"id":"t1"}}}),
+            json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t1","item":{"type":"agentMessage","id":"a1","text":"200초 셀이 끝나면 '끝'이라고 답할게요."}}}),
+            json!({"method":"turn/completed","params":{"threadId":"r1","turn":{"id":"t1","status":"completed","items":[]}}}),
+        ] {
+            ws.send(Message::text(frame.to_string())).await.unwrap();
+        }
+        // The follower's subscription.
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut follower = tokio_tungstenite::accept_async(socket).await.unwrap();
+        for method in ["initialize", "thread/resume"] {
+            let request: Value =
+                serde_json::from_str(follower.next().await.unwrap().unwrap().to_text().unwrap())
+                    .unwrap();
+            assert_eq!(request["method"], method);
+            assert!(method == "initialize" || request["params"]["threadId"] == "r1");
+            follower
+                .send(Message::text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":{"thread":{"id":"r1"}}})
+                        .to_string(),
+                ))
+                .await
+                .unwrap();
+        }
+        for frame in [
+            json!({"method":"turn/started","params":{"threadId":"r1","turn":{"id":"t2"}}}),
+            json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2","item":{"type":"agentMessage","id":"a2","text":"끝"}}}),
+            json!({"method":"turn/completed","params":{"threadId":"r1","turn":{"id":"t2","status":"completed","items":[{"type":"agentMessage","text":"끝"}]}}}),
+        ] {
+            follower
+                .send(Message::text(frame.to_string()))
+                .await
+                .unwrap();
+        }
+        stop_rx.await.unwrap();
+    });
+
+    let (delivered_tx, mut delivered_rx) = tokio::sync::mpsc::unbounded_channel();
+    let dispatcher = Arc::new(CapturingDispatcher::new());
+    *dispatcher.turn_started_tx.lock() = Some(delivered_tx);
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address}")),
+        dispatcher.clone(),
+    )
+    .with_engine_turn_follow(true);
+    let key = SessionKey::new("local", None::<String>, "u-follow", None::<String>, "user");
+    let mut session = SessionContext::new(key.clone());
+    session
+        .state
+        .metadata
+        .insert("omo_thread_id".into(), json!("r1"));
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(
+            &mut session,
+            InboundEvent::message(key, "u-follow", "sleep 200 then say 끝"),
+        ),
+    )
+    .await
+    .expect("gateway turn finishes")
+    .expect("gateway turn succeeds");
+
+    let follow_up = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let content = delivered_rx.recv().await.expect("dispatcher open");
+            if content == "끝" {
+                return content;
+            }
+        }
+    })
+    .await
+    .expect("the engine-started turn reaches the messenger");
+    assert_eq!(follow_up, "끝");
+    let finals: Vec<String> = dispatcher
+        .stream_chunks()
+        .into_iter()
+        .filter(|chunk| chunk.is_final)
+        .map(|chunk| chunk.content)
+        .collect();
+    assert_eq!(
+        finals,
+        vec![
+            "200초 셀이 끝나면 '끝'이라고 답할게요.".to_string(),
+            "끝".to_string()
+        ]
+    );
+    stop_tx.send(()).unwrap();
+    peer.await.unwrap();
+}

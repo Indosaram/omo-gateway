@@ -42,6 +42,8 @@ APPSERVER_URL="${OMON_OMO_APPSERVER_URL:-ws://127.0.0.1:19742}"
 APPSERVER_HTTP="${APPSERVER_URL/ws:\/\//http://}"
 LOG="$HOME/.omon/gateway.log"
 VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
+# A restart cuts off every turn in flight; wait up to this long for them to finish first.
+IDLE_WAIT_TIMEOUT="${IDLE_WAIT_TIMEOUT:-600}"
 BACKUP_DIR="$HOME/.omon/deploy-backups"
 
 say() { printf '[deploy] %s\n' "$*"; }
@@ -140,6 +142,26 @@ verify() {
     say "verify timed out: gateway=${pid:-none} transport=$transport:${ready:+ready} readyz=${code:-none} appservers=[$(tr '\n' ' ' <<<"$servers")] parent=${parent:-?} dashboard=$dashboard_state"
     check_fda_warning "$since"
     return 1
+}
+
+# Waits until the running gateway reports no session running a turn (busy_sessions=0) or
+# IDLE_WAIT_TIMEOUT passes. A gateway that predates the field, or does not answer, is not waited on.
+wait_for_idle_sessions() {
+    local deadline=$((SECONDS + IDLE_WAIT_TIMEOUT)) busy announced=0
+    while ((SECONDS < deadline)); do
+        busy="$(curl -s -m 5 "$(dashboard_url)/api/status" 2>/dev/null \
+            | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("busy_sessions", 0))
+except Exception: print(0)' 2>/dev/null || echo 0)"
+        [[ "$busy" =~ ^[0-9]+$ ]] || busy=0
+        ((busy == 0)) && return 0
+        if ((announced == 0)); then
+            say "waiting for $busy running turn(s) to finish before restarting (up to ${IDLE_WAIT_TIMEOUT}s)"
+            announced=1
+        fi
+        sleep 5
+    done
+    say "turns still running after ${IDLE_WAIT_TIMEOUT}s; restarting anyway (they resume on boot)"
 }
 
 plist_modified=0
@@ -318,6 +340,7 @@ if [[ -f "$PLIST" ]]; then
 fi
 
 old_pid="$(detect_old_pid)"
+[[ -n "$old_pid" ]] && wait_for_idle_sessions
 since="$(date -u +%Y-%m-%dT%H:%M:%S)"
 say "restarting $LABEL (old pid ${old_pid:-none})"
 restart

@@ -515,6 +515,22 @@ impl SessionMultiplexer {
         self.sessions.len()
     }
 
+    /// Sessions running a turn or holding queued events; a restart would cut them off.
+    pub async fn busy_sessions(&self) -> usize {
+        let handles: Vec<_> = self
+            .sessions
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+        let mut busy = 0;
+        for handle in handles {
+            if Self::has_unfinished_work(&handle).await {
+                busy += 1;
+            }
+        }
+        busy
+    }
+
     /// Answers a pending approval with a short reply from the verified owner. Never reached
     /// from lane steers or system text.
     pub async fn resolve_owner_reply(&self, key: &SessionKey, text: &str) -> Result<bool> {
@@ -931,6 +947,7 @@ mod tests {
             multiplexer.mark_in_flight_resume_pending().await.unwrap(),
             1
         );
+        assert_eq!(multiplexer.busy_sessions().await, 1);
         assert_eq!(resume_pending(&db, &busy).await, 1);
         assert_eq!(
             resume_pending(&db, &idle).await,

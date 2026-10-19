@@ -31,6 +31,8 @@ use crate::{OmonError, OutboundDispatcher, Result};
 
 type WsStream = WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+mod follow;
+
 /// Approval denials tolerated per turn before the gateway aborts it: a
 /// policy-denial loop otherwise burns the entire turn deadline flailing.
 pub const APPROVAL_DENIAL_TURN_LIMIT: u32 = 5;
@@ -184,6 +186,7 @@ const INTERACTIVE_TURN_CAP: Duration = Duration::from_secs(1800);
 
 pub type UtcClock = Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>;
 
+#[derive(Clone)]
 pub struct OmoBackend {
     pub config: OmoBackendConfig,
     pub pool: Option<SqlitePool>,
@@ -194,6 +197,8 @@ pub struct OmoBackend {
     pub ledger_enabled: Option<bool>,
     pub full_access: Option<bool>,
     pub clock: Option<UtcClock>,
+    followers: Arc<ParkingMutex<HashMap<String, follow::Follower>>>,
+    follow_engine_turns: bool,
 }
 
 impl OmoBackend {
@@ -208,6 +213,8 @@ impl OmoBackend {
             ledger_enabled: None,
             full_access: None,
             clock: None,
+            followers: Arc::new(ParkingMutex::new(HashMap::new())),
+            follow_engine_turns: false,
         }
     }
 
@@ -226,6 +233,13 @@ impl OmoBackend {
 
     pub fn with_ledger_enabled(mut self, enabled: bool) -> Self {
         self.ledger_enabled = Some(enabled);
+        self
+    }
+
+    /// Keeps a subscription open after each interactive turn so turns the engine starts on
+    /// its own (a detached cell finishing, a monitor firing) reach the messenger.
+    pub fn with_engine_turn_follow(mut self, enabled: bool) -> Self {
+        self.follow_engine_turns = enabled;
         self
     }
 
@@ -2372,6 +2386,10 @@ impl AgentBackend for OmoBackend {
             self.config.total_timeout.min(INTERACTIVE_TURN_CAP)
         };
         let deadline = tokio::time::Instant::now() + effective_total_timeout;
+        let follows_engine_turns = self.follow_engine_turns && !is_cron_session && !is_lane;
+        if follows_engine_turns {
+            self.stop_following(&session.key.storage_key());
+        }
 
         // Cron deliveries are posted by the scheduler, not by this thread. Take the
         // pending ones once for every attempt of this run (a model fallback re-runs
@@ -2581,7 +2599,7 @@ impl AgentBackend for OmoBackend {
             let (ws, thread_id) = self
                 .setup_turn(session, deadline, effective_total_timeout)
                 .await?;
-            return self
+            result = self
                 .execute_turn(
                     ws,
                     thread_id,
@@ -2594,6 +2612,16 @@ impl AgentBackend for OmoBackend {
                     briefings.as_ref(),
                 )
                 .await;
+        }
+        if follows_engine_turns {
+            if let Some(thread_id) = session
+                .state
+                .metadata
+                .get("omo_thread_id")
+                .and_then(Value::as_str)
+            {
+                self.follow_thread(session, thread_id.to_owned());
+            }
         }
         result
     }

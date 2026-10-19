@@ -1358,7 +1358,8 @@ async fn run_gateway_with_dashboard(
     let omo_backend = Arc::new(
         OmoBackend::new(omo_config.clone(), shared_dispatcher.clone())
             .with_pool(pool.clone())
-            .with_approval_requester(approval_requester.clone()),
+            .with_approval_requester(approval_requester.clone())
+            .with_engine_turn_follow(true),
     );
     let runner: Arc<dyn AgentBackend> = omo_backend.clone();
     let profile_router = ProfileRouter::new(config.profile_routes.clone());

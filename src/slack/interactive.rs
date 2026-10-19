@@ -6,6 +6,8 @@ use crate::{parse_custom_id, ApprovalDecision, Result, SmartApprovalGuard};
 
 const APPROVAL_PREFIX: &str = "omon:approval:";
 const NOT_AUTHORIZED: &str = "You are not authorized to answer this approval request.";
+const STALE_APPROVAL: &str =
+    "이 승인 요청은 이미 처리됐거나 만료됐어요. 다시 누르지 않으셔도 돼요.";
 
 pub async fn handle_block_actions(
     payload: &Value,
@@ -54,6 +56,18 @@ async fn resolve_approvals(
             decided.push((request_id, decision_label(&decision, user)));
         } else {
             tracing::info!(%request_id, "Slack approval click for an unknown or expired request");
+            // The card still shows buttons that can no longer do anything (decided elsewhere,
+            // expired, or lost to a restart): replace them so the owner is not left clicking.
+            if let (Some(channel), Some(ts)) =
+                (payload_channel(payload), payload_message_ts(payload))
+            {
+                if let Err(error) = api
+                    .update_message(channel, ts, STALE_APPROVAL, Some(stale_blocks()))
+                    .await
+                {
+                    tracing::warn!(%request_id, %error, "failed to clear a stale Slack approval card");
+                }
+            }
         }
     }
     Ok(decided)
@@ -78,6 +92,17 @@ pub(super) fn payload_channel(payload: &Value) -> Option<&str> {
         .pointer("/channel/id")
         .or_else(|| payload.pointer("/container/channel_id"))
         .and_then(Value::as_str)
+}
+
+fn payload_message_ts(payload: &Value) -> Option<&str> {
+    payload
+        .pointer("/container/message_ts")
+        .or_else(|| payload.pointer("/message/ts"))
+        .and_then(Value::as_str)
+}
+
+fn stale_blocks() -> Value {
+    serde_json::json!([{ "type": "section", "text": { "type": "mrkdwn", "text": STALE_APPROVAL } }])
 }
 
 fn decision_label(decision: &ApprovalDecision, user: &str) -> String {
@@ -272,6 +297,15 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+        // The well-formed but unknown click gets its dead buttons replaced; nothing else is sent.
+        {
+            let calls = calls.lock();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "/api/chat.update");
+            assert_eq!(calls[0].1["ts"], "1.2");
+            assert_eq!(calls[0].1["text"], STALE_APPROVAL);
+        }
+        calls.lock().clear();
 
         let mut other = click("USTRANGER", &["other:button".to_owned()]);
         assert!(resolve_approvals(&other, &config(), &guard, &api)
