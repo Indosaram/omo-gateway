@@ -579,6 +579,8 @@ impl SessionActor {
                         _ => None,
                     };
 
+                    // One "queued" notice per running turn; a fresh turn starts with it unsent.
+                    let mut queued_notice_sent = false;
                     let runner = self.runner.clone();
                     let mut run = Box::pin(runner.run_cancelable(
                         &mut turn_context,
@@ -654,7 +656,26 @@ impl SessionActor {
                                             }
                                         }
                                         if pending_events.len() < MAX_PENDING_EVENTS {
+                                            let notify_reply_to = (!queued_notice_sent
+                                                && next.origin == crate::EventOrigin::User
+                                                && owner.is_some()
+                                                && next.author_id.as_deref() == owner.as_deref()
+                                                && !next.platform_message_id.is_empty()
+                                                && !self.context.key.user_id.starts_with("cron:"))
+                                            .then(|| next.platform_message_id.clone());
                                             pending_events.push_back(ActorCommand::Event(next));
+                                            if let (Some(reply_to), Some(dispatcher)) =
+                                                (notify_reply_to, &self.dispatcher)
+                                            {
+                                                queued_notice_sent = true;
+                                                let _ = dispatcher
+                                                    .dispatch(OutboundAction::SendMessage {
+                                                        session: self.context.key.clone(),
+                                                        content: QUEUED_NOTICE_TEXT.to_string(),
+                                                        reply_to: Some(reply_to),
+                                                    })
+                                                    .await;
+                                            }
                                         } else {
                                             tracing::warn!(
                                                 session = %self.context.key,
@@ -887,7 +908,7 @@ impl SessionActor {
                                     let _ = dispatcher
                                         .dispatch(OutboundAction::SendMessage {
                                             session: self.context.key.clone(),
-                                            content: error.to_string(),
+                                            content: owner_failure_text(&error.to_string()),
                                             reply_to: Some(reply_to),
                                         })
                                         .await;
@@ -1420,6 +1441,31 @@ async fn discard_unfinished_inbound(
     Ok(())
 }
 
+const QUEUED_NOTICE_TEXT: &str = "앞 작업이 끝나면 바로 이어서 할게요.";
+
+/// Owner-facing Korean line for a failed turn; the raw error stays in the logs.
+fn owner_failure_text(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+    let reason = if [
+        "no output within",
+        "turn interrupted",
+        "timeout waiting for turn/start",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+    {
+        "모델이 응답하지 않았어요"
+    } else if ["quota", "429", "rate limit"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        "모델 사용량 한도에 걸렸어요"
+    } else {
+        "처리 중 오류가 났어요"
+    };
+    format!("⚠️ 응답을 만들지 못했어요 ({reason}). 같은 메시지를 다시 보내 주시면 이어서 할게요.")
+}
+
 fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
     if key.platform == crate::slack::PLATFORM {
         return is_slack_owner_lead_session(
@@ -1728,6 +1774,31 @@ mod tests {
         let elsewhere = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
         assert!(!is_slack_owner_lead_session(&elsewhere, "UOWNER", &home));
         assert!(!is_slack_owner_lead_session(&home_thread, "UOWNER", &[]));
+    }
+
+    #[test]
+    fn owner_failure_text_maps_known_causes_to_korean_reasons() {
+        let no_response = "⚠️ 응답을 만들지 못했어요 (모델이 응답하지 않았어요). 같은 메시지를 다시 보내 주시면 이어서 할게요.";
+        for error in [
+            "LLM error: turn interrupted: agent produced no output within 45s of starting the prompt",
+            "agent produced no output within 45s",
+            "Turn Interrupted",
+            "timeout waiting for turn/start",
+        ] {
+            assert_eq!(owner_failure_text(error), no_response, "{error}");
+        }
+        let quota = "⚠️ 응답을 만들지 못했어요 (모델 사용량 한도에 걸렸어요). 같은 메시지를 다시 보내 주시면 이어서 할게요.";
+        for error in [
+            "quota exhausted",
+            "HTTP 429 Too Many Requests",
+            "Rate limit reached",
+        ] {
+            assert_eq!(owner_failure_text(error), quota, "{error}");
+        }
+        assert_eq!(
+            owner_failure_text("database is locked"),
+            "⚠️ 응답을 만들지 못했어요 (처리 중 오류가 났어요). 같은 메시지를 다시 보내 주시면 이어서 할게요."
+        );
     }
 
     #[test]

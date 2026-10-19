@@ -193,6 +193,18 @@ if [[ "$ONLY_VERIFY" == 1 ]]; then
 fi
 
 cd "$REPO"
+# Several worktrees deploy to the same gateway. A build that does not contain the revision
+# currently deployed silently reverts another session's fixes (2026-10-19: the full-access
+# and Slack ingress fixes were overwritten twice). Refuse it unless forced.
+deployed_rev="$(sed -n 's/^rev=\([0-9a-f]*\).*/\1/p' "$INSTALL_DIR/DEPLOYED" 2>/dev/null | head -1)"
+if [[ -n "$deployed_rev" && "${OMON_DEPLOY_ALLOW_REWIND:-0}" != 1 ]]; then
+    if git -C "$REPO" cat-file -e "$deployed_rev^{commit}" 2>/dev/null; then
+        git -C "$REPO" merge-base --is-ancestor "$deployed_rev" HEAD \
+            || die "HEAD does not contain the deployed revision $deployed_rev; merge it first (or set OMON_DEPLOY_ALLOW_REWIND=1)"
+    else
+        die "deployed revision $deployed_rev is unknown to $REPO; fetch or merge it first (or set OMON_DEPLOY_ALLOW_REWIND=1)"
+    fi
+fi
 if [[ "$NO_BUILD" == 0 ]]; then
     [[ -z "$(pgrep -f 'cargo (build|test|clippy).*omo-gateway' || true)" ]] \
         || die "another cargo build of omo-gateway holds the build lock; stop it first"

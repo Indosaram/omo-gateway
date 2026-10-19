@@ -10,6 +10,7 @@ import {
   Search,
   SquarePen,
   Target,
+  SquareTerminal,
   CircleUser,
 } from 'lucide-react'
 import { hrefFor, navigate, type Route } from '../router'
@@ -17,6 +18,7 @@ import { useTracker } from '../store'
 import type { Favorite, Team } from '../types'
 import { cycleLabel, initials } from '../format'
 import { AgentGlyph, Avatar, Kbd, LabelDot, MenuList, Popover, ProjectIcon, Tooltip } from '../ui'
+import { useSessionsSummary } from '../pages/SessionsPage'
 
 const WIDTH_KEY = 'tracker.sidebarWidth'
 const OPEN_KEY = 'tracker.sidebarSections'
@@ -71,6 +73,8 @@ export function TeamIcon({ team, size = 18 }: { team: Team; size?: number }) {
 
 function isRoute(route: Route, path: string): boolean {
   switch (route.name) {
+    case 'sessions':
+      return path === '/sessions'
     case 'inbox':
       return path === '/inbox'
     case 'my-issues':
@@ -159,6 +163,8 @@ export function Sidebar({
   onNavigate?: () => void
 }) {
   const t = useTracker()
+  const sessionCounts = useSessionsSummary()
+  const sessionsAttention = sessionCounts ? sessionCounts.question + sessionCounts.blocked : 0
   const [open, setOpen] = useState<Record<string, boolean>>(() => readJson(OPEN_KEY, {}))
   const [wsMenuAnchor, setWsMenuAnchor] = useState<HTMLElement | null>(null)
   const [dragging, setDragging] = useState(false)
@@ -334,6 +340,21 @@ export function Sidebar({
       </Popover>
 
       <div className="ls-sidebar-scroll">
+        <NavItem
+          href="/sessions"
+          icon={<SquareTerminal size={15} />}
+          label="Sessions"
+          active={isRoute(route, '/sessions')}
+          onNavigate={onNavigate}
+          title={sessionsAttention > 0 ? `${sessionsAttention} need an answer` : undefined}
+          trailing={
+            sessionsAttention > 0 ? (
+              <span className="ls-badge ss-badge-attn">{sessionsAttention}</span>
+            ) : sessionCounts && sessionCounts.working > 0 ? (
+              <span className="ls-count">{sessionCounts.working}</span>
+            ) : null
+          }
+        />
         <NavItem
           href="/inbox"
           icon={<Inbox size={15} />}

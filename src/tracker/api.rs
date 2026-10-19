@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::error::OmonError;
-use crate::tracker::{issues, lanes, seed, threads, workspace};
+use crate::tracker::{issues, lanes, seed, sessions, threads, workspace};
 
 #[derive(Debug)]
 pub struct TrackerError {
@@ -251,5 +251,18 @@ where
         )
         .route("/notifications/{id}", patch(workspace::update_notification))
         .route("/search", get(workspace::search))
+        .route("/sessions", get(sessions::list))
+        .route(
+            "/sessions/{machine}/{session_id}/send",
+            post(sessions::send),
+        )
+        .route(
+            "/sessions/{machine}/{session_id}/interrupt",
+            post(sessions::interrupt),
+        )
+        .route(
+            "/sessions/{machine}/{session_id}/answer",
+            post(sessions::answer),
+        )
         .with_state(pool)
 }

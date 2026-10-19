@@ -442,3 +442,60 @@ export const LANE_STATUS_LABELS: Record<LaneStatus, string> = {
   closed: 'Closed',
   failed: 'Failed',
 }
+
+export type SessionState = 'working' | 'question' | 'blocked' | 'idle'
+
+export interface SessionQuestionItem {
+  id: string
+  header: string | null
+  question: string | null
+  options: string[]
+}
+
+export interface SessionQuestion {
+  request_id: string
+  questions: SessionQuestionItem[]
+}
+
+export interface OmoSession {
+  machine: string
+  session_id: string
+  name: string | null
+  cwd: string | null
+  state: SessionState
+  streaming: boolean
+  compacting: boolean
+  message_count: number
+  pending_messages: number
+  last_user: string
+  last_assistant: string
+  questions: SessionQuestion[]
+  updated_at: string | null
+}
+
+export interface SessionMachine {
+  machine: string
+  ok: boolean
+  error: string | null
+  session_count: number
+}
+
+export interface SessionCounts {
+  working: number
+  question: number
+  blocked: number
+  idle: number
+  total: number
+}
+
+export interface SessionsOverview {
+  collected_at: string
+  machines: SessionMachine[]
+  sessions: OmoSession[]
+  counts: SessionCounts
+}
+
+export interface SessionActionResult {
+  ok: boolean
+  result: unknown
+}
