@@ -488,10 +488,31 @@ impl GuardReport {
     }
 }
 
+/// Within this window a repeated ALERT is suppressed unless the host got materially worse.
+pub const GUARD_REALERT_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
+/// Disk must drop at least this many GB below the last alerted value to re-alert early.
+pub const GUARD_REALERT_DISK_DROP_GB: u64 = 10;
+/// Free memory must drop at least this many percentage points to re-alert early.
+pub const GUARD_REALERT_MEM_DROP_PCT: u32 = 10;
+
+/// Snapshot of the host at the last emitted ALERT.
+#[derive(Debug, Clone, Copy)]
+struct AlertMark {
+    at: std::time::Instant,
+    load: bool,
+    mem: bool,
+    disk: bool,
+    mem_free_pct: u32,
+    disk_free_gb: u64,
+}
+
 #[derive(Clone)]
 pub struct GuardWatcher {
     thresholds: GuardThresholds,
     current_state: GuardState,
+    last_alert: Option<AlertMark>,
+    /// Whether the current Alert episode emitted an ALERT (so its CLEAR is worth sending).
+    episode_reported: bool,
 }
 
 impl Default for GuardWatcher {
@@ -505,6 +526,8 @@ impl GuardWatcher {
         Self {
             thresholds,
             current_state: GuardState::Clear,
+            last_alert: None,
+            episode_reported: false,
         }
     }
 
@@ -517,9 +540,76 @@ impl GuardWatcher {
     }
 
     pub fn check(&mut self, sample: &HostSample) -> Option<GuardReport> {
-        let mut alert_reasons = Vec::new();
+        self.check_at(sample, std::time::Instant::now())
+    }
 
-        if sample.load_1m >= self.thresholds.load_alert {
+    /// True when this sample deserves a fresh ALERT given the last emitted one.
+    fn worth_alerting(
+        &self,
+        load: bool,
+        mem: bool,
+        disk: bool,
+        sample: &HostSample,
+        now: std::time::Instant,
+    ) -> bool {
+        let Some(mark) = self.last_alert else {
+            return true;
+        };
+        if now.saturating_duration_since(mark.at) >= GUARD_REALERT_WINDOW {
+            return true;
+        }
+        // A metric that was not part of the last alert is new information.
+        if (load && !mark.load) || (mem && !mark.mem) || (disk && !mark.disk) {
+            return true;
+        }
+        let disk_worse = disk
+            && sample
+                .disk_free_gb
+                .saturating_add(GUARD_REALERT_DISK_DROP_GB)
+                <= mark.disk_free_gb;
+        let mem_worse = mem
+            && sample
+                .mem_free_pct
+                .saturating_add(GUARD_REALERT_MEM_DROP_PCT)
+                <= mark.mem_free_pct;
+        disk_worse || mem_worse
+    }
+
+    fn mark_alert(
+        &mut self,
+        load: bool,
+        mem: bool,
+        disk: bool,
+        sample: &HostSample,
+        now: std::time::Instant,
+    ) {
+        self.last_alert = Some(AlertMark {
+            at: now,
+            load,
+            mem,
+            disk,
+            mem_free_pct: sample.mem_free_pct,
+            disk_free_gb: sample.disk_free_gb,
+        });
+        self.episode_reported = true;
+    }
+
+    /// Deduplicating state machine. While in Alert nothing is emitted unless disk/mem dropped
+    /// by the re-alert margins (or a new metric alerts) since the last emitted ALERT. A
+    /// Clear->Alert flip within [`GUARD_REALERT_WINDOW`] of the last ALERT is suppressed under
+    /// the same rule; CLEAR is sent only for episodes whose ALERT was actually emitted, so
+    /// flapping around a threshold yields one ALERT and one CLEAR.
+    pub fn check_at(
+        &mut self,
+        sample: &HostSample,
+        now: std::time::Instant,
+    ) -> Option<GuardReport> {
+        let mut alert_reasons = Vec::new();
+        let load_alert = sample.load_1m >= self.thresholds.load_alert;
+        let mem_alert = sample.mem_free_pct < self.thresholds.mem_free_min_pct;
+        let disk_alert = sample.disk_free_gb < self.thresholds.disk_free_min_gb;
+
+        if load_alert {
             alert_reasons.push(format!(
                 "load average ({:.2}) >= alert threshold ({:.2})",
                 sample.load_1m, self.thresholds.load_alert
@@ -540,8 +630,13 @@ impl GuardWatcher {
 
         match self.current_state {
             GuardState::Clear => {
-                if !alert_reasons.is_empty() {
-                    self.current_state = GuardState::Alert;
+                if alert_reasons.is_empty() {
+                    return None;
+                }
+                self.current_state = GuardState::Alert;
+                self.episode_reported = false;
+                if self.worth_alerting(load_alert, mem_alert, disk_alert, sample, now) {
+                    self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
                     Some(GuardReport::Alert(alert_reasons.join("; ")))
                 } else {
                     None
@@ -554,10 +649,21 @@ impl GuardWatcher {
 
                 if load_cleared && mem_cleared && disk_cleared {
                     self.current_state = GuardState::Clear;
-                    Some(GuardReport::Clear)
-                } else {
-                    None
+                    let reported = std::mem::replace(&mut self.episode_reported, false);
+                    return reported.then_some(GuardReport::Clear);
                 }
+                // Still alerting: quiet unless the host got materially worse (or a new metric
+                // started alerting) since the last emitted ALERT. Time alone never re-alerts here.
+                if !alert_reasons.is_empty()
+                    && self.last_alert.is_some_and(|mark| {
+                        now.saturating_duration_since(mark.at) < GUARD_REALERT_WINDOW
+                    })
+                    && self.worth_alerting(load_alert, mem_alert, disk_alert, sample, now)
+                {
+                    self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
+                    return Some(GuardReport::Alert(alert_reasons.join("; ")));
+                }
+                None
             }
         }
     }
@@ -581,8 +687,9 @@ impl GuardWatcher {
             };
             crate::storage::enqueue_lane_event(pool, None, lead, "guard", &super::scrub(&body))
                 .await?;
-            *self = next;
         }
+        // Suppressed transitions still advance the state machine.
+        *self = next;
         Ok(())
     }
 }
@@ -1128,6 +1235,90 @@ mod tests {
         let rep_disk_clear = watcher.check(&s_ok_disk);
         assert_eq!(rep_disk_clear, Some(GuardReport::Clear));
         assert_eq!(watcher.state(), GuardState::Clear);
+    }
+
+    #[test]
+    fn guard_disk_flapping_within_hour_alerts_once_until_material_drop() {
+        let thresholds = GuardThresholds {
+            load_alert: 150.0,
+            load_ok: 80.0,
+            mem_free_min_pct: 20,
+            disk_free_min_gb: 50,
+            lanes_max: 6,
+        };
+        let mut watcher = GuardWatcher::new(thresholds);
+        let t0 = std::time::Instant::now();
+        let mut alerts = 0;
+        let mut clears = 0;
+        for (minute, gb) in [48u64, 51, 47, 52, 46].into_iter().enumerate() {
+            let now = t0 + Duration::from_secs(minute as u64 * 10 * 60);
+            match watcher.check_at(&HostSample::new(10.0, 50, gb, 0), now) {
+                Some(GuardReport::Alert(_)) => alerts += 1,
+                Some(GuardReport::Clear) => clears += 1,
+                None => {}
+            }
+        }
+        assert_eq!(alerts, 1, "flapping must alert exactly once");
+        assert_eq!(clears, 1, "only the reported episode may CLEAR");
+        assert_eq!(watcher.state(), GuardState::Alert);
+
+        // A drop >=10 GB below the last alerted value re-alerts, even mid-episode.
+        let t_drop = t0 + Duration::from_secs(55 * 60);
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 50, 40, 0), t_drop),
+            None
+        );
+        let rep = watcher.check_at(&HostSample::new(10.0, 50, 35, 0), t_drop);
+        assert!(
+            rep.as_ref().is_some_and(GuardReport::is_alert),
+            "a drop >=10 GB below the last alerted value must re-alert, got {rep:?}"
+        );
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 50, 34, 0), t_drop),
+            None
+        );
+    }
+
+    #[test]
+    fn guard_realerts_after_window_and_on_mem_drop() {
+        let thresholds = GuardThresholds {
+            load_alert: 150.0,
+            load_ok: 80.0,
+            mem_free_min_pct: 20,
+            disk_free_min_gb: 50,
+            lanes_max: 6,
+        };
+        let mut watcher = GuardWatcher::new(thresholds);
+        let t0 = std::time::Instant::now();
+        assert!(watcher
+            .check_at(&HostSample::new(10.0, 18, 100, 0), t0)
+            .is_some());
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 25, 100, 0), t0),
+            Some(GuardReport::Clear)
+        );
+        // 3 points lower within the window: suppressed.
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 15, 100, 0), t0),
+            None
+        );
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 25, 100, 0), t0),
+            None
+        );
+        // 10 points lower: re-alert.
+        assert!(watcher
+            .check_at(&HostSample::new(10.0, 8, 100, 0), t0)
+            .is_some());
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 25, 100, 0), t0),
+            Some(GuardReport::Clear)
+        );
+        // Same value but 24h later: re-alert.
+        let later = t0 + GUARD_REALERT_WINDOW;
+        assert!(watcher
+            .check_at(&HostSample::new(10.0, 8, 100, 0), later)
+            .is_some());
     }
 
     #[tokio::test]
