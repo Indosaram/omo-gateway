@@ -432,7 +432,14 @@ pub async fn evaluate_pre_ask(
     )
     .await?;
 
-    if in_quiet_hours_kst(input.now) {
+    if in_quiet_hours_kst(input.now)
+        && !owner_recently_active(
+            pool,
+            &[input.lead_session_key, input.session_key],
+            input.now,
+        )
+        .await?
+    {
         let release_at = next_0800_kst(input.now);
         let body = format!(
             "[ACTION_LOOP] quiet-hour proposal #{proposal_id} ({} {}): {}",
@@ -464,6 +471,41 @@ pub async fn evaluate_pre_ask(
     }
 
     Ok(PreAskOutcome::Ask { proposal_id })
+}
+
+/// Window in which an owner message counts as "the owner is awake and driving this session".
+const OWNER_ACTIVE_WINDOW_MINUTES: i64 = 10;
+
+/// True when the owner sent a real (non-system) message in any of `keys` within the last
+/// 10 minutes. Quiet hours exist to avoid waking the owner, not to refuse requests the
+/// owner is making live.
+pub async fn owner_recently_active(
+    pool: &SqlitePool,
+    keys: &[&str],
+    now: DateTime<Utc>,
+) -> Result<bool, sqlx::Error> {
+    let cutoff = (now - chrono::Duration::minutes(OWNER_ACTIVE_WINDOW_MINUTES)).to_rfc3339();
+    for key in keys {
+        if key.is_empty() {
+            continue;
+        }
+        // created_at is stored either as RFC3339 (bound DateTime<Utc>) or as SQLite
+        // CURRENT_TIMESTAMP text; julianday() normalizes both.
+        let hit: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 FROM messages
+             WHERE session_key = ? AND role = 'user' AND content NOT LIKE '[system]%'
+               AND julianday(created_at) >= julianday(?)
+             LIMIT 1",
+        )
+        .bind(key)
+        .bind(&cutoff)
+        .fetch_optional(pool)
+        .await?;
+        if hit.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -652,50 +694,94 @@ pub async fn recover_pending_proposals_on_startup(
     if pending.is_empty() {
         return Ok(0);
     }
-    sqlx::query(
-        "UPDATE action_proposals
-         SET state = 'expired', decided_at = CURRENT_TIMESTAMP
-         WHERE state = 'pending' AND origin IN ('engine_approval','tool_approval')",
+    // A pending row whose approval card is already on the platform and is younger than 24h
+    // stays answerable: the owner can still press the card. Everything else dies with the
+    // process.
+    let kept_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM action_proposals
+         WHERE state = 'pending' AND origin IN ('engine_approval','tool_approval')
+           AND platform_message_id IS NOT NULL AND platform_message_id != ''
+           AND julianday(created_at) >= julianday('now', '-1 day')",
     )
-    .execute(pool)
+    .fetch_all(pool)
     .await?;
-
-    let mut by_lead: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for p in &pending {
-        let lead = if p.session_key.starts_with("lane:") {
-            let lane_key = p.session_key.trim_start_matches("lane:");
-            sqlx::query_scalar::<_, String>("SELECT lead_session_key FROM lanes WHERE key = ?")
-                .bind(lane_key)
-                .fetch_optional(pool)
-                .await?
-                .unwrap_or_else(|| default_lead.to_string())
-        } else if SessionKey::from_storage_key(&p.session_key).is_ok() {
-            p.session_key.clone()
-        } else {
-            default_lead.to_string()
-        };
-        by_lead
-            .entry(lead)
-            .or_default()
-            .push(format!("#{} ({} {})", p.id, p.effect, p.summary));
+    let (kept, expired): (Vec<&ActionProposal>, Vec<&ActionProposal>) =
+        pending.iter().partition(|p| kept_ids.contains(&p.id));
+    for p in &expired {
+        sqlx::query(
+            "UPDATE action_proposals
+             SET state = 'expired', decided_at = CURRENT_TIMESTAMP
+             WHERE id = ? AND state = 'pending'",
+        )
+        .bind(p.id)
+        .execute(pool)
+        .await?;
     }
 
-    for (lead, items) in by_lead {
+    let mut expired_by_lead: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut kept_by_lead: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (rows, by_lead) in [(&expired, &mut expired_by_lead), (&kept, &mut kept_by_lead)] {
+        for p in rows.iter() {
+            let lead = proposal_lead(pool, p, default_lead).await?;
+            by_lead
+                .entry(lead)
+                .or_default()
+                .push(format!("#{} ({} {})", p.id, p.effect, p.summary));
+        }
+    }
+
+    for (lead, items) in expired_by_lead {
         let body = format!(
             "[ACTION_LOOP] {} expired pending proposal(s) on restart: {}",
             items.len(),
             items.join("; ")
         );
-        sqlx::query(
-            "INSERT INTO lane_events (lane_key, lead_session_key, kind, body, created_at)
-             VALUES (NULL, ?, 'action_loop', ?, CURRENT_TIMESTAMP)",
-        )
-        .bind(&lead)
-        .bind(&body)
-        .execute(pool)
-        .await?;
+        insert_action_loop_event(pool, &lead, &body).await?;
     }
-    Ok(pending.len())
+    for (lead, items) in kept_by_lead {
+        let body = format!(
+            "[ACTION_LOOP] {} pending approval(s) still waiting after restart: {}",
+            items.len(),
+            items.join("; ")
+        );
+        insert_action_loop_event(pool, &lead, &body).await?;
+    }
+    Ok(expired.len())
+}
+
+async fn insert_action_loop_event(
+    pool: &SqlitePool,
+    lead: &str,
+    body: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO lane_events (lane_key, lead_session_key, kind, body, created_at)
+         VALUES (NULL, ?, 'action_loop', ?, CURRENT_TIMESTAMP)",
+    )
+    .bind(lead)
+    .bind(body)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+async fn proposal_lead(
+    pool: &SqlitePool,
+    p: &ActionProposal,
+    default_lead: &str,
+) -> Result<String, sqlx::Error> {
+    Ok(if p.session_key.starts_with("lane:") {
+        let lane_key = p.session_key.trim_start_matches("lane:");
+        sqlx::query_scalar::<_, String>("SELECT lead_session_key FROM lanes WHERE key = ?")
+            .bind(lane_key)
+            .fetch_optional(pool)
+            .await?
+            .unwrap_or_else(|| default_lead.to_string())
+    } else if SessionKey::from_storage_key(&p.session_key).is_ok() {
+        p.session_key.clone()
+    } else {
+        default_lead.to_string()
+    })
 }
 
 pub async fn decide_proposal(

@@ -930,3 +930,193 @@ fn k_context_pack_with_other_peoples_lines_is_foreign() {
     assert!(pack_has_foreign_text(other));
     assert!(!pack_has_foreign_text(none));
 }
+
+fn quiet_0023_kst() -> chrono::DateTime<chrono::Utc> {
+    use chrono::TimeZone;
+    chrono_tz::Asia::Seoul
+        .with_ymd_and_hms(2026, 10, 19, 0, 23, 0)
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+
+async fn seed_owner_message(
+    pool: &sqlx::SqlitePool,
+    session_key: &str,
+    at: chrono::DateTime<chrono::Utc>,
+) {
+    sqlx::query(
+        "INSERT OR IGNORE INTO sessions (session_key, platform, channel_id, user_id)
+         VALUES (?, 'slack', 'C1', 'U1')",
+    )
+    .bind(session_key)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO messages (id, session_key, role, content, metadata_json, created_at)
+         VALUES (?, ?, 'user', 'push it now', '{}', ?)",
+    )
+    .bind(format!("owner-{}", at.timestamp()))
+    .bind(session_key)
+    .bind(at)
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+async fn quiet_pre_ask(pool: &sqlx::SqlitePool, lead: &str) -> PreAskOutcome {
+    let cls = classify_command("git push origin lane/live", Some("/repo"));
+    evaluate_pre_ask(
+        pool,
+        PreAskInput {
+            origin: ProposalOrigin::EngineApproval,
+            session_key: lead,
+            lead_session_key: lead,
+            classification: &cls,
+            payload_json: "{}",
+            tainted: false,
+            yolo: false,
+            always_mode: false,
+            now: quiet_0023_kst(),
+        },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn d1_quiet_hours_ask_when_owner_messaged_five_minutes_ago() {
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    let lead = "slack:T1:C1::U1";
+    seed_owner_message(&pool, lead, quiet_0023_kst() - chrono::Duration::minutes(5)).await;
+    let out = quiet_pre_ask(&pool, lead).await;
+    let PreAskOutcome::Ask { proposal_id } = out else {
+        panic!("owner is active, quiet hours must not defer: {out:?}");
+    };
+    assert_eq!(
+        get_proposal(&pool, proposal_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "pending"
+    );
+    let held: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM lane_events WHERE kind = 'action_loop'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(held, 0, "no 08:00 re-issue event when the owner is active");
+}
+
+#[tokio::test]
+async fn d2_quiet_hours_defer_when_owner_message_is_thirty_minutes_old() {
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    let lead = "slack:T1:C1::U1";
+    seed_owner_message(
+        &pool,
+        lead,
+        quiet_0023_kst() - chrono::Duration::minutes(30),
+    )
+    .await;
+    let out = quiet_pre_ask(&pool, lead).await;
+    let PreAskOutcome::Deny {
+        proposal_id,
+        reason,
+        ..
+    } = out
+    else {
+        panic!("stale owner message must keep the quiet-hour deferral: {out:?}");
+    };
+    assert!(reason.starts_with("quiet hours;"), "reason: {reason}");
+    assert_eq!(
+        get_proposal(&pool, proposal_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "expired"
+    );
+}
+
+#[tokio::test]
+async fn d3_restart_keeps_carded_recent_pending_and_expires_cardless_and_stale() {
+    use omon_gateway::autonomy::{
+        insert_proposal, recover_pending_proposals_on_startup, NewProposal, ProposalState,
+    };
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    let lead = "slack:T1:C1::U1";
+    let mut ids = Vec::new();
+    for (i, card) in [Some("1760800000.000100"), None, Some("1760800000.000200")]
+        .into_iter()
+        .enumerate()
+    {
+        let id = insert_proposal(
+            &pool,
+            &NewProposal {
+                origin: ProposalOrigin::EngineApproval,
+                session_key: lead.to_string(),
+                signature: format!("vcs_remote:git push:/repo-{i}"),
+                effect: Effect::VcsRemote,
+                target: format!("/repo-{i}"),
+                summary: format!("git push origin lane/{i}"),
+                payload_json: "{}".into(),
+                tainted: false,
+                state: ProposalState::Pending,
+                precedent_id: None,
+                owner_words: None,
+                platform_message_id: card.map(str::to_string),
+            },
+        )
+        .await
+        .unwrap();
+        ids.push(id);
+    }
+    let (carded, cardless, stale) = (ids[0], ids[1], ids[2]);
+    sqlx::query("UPDATE action_proposals SET created_at = datetime('now', '-2 days') WHERE id = ?")
+        .bind(stale)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let expired = recover_pending_proposals_on_startup(&pool, lead)
+        .await
+        .unwrap();
+    assert_eq!(expired, 2);
+    let state = |id: i64| {
+        let pool = pool.clone();
+        async move { get_proposal(&pool, id).await.unwrap().unwrap().state }
+    };
+    assert_eq!(state(carded).await, "pending");
+    assert_eq!(state(cardless).await, "expired");
+    assert_eq!(state(stale).await, "expired");
+
+    let bodies: Vec<String> = sqlx::query_scalar(
+        "SELECT body FROM lane_events WHERE kind = 'action_loop' AND lead_session_key = ? ORDER BY id",
+    )
+    .bind(lead)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let waiting: Vec<&String> = bodies
+        .iter()
+        .filter(|b| b.contains("still waiting after restart"))
+        .collect();
+    assert_eq!(
+        waiting.len(),
+        1,
+        "one re-announce event per lead: {bodies:?}"
+    );
+    assert!(
+        waiting[0].starts_with("[ACTION_LOOP] 1 pending approval(s) still waiting after restart: ")
+    );
+    assert!(waiting[0].contains(&format!("#{carded} ")));
+    assert!(!waiting[0].contains(&format!("#{cardless} ")));
+    let expired_body = bodies
+        .iter()
+        .find(|b| b.contains("expired pending proposal(s) on restart"))
+        .expect("expired rows keep the existing notice");
+    assert!(expired_body.contains(&format!("#{cardless} ")));
+    assert!(expired_body.contains(&format!("#{stale} ")));
+    assert!(!expired_body.contains(&format!("#{carded} ")));
+}
