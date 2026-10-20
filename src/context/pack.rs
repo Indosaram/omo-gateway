@@ -402,12 +402,16 @@ async fn unseen_thread_lines(
             let author = match user {
                 Some(id) if id == settings.slack_owner => "owner".to_owned(),
                 Some(id) => format!("<@{id}>"),
-                None => message
-                    .get("username")
-                    .or_else(|| message.pointer("/bot_profile/name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("unknown")
-                    .to_owned(),
+                // A user-less post (webhook, bot) picks its own display name, so it must never
+                // render as "owner": `pack_has_foreign_text` keys the taint check on that label.
+                None => format!(
+                    "bot {}",
+                    message
+                        .get("username")
+                        .or_else(|| message.pointer("/bot_profile/name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown")
+                ),
             };
             Some(clip(
                 &format!("{author}: {}", one_line(text)),

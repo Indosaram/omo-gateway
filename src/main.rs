@@ -799,6 +799,41 @@ impl SlackBoot {
     }
 }
 
+/// A launchd start right after login or wake often races the network: retry transient Slack
+/// boot calls with bounded backoff (about a minute), but give up at once on a rejected token.
+async fn retry_slack_boot<T, F, Fut>(what: &str, mut call: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    const ATTEMPTS: u32 = 6;
+    const PERMANENT: &[&str] = &[
+        "invalid_auth",
+        "not_authed",
+        "account_inactive",
+        "token_revoked",
+        "token_expired",
+        "missing_scope",
+    ];
+    let mut backoff = std::time::Duration::from_secs(2);
+    let mut attempt = 1;
+    loop {
+        match call().await {
+            Ok(value) => return Ok(value),
+            Err(error) => {
+                let text = error.to_string();
+                if attempt >= ATTEMPTS || PERMANENT.iter().any(|code| text.contains(code)) {
+                    return Err(error);
+                }
+                warn!(%error, what, attempt, retry_in_secs = backoff.as_secs(), "Slack boot call failed; retrying");
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
+                attempt += 1;
+            }
+        }
+    }
+}
+
 /// `auth.test`, persona copy and (when Slack is home) the owner DM lead. `None` when Slack is
 /// off or its token is rejected; the caller then runs Discord only.
 async fn boot_slack(
@@ -810,7 +845,7 @@ async fn boot_slack(
         return Ok(None);
     };
     let api = omon_gateway::slack::SlackApi::new(config.bot_token.clone());
-    let auth = match api.auth_test().await {
+    let auth = match retry_slack_boot("auth.test", || api.auth_test()).await {
         Ok(auth) => auth,
         Err(error) => {
             warn!(%error, "Slack auth.test failed; Slack stays off for this run");
@@ -830,7 +865,11 @@ async fn boot_slack(
         discord_configured,
     );
     let owner_dm = if slack_home {
-        match omon_gateway::slack::home::owner_dm_key(&api, config, &auth.user_id, pool).await {
+        match retry_slack_boot("owner DM", || {
+            omon_gateway::slack::home::owner_dm_key(&api, config, &auth.user_id, pool)
+        })
+        .await
+        {
             Ok(key) => {
                 if optional_env("OMON_LANE_DEFAULT_LEAD").is_none() {
                     // Lanes, kibitzer, cron health, proposals and the actor read the lead here.

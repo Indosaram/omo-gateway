@@ -1,0 +1,7 @@
+ D .omo/permissions-approved.jsonl
+ M src/agent/omo_backend.rs
+ M src/slack/egress.rs
+?? .omo/drafts/review-fix-20261019.md
+?? .omo/evidence/review-20261019/
+?? .senpi/
+?? wt/

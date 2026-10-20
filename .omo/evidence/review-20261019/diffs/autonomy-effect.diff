@@ -1,0 +1,1290 @@
+diff --git a/src/autonomy/effect.rs b/src/autonomy/effect.rs
+new file mode 100644
+index 0000000..0b9f538
+--- /dev/null
++++ b/src/autonomy/effect.rs
+@@ -0,0 +1,1284 @@
++use std::fmt;
++use std::path::Path;
++use std::str::FromStr;
++
++use serde::{Deserialize, Serialize};
++use serde_json::Value;
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
++#[serde(rename_all = "snake_case")]
++pub enum Effect {
++    Read,
++    Draft,
++    WriteLocal,
++    VcsLocal,
++    VcsRemote,
++    VcsProtected,
++    ExternalSend,
++    Delete,
++    Spend,
++    Unknown,
++}
++
++impl Effect {
++    pub fn as_str(&self) -> &'static str {
++        match self {
++            Self::Read => "read",
++            Self::Draft => "draft",
++            Self::WriteLocal => "write_local",
++            Self::VcsLocal => "vcs_local",
++            Self::VcsRemote => "vcs_remote",
++            Self::VcsProtected => "vcs_protected",
++            Self::ExternalSend => "external_send",
++            Self::Delete => "delete",
++            Self::Spend => "spend",
++            Self::Unknown => "unknown",
++        }
++    }
++
++    pub fn allows_any_precedent(&self) -> bool {
++        !matches!(self, Self::Spend)
++    }
++
++    pub fn allows_class_precedent(&self) -> bool {
++        !matches!(self, Self::Spend | Self::Delete | Self::VcsProtected)
++    }
++}
++
++impl fmt::Display for Effect {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str(self.as_str())
++    }
++}
++
++impl FromStr for Effect {
++    type Err = String;
++
++    fn from_str(s: &str) -> Result<Self, Self::Err> {
++        match s.trim() {
++            "read" => Ok(Self::Read),
++            "draft" => Ok(Self::Draft),
++            "write_local" => Ok(Self::WriteLocal),
++            "vcs_local" => Ok(Self::VcsLocal),
++            "vcs_remote" => Ok(Self::VcsRemote),
++            "vcs_protected" => Ok(Self::VcsProtected),
++            "external_send" => Ok(Self::ExternalSend),
++            "delete" => Ok(Self::Delete),
++            "spend" => Ok(Self::Spend),
++            "unknown" => Ok(Self::Unknown),
++            other => Err(format!("unknown effect: {other}")),
++        }
++    }
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct Classification {
++    pub effect: Effect,
++    pub program: String,
++    pub target: String,
++    pub signature: String,
++    pub summary: String,
++}
++
++impl Classification {
++    pub fn new(
++        effect: Effect,
++        program: impl Into<String>,
++        target: impl Into<String>,
++        summary: impl Into<String>,
++    ) -> Self {
++        let program = program.into();
++        let target = normalize_target(&target.into());
++        let summary = summary.into();
++        let mut signature = format!("{}:{}:{}", effect.as_str(), program, target);
++        // An exact precedent for a destructive or outward action covers only the exact
++        // command the owner saw (rm -rf ., push --force, another PR are different cases).
++        if matches!(
++            effect,
++            Effect::Delete | Effect::VcsProtected | Effect::ExternalSend
++        ) {
++            let exact = summary.split_whitespace().collect::<Vec<_>>().join(" ");
++            if !exact.is_empty() {
++                signature.push('|');
++                signature.push_str(&exact);
++            }
++        }
++        Self {
++            effect,
++            program,
++            target,
++            signature,
++            summary,
++        }
++    }
++}
++
++/// Fixed owner rules:
++/// - `spend` always asks and never gets a precedent.
++/// - `tainted` + (`external_send` | `delete` | `spend` | `vcs_protected`) always asks
++///   (except `external_send` when matched by an exact recipient precedent in the ledger).
++pub fn requires_always_ask(effect: Effect, tainted: bool) -> bool {
++    if effect == Effect::Spend {
++        return true;
++    }
++    tainted
++        && matches!(
++            effect,
++            Effect::ExternalSend | Effect::Delete | Effect::Spend | Effect::VcsProtected
++        )
++}
++
++/// True when an engine approval frame is the outer `Tool: eval` container request
++/// (`command == null`, `reason` starts with `"Tool: eval"` or `itemId == "approval-eval"`).
++impl Effect {
++    /// Higher means more consequential; used to pick the effect that decides an eval cell.
++    pub fn rank(&self) -> u8 {
++        match self {
++            Self::Read => 0,
++            Self::Draft => 1,
++            Self::WriteLocal => 2,
++            Self::VcsLocal => 3,
++            Self::VcsRemote => 4,
++            Self::Unknown => 5,
++            Self::ExternalSend => 6,
++            Self::Delete => 7,
++            Self::VcsProtected => 8,
++            Self::Spend => 9,
++        }
++    }
++}
++
++/// Shell commands an eval cell runs through Bun's template-literal shell, or a `command:` string.
++/// A bare eval approval frame carries no command, and a command run through Bun's shell raises no
++/// nested frame, so the cell's own code is the only place to see it.
++pub fn eval_shell_commands(code: &str) -> Vec<String> {
++    let mut out = Vec::new();
++    let bytes = code.as_bytes();
++    let mut i = 0;
++    while i + 1 < bytes.len() {
++        if bytes[i] == b'$' && bytes[i + 1] == b'`' {
++            let start = i + 2;
++            let mut j = start;
++            while j < bytes.len() && !(bytes[j] == b'`' && bytes[j - 1] != b'\\') {
++                j += 1;
++            }
++            out.push(code[start..j.min(bytes.len())].to_string());
++            i = j + 1;
++            continue;
++        }
++        i += 1;
++    }
++    let mut rest = code;
++    while let Some(pos) = rest.find("command") {
++        let after = rest[pos + "command".len()..].trim_start();
++        let value = after
++            .strip_prefix(':')
++            .or_else(|| after.strip_prefix('='))
++            .map(str::trim_start);
++        if let Some(value) = value {
++            if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
++                if let Some(end) = value[1..].find(quote) {
++                    out.push(value[1..1 + end].to_string());
++                }
++            }
++        }
++        rest = &rest[pos + "command".len()..];
++    }
++    out.retain(|c| !c.trim().is_empty());
++    out
++}
++
++/// The most consequential side-effecting shell command in an eval cell, or None when it runs
++/// only reads or no shell command at all.
++pub fn classify_eval_code(code: &str, cwd: Option<&str>) -> Option<Classification> {
++    let mut best: Option<Classification> = None;
++    let mut consider = |c: Classification| {
++        if c.effect != Effect::Read
++            && best
++                .as_ref()
++                .is_none_or(|b| c.effect.rank() > b.effect.rank())
++        {
++            best = Some(c);
++        }
++    };
++    for cmd in eval_shell_commands(code) {
++        // A command built from variables cannot be read from the cell's text.
++        if cmd.contains("${") {
++            consider(eval_unknown(code, cwd, "interpolated shell command"));
++            continue;
++        }
++        consider(classify_command(&cmd, cwd));
++    }
++    for path in eval_written_paths(code) {
++        consider(classify_file_change(&path, cwd));
++    }
++    if let Some(api) = eval_opaque_api(code) {
++        consider(eval_unknown(code, cwd, api));
++    }
++    best
++}
++
++/// A side effect the classifier cannot read from the cell text. The signature carries a hash of
++/// the code, so a precedent never covers a different cell.
++fn eval_unknown(code: &str, cwd: Option<&str>, why: &str) -> Classification {
++    use std::hash::{Hash, Hasher};
++    let mut h = std::collections::hash_map::DefaultHasher::new();
++    code.hash(&mut h);
++    let mut c = Classification::new(
++        Effect::Unknown,
++        "eval",
++        resolve_target_scope(None, cwd),
++        format!("eval ({why})"),
++    );
++    c.signature = format!("{}|{:016x}", c.signature, h.finish());
++    c
++}
++
++/// JS calls in an eval cell that act outside the shell and the file helpers.
++fn eval_opaque_api(code: &str) -> Option<&'static str> {
++    const APIS: &[(&str, &str)] = &[
++        ("Bun.spawn", "Bun.spawn"),
++        ("child_process", "child_process"),
++        ("execSync", "exec"),
++        ("spawnSync", "spawn"),
++        ("fetch(", "fetch"),
++        ("rmSync", "fs delete"),
++        ("rm(", "fs delete"),
++        ("unlink", "fs delete"),
++        ("rmdir", "fs delete"),
++        ("renameSync", "fs rename"),
++        ("WebSocket", "socket"),
++        ("Bun.serve", "server"),
++        ("agent(", "subagent"),
++        ("tool.bash", "tool.bash"),
++        ("tool.task", "tool.task"),
++        ("import(", "dynamic import"),
++        ("require(", "require"),
++    ];
++    // Shell commands passed to tool.bash as literals are classified on their own.
++    let stripped = code
++        .replace("tool.bash({ command:", "")
++        .replace("tool.bash({command:", "");
++    APIS.iter()
++        .find(|(needle, _)| stripped.contains(needle))
++        .map(|(_, why)| *why)
++}
++
++/// Literal paths an eval cell writes through `write(..)`, `Bun.write(..)` or `fs.writeFile*`.
++fn eval_written_paths(code: &str) -> Vec<String> {
++    let mut out = Vec::new();
++    for call in [
++        "write(",
++        "writeFile(",
++        "writeFileSync(",
++        "appendFile(",
++        "appendFileSync(",
++    ] {
++        let mut rest = code;
++        while let Some(pos) = rest.find(call) {
++            let after = rest[pos + call.len()..].trim_start();
++            let quote = after.chars().next();
++            let path = match quote {
++                Some(q @ ('"' | '\'' | '`')) => {
++                    after[1..].find(q).map(|end| after[1..1 + end].to_string())
++                }
++                _ => None,
++            };
++            // A path built from variables cannot be read; treat it as an unknown write.
++            out.push(match path {
++                Some(p) if !p.contains("${") => p,
++                _ => "unknown".to_string(),
++            });
++            rest = &rest[pos + call.len()..];
++        }
++    }
++    out
++}
++
++pub fn is_bare_eval_frame(frame: &Value) -> bool {
++    let method = frame
++        .get("method")
++        .and_then(Value::as_str)
++        .unwrap_or("item/commandExecution/requestApproval");
++    if !method.contains("commandExecution") {
++        return false;
++    }
++    let params = frame.get("params").unwrap_or(frame);
++    let command = params
++        .get("command")
++        .and_then(Value::as_str)
++        .map(str::trim)
++        .filter(|s| !s.is_empty());
++    if command.is_some() {
++        return false;
++    }
++    let item_id = params.get("itemId").and_then(Value::as_str).unwrap_or("");
++    let reason = params.get("reason").and_then(Value::as_str).unwrap_or("");
++    item_id == "approval-eval" || reason.trim_start().starts_with("Tool: eval")
++}
++
++pub fn classify_json(val: &Value) -> Classification {
++    let default_cwd = val.get("location").and_then(Value::as_str);
++    if let Some(frames) = val.get("frames").and_then(Value::as_array) {
++        for frame in frames {
++            let method = frame.get("method").and_then(Value::as_str).unwrap_or("");
++            let params = frame.get("params").unwrap_or(frame);
++            let has_cmd = params
++                .get("command")
++                .and_then(Value::as_str)
++                .is_some_and(|s| !s.trim().is_empty());
++            if has_cmd || method == "item/fileChange/requestApproval" {
++                return classify_frame(frame, default_cwd);
++            }
++        }
++        if let Some(prompt) = val.get("prompt").and_then(Value::as_str) {
++            const PREFIX: &str =
++                "Run exactly this shell command with the bash tool and nothing else:";
++            if let Some(rest) = prompt.strip_prefix(PREFIX) {
++                let cmd = rest.trim();
++                if !cmd.is_empty() {
++                    return classify_command(cmd, default_cwd);
++                }
++            }
++        }
++        if let Some(first) = frames.first() {
++            return classify_frame(first, default_cwd);
++        }
++    }
++    classify_frame(val, default_cwd)
++}
++
++pub fn classify_frame(frame: &Value, default_cwd: Option<&str>) -> Classification {
++    let method = frame
++        .get("method")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++    let params = frame.get("params").unwrap_or(frame);
++    let cwd = params
++        .get("cwd")
++        .and_then(Value::as_str)
++        .filter(|s| !s.trim().is_empty())
++        .or(default_cwd);
++    let reason = params
++        .get("reason")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++
++    if method == "item/fileChange/requestApproval" || reason.trim_start().starts_with("File:") {
++        let path = extract_prefixed_line(reason, "File:")
++            .or_else(|| params.get("grantRoot").and_then(Value::as_str))
++            .unwrap_or("unknown");
++        return classify_file_change(path, cwd);
++    }
++
++    if let Some(cmd) = params
++        .get("command")
++        .and_then(Value::as_str)
++        .map(str::trim)
++        .filter(|s| !s.is_empty())
++    {
++        return classify_command(cmd, cwd);
++    }
++
++    if let Some(cmd_line) = extract_prefixed_line(reason, "Command:") {
++        let cleaned = cmd_line.trim_start_matches('$').trim();
++        if !cleaned.is_empty() {
++            return classify_command(cleaned, cwd);
++        }
++    }
++
++    if let Some(dir) = extract_prefixed_line(reason, "Directory:") {
++        let effect = if is_draft_path(dir, cwd) {
++            Effect::Draft
++        } else {
++            Effect::Unknown
++        };
++        return Classification::new(
++            effect,
++            "directory",
++            resolve_target_scope(Some(dir), cwd),
++            format!("directory access {dir}"),
++        );
++    }
++
++    if is_bare_eval_frame(frame) {
++        return Classification::new(
++            Effect::Unknown,
++            "eval",
++            resolve_target_scope(None, cwd),
++            "Tool: eval",
++        );
++    }
++
++    Classification::new(
++        Effect::Unknown,
++        "unknown",
++        resolve_target_scope(None, cwd),
++        if reason.is_empty() {
++            "unknown approval request".to_string()
++        } else {
++            reason.lines().next().unwrap_or("unknown").to_string()
++        },
++    )
++}
++
++pub fn classify_file_change(path: &str, cwd: Option<&str>) -> Classification {
++    let trimmed = path.trim();
++    let effect = if is_draft_path(trimmed, cwd) {
++        Effect::Draft
++    } else {
++        Effect::WriteLocal
++    };
++    let target = resolve_file_target(trimmed, cwd);
++    Classification::new(effect, "edit", target, format!("edit {trimmed}"))
++}
++
++pub fn classify_argv(argv: &[String], cwd: Option<&str>) -> Classification {
++    if argv.is_empty() {
++        return Classification::new(Effect::Unknown, "empty", "", "empty argv");
++    }
++    let prog = basename(&argv[0]);
++    if matches!(prog, "sh" | "bash" | "zsh" | "fish" | "dash" | "eval") {
++        return Classification::new(
++            Effect::Unknown,
++            prog,
++            resolve_target_scope(None, cwd),
++            argv.join(" "),
++        );
++    }
++    let joined = shell_join(argv);
++    classify_tokens(argv, cwd, &joined)
++}
++
++pub fn classify_command(command: &str, cwd: Option<&str>) -> Classification {
++    let trimmed = command.trim();
++    if trimmed.is_empty() {
++        return Classification::new(Effect::Unknown, "empty", "", "empty command");
++    }
++    // Command and process substitution run arbitrary code the tokenizer cannot see.
++    if has_unquoted_substitution(trimmed) {
++        return Classification::new(
++            Effect::Unknown,
++            "shell",
++            resolve_target_scope(None, cwd),
++            trimmed.to_string(),
++        );
++    }
++    let segments = split_shell_segments(trimmed);
++    if segments.len() > 1 {
++        // Every segment runs, so the most consequential one decides; `cd` carries forward.
++        let mut seg_cwd = cwd.map(str::to_string);
++        let mut worst: Option<Classification> = None;
++        for seg in &segments {
++            let (next_cwd, body) = peel_cd_prefix(seg, seg_cwd.as_deref());
++            if body.is_empty() || body == "cd" || body.starts_with("cd ") {
++                if let Some(dir) = body.strip_prefix("cd ") {
++                    seg_cwd = Some(dir.trim().trim_matches('"').trim_matches('\'').to_string());
++                }
++                continue;
++            }
++            let c = classify_command(body, next_cwd.as_deref());
++            if worst
++                .as_ref()
++                .is_none_or(|w| c.effect.rank() > w.effect.rank())
++            {
++                worst = Some(c);
++            }
++        }
++        return match worst {
++            Some(mut c) => {
++                c.summary = trimmed.to_string();
++                c
++            }
++            None => Classification::new(Effect::Read, "cd", "", trimmed.to_string()),
++        };
++    }
++
++    let (effective_cwd, body) = peel_cd_prefix(trimmed, cwd);
++    let cwd_ref = effective_cwd.as_deref();
++
++    if let Some(redir_target) = detect_output_redirection(body) {
++        let effect = if is_draft_path(&redir_target, cwd_ref) {
++            Effect::Draft
++        } else {
++            Effect::WriteLocal
++        };
++        let target = resolve_file_target(&redir_target, cwd_ref);
++        return Classification::new(effect, "redirect", target, trimmed.to_string());
++    }
++
++    let tokens = tokenize_shell(body);
++    let tokens = skip_env_assignments(&tokens);
++    if tokens.is_empty() {
++        return Classification::new(Effect::Unknown, "empty", "", trimmed.to_string());
++    }
++
++    let prog0 = basename(&tokens[0]);
++    if matches!(prog0, "sh" | "bash" | "zsh") && tokens.len() >= 3 && tokens[1] == "-c" {
++        return classify_command(&tokens[2], cwd_ref);
++    }
++
++    classify_tokens(tokens, cwd_ref, trimmed)
++}
++
++fn classify_tokens(tokens: &[String], cwd: Option<&str>, summary: &str) -> Classification {
++    if tokens.is_empty() {
++        return Classification::new(Effect::Unknown, "empty", "", summary);
++    }
++    let prog = basename(&tokens[0]);
++    let args = &tokens[1..];
++
++    if is_spend_invocation(prog, args) {
++        let target = resolve_target_scope(None, cwd);
++        return Classification::new(Effect::Spend, format!("{prog} spend"), target, summary);
++    }
++
++    match prog {
++        "git" => classify_git(args, cwd, summary),
++        "gh" => classify_gh(args, cwd, summary),
++        "rm" | "rmdir" | "unlink" | "trash" => {
++            let (_, positionals) = split_flags_and_positionals(args, &[]);
++            let path = positionals.first().map(String::as_str);
++            let target = resolve_target_scope(path, cwd);
++            Classification::new(Effect::Delete, prog, target, summary)
++        }
++        "find" => {
++            let has_delete = args
++                .iter()
++                .any(|a| a == "-delete" || a == "rm" || a.starts_with("-exec"));
++            let (_, positionals) = split_flags_and_positionals(
++                args,
++                &["-name", "-path", "-type", "-maxdepth", "-mindepth"],
++            );
++            let path = positionals.first().map(String::as_str);
++            let target = resolve_target_scope(path, cwd);
++            if has_delete {
++                Classification::new(Effect::Delete, "find -delete", target, summary)
++            } else {
++                Classification::new(Effect::Read, "find", target, summary)
++            }
++        }
++        "ls" | "pwd" | "cat" | "head" | "tail" | "wc" | "stat" | "file" | "du" | "df" | "which"
++        | "type" | "uname" | "date" | "whoami" | "id" | "printenv" | "jq" | "true" | "false"
++        | "echo" | "printf" => {
++            let (_, positionals) = split_flags_and_positionals(args, &[]);
++            let path = positionals
++                .iter()
++                .find(|p| p.starts_with('/') || p.starts_with('~') || p.starts_with('.'))
++                .map(String::as_str);
++            let target = resolve_target_scope(path, cwd);
++            Classification::new(Effect::Read, prog, target, summary)
++        }
++        "rg" | "grep" | "egrep" | "fgrep" => {
++            // `rg --pre <cmd>` runs a program per file.
++            if args.iter().any(|a| a == "--pre" || a.starts_with("--pre=")) {
++                return Classification::new(
++                    Effect::Unknown,
++                    format!("{prog} --pre"),
++                    resolve_target_scope(None, cwd),
++                    summary,
++                );
++            }
++            let (_, positionals) = split_flags_and_positionals(
++                args,
++                &[
++                    "-e",
++                    "-f",
++                    "-g",
++                    "--glob",
++                    "-t",
++                    "--type",
++                    "-A",
++                    "-B",
++                    "-C",
++                    "-m",
++                    "--max-count",
++                ],
++            );
++            let path = if positionals.len() >= 2 {
++                positionals.last().map(String::as_str)
++            } else {
++                None
++            };
++            let target = resolve_target_scope(path, cwd);
++            Classification::new(Effect::Read, prog, target, summary)
++        }
++        "sqlite3" => {
++            let is_readonly = args.iter().any(|a| a == "-readonly" || a == "--readonly");
++            let (_, positionals) = split_flags_and_positionals(args, &["-cmd", "-separator"]);
++            let db_path = positionals.first().map(String::as_str);
++            let sql = positionals
++                .get(1)
++                .map(|s| s.to_ascii_lowercase())
++                .unwrap_or_default();
++            let target = resolve_target_scope(db_path, cwd);
++            let mutates = sql.contains("insert ")
++                || sql.contains("update ")
++                || sql.contains("delete ")
++                || sql.contains("drop ")
++                || sql.contains("alter ")
++                || sql.contains("create ");
++            if is_readonly || (!mutates && (sql.starts_with("select") || sql.starts_with("pragma")))
++            {
++                Classification::new(Effect::Read, "sqlite3", target, summary)
++            } else if is_draft_path(db_path.unwrap_or(""), cwd) {
++                Classification::new(Effect::Draft, "sqlite3", target, summary)
++            } else {
++                Classification::new(Effect::WriteLocal, "sqlite3", target, summary)
++            }
++        }
++        "touch" | "mkdir" | "cp" | "mv" | "chmod" | "chown" | "truncate" | "tee" => {
++            let (_, positionals) = split_flags_and_positionals(args, &["-m", "-o", "-g"]);
++            let dst = positionals.last().map(String::as_str).unwrap_or("");
++            let effect = if is_draft_path(dst, cwd) {
++                Effect::Draft
++            } else {
++                Effect::WriteLocal
++            };
++            let target = resolve_file_target(dst, cwd);
++            Classification::new(effect, prog, target, summary)
++        }
++        "sed" => {
++            let in_place = args.iter().any(|a| a == "-i" || a.starts_with("-i"));
++            let (_, positionals) = split_flags_and_positionals(args, &["-e", "-f"]);
++            let file = positionals.last().map(String::as_str).unwrap_or("");
++            if in_place {
++                let effect = if is_draft_path(file, cwd) {
++                    Effect::Draft
++                } else {
++                    Effect::WriteLocal
++                };
++                Classification::new(effect, "sed -i", resolve_file_target(file, cwd), summary)
++            } else {
++                Classification::new(
++                    Effect::Read,
++                    "sed",
++                    resolve_target_scope(Some(file), cwd),
++                    summary,
++                )
++            }
++        }
++        "imsg" | "slack-cli" | "sendmail" | "mail" | "mailx" => {
++            let recipient = extract_recipient(args).unwrap_or_else(|| "external".to_string());
++            Classification::new(Effect::ExternalSend, prog, recipient, summary)
++        }
++        "zele" => {
++            let sends = args
++                .iter()
++                .any(|a| matches!(a.as_str(), "send" | "reply" | "forward"));
++            if sends {
++                let recipient = extract_recipient(args).unwrap_or_else(|| "mail".to_string());
++                Classification::new(Effect::ExternalSend, "zele mail send", recipient, summary)
++            } else {
++                Classification::new(
++                    Effect::Read,
++                    "zele",
++                    resolve_target_scope(None, cwd),
++                    summary,
++                )
++            }
++        }
++        "cargo" => {
++            let sub = args
++                .iter()
++                .find(|a| !a.starts_with('-'))
++                .map(String::as_str)
++                .unwrap_or("");
++            let target = resolve_target_scope(None, cwd);
++            match sub {
++                "check" | "clippy" | "test" | "bench" | "doc" | "metadata" | "tree" | "version" => {
++                    Classification::new(
++                        Effect::Read,
++                        format!("cargo {sub}").trim().to_string(),
++                        target,
++                        summary,
++                    )
++                }
++                "fmt" | "fix" | "build" | "add" | "remove" | "update" => {
++                    Classification::new(Effect::WriteLocal, format!("cargo {sub}"), target, summary)
++                }
++                "publish" => {
++                    Classification::new(Effect::VcsProtected, "cargo publish", target, summary)
++                }
++                _ => Classification::new(Effect::Unknown, "cargo", target, summary),
++            }
++        }
++        _ => Classification::new(
++            Effect::Unknown,
++            prog,
++            resolve_target_scope(None, cwd),
++            summary,
++        ),
++    }
++}
++
++fn classify_git(args: &[String], cwd: Option<&str>, summary: &str) -> Classification {
++    let mut idx = 0;
++    let mut repo_cwd: Option<String> = cwd.map(str::to_string);
++    while idx < args.len() {
++        let tok = args[idx].as_str();
++        // A config override can run arbitrary programs (core.fsmonitor, alias.*, core.pager).
++        if tok == "-c"
++            || tok == "--config-env"
++            || tok.starts_with("--config-env=")
++            || tok == "--exec-path"
++        {
++            return Classification::new(
++                Effect::Unknown,
++                "git -c",
++                resolve_target_scope(None, repo_cwd.as_deref()),
++                summary,
++            );
++        }
++        if tok == "-C" || tok == "--git-dir" || tok == "--work-tree" {
++            if tok == "-C" {
++                if let Some(dir) = args.get(idx + 1) {
++                    repo_cwd = Some(dir.clone());
++                }
++            }
++            idx += 2;
++            continue;
++        }
++        if let Some(dir) = tok.strip_prefix("-C") {
++            if !dir.is_empty() {
++                repo_cwd = Some(dir.to_string());
++            }
++            idx += 1;
++            continue;
++        }
++        if tok.starts_with('-') {
++            idx += 1;
++            continue;
++        }
++        break;
++    }
++
++    let sub = args.get(idx).map(String::as_str).unwrap_or("");
++    let sub_args = if idx < args.len() {
++        &args[idx + 1..]
++    } else {
++        &[]
++    };
++    let repo_target = resolve_target_scope(None, repo_cwd.as_deref());
++
++    match sub {
++        "status" | "diff" | "log" | "show" | "rev-parse" | "ls-files" | "ls-remote"
++        | "cat-file" | "describe" | "shortlog" | "blame" | "reflog" | "grep" => {
++            Classification::new(Effect::Read, format!("git {sub}"), repo_target, summary)
++        }
++        "branch" => {
++            let (flags, positionals) = split_flags_and_positionals(sub_args, &[]);
++            let has_delete_force = flags.iter().any(|f| f == "-D" || f == "--delete");
++            let is_read = positionals.is_empty()
++                || flags.iter().any(|f| {
++                    matches!(
++                        f.as_str(),
++                        "-a" | "--all"
++                            | "-r"
++                            | "--remotes"
++                            | "-l"
++                            | "--list"
++                            | "--show-current"
++                            | "-v"
++                            | "-vv"
++                    )
++                });
++            if has_delete_force {
++                Classification::new(Effect::VcsProtected, "git branch -D", repo_target, summary)
++            } else if is_read {
++                Classification::new(Effect::Read, "git branch", repo_target, summary)
++            } else {
++                Classification::new(Effect::VcsLocal, "git branch", repo_target, summary)
++            }
++        }
++        "worktree" => {
++            let action = sub_args.first().map(String::as_str).unwrap_or("list");
++            match action {
++                "list" => {
++                    Classification::new(Effect::Read, "git worktree list", repo_target, summary)
++                }
++                "remove" | "prune" => {
++                    Classification::new(Effect::Delete, "git worktree remove", repo_target, summary)
++                }
++                _ => {
++                    Classification::new(Effect::VcsLocal, "git worktree add", repo_target, summary)
++                }
++            }
++        }
++        "add" | "commit" | "stash" | "checkout" | "switch" | "rebase" | "cherry-pick"
++        | "restore" | "mv" | "rm" | "init" | "fetch" | "pull" => {
++            Classification::new(Effect::VcsLocal, format!("git {sub}"), repo_target, summary)
++        }
++        "reset" => {
++            let hard = sub_args.iter().any(|a| a == "--hard");
++            if hard {
++                Classification::new(
++                    Effect::VcsProtected,
++                    "git reset --hard",
++                    repo_target,
++                    summary,
++                )
++            } else {
++                Classification::new(Effect::VcsLocal, "git reset", repo_target, summary)
++            }
++        }
++        "clean" => {
++            let force = sub_args
++                .iter()
++                .any(|a| a.starts_with("-f") || a == "--force");
++            if force {
++                Classification::new(Effect::Delete, "git clean", repo_target, summary)
++            } else {
++                Classification::new(Effect::Read, "git clean", repo_target, summary)
++            }
++        }
++        "merge" | "tag" => Classification::new(
++            Effect::VcsProtected,
++            format!("git {sub}"),
++            repo_target,
++            summary,
++        ),
++        "push" => {
++            let (flags, positionals) =
++                split_flags_and_positionals(sub_args, &["--repo", "--receive-pack", "--exec"]);
++            let force_or_tags_or_del = flags.iter().any(|f| {
++                matches!(
++                    f.as_str(),
++                    "-f" | "--force"
++                        | "--force-with-lease"
++                        | "--tags"
++                        | "--delete"
++                        | "-d"
++                        | "--mirror"
++                )
++            });
++            let branch = positionals
++                .get(1)
++                .or_else(|| positionals.first())
++                .map(String::as_str)
++                .unwrap_or("");
++            let refspec_target = branch.rsplit(':').next().unwrap_or(branch);
++            let refspec_clean = refspec_target
++                .strip_prefix("refs/heads/")
++                .unwrap_or(refspec_target);
++            let is_protected_branch = matches!(
++                refspec_clean,
++                "main" | "master" | "production" | "prod" | "release"
++            ) || branch.starts_with('+');
++            if force_or_tags_or_del || is_protected_branch {
++                Classification::new(Effect::VcsProtected, "git push", repo_target, summary)
++            } else {
++                Classification::new(Effect::VcsRemote, "git push", repo_target, summary)
++            }
++        }
++        _ => Classification::new(Effect::Unknown, "git", repo_target, summary),
++    }
++}
++
++fn classify_gh(args: &[String], cwd: Option<&str>, summary: &str) -> Classification {
++    let mut non_flags = args.iter().filter(|a| !a.starts_with('-'));
++    let group = non_flags.next().map(String::as_str).unwrap_or("");
++    let action = non_flags.next().map(String::as_str).unwrap_or("");
++    let target = extract_flag_value(args, &["-R", "--repo"])
++        .unwrap_or_else(|| resolve_target_scope(None, cwd));
++
++    match (group, action) {
++        ("pr", "list" | "view" | "status" | "checks" | "diff")
++        | ("issue", "list" | "view" | "status")
++        | ("run", "list" | "view")
++        | ("repo", "view" | "list")
++        | ("release", "list" | "view")
++        | ("search", _)
++        | ("auth", "status") => Classification::new(
++            Effect::Read,
++            format!("gh {group} {action}").trim().to_string(),
++            target,
++            summary,
++        ),
++        ("api", _) => {
++            let method = extract_flag_value(args, &["-X", "--method"])
++                .unwrap_or_else(|| "GET".to_string())
++                .to_ascii_uppercase();
++            let has_field_mutation = args.iter().any(|a| {
++                matches!(
++                    a.as_str(),
++                    "-f" | "-F" | "--field" | "--raw-field" | "--input"
++                )
++            }) && !args.iter().any(|a| a == "graphql");
++            if method == "GET" && !has_field_mutation {
++                Classification::new(Effect::Read, "gh api", target, summary)
++            } else if method == "DELETE" {
++                Classification::new(Effect::Delete, "gh api", target, summary)
++            } else {
++                Classification::new(Effect::VcsRemote, "gh api", target, summary)
++            }
++        }
++        ("pr", "create" | "comment" | "edit" | "ready" | "review" | "close" | "reopen")
++        | ("issue", "create" | "comment" | "edit" | "close" | "reopen") => Classification::new(
++            Effect::VcsRemote,
++            format!("gh {group} {action}"),
++            target,
++            summary,
++        ),
++        ("pr", "merge")
++        | ("release", "create" | "delete" | "upload")
++        | ("repo", "delete" | "archive") => Classification::new(
++            Effect::VcsProtected,
++            format!("gh {group} {action}"),
++            target,
++            summary,
++        ),
++        _ => Classification::new(Effect::Unknown, "gh", target, summary),
++    }
++}
++
++fn is_spend_invocation(prog: &str, args: &[String]) -> bool {
++    if matches!(
++        prog,
++        "stripe" | "paypal" | "payment" | "billing" | "purchase"
++    ) {
++        return true;
++    }
++    let all = std::iter::once(prog)
++        .chain(args.iter().map(String::as_str))
++        .collect::<Vec<_>>()
++        .join(" ")
++        .to_ascii_lowercase();
++    all.contains("stripe charges")
++        || all.contains("stripe payment")
++        || all.contains("billing")
++        || all.contains("--pay")
++        || all.contains("purchase")
++        || all.contains("checkout --confirm")
++        || all.contains("xenoci build")
++        || all.contains("xenocast build")
++}
++
++fn is_draft_path(path: &str, cwd: Option<&str>) -> bool {
++    let p = path.trim();
++    if p.starts_with("/tmp")
++        || p.starts_with("/private/tmp")
++        || p.contains("/.omon/workspace")
++        || p.starts_with("~/.omon/workspace")
++    {
++        return true;
++    }
++    if !p.starts_with('/') && !p.starts_with('~') {
++        if let Some(c) = cwd {
++            let c = c.trim();
++            if c.starts_with("/tmp")
++                || c.starts_with("/private/tmp")
++                || c.contains("/.omon/workspace")
++                || c.starts_with("~/.omon/workspace")
++            {
++                return true;
++            }
++        }
++    }
++    false
++}
++
++fn resolve_file_target(path: &str, cwd: Option<&str>) -> String {
++    let p = path.trim();
++    if p.is_empty() {
++        return resolve_target_scope(None, cwd);
++    }
++    if p.starts_with('/') || p.starts_with('~') {
++        return normalize_target(parent_or_self(p));
++    }
++    if let Some(c) = cwd {
++        return normalize_target(c);
++    }
++    normalize_target(parent_or_self(p))
++}
++
++fn resolve_target_scope(path: Option<&str>, cwd: Option<&str>) -> String {
++    if let Some(p) = path.map(str::trim).filter(|s| !s.is_empty()) {
++        if p.starts_with('/') || p.starts_with('~') {
++            return normalize_target(parent_or_self(p));
++        }
++    }
++    if let Some(c) = cwd.map(str::trim).filter(|s| !s.is_empty()) {
++        return normalize_target(c);
++    }
++    if let Some(p) = path.map(str::trim).filter(|s| !s.is_empty()) {
++        return normalize_target(parent_or_self(p));
++    }
++    String::new()
++}
++
++fn parent_or_self(path: &str) -> &str {
++    let p = Path::new(path);
++    if path.ends_with('/') {
++        return path.trim_end_matches('/');
++    }
++    if let Some(ext) = p.extension() {
++        if !ext.is_empty() {
++            if let Some(parent) = p.parent().and_then(Path::to_str) {
++                if !parent.is_empty() && parent != "." {
++                    return parent;
++                }
++            }
++        }
++    }
++    path
++}
++
++fn normalize_target(raw: &str) -> String {
++    let trimmed = raw.trim().trim_end_matches('/');
++    let trimmed = trimmed
++        .strip_prefix("/private/tmp")
++        .map(|rest| format!("/tmp{rest}"))
++        .unwrap_or_else(|| trimmed.to_string());
++    if let Some(idx) = trimmed.find("/.omon/workspace/agents/") {
++        let rest = &trimmed[idx + 1..];
++        return format!("~/{rest}");
++    }
++    trimmed
++}
++
++fn extract_prefixed_line<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
++    for line in text.lines() {
++        let trimmed = line.trim();
++        if let Some(rest) = trimmed.strip_prefix(prefix) {
++            return Some(rest.trim());
++        }
++    }
++    None
++}
++
++fn peel_cd_prefix<'a>(command: &'a str, cwd: Option<&str>) -> (Option<String>, &'a str) {
++    let trimmed = command.trim();
++    if let Some(rest) = trimmed.strip_prefix("cd ") {
++        if let Some((dir_part, after)) = rest.split_once("&&").or_else(|| rest.split_once(';')) {
++            let dir = dir_part.trim().trim_matches('"').trim_matches('\'');
++            if !dir.is_empty() {
++                return (Some(dir.to_string()), after.trim());
++            }
++        }
++    }
++    (cwd.map(str::to_string), trimmed)
++}
++
++fn detect_output_redirection(cmd: &str) -> Option<String> {
++    let tokens = tokenize_shell(cmd);
++    for (i, tok) in tokens.iter().enumerate() {
++        if (tok == ">" || tok == ">>" || tok == "1>" || tok == "1>>") && i + 1 < tokens.len() {
++            let target = &tokens[i + 1];
++            if !target.starts_with('&') && target != "/dev/null" {
++                return Some(target.clone());
++            }
++        }
++    }
++    None
++}
++
++fn skip_env_assignments(tokens: &[String]) -> &[String] {
++    let mut idx = 0;
++    while idx < tokens.len() {
++        let t = &tokens[idx];
++        if t == "env" {
++            idx += 1;
++            continue;
++        }
++        if let Some((name, _)) = t.split_once('=') {
++            if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
++                idx += 1;
++                continue;
++            }
++        }
++        break;
++    }
++    &tokens[idx..]
++}
++
++fn split_flags_and_positionals(
++    args: &[String],
++    flags_with_value: &[&str],
++) -> (Vec<String>, Vec<String>) {
++    let mut flags = Vec::new();
++    let mut positionals = Vec::new();
++    let mut skip_next = false;
++    let mut after_double_dash = false;
++    for (i, arg) in args.iter().enumerate() {
++        if skip_next {
++            skip_next = false;
++            continue;
++        }
++        if after_double_dash {
++            positionals.push(arg.clone());
++            continue;
++        }
++        if arg == "--" {
++            after_double_dash = true;
++            continue;
++        }
++        if arg.starts_with('-') && arg.len() > 1 {
++            flags.push(arg.clone());
++            if flags_with_value.contains(&arg.as_str()) && i + 1 < args.len() {
++                skip_next = true;
++            }
++        } else {
++            positionals.push(arg.clone());
++        }
++    }
++    flags.sort();
++    (flags, positionals)
++}
++
++fn extract_flag_value(args: &[String], names: &[&str]) -> Option<String> {
++    for (i, arg) in args.iter().enumerate() {
++        if names.contains(&arg.as_str()) {
++            if let Some(val) = args.get(i + 1) {
++                return Some(val.clone());
++            }
++        }
++        for name in names {
++            if let Some(eq) = arg.strip_prefix(&format!("{name}=")) {
++                return Some(eq.to_string());
++            }
++        }
++    }
++    None
++}
++
++fn extract_recipient(args: &[String]) -> Option<String> {
++    extract_flag_value(
++        args,
++        &["--to", "-t", "--recipient", "--channel", "--chat", "--user"],
++    )
++    .or_else(|| {
++        let (_, pos) =
++            split_flags_and_positionals(args, &["-m", "--message", "--body", "--subject", "-s"]);
++        pos.into_iter()
++            .find(|p| !matches!(p.as_str(), "send" | "reply" | "mail" | "message" | "chat"))
++    })
++}
++
++fn basename(path: &str) -> &str {
++    Path::new(path)
++        .file_name()
++        .and_then(|s| s.to_str())
++        .unwrap_or(path)
++}
++
++fn shell_join(argv: &[String]) -> String {
++    argv.join(" ")
++}
++
++/// `$(..)`, backticks and `<(..)`/`>(..)` outside single quotes.
++fn has_unquoted_substitution(input: &str) -> bool {
++    let mut in_single = false;
++    let mut in_double = false;
++    let mut prev = '\0';
++    let mut chars = input.chars().peekable();
++    while let Some(c) = chars.next() {
++        match c {
++            '\\' if !in_single => {
++                chars.next();
++                prev = '\0';
++                continue;
++            }
++            '\'' if !in_double => in_single = !in_single,
++            '"' if !in_single => in_double = !in_double,
++            '`' if !in_single => return true,
++            '$' if !in_single && chars.peek() == Some(&'(') => return true,
++            '(' if !in_single && !in_double && (prev == '<' || prev == '>') => return true,
++            _ => {}
++        }
++        prev = c;
++    }
++    false
++}
++
++/// Splits a command line on unquoted `;`, `&&`, `||`, `|`, `&` and newlines.
++fn split_shell_segments(input: &str) -> Vec<String> {
++    let mut segments = Vec::new();
++    let mut current = String::new();
++    let mut in_single = false;
++    let mut in_double = false;
++    let mut chars = input.chars().peekable();
++    while let Some(c) = chars.next() {
++        if c == '\\' && !in_single {
++            current.push(c);
++            if let Some(n) = chars.next() {
++                current.push(n);
++            }
++            continue;
++        }
++        if c == '\'' && !in_double {
++            in_single = !in_single;
++        } else if c == '"' && !in_single {
++            in_double = !in_double;
++        }
++        let split = !in_single && !in_double && matches!(c, ';' | '|' | '&' | '\n');
++        if split {
++            // `>&2` / `2>&1` / `&>` are redirections, not separators.
++            if c == '&' && (current.ends_with('>') || chars.peek() == Some(&'>')) {
++                current.push(c);
++                continue;
++            }
++            if matches!(c, '|' | '&') && chars.peek() == Some(&c) {
++                chars.next();
++            }
++            if !current.trim().is_empty() {
++                segments.push(current.trim().to_string());
++            }
++            current.clear();
++            continue;
++        }
++        current.push(c);
++    }
++    if !current.trim().is_empty() {
++        segments.push(current.trim().to_string());
++    }
++    segments
++}
++
++fn tokenize_shell(input: &str) -> Vec<String> {
++    let mut tokens = Vec::new();
++    let mut current = String::new();
++    let mut chars = input.chars().peekable();
++    let mut in_single = false;
++    let mut in_double = false;
++
++    while let Some(c) = chars.next() {
++        if in_single {
++            if c == '\'' {
++                in_single = false;
++            } else {
++                current.push(c);
++            }
++        } else if in_double {
++            if c == '"' {
++                in_double = false;
++            } else if c == '\\' {
++                if let Some(next) = chars.next() {
++                    current.push(next);
++                }
++            } else {
++                current.push(c);
++            }
++        } else {
++            match c {
++                '\'' => in_single = true,
++                '"' => in_double = true,
++                '\\' => {
++                    if let Some(next) = chars.next() {
++                        current.push(next);
++                    }
++                }
++                c if c.is_whitespace() => {
++                    if !current.is_empty() {
++                        tokens.push(std::mem::take(&mut current));
++                    }
++                }
++                _ => current.push(c),
++            }
++        }
++    }
++    if !current.is_empty() {
++        tokens.push(current);
++    }
++    tokens
++}

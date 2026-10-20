@@ -114,10 +114,16 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         let mut lane = Lane::new(&key, goal, lead, &cwd, "", target.to_string(), done);
         lane.status = "working".into();
         lane.omo_thread_id = Some(target.session().into());
-        let baseline = self.control.read(target, 1, None).await.map_err(invalid)?;
+        let baseline = self
+            .control
+            .read(target, 100, None)
+            .await
+            .map_err(invalid)?;
         let cursor = next_cursor(&baseline).ok_or_else(|| {
             invalid("read response has no cursor; cannot safely adopt historical output")
         })?;
+        // Output that existed before adoption is history, not a new claim: mark it seen.
+        let historical = assistant_items(&baseline)?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         sqlx::query("INSERT INTO lanes(key,title,lead_session_key,cwd,brief_path,session_key,omo_thread_id,status,done_signals,last_activity_at,kind,external_target) VALUES(?,?,?,?,?,?,?,'working',?,?,'external',?)")
                 .bind(&lane.key).bind(&lane.title).bind(&lane.lead_session_key).bind(&lane.cwd)
@@ -130,6 +136,15 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             .bind(cursor)
             .execute(&mut *tx)
             .await?;
+        for (item_id, _) in &historical {
+            sqlx::query(
+                "INSERT OR IGNORE INTO external_session_items(lane_key,item_id) VALUES(?,?)",
+            )
+            .bind(&key)
+            .bind(item_id)
+            .execute(&mut *tx)
+            .await?;
+        }
         sqlx::query("INSERT INTO lane_history(lane_key,at,to_status,reason) VALUES(?,?,'working','external session adopted')")
                 .bind(&key).bind(self.clock.now()).execute(&mut *tx).await?;
         tx.commit().await?;
@@ -255,15 +270,9 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             .await
             .map_err(invalid)?;
         let cursor = next_cursor(&output).ok_or_else(|| invalid("read response has no cursor"))?;
+        // omo numbers a tail read 1..=60 inside its window, so a numeric seq is neither a stable
+        // position nor an identity: every item is deduplicated by its content id instead.
         let items = assistant_items(&output)?;
-        let items: Vec<(String, String)> = if let Some(last_seq) = is_numeric_cursor {
-            items
-                .into_iter()
-                .filter(|(id, _)| id.parse::<i64>().map(|seq| seq > last_seq).unwrap_or(true))
-                .collect()
-        } else {
-            items
-        };
         let activity = LaneActivity::new(self.pool.clone(), self.clock.clone());
         let mut count = 0;
         for (id, text) in items {
@@ -590,17 +599,22 @@ fn assistant_items(value: &Value) -> Result<Vec<(String, String)>> {
             .or_else(|| entry.get("itemId"))
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .or_else(|| {
-                entry.get("seq").and_then(|s| {
-                    s.as_i64()
-                        .map(|seq| seq.to_string())
-                        .or_else(|| s.as_str().map(str::to_owned))
-                })
-            })
-            .ok_or_else(|| invalid("assistant message has no stable id"))?;
+            .unwrap_or_else(|| {
+                // No stable id (omo tail reads): identify the message by its content.
+                let digest = Sha256::digest(format!("assistant:{text}"));
+                format!("h:{}", hex_prefix(&digest))
+            });
         items.push((id, text));
     }
     Ok(items)
+}
+
+fn hex_prefix(digest: &[u8]) -> String {
+    digest
+        .iter()
+        .take(16)
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn extract_blocks_text(blocks: &[Value]) -> Option<String> {
@@ -729,13 +743,33 @@ mod tests {
             ]
         });
 
+        let id = |text: &str| {
+            format!(
+                "h:{}",
+                hex_prefix(&Sha256::digest(format!("assistant:{text}")))
+            )
+        };
         assert_eq!(
             assistant_items(&page).unwrap(),
             vec![
-                ("42".to_owned(), "first line\nsecond line".to_owned()),
-                ("43".to_owned(), "simple string".to_owned()),
-                ("44".to_owned(), "array block".to_owned())
+                (
+                    id("first line\nsecond line"),
+                    "first line\nsecond line".to_owned()
+                ),
+                (id("simple string"), "simple string".to_owned()),
+                (id("array block"), "array block".to_owned())
             ]
+        );
+    }
+
+    #[test]
+    fn tail_window_seq_reuse_never_hides_a_new_message() {
+        // omo renumbers a tail read 1..=60, so an old and a new message can share seq 60.
+        let before = json!({"items": [{"seq": 60, "role": "assistant", "content": "old"}]});
+        let after = json!({"items": [{"seq": 60, "role": "assistant", "content": "[CLAIM_DONE] k | done"}]});
+        assert_ne!(
+            assistant_items(&before).unwrap()[0].0,
+            assistant_items(&after).unwrap()[0].0
         );
     }
 }

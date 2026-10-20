@@ -558,6 +558,15 @@ impl GuardWatcher {
         if now.saturating_duration_since(mark.at) >= GUARD_REALERT_WINDOW {
             return true;
         }
+        self.got_worse(load, mem, disk, sample)
+    }
+
+    /// The host is materially worse than at the last emitted ALERT, or a new metric started
+    /// alerting. Elapsed time plays no part, so a long episode still reports real changes.
+    fn got_worse(&self, load: bool, mem: bool, disk: bool, sample: &HostSample) -> bool {
+        let Some(mark) = self.last_alert else {
+            return true;
+        };
         // A metric that was not part of the last alert is new information.
         if (load && !mark.load) || (mem && !mark.mem) || (disk && !mark.disk) {
             return true;
@@ -655,10 +664,8 @@ impl GuardWatcher {
                 // Still alerting: quiet unless the host got materially worse (or a new metric
                 // started alerting) since the last emitted ALERT. Time alone never re-alerts here.
                 if !alert_reasons.is_empty()
-                    && self.last_alert.is_some_and(|mark| {
-                        now.saturating_duration_since(mark.at) < GUARD_REALERT_WINDOW
-                    })
-                    && self.worth_alerting(load_alert, mem_alert, disk_alert, sample, now)
+                    && self.last_alert.is_some()
+                    && self.got_worse(load_alert, mem_alert, disk_alert, sample)
                 {
                     self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
                     return Some(GuardReport::Alert(alert_reasons.join("; ")));
@@ -1318,6 +1325,32 @@ mod tests {
         let later = t0 + GUARD_REALERT_WINDOW;
         assert!(watcher
             .check_at(&HostSample::new(10.0, 8, 100, 0), later)
+            .is_some());
+    }
+
+    #[test]
+    fn guard_alert_episode_longer_than_window_still_reports_a_worse_disk() {
+        let thresholds = GuardThresholds {
+            load_alert: 150.0,
+            load_ok: 80.0,
+            mem_free_min_pct: 20,
+            disk_free_min_gb: 50,
+            lanes_max: 6,
+        };
+        let mut watcher = GuardWatcher::new(thresholds);
+        let t0 = std::time::Instant::now();
+        assert!(watcher
+            .check_at(&HostSample::new(10.0, 50, 40, 0), t0)
+            .is_some());
+        let later = t0 + GUARD_REALERT_WINDOW + Duration::from_secs(60);
+        // Unchanged after a day of the same episode: time alone stays quiet.
+        assert_eq!(
+            watcher.check_at(&HostSample::new(10.0, 50, 40, 0), later),
+            None
+        );
+        // Disk fell another 10+ GB: the lead hears about it even after 24h.
+        assert!(watcher
+            .check_at(&HostSample::new(10.0, 50, 28, 0), later)
             .is_some());
     }
 

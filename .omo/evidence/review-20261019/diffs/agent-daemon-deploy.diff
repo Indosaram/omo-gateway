@@ -1,0 +1,1241 @@
+diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+old mode 100755
+new mode 100644
+index 31bd854..6d155e2
+--- a/scripts/deploy.sh
++++ b/scripts/deploy.sh
+@@ -1,88 +1,346 @@
+ #!/usr/bin/env bash
+ # One-shot production deploy: build -> sign -> restart -> verify -> rollback on failure.
+ #
+-#   scripts/deploy.sh            build, sign, restart, verify
++#   scripts/deploy.sh            build gateway + dashboard web, sign, restart, verify
++#   scripts/deploy.sh --no-build skip both builds, install existing target/release binary and web/dist
+ #   scripts/deploy.sh --verify   only run the post-deploy checks against the running gateway
+ #
++# The gateway binary and the dashboard web bundle are always built from the same source tree
++# and installed together: the binary to $INSTALL_BIN, the web bundle to $INSTALL_WEB, which the
++# launchd plist pins via DASHBOARD_WEB_ROOT. Incident 2026-10-17: a binary built from a clean
++# commit worktree served a web/dist built from the dirty main tree, so the dashboard called API
++# routes the binary did not have ("API endpoint not found") while every check passed.
++#
+ # Verification passes only when, within VERIFY_TIMEOUT seconds of the restart:
+ #   - a new gateway process is running,
+-#   - it logged "Discord client ready" after the restart,
++#   - the configured home transport connected after the restart,
+ #   - the app-server answers readyz 200,
+-#   - exactly one app-server listens, and its parent is the gateway.
+-# On failure the previous binary is restored and the gateway restarted with it.
++#   - exactly one app-server listens, and its parent is the gateway,
++#   - the dashboard serves the installed index.html and answers every DASHBOARD_PROBES path with 200.
++# On failure the previous binary and web bundle are restored and the gateway restarted with them.
++#
++# Incident 2026-10-15: Plain `cargo build --release` rewrote target/release/omo-gateway
++# with an ad-hoc signature (no TeamIdentifier), breaking macOS TCC Full Disk Access and
++# causing iMessage collection failure. We decouple the launchd running binary ($INSTALL_BIN)
++# from cargo's target/ output directory so that cargo builds never replace the signed binary
++# launchd runs.
+ set -euo pipefail
+ 
+ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+-BIN="$REPO/target/release/omo-gateway"
++TARGET_BIN="$REPO/target/release/omo-gateway"
++INSTALL_BIN="${INSTALL_BIN:-$HOME/.omon/bin/omo-gateway}"
++INSTALL_DIR="$(dirname "$INSTALL_BIN")"
++INSTALL_WEB="${INSTALL_WEB:-$INSTALL_DIR/../web}"
++WEB_SRC="$REPO/web"
++BUN="${BUN:-$(command -v bun || printf '%s' "$HOME/.bun/bin/bun")}"
++# Paths the dashboard web bundle depends on; each must answer 200 on the deployed gateway.
++DASHBOARD_PROBES="${DASHBOARD_PROBES:-/api/health /api/tracker/bootstrap}"
+ LABEL="ai.omon.gateway"
++PLIST="${LAUNCHD_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
+ SIGN_IDENTITY="${SIGN_IDENTITY:-Developer ID Application: Indo Yoon (5DUM8WPB4C)}"
+ APPSERVER_URL="${OMON_OMO_APPSERVER_URL:-ws://127.0.0.1:19742}"
+ APPSERVER_HTTP="${APPSERVER_URL/ws:\/\//http://}"
+ LOG="$HOME/.omon/gateway.log"
+ VERIFY_TIMEOUT="${VERIFY_TIMEOUT:-120}"
++# A restart cuts off every turn in flight; wait up to this long for them to finish first.
++IDLE_WAIT_TIMEOUT="${IDLE_WAIT_TIMEOUT:-600}"
+ BACKUP_DIR="$HOME/.omon/deploy-backups"
+ 
+ say() { printf '[deploy] %s\n' "$*"; }
+ die() { printf '[deploy] FAIL: %s\n' "$*" >&2; exit 1; }
+ 
+-gateway_pid() { pgrep -f "$BIN run" | head -1 || true; }
++plist_value() { /usr/libexec/PlistBuddy -c "Print :$1" "$PLIST" 2>/dev/null || true; }
++
++# The dashboard address the running gateway uses: DASHBOARD_URL, else the gateway's .env
++# (launchd WorkingDirectory), else the built-in default port.
++dashboard_url() {
++    if [[ -n "${DASHBOARD_URL:-}" ]]; then printf '%s\n' "$DASHBOARD_URL"; return; fi
++    local env_file port
++    env_file="$(plist_value WorkingDirectory)/.env"
++    port="$(grep -E '^DASHBOARD_PORT=' "$env_file" 2>/dev/null | tail -1 | cut -d= -f2 | tr -d "\"' " || true)"
++    printf 'http://127.0.0.1:%s\n' "${port:-9119}"
++}
++
++# The web root the running gateway serves: the plist pin, else web/dist of its working directory.
++served_web_root() {
++    local pinned
++    pinned="$(plist_value EnvironmentVariables:DASHBOARD_WEB_ROOT)"
++    if [[ -n "$pinned" ]]; then printf '%s\n' "$pinned"; else printf '%s/web/dist\n' "$(plist_value WorkingDirectory)"; fi
++}
++
++# 0 when the dashboard serves the installed index.html and every probe path answers 200.
++dashboard_ok() {
++    local base path code served
++    base="$(dashboard_url)"
++    served="$(curl -s -m 3 "$base/" || true)"
++    [[ -n "$served" && "$served" == "$(cat "$(served_web_root)/index.html" 2>/dev/null)" ]] || {
++        dashboard_state="index.html differs from $(served_web_root)"
++        return 1
++    }
++    for path in $DASHBOARD_PROBES; do
++        code="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "$base$path" || true)"
++        [[ "$code" == 200 ]] || { dashboard_state="$path=$code"; return 1; }
++    done
++    dashboard_state="ok"
++}
++
++# Gateway PID matching the installed binary path.
++gateway_pid() { pgrep -f "$INSTALL_BIN run" | head -1 || true; }
++
++# During the FIRST deploy the old process still runs from target/release,
++# so old_pid detection must accept either path (match both patterns).
++detect_old_pid() {
++    local pid
++    pid="$(gateway_pid)"
++    if [[ -z "$pid" ]]; then
++        pid="$(pgrep -f "$TARGET_BIN run" | head -1 || true)"
++    fi
++    printf '%s\n' "$pid"
++}
++
++check_fda_warning() {
++    local since="$1"
++    local fda_denied
++    fda_denied="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null \
++        | grep -a 'full disk access: denied' | awk -v s="$since" '$1 >= s' | tail -1 || true)"
++    if [[ -n "$fda_denied" ]]; then
++        printf '\n*******************************************************************************\n' >&2
++        printf '⚠️  WARNING: Full Disk Access is DENIED for %s\n' "$INSTALL_BIN" >&2
++        printf 'Please enable Full Disk Access in macOS System Settings -> Privacy & Security -> Full Disk Access for:\n' >&2
++        printf '  %s\n' "$INSTALL_BIN" >&2
++        printf '*******************************************************************************\n\n' >&2
++    fi
++}
+ 
+ # Checks the running gateway. $1 = earliest acceptable log timestamp (UTC, ISO prefix).
+ verify() {
+     local since="$1" old_pid="${2:-}" deadline=$((SECONDS + VERIFY_TIMEOUT))
+     local pid="" ready="" code="" servers="" parent=""
++    local transport="Discord" ready_pattern="Discord client ready"
++    if [[ "$(plist_value EnvironmentVariables:OMON_HOME_PLATFORM)" == slack ]]; then
++        transport="Slack"
++        ready_pattern="slack socket: connected"
++    fi
++    dashboard_state="unchecked"
+     while ((SECONDS < deadline)); do
+         pid="$(gateway_pid)"
+         ready="$(sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null \
+-            | grep -a 'Discord client ready' | awk -v s="$since" '$1 >= s' | tail -1 || true)"
++            | grep -a "$ready_pattern" | awk -v s="$since" '$1 >= s' | tail -1 || true)"
+         code="$(curl -s -m 3 -o /dev/null -w '%{http_code}' "$APPSERVER_HTTP/readyz" || true)"
+         servers="$(pgrep -f "app-server --listen $APPSERVER_URL" || true)"
+         if [[ -n "$pid" && "$pid" != "$old_pid" && -n "$ready" && "$code" == 200 \
+             && "$(wc -l <<<"$servers" | tr -d ' ')" == 1 && -n "$servers" ]]; then
+             parent="$(ps -o ppid= -p "$servers" | tr -d ' ')"
+-            if [[ "$parent" == "$pid" ]]; then
+-                say "verified: gateway=$pid discord=ready appserver=$servers(ppid=$parent) readyz=200"
++            if [[ "$parent" == "$pid" ]] && dashboard_ok; then
++                say "verified: gateway=$pid transport=$transport:ready appserver=$servers(ppid=$parent) readyz=200 dashboard=$(dashboard_url) probes=[$DASHBOARD_PROBES]"
++                check_fda_warning "$since"
+                 return 0
+             fi
+         fi
+         sleep 2
+     done
+-    say "verify timed out: gateway=${pid:-none} discord=${ready:+ready} readyz=${code:-none} appservers=[$(tr '\n' ' ' <<<"$servers")] parent=${parent:-?}"
++    say "verify timed out: gateway=${pid:-none} transport=$transport:${ready:+ready} readyz=${code:-none} appservers=[$(tr '\n' ' ' <<<"$servers")] parent=${parent:-?} dashboard=$dashboard_state"
++    check_fda_warning "$since"
+     return 1
+ }
+ 
++# Waits until the running gateway reports no session running a turn (busy_sessions=0) or
++# IDLE_WAIT_TIMEOUT passes. A gateway that predates the field, or does not answer, is not waited on.
++wait_for_idle_sessions() {
++    local deadline=$((SECONDS + IDLE_WAIT_TIMEOUT)) busy announced=0
++    while ((SECONDS < deadline)); do
++        busy="$(curl -s -m 5 "$(dashboard_url)/api/status" 2>/dev/null \
++            | python3 -c 'import json,sys
++try: print(json.load(sys.stdin).get("busy_sessions", 0))
++except Exception: print(0)' 2>/dev/null || echo 0)"
++        [[ "$busy" =~ ^[0-9]+$ ]] || busy=0
++        ((busy == 0)) && return 0
++        if ((announced == 0)); then
++            say "waiting for $busy running turn(s) to finish before restarting (up to ${IDLE_WAIT_TIMEOUT}s)"
++            announced=1
++        fi
++        sleep 5
++    done
++    say "turns still running after ${IDLE_WAIT_TIMEOUT}s; restarting anyway (they resume on boot)"
++}
++
++plist_modified=0
+ restart() {
+-    launchctl kickstart -k "gui/$(id -u)/$LABEL" >/dev/null 2>&1 \
+-        || launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$LABEL.plist"
++    local uid="${UID:-$(id -u)}"
++    if [[ "$plist_modified" == 1 ]]; then
++        say "reloading $LABEL with bootout and bootstrap (plist was updated)"
++        launchctl bootout "gui/$uid/$LABEL" >/dev/null 2>&1 || true
++        # bootout returns before launchd has removed the job; an immediate bootstrap then
++        # fails with "5: Input/output error" and leaves the gateway down (2026-10-16).
++        local tries=0
++        while launchctl print "gui/$uid/$LABEL" >/dev/null 2>&1 && ((tries < 30)); do
++            sleep 1
++            tries=$((tries + 1))
++        done
++        tries=0
++        until launchctl bootstrap "gui/$uid" "$PLIST"; do
++            tries=$((tries + 1))
++            ((tries >= 5)) && die "launchctl bootstrap failed $tries times; gateway is NOT running"
++            sleep 2
++        done
++        plist_modified=0
++    else
++        launchctl kickstart -k "gui/$uid/$LABEL" >/dev/null 2>&1 \
++            || launchctl bootstrap "gui/$uid" "$PLIST"
++    fi
+ }
+ 
+-if [[ "${1:-}" == "--verify" ]]; then
++NO_BUILD=0
++ONLY_VERIFY=0
++
++for arg in "$@"; do
++    case "$arg" in
++        --verify)
++            ONLY_VERIFY=1
++            ;;
++        --no-build)
++            NO_BUILD=1
++            ;;
++        *)
++            die "unknown argument: $arg"
++            ;;
++    esac
++done
++
++if [[ "$ONLY_VERIFY" == 1 ]]; then
++    # Before the first pinned-path deploy the gateway still runs from target/release.
++    if [[ -z "$(gateway_pid)" ]]; then gateway_pid() { detect_old_pid; }; fi
+     verify "0000" "" || die "running gateway is not healthy"
+     exit 0
+ fi
+ 
+ cd "$REPO"
+-[[ -z "$(pgrep -f 'cargo (build|test|clippy).*omo-gateway' || true)" ]] \
+-    || die "another cargo build of omo-gateway holds the build lock; stop it first"
++# Several worktrees deploy to the same gateway. A build that does not contain the revision
++# currently deployed silently reverts another session's fixes (2026-10-19: the full-access
++# and Slack ingress fixes were overwritten twice). Refuse it unless forced.
++deployed_rev="$(sed -n 's/^rev=\([0-9a-f]*\).*/\1/p' "$INSTALL_DIR/DEPLOYED" 2>/dev/null | head -1)"
++if [[ -n "$deployed_rev" && "${OMON_DEPLOY_ALLOW_REWIND:-0}" != 1 ]]; then
++    if git -C "$REPO" cat-file -e "$deployed_rev^{commit}" 2>/dev/null; then
++        git -C "$REPO" merge-base --is-ancestor "$deployed_rev" HEAD \
++            || die "HEAD does not contain the deployed revision $deployed_rev; merge it first (or set OMON_DEPLOY_ALLOW_REWIND=1)"
++    else
++        die "deployed revision $deployed_rev is unknown to $REPO; fetch or merge it first (or set OMON_DEPLOY_ALLOW_REWIND=1)"
++    fi
++fi
++if [[ "$NO_BUILD" == 0 ]]; then
++    [[ -z "$(pgrep -f 'cargo (build|test|clippy).*omo-gateway' || true)" ]] \
++        || die "another cargo build of omo-gateway holds the build lock; stop it first"
++fi
+ 
+ mkdir -p "$BACKUP_DIR"
++mkdir -p "$INSTALL_DIR"
++
++stamp="$(date +%Y%m%d-%H%M%S)"
+ backup=""
+-if [[ -x "$BIN" ]]; then
+-    backup="$BACKUP_DIR/omo-gateway.$(date +%Y%m%d-%H%M%S)"
+-    cp -p "$BIN" "$backup"
++if [[ -x "$INSTALL_BIN" ]]; then
++    backup="$BACKUP_DIR/omo-gateway.$stamp"
++    cp -p "$INSTALL_BIN" "$backup"
+     say "backed up current binary to $backup"
+ fi
++# Back up whatever the gateway serves now, so a rollback restores a matching binary + web pair.
++web_backup=""
++if [[ -f "$(served_web_root)/index.html" ]]; then
++    web_backup="$BACKUP_DIR/web.$stamp"
++    cp -Rp "$(served_web_root)" "$web_backup"
++    say "backed up served web bundle $(served_web_root) to $web_backup"
++fi
++
++source_rev="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo unknown)"
++source_dirty="$(git -C "$REPO" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"
++say "source tree $REPO at $source_rev with $source_dirty uncommitted paths (binary and web both built from it)"
++
++if [[ "$NO_BUILD" == 1 ]]; then
++    say "skipping cargo and web builds (--no-build specified)"
++    [[ -x "$TARGET_BIN" ]] || die "target binary not found or not executable at $TARGET_BIN"
++    [[ -f "$WEB_SRC/dist/index.html" ]] || die "web bundle not found at $WEB_SRC/dist"
++else
++    say "building dashboard web bundle in $WEB_SRC"
++    [[ -x "$BUN" ]] || die "bun not found (set BUN=/path/to/bun); running gateway untouched"
++    (cd "$WEB_SRC" && "$BUN" install --frozen-lockfile && "$BUN" run build) \
++        || die "web build failed; running gateway untouched"
++    say "building release (sccache bypassed: a corrupt cache entry once broke every build; strip=none for macOS ld bug)"
++    cargo build --release --bin omo-gateway \
++        --config 'build.rustc-wrapper=""' \
++        --config 'profile.release.strip="none"' \
++        --config 'profile.release.build-override.strip="none"' \
++        || die "release build failed; running gateway untouched"
++fi
+ 
+-say "building release (sccache bypassed: a corrupt cache entry once broke every build)"
+-cargo build --release --bin omo-gateway --config 'build.rustc-wrapper=""' \
+-    || die "release build failed; running gateway untouched"
++say "staging built binary to $INSTALL_BIN.new"
++cp -p "$TARGET_BIN" "$INSTALL_BIN.new"
+ 
+-say "signing with $SIGN_IDENTITY"
++say "signing $INSTALL_BIN.new with $SIGN_IDENTITY"
+ codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" \
+-    --identifier omo-gateway "$BIN"
+-codesign --verify --strict "$BIN" || die "signature verification failed"
++    --identifier omo-gateway "$INSTALL_BIN.new"
++codesign --verify --strict "$INSTALL_BIN.new" || die "signature verification failed"
++
++# Check codesign -dv reports TeamIdentifier=5DUM8WPB4C; fail otherwise
++codesign_dv="$(codesign -dv "$INSTALL_BIN.new" 2>&1 || true)"
++if ! grep -q 'TeamIdentifier=5DUM8WPB4C' <<<"$codesign_dv"; then
++    rm -f "$INSTALL_BIN.new"
++    die "codesign check failed: TeamIdentifier is not 5DUM8WPB4C (got: $(grep 'TeamIdentifier=' <<<"$codesign_dv" || echo 'not found'))"
++fi
++
++say "staging web bundle to $INSTALL_WEB.new"
++rm -rf "$INSTALL_WEB.new"
++cp -Rp "$WEB_SRC/dist" "$INSTALL_WEB.new"
++
++say "atomically installing binary to $INSTALL_BIN"
++mv -f "$INSTALL_BIN.new" "$INSTALL_BIN"
++
++say "installing web bundle to $INSTALL_WEB"
++rm -rf "$INSTALL_WEB.old"
++[[ -e "$INSTALL_WEB" ]] && mv "$INSTALL_WEB" "$INSTALL_WEB.old"
++mv "$INSTALL_WEB.new" "$INSTALL_WEB"
++rm -rf "$INSTALL_WEB.old"
++INSTALL_WEB="$(cd "$INSTALL_WEB" && pwd)"
++printf 'rev=%s dirty_paths=%s source=%s deployed_at=%s\n' "$source_rev" "$source_dirty" "$REPO" "$stamp" \
++    > "$INSTALL_DIR/DEPLOYED"
++
++# Ensure launchd plist ProgramArguments[0] equals INSTALL_BIN
++if [[ -f "$PLIST" ]]; then
++    current_arg0="$(/usr/libexec/PlistBuddy -c "Print :ProgramArguments:0" "$PLIST" 2>/dev/null || true)"
++    if [[ "$current_arg0" != "$INSTALL_BIN" ]]; then
++        say "plist ProgramArguments[0] ($current_arg0) does not match $INSTALL_BIN; updating $PLIST"
++        plist_backup="$BACKUP_DIR/$(basename "$PLIST").$(date +%Y%m%d-%H%M%S)"
++        cp -p "$PLIST" "$plist_backup"
++        say "backed up plist to $plist_backup"
++        /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $INSTALL_BIN" "$PLIST" \
++            || die "failed to update ProgramArguments[0] in $PLIST"
++        plist_modified=1
++    fi
++    # Pin the dashboard to the web bundle installed with this binary.
++    if [[ "$(plist_value EnvironmentVariables:DASHBOARD_WEB_ROOT)" != "$INSTALL_WEB" ]]; then
++        say "pinning DASHBOARD_WEB_ROOT=$INSTALL_WEB in $PLIST"
++        [[ "$plist_modified" == 1 ]] || cp -p "$PLIST" "$BACKUP_DIR/$(basename "$PLIST").$stamp"
++        /usr/libexec/PlistBuddy -c "Set :EnvironmentVariables:DASHBOARD_WEB_ROOT $INSTALL_WEB" "$PLIST" 2>/dev/null \
++            || /usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:DASHBOARD_WEB_ROOT string $INSTALL_WEB" "$PLIST" \
++            || die "failed to set DASHBOARD_WEB_ROOT in $PLIST"
++        plist_modified=1
++    fi
++    # A kickstart keeps the environment launchd loaded; reload when the plist's
++    # EnvironmentVariables changed since then (for example a new feature flag).
++    if [[ "$plist_modified" != 1 ]]; then
++        loaded_env="$(launchctl print "gui/${UID:-$(id -u)}/$LABEL" 2>/dev/null \
++            | sed -n '/^\tenvironment = {/,/^\t}/p' | sed -n 's/^\t\t\([^ ]*\) => \(.*\)$/\1=\2/p' | sort)"
++        plist_env="$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables" "$PLIST" 2>/dev/null \
++            | sed -n 's/^ *\([^ ]*\) = \(.*\)$/\1=\2/p' | sort)"
++        if [[ -n "$loaded_env" ]] && ! comm -23 <(printf '%s\n' "$plist_env") <(printf '%s\n' "$loaded_env") | grep -q .; then
++            :
++        elif [[ -n "$loaded_env" ]]; then
++            say "plist EnvironmentVariables differ from the loaded job; reloading"
++            plist_modified=1
++        fi
++    fi
++fi
+ 
+-old_pid="$(gateway_pid)"
++old_pid="$(detect_old_pid)"
++[[ -n "$old_pid" ]] && wait_for_idle_sessions
+ since="$(date -u +%Y-%m-%dT%H:%M:%S)"
+ say "restarting $LABEL (old pid ${old_pid:-none})"
+ restart
+@@ -94,12 +352,20 @@ fi
+ 
+ if [[ -n "$backup" ]]; then
+     say "rolling back to $backup"
+-    # Replace by rename: rewriting the running, signed binary in place can get it killed at exec.
+-    { cp -p "$backup" "$BIN.rollback" && mv -f "$BIN.rollback" "$BIN"; } \
+-        || die "rollback copy failed; $BIN still holds the failed build"
++    # Atomic rollback via temporary file and rename to avoid killing running binary
++    { cp -p "$backup" "$INSTALL_BIN.rollback" && mv -f "$INSTALL_BIN.rollback" "$INSTALL_BIN"; } \
++        || die "rollback copy failed; $INSTALL_BIN still holds the failed build"
++    if [[ -n "$web_backup" ]]; then
++        say "restoring web bundle from $web_backup"
++        { rm -rf "$INSTALL_WEB.rollback" && cp -Rp "$web_backup" "$INSTALL_WEB.rollback" \
++            && rm -rf "$INSTALL_WEB" && mv "$INSTALL_WEB.rollback" "$INSTALL_WEB"; } \
++            || die "web rollback failed; $INSTALL_WEB may not match the restored binary"
++    fi
+     since="$(date -u +%Y-%m-%dT%H:%M:%S)"
+-    old_pid="$(gateway_pid)"
++    old_pid="$(detect_old_pid)"
+     restart
++    # The previous binary may predate newer probe routes; only require the dashboard to serve.
++    DASHBOARD_PROBES="/api/health"
+     verify "$since" "$old_pid" && die "new build failed verification; rolled back to the previous binary" \
+         || die "new build failed verification AND rollback did not come up healthy"
+ fi
+diff --git a/scripts/gateway_watchdog.sh b/scripts/gateway_watchdog.sh
+index 8fe92f2..95409c1 100755
+--- a/scripts/gateway_watchdog.sh
++++ b/scripts/gateway_watchdog.sh
+@@ -2,22 +2,28 @@
+ # launchd watchdog for the omon gateway (ai.omon.gateway-watchdog, every 60s).
+ #
+ # Restarts the gateway when it is gone or unhealthy, and alerts the owner out of
+-# band (macOS notification + Discord DM via the bot token, not via the gateway)
+-# when restarts keep failing, the agent backend stays down, or the senpi
+-# app-server patch disappeared after an omo/senpi update.
++# band (macOS notification + Slack DM via the bot token, not via the gateway)
++# when restarts keep failing, the agent backend stays down, or the TurnEngine
++# subscription patch is missing from the app-server runtime the gateway launches.
+ #
+ # Every input is overridable so the logic can be exercised without touching the
+ # running gateway (see `tests/test_gateway_watchdog.sh`).
+ set -u
+ 
+ LABEL="${WATCHDOG_LABEL:-ai.omon.gateway}"
+-GATEWAY_PATTERN="${WATCHDOG_GATEWAY_PATTERN:-/target/release/omo-gateway run}"
++# Incident 2026-10-16: launchd runs the signed copy in ~/.omon/bin; the legacy target/release
++# path is still accepted so this script (run live from the repo) never restarts a healthy
++# gateway that has not been redeployed yet. pgrep -f takes an extended regex.
++GATEWAY_PATTERN="${WATCHDOG_GATEWAY_PATTERN:-(/\.omon/bin|/target/release)/omo-gateway run}"
+ DASHBOARD_URL="${WATCHDOG_DASHBOARD_URL:-http://127.0.0.1:9119/api/health}"
+ APPSERVER_URL="${WATCHDOG_APPSERVER_URL:-http://127.0.0.1:19742/readyz}"
+-SENPI_CHUNKS="${WATCHDOG_SENPI_CHUNKS:-$HOME/.bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/chunks}"
++# omo 5.1.35 removed `omo app-server`; the gateway runs a preserved runtime through this
++# wrapper (OMON_OMO_BIN), so the patch is checked there, not in the global senpi bundle.
++OMO_RUNTIME="${WATCHDOG_OMO_RUNTIME:-$HOME/.omon/bin/omo-gateway-runtime}"
++PATCH_FILE="${WATCHDOG_PATCH_FILE:-}"
+ STATE_DIR="${WATCHDOG_STATE_DIR:-$HOME/.omon/watchdog-state}"
+-ENV_FILE="${WATCHDOG_ENV_FILE:-$HOME/code/project/omon-gateway/.env}"
+-OWNER_ID="${WATCHDOG_OWNER_ID:-414011632306618368}"
++SLACK_TOKEN_FILE="${WATCHDOG_SLACK_TOKEN_FILE:-$HOME/.omon/secrets/slack-bot-token}"
++SLACK_CHANNEL="${WATCHDOG_SLACK_CHANNEL:-D0C9HNVUK5M}"
+ FAIL_LIMIT="${WATCHDOG_FAIL_LIMIT:-3}"
+ ALERT_COOLDOWN="${WATCHDOG_ALERT_COOLDOWN:-1800}"
+ DRY_ALERT="${WATCHDOG_DRY_ALERT:-0}"
+@@ -45,20 +51,16 @@ alert() {
+     else
+         osascript -e "display notification \"${message//\"/}\" with title \"omon gateway\"" >/dev/null 2>&1
+     fi
+-    discord_dm "⚠️ [gateway watchdog] $message"
++    slack_dm ":warning: [gateway watchdog] $message"
+ }
+ 
+-discord_dm() {
+-    local token channel
+-    token="$(grep -E '^DISCORD_BOT_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'"' ')"
++slack_dm() {
++    local token
++    token="$(tr -d '[:space:]' <"$SLACK_TOKEN_FILE" 2>/dev/null)"
+     [[ -z "$token" ]] && return 0
+-    channel="$(curl -s -m 10 -X POST https://discord.com/api/v10/users/@me/channels \
+-        -H "Authorization: Bot $token" -H 'Content-Type: application/json' \
+-        -d "{\"recipient_id\":\"$OWNER_ID\"}" | sed -n 's/.*"id": *"\([0-9]*\)".*/\1/p' | head -1)"
+-    [[ -z "$channel" ]] && return 0
+-    curl -s -m 10 -o /dev/null -X POST "https://discord.com/api/v10/channels/$channel/messages" \
+-        -H "Authorization: Bot $token" -H 'Content-Type: application/json' \
+-        --data-binary "$(printf '{"content":%s}' "$(printf '%s' "$1" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))')")"
++    curl -s -m 10 -o /dev/null -X POST https://slack.com/api/chat.postMessage \
++        -H "Authorization: Bearer $token" -H 'Content-Type: application/json; charset=utf-8' \
++        --data-binary "$(printf '%s' "$1" | python3 -c 'import json,sys;print(json.dumps({"channel":sys.argv[1],"text":sys.stdin.read()}))' "$SLACK_CHANNEL")"
+ }
+ 
+ restart_gateway() {
+@@ -103,12 +105,17 @@ if pgrep -f "$GATEWAY_PATTERN" >/dev/null 2>&1; then
+     fi
+ fi
+ 
+-# 3. senpi TurnEngine subscription patch, wiped by every omo/senpi reinstall.
+-if [[ -d "$SENPI_CHUNKS" ]]; then
+-    if grep -q '_turnEngineSubscribed' "$SENPI_CHUNKS"/session-worker.js 2>/dev/null; then
++# 3. TurnEngine subscription patch in the app-server runtime the gateway actually launches.
++# The global senpi bundle no longer ships an app-server, so it is never the target.
++if [[ -z "$PATCH_FILE" && -f "$OMO_RUNTIME" ]]; then
++    cli_main="$(grep -oE '[^ "]*/dist/cli-main\.js' "$OMO_RUNTIME" 2>/dev/null | head -1)"
++    [[ -n "$cli_main" ]] && PATCH_FILE="$(dirname "$cli_main")/modes/app-server/threads/turns.js"
++fi
++if [[ -n "$PATCH_FILE" && -f "$PATCH_FILE" ]]; then
++    if grep -q '_turnEngineSubscribed' "$PATCH_FILE" 2>/dev/null; then
+         rm -f "$STATE_DIR/alert.senpi_patch"
+     else
+-        alert senpi_patch "senpi 업데이트로 app-server 구독 패치가 사라졌어요. 게이트웨이가 자동 재시작으로 버티지만 답장이 1분가량 늦어질 수 있어요. 패치 재적용이 필요해요."
++        alert senpi_patch "게이트웨이가 쓰는 app-server 런타임에 구독 패치가 없어요($PATCH_FILE). 게이트웨이가 자동 재시작으로 버티지만 답장이 1분가량 늦어질 수 있어요."
+     fi
+ fi
+ exit 0
+diff --git a/src/agent/omo_daemon.rs b/src/agent/omo_daemon.rs
+index d9e6e6d..7d0468d 100644
+--- a/src/agent/omo_daemon.rs
++++ b/src/agent/omo_daemon.rs
+@@ -28,13 +28,26 @@ type ChildSlot = Arc<Mutex<Option<Child>>>;
+ type OwnedDaemons = std::collections::HashMap<String, std::sync::Weak<Mutex<Option<Child>>>>;
+ static OWNED_DAEMONS: LazyLock<std::sync::Mutex<OwnedDaemons>> = LazyLock::new(Default::default);
+ /// When each URL was last force-restarted; a slow model must not turn into a restart loop.
+-static LAST_FORCED_RESTART: LazyLock<std::sync::Mutex<std::collections::HashMap<String, Instant>>> =
+-    LazyLock::new(Default::default);
++static LAST_FORCED_RESTART: LazyLock<
++    std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
++> = LazyLock::new(Default::default);
+ /// Minimum spacing between two forced restarts of the same daemon.
+ const FORCED_RESTART_MIN_INTERVAL: Duration = Duration::from_secs(120);
+ 
+ const READY_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+ const READY_WAIT_AFTER_SPAWN: Duration = Duration::from_secs(30);
++/// Longest readiness wait for a spawned daemon. Under heavy host load a healthy app-server
++/// can need well over READY_WAIT_AFTER_SPAWN; only a child that is still unready after this
++/// is treated as hung and replaced.
++const READY_WAIT_MAX: Duration = Duration::from_secs(180);
++
++/// Readiness deadline for the attempt after `failures` consecutive unready restarts: it
++/// grows so sustained load cannot turn every replacement into a kill-and-retry loop.
++fn ready_wait(failures: u32) -> Duration {
++    READY_WAIT_AFTER_SPAWN
++        .saturating_mul(failures.saturating_add(1))
++        .min(READY_WAIT_MAX)
++}
+ /// First delay before a restart attempt; it doubles per consecutive failure.
+ const RESTART_BACKOFF: Duration = Duration::from_secs(2);
+ /// Upper bound of the restart delay: the supervisor keeps retrying at this pace.
+@@ -42,6 +55,13 @@ const RESTART_BACKOFF_MAX: Duration = Duration::from_secs(60);
+ /// A daemon that stayed ready this long before exiting counts as healthy, so its
+ /// exit starts a fresh outage (backoff reset) instead of extending a crash loop.
+ const RESTART_WINDOW: Duration = Duration::from_secs(60);
++/// How often the supervisor probes readyz of a running daemon that has been ready.
++const LIVENESS_INTERVAL: Duration = Duration::from_secs(20);
++/// Consecutive failed liveness probes after which a running daemon counts as wedged.
++/// Incident 2026-10-16: one session's blocking file read (an iCloud dataless file)
++/// froze the whole app-server process for 4h38m while it stayed alive, so an exit
++/// check alone never restarted it.
++const LIVENESS_FAILURES: u32 = 3;
+ 
+ /// Delay before the restart attempt that follows `failures` consecutive failures.
+ fn restart_backoff(failures: u32, base: Duration, cap: Duration) -> Duration {
+@@ -371,25 +391,29 @@ async fn reclaim_leftover_daemon(listen_url: &str) {
+     }
+ }
+ 
+-/// The senpi app-server drops turn events after a thread is reloaded unless its
+-/// TurnEngine subscription is patched; every omo/senpi reinstall wipes the patch.
+-/// None when the bundle is not found (custom install), Some(false) when unpatched.
+-fn senpi_subscription_patch_present(chunks_dir: &std::path::Path) -> Option<bool> {
+-    let worker = std::fs::read_to_string(chunks_dir.join("session-worker.js")).ok()?;
+-    Some(worker.contains("_turnEngineSubscribed"))
++/// The app-server drops turn events after a thread is reloaded unless its TurnEngine
++/// subscription is patched. omo 5.1.35 removed `omo app-server`, so the gateway launches a
++/// preserved runtime through a wrapper script (OMON_OMO_BIN); the patch lives in that
++/// runtime, never in the global senpi bundle. Returns the checked file and whether it is
++/// patched, or None when `bin` is not such a wrapper (nothing to check).
++fn app_server_patch_state(bin: &str) -> Option<(std::path::PathBuf, bool)> {
++    let wrapper = std::fs::read_to_string(bin).ok()?;
++    let cli_main = wrapper
++        .split(|c: char| c.is_whitespace() || c == '"' || c == '\'')
++        .find(|word| word.ends_with("/dist/cli-main.js"))?;
++    let turns = std::path::Path::new(cli_main)
++        .parent()?
++        .join("modes/app-server/threads/turns.js");
++    let source = std::fs::read_to_string(&turns).ok()?;
++    Some((turns, source.contains("_turnEngineSubscribed")))
+ }
+ 
+-fn warn_if_senpi_unpatched() {
+-    let Some(home) = std::env::var_os("HOME") else {
+-        return;
+-    };
+-    let chunks = std::path::PathBuf::from(home)
+-        .join(".bun/install/global/node_modules/@code-yeongyu/senpi/dist/bundle/chunks");
+-    if senpi_subscription_patch_present(&chunks) == Some(false) {
++fn warn_if_app_server_unpatched(bin: &str) {
++    if let Some((path, false)) = app_server_patch_state(bin) {
+         tracing::warn!(
+-            path = %chunks.display(),
+-            "senpi app-server subscription patch is missing (wiped by an omo/senpi update); \
+-             stalled turns will be recovered by restarting the app-server, but replies may lag"
++            path = %path.display(),
++            "app-server runtime lacks the TurnEngine subscription patch; stalled turns will be \
++             recovered by restarting the app-server, but replies may lag"
+         );
+     }
+ }
+@@ -417,6 +441,37 @@ fn daemon_command(bin: &str, listen_url: &str, token_file: Option<&std::path::Pa
+     };
+     cmd.stdin(Stdio::null()).kill_on_drop(true);
+ 
++    let mut prepend_dirs: Vec<std::path::PathBuf> = Vec::new();
++    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
++        prepend_dirs.push(std::path::PathBuf::from(home).join(".omon").join("bin"));
++    }
++    if let Ok(exe) = std::env::current_exe() {
++        if let Some(dir) = exe.parent() {
++            prepend_dirs.push(dir.to_path_buf());
++        }
++    }
++
++    let inherited_path = std::env::var_os("PATH");
++    let mut path_entries: Vec<std::path::PathBuf> = Vec::new();
++
++    for dir in prepend_dirs {
++        if !path_entries.contains(&dir) {
++            path_entries.push(dir);
++        }
++    }
++
++    if let Some(ref path_os) = inherited_path {
++        for entry in std::env::split_paths(path_os) {
++            if !path_entries.contains(&entry) {
++                path_entries.push(entry);
++            }
++        }
++    }
++
++    if let Ok(new_path) = std::env::join_paths(path_entries) {
++        cmd.env("PATH", new_path);
++    }
++
+     let log_file = std::env::var("HOME")
+         .or_else(|_| std::env::var("USERPROFILE"))
+         .ok()
+@@ -480,7 +535,7 @@ impl OmoDaemonSupervisor {
+         if !autospawn_enabled() || !is_local_url(&cfg.appserver_url) {
+             return Ok(None);
+         }
+-        warn_if_senpi_unpatched();
++        warn_if_app_server_unpatched(&bin);
+         reclaim_leftover_daemon(&cfg.appserver_url).await;
+         if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
+             // A daemon spawned by another live omon process (a standalone dashboard) dies
+@@ -524,6 +579,7 @@ impl OmoDaemonSupervisor {
+         }
+ 
+         let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
++        let mut exited_early = false;
+         while Instant::now() < deadline {
+             if probe_readyz(&cfg.appserver_url, READY_PROBE_TIMEOUT).await {
+                 tracing::info!(url = %cfg.appserver_url, "omo app-server daemon ready");
+@@ -531,17 +587,65 @@ impl OmoDaemonSupervisor {
+                 return Ok(Some(supervisor));
+             }
+             if supervisor.child_exited() {
++                exited_early = true;
+                 break;
+             }
+             sleep(Duration::from_millis(400)).await;
+         }
+ 
+-        supervisor.kill();
+-        Err(OmonError::Config(format!(
+-            "spawned 'omo app-server' did not become ready at {} within {}s",
+-            cfg.appserver_url,
+-            READY_WAIT_AFTER_SPAWN.as_secs()
+-        )))
++        // A slow start (heavy host load) must not take the whole gateway down: exiting here
++        // made launchd restart it into the same timeout forever. Keep running and let the
++        // watcher own the daemon: it respawns it once it exits, and kills a child that is
++        // still unready after READY_WAIT_MAX so a hung daemon is replaced too.
++        if exited_early {
++            tracing::error!(
++                url = %cfg.appserver_url,
++                "omo app-server exited before becoming ready; supervising and restarting it"
++            );
++        } else {
++            tracing::warn!(
++                url = %cfg.appserver_url,
++                wait_secs = READY_WAIT_AFTER_SPAWN.as_secs(),
++                "omo app-server daemon not ready yet; continuing startup and supervising it"
++            );
++            let slot = Arc::clone(&supervisor.child);
++            let shutdown = Arc::clone(&supervisor.shutdown);
++            let url = cfg.appserver_url.clone();
++            // Only this first child may be killed here; the watcher can swap in a replacement.
++            let first_pid = supervisor
++                .child
++                .try_lock()
++                .ok()
++                .and_then(|g| g.as_ref().and_then(Child::id));
++            tokio::spawn(async move {
++                let deadline = Instant::now() + READY_WAIT_MAX - READY_WAIT_AFTER_SPAWN;
++                while Instant::now() < deadline {
++                    if shutdown.load(Ordering::Acquire) {
++                        return;
++                    }
++                    if probe_readyz(&url, READY_PROBE_TIMEOUT).await {
++                        tracing::info!(url = %url, "omo app-server daemon ready after slow start");
++                        return;
++                    }
++                    let exited = slot.lock().await.as_mut().is_none_or(|child| {
++                        child.id() != first_pid || matches!(child.try_wait(), Ok(Some(_)))
++                    });
++                    if exited {
++                        return;
++                    }
++                    sleep(Duration::from_millis(500)).await;
++                }
++                // Still alive and never ready: kill it so the watcher sees an exit and respawns.
++                if let Some(child) = slot.lock().await.as_mut() {
++                    if child.id() == first_pid {
++                        tracing::error!(url = %url, "omo app-server never became ready; replacing it");
++                        let _ = child.start_kill();
++                    }
++                }
++            });
++        }
++        supervisor.spawn_watcher(cfg.appserver_url.clone(), bin, token_file);
++        Ok(Some(supervisor))
+     }
+ 
+     fn child_exited(&self) -> bool {
+@@ -558,7 +662,14 @@ impl OmoDaemonSupervisor {
+     }
+ 
+     fn spawn_watcher(&self, url: String, bin: String, token_file: Option<std::path::PathBuf>) {
+-        self.spawn_watcher_with_backoff(url, bin, token_file, RESTART_BACKOFF, RESTART_BACKOFF_MAX);
++        self.spawn_watcher_with_backoff(
++            url,
++            bin,
++            token_file,
++            RESTART_BACKOFF,
++            RESTART_BACKOFF_MAX,
++            LIVENESS_INTERVAL,
++        );
+     }
+ 
+     fn spawn_watcher_with_backoff(
+@@ -568,6 +679,7 @@ impl OmoDaemonSupervisor {
+         token_file: Option<std::path::PathBuf>,
+         backoff_base: Duration,
+         backoff_cap: Duration,
++        liveness_interval: Duration,
+     ) {
+         let child_slot = Arc::clone(&self.child);
+         let shutdown = Arc::clone(&self.shutdown);
+@@ -582,6 +694,12 @@ impl OmoDaemonSupervisor {
+                 if shutdown.load(Ordering::Acquire) {
+                     return;
+                 }
++                // A daemon that is alive but no longer answers readyz is wedged: kill it
++                // so the restart path below replaces it. Probing starts only once this
++                // daemon has answered at least once, so a slow start is never killed here.
++                let mut answered = false;
++                let mut missed: u32 = 0;
++                let mut next_probe = Instant::now();
+                 loop {
+                     if shutdown.load(Ordering::Acquire) {
+                         return;
+@@ -596,6 +714,32 @@ impl OmoDaemonSupervisor {
+                     if exited {
+                         break;
+                     }
++                    if Instant::now() >= next_probe {
++                        next_probe = Instant::now() + liveness_interval;
++                        if probe_readyz(&url, READY_PROBE_TIMEOUT).await {
++                            answered = true;
++                            missed = 0;
++                        } else if answered {
++                            missed += 1;
++                            if missed >= LIVENESS_FAILURES {
++                                if let Ok(mut last) = LAST_FORCED_RESTART.lock() {
++                                    last.insert(url.clone(), std::time::Instant::now());
++                                }
++                                let mut guard = child_slot.lock().await;
++                                if let Some(child) = guard.as_mut() {
++                                    tracing::warn!(
++                                        url = %url,
++                                        pid = ?child.id(),
++                                        missed,
++                                        "omo app-server alive but not answering readyz; killing it"
++                                    );
++                                    let _ = child.start_kill();
++                                    let _ = timeout(Duration::from_secs(5), child.wait()).await;
++                                }
++                                break;
++                            }
++                        }
++                    }
+                     sleep(Duration::from_millis(500)).await;
+                 }
+                 if shutdown.load(Ordering::Acquire) {
+@@ -641,7 +785,7 @@ impl OmoDaemonSupervisor {
+                     Ok(child) => {
+                         record_daemon_pid(&url, child.id());
+                         child_slot.lock().await.replace(child);
+-                        let deadline = Instant::now() + READY_WAIT_AFTER_SPAWN;
++                        let deadline = Instant::now() + ready_wait(failures.saturating_sub(1));
+                         let mut ready = false;
+                         let mut exited = false;
+                         while Instant::now() < deadline {
+@@ -715,7 +859,7 @@ pub async fn force_restart_owned_daemon(url: &str) -> bool {
+             tracing::warn!(%url, "omo app-server was force-restarted recently; not restarting again");
+             return false;
+         }
+-        last.insert(url.to_owned(), Instant::now());
++        last.insert(url.to_owned(), std::time::Instant::now());
+     }
+     let slot = OWNED_DAEMONS
+         .lock()
+@@ -752,6 +896,47 @@ pub async fn force_restart_owned_daemon(url: &str) -> bool {
+     false
+ }
+ 
++/// True when the app-server at `url` answers readyz right now. A turn that produced no
++/// events while the server stays responsive is a model-side stall, not a wedged daemon.
++pub async fn owned_daemon_responsive(url: &str) -> bool {
++    let owned = OWNED_DAEMONS
++        .lock()
++        .ok()
++        .is_some_and(|owned| owned.get(url).and_then(std::sync::Weak::upgrade).is_some());
++    owned && probe_readyz(url, READY_PROBE_TIMEOUT).await
++}
++
++/// Returns true if the daemon at `url` was force-restarted at or after `since`.
++///
++/// Incident 2026-10-16: concurrent turns in other sessions that fail with a transport
++/// reset during a forced restart use this to determine that their connection died
++/// because the app-server process was killed by the gateway, making a single retry safe.
++pub fn forced_restart_since(url: &str, since: std::time::Instant) -> bool {
++    let Ok(last) = LAST_FORCED_RESTART.lock() else {
++        return false;
++    };
++    last.get(url).is_some_and(|&at| at >= since)
++}
++
++/// Polls `<url>/readyz` until the replacement daemon answers or `max` duration has elapsed.
++///
++/// Used after an owned daemon restart so concurrent turns lost to the restart can wait
++/// for readiness before retrying (incident 2026-10-16).
++pub async fn wait_owned_daemon_ready(url: &str, max: Duration) -> bool {
++    let deadline = Instant::now() + max;
++    while Instant::now() < deadline {
++        if probe_readyz(url, READY_PROBE_TIMEOUT).await {
++            return true;
++        }
++        let remaining = deadline.saturating_duration_since(Instant::now());
++        if remaining.is_zero() {
++            break;
++        }
++        sleep(Duration::from_millis(500).min(remaining)).await;
++    }
++    false
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -854,6 +1039,7 @@ s.recv(1)
+             None,
+             Duration::from_millis(10),
+             Duration::from_millis(40),
++            LIVENESS_INTERVAL,
+         );
+         for _ in 0..RESTARTS_PAST_OLD_LIMIT {
+             let (mut event, _) = timeout(Duration::from_secs(10), events.accept())
+@@ -971,6 +1157,39 @@ s.recv(1)
+             .unwrap();
+     }
+ 
++    #[test]
++    fn readiness_wait_grows_per_unready_restart_and_is_capped() {
++        assert_eq!(ready_wait(0), READY_WAIT_AFTER_SPAWN);
++        assert_eq!(ready_wait(1), READY_WAIT_AFTER_SPAWN * 2);
++        assert_eq!(ready_wait(100), READY_WAIT_MAX);
++    }
++
++    #[test]
++    fn forced_restart_since_reports_restarts_at_or_after_deadline() {
++        let fake_url = "ws://127.0.0.1:59999/unit-test-forced-restart";
++        let before = std::time::Instant::now();
++        std::thread::sleep(Duration::from_millis(5));
++        let restart_time = std::time::Instant::now();
++        {
++            let mut last = LAST_FORCED_RESTART.lock().unwrap();
++            last.insert(fake_url.to_string(), restart_time);
++        }
++        std::thread::sleep(Duration::from_millis(5));
++        let after = std::time::Instant::now();
++
++        // `before` is strictly before the restart -> must be true
++        assert!(forced_restart_since(fake_url, before));
++        // `restart_time` is equal to the restart -> must be true (at >= since)
++        assert!(forced_restart_since(fake_url, restart_time));
++        // `after` is strictly after the restart -> must be false
++        assert!(!forced_restart_since(fake_url, after));
++        // Unrelated url -> must be false
++        assert!(!forced_restart_since(
++            "ws://127.0.0.1:59999/untracked-url",
++            before
++        ));
++    }
++
+     #[tokio::test]
+     #[cfg(unix)]
+     async fn daemon_ensure_owned_local_surface() {
+@@ -1025,21 +1244,34 @@ while True:
+     }
+ 
+     #[test]
+-    fn senpi_patch_detection_reads_the_worker_bundle() {
++    fn patch_check_follows_the_runtime_wrapper_not_the_global_bundle() {
+         let dir = tempfile::tempdir().unwrap();
+-        assert_eq!(senpi_subscription_patch_present(dir.path()), None);
++        let dist = dir.path().join("rt/dist");
++        let threads = dist.join("modes/app-server/threads");
++        std::fs::create_dir_all(&threads).unwrap();
++        let wrapper = dir.path().join("omo-gateway-runtime");
+         std::fs::write(
+-            dir.path().join("session-worker.js"),
+-            "this.subscribedThreadIds.has(t)",
+-        )
+-        .unwrap();
+-        assert_eq!(senpi_subscription_patch_present(dir.path()), Some(false));
+-        std::fs::write(
+-            dir.path().join("session-worker.js"),
+-            "e.session._turnEngineSubscribed||",
++            &wrapper,
++            format!(
++                "#!/bin/sh\nexec bun {}/cli-main.js \"$@\" --extension x\n",
++                dist.display()
++            ),
+         )
+         .unwrap();
+-        assert_eq!(senpi_subscription_patch_present(dir.path()), Some(true));
++        let wrapper = wrapper.to_str().unwrap();
++
++        // A plain `omo` binary or a wrapper whose runtime has no app-server: nothing to check.
++        assert_eq!(app_server_patch_state("omo"), None);
++        assert_eq!(app_server_patch_state(wrapper), None);
++
++        let turns = threads.join("turns.js");
++        std::fs::write(&turns, "this.subscribedThreadIds.has(t)").unwrap();
++        assert_eq!(
++            app_server_patch_state(wrapper),
++            Some((turns.clone(), false))
++        );
++        std::fs::write(&turns, "e.session._turnEngineSubscribed||").unwrap();
++        assert_eq!(app_server_patch_state(wrapper), Some((turns, true)));
+     }
+ 
+     #[tokio::test]
+@@ -1277,6 +1509,7 @@ while True:
+             None,
+             Duration::from_millis(10),
+             Duration::from_millis(40),
++            LIVENESS_INTERVAL,
+         );
+         let (mut event, _) = timeout(Duration::from_secs(10), started)
+             .await
+@@ -1295,7 +1528,7 @@ while True:
+         let retried = events.accept();
+         // Time is the behavior under test: advance beyond the readiness bound.
+         tokio::time::pause();
+-        tokio::time::advance(READY_WAIT_AFTER_SPAWN + Duration::from_secs(3)).await;
++        tokio::time::advance(ready_wait(0) + Duration::from_secs(3)).await;
+         tokio::time::resume();
+         // The unready replacement is killed (its event socket closes)...
+         let eof = timeout(Duration::from_secs(5), event.read_u8()).await;
+@@ -1326,6 +1559,112 @@ while True:
+         assert_ne!(first_pid, second_pid, "retry must be a fresh process");
+     }
+ 
++    /// Incident 2026-10-16: the app-server stayed alive but stopped answering for 4h38m
++    /// (a blocking read of an iCloud dataless file froze its event loop). The supervisor
++    /// must notice the silence, kill the wedged process, and start a fresh one.
++    #[tokio::test]
++    #[cfg(unix)]
++    async fn daemon_alive_but_unresponsive_is_replaced() {
++        if isolated_home("daemon_alive_but_unresponsive_is_replaced").await {
++            return;
++        }
++        use std::os::unix::fs::PermissionsExt;
++        let dir = tempfile::tempdir().unwrap();
++        let events = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let port = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let url = format!("ws://{}", port.local_addr().unwrap());
++        drop(port);
++        let bin = dir.path().join("wedging-daemon");
++        // Answers readyz twice, then keeps accepting connections without replying,
++        // like an app-server whose event loop is blocked.
++        std::fs::write(
++            &bin,
++            format!(
++                r#"#!/bin/sh
++''''test -x /opt/homebrew/bin/python3 && exec /opt/homebrew/bin/python3 "$0" "$@"; exec /usr/bin/python3 "$0" "$@" # '''
++import os, socket, sys
++ev = socket.create_connection(('127.0.0.1', {}))
++ev.sendall(str(os.getpid()).encode() + b'\n')
++s = socket.socket()
++s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
++s.bind(('127.0.0.1', int(sys.argv[3].rsplit(':', 1)[1])))
++s.listen(64)
++held = []
++answered = 0
++while True:
++    c, _ = s.accept()
++    if answered < 2:
++        c.recv(4096)
++        c.sendall(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n')
++        c.close()
++        answered += 1
++    else:
++        held.append(c)
++"#,
++                events.local_addr().unwrap().port()
++            ),
++        )
++        .unwrap();
++        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o700)).unwrap();
++        let supervisor = OmoDaemonSupervisor {
++            child: Arc::new(Mutex::new(None)),
++            shutdown: Arc::new(AtomicBool::new(false)),
++        };
++        // Subscribe to the first daemon's start before starting the watcher.
++        let started = events.accept();
++        supervisor.spawn_watcher_with_backoff(
++            url.clone(),
++            bin.to_string_lossy().into_owned(),
++            None,
++            Duration::from_millis(10),
++            Duration::from_millis(40),
++            Duration::from_millis(100),
++        );
++        let (mut first, _) = timeout(Duration::from_secs(10), started)
++            .await
++            .unwrap()
++            .unwrap();
++        let mut first_pid = String::new();
++        loop {
++            let byte = first.read_u8().await.unwrap();
++            if byte == b'\n' {
++                break;
++            }
++            first_pid.push(byte as char);
++        }
++        // Subscribe to the replacement before the wedge is detected.
++        let replaced = events.accept();
++        // Detection needs LIVENESS_FAILURES probes that each wait READY_PROBE_TIMEOUT.
++        let bound = READY_PROBE_TIMEOUT * (LIVENESS_FAILURES + 2) + Duration::from_secs(10);
++        let eof = timeout(bound, first.read_u8()).await;
++        let (mut second, _) = timeout(Duration::from_secs(15), replaced)
++            .await
++            .expect("supervisor must start a fresh daemon after the wedge")
++            .unwrap();
++        let mut second_pid = String::new();
++        loop {
++            let byte = second.read_u8().await.unwrap();
++            if byte == b'\n' {
++                break;
++            }
++            second_pid.push(byte as char);
++        }
++        supervisor.kill();
++        assert!(
++            eof.is_ok(),
++            "wedged daemon PID {first_pid} was never killed"
++        );
++        assert!(
++            !process_alive(first_pid.parse().unwrap()),
++            "wedged daemon must be gone"
++        );
++        assert_ne!(first_pid, second_pid, "replacement must be a fresh process");
++        assert!(
++            forced_restart_since(&url, std::time::Instant::now() - bound * 2),
++            "the liveness kill must be recorded like a forced restart"
++        );
++    }
++
+     #[test]
+     fn test_is_local_url() {
+         assert!(is_local_url("ws://127.0.0.1:19742"));
+@@ -1450,4 +1789,41 @@ while True:
+         );
+         assert!(!args.iter().any(|a| a == "off"));
+     }
++
++    #[tokio::test]
++    async fn test_daemon_command_path_prepends_dirs() {
++        if isolated_home("test_daemon_command_path_prepends_dirs").await {
++            return;
++        }
++        let cmd = daemon_command("omo", "ws://127.0.0.1:19742", None);
++        let envs: Vec<(std::ffi::OsString, Option<std::ffi::OsString>)> = cmd
++            .as_std()
++            .get_envs()
++            .map(|(k, v)| (k.to_os_string(), v.map(|v| v.to_os_string())))
++            .collect();
++        let path_val = envs
++            .iter()
++            .find(|(k, _)| k == "PATH")
++            .and_then(|(_, v)| v.as_ref())
++            .expect("PATH env var must be set on daemon command");
++
++        let entries: Vec<std::path::PathBuf> = std::env::split_paths(path_val).collect();
++        assert!(
++            entries.len() >= 2,
++            "PATH must have at least the two prepended dirs"
++        );
++
++        let home = std::env::var_os("HOME")
++            .or_else(|| std::env::var_os("USERPROFILE"))
++            .expect("HOME or USERPROFILE must be present in test");
++        let expected_omon_bin = std::path::PathBuf::from(home).join(".omon").join("bin");
++        let expected_exe_dir = std::env::current_exe()
++            .expect("current_exe must succeed in test")
++            .parent()
++            .expect("current_exe must have a parent dir")
++            .to_path_buf();
++
++        assert_eq!(entries[0], expected_omon_bin);
++        assert_eq!(entries[1], expected_exe_dir);
++    }
+ }
+diff --git a/src/readiness.rs b/src/readiness.rs
+index 995dc5f..ec2ef0f 100644
+--- a/src/readiness.rs
++++ b/src/readiness.rs
+@@ -258,6 +258,35 @@ pub fn probe_gateway(bot_count: usize) -> CheckResult {
+     }
+ }
+ 
++/// Slack transport state at readiness time. Tokens never appear here.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum SlackReadiness {
++    Disabled,
++    Connected {
++        bot_user_id: String,
++        team_id: String,
++    },
++    Failed(String),
++}
++
++/// `None` when Slack is disabled, so a Discord-only gateway keeps its old report shape.
++pub fn probe_slack(slack: &SlackReadiness) -> Option<CheckResult> {
++    match slack {
++        SlackReadiness::Disabled => None,
++        SlackReadiness::Connected {
++            bot_user_id,
++            team_id,
++        } => Some(
++            CheckResult::ok()
++                .with_metric("bot_user_id", bot_user_id.as_str())
++                .with_metric("team_id", team_id.as_str()),
++        ),
++        SlackReadiness::Failed(detail) => Some(CheckResult::degraded(format!(
++            "slack runtime did not start: {detail}"
++        ))),
++    }
++}
++
+ fn backend_http_url(appserver_url: Option<&str>) -> String {
+     let url = appserver_url.unwrap_or("ws://127.0.0.1:19742");
+     if let Some(stripped) = url.strip_prefix("ws://") {
+@@ -311,13 +340,38 @@ pub async fn collect_runtime_readiness(
+     workspace_root: &Path,
+     default_model: &str,
+     bot_count: usize,
++) -> ReadinessReport {
++    collect_runtime_readiness_with_slack(
++        pool,
++        workspace_root,
++        default_model,
++        bot_count,
++        &SlackReadiness::Disabled,
++    )
++    .await
++}
++
++/// `discord_bot_count` plus a connected Slack bot make up the gateway's configured bots.
++pub async fn collect_runtime_readiness_with_slack(
++    pool: &SqlitePool,
++    workspace_root: &Path,
++    default_model: &str,
++    discord_bot_count: usize,
++    slack: &SlackReadiness,
+ ) -> ReadinessReport {
+     let mut checks = HashMap::new();
++    let slack_bots = usize::from(matches!(slack, SlackReadiness::Connected { .. }));
+ 
+     checks.insert("state_db".to_string(), probe_database(pool).await);
+     checks.insert("disk".to_string(), probe_disk(workspace_root));
+     checks.insert("credentials".to_string(), probe_credentials(default_model));
+-    checks.insert("gateway".to_string(), probe_gateway(bot_count));
++    checks.insert(
++        "gateway".to_string(),
++        probe_gateway(discord_bot_count + slack_bots),
++    );
++    if let Some(check) = probe_slack(slack) {
++        checks.insert("slack".to_string(), check);
++    }
+     let appserver_url = std::env::var("OMON_OMO_APPSERVER_URL")
+         .ok()
+         .map(|s| s.trim().to_string())
+@@ -487,6 +541,45 @@ mod tests {
+         assert_eq!(check.status, "ok");
+     }
+ 
++    #[test]
++    fn slack_probe_reports_state_without_tokens() {
++        assert_eq!(probe_slack(&SlackReadiness::Disabled), None);
++        let connected = probe_slack(&SlackReadiness::Connected {
++            bot_user_id: "UBOT".into(),
++            team_id: "T1".into(),
++        })
++        .unwrap();
++        assert_eq!(connected.status, "ok");
++        assert_eq!(
++            connected.metrics.get("bot_user_id"),
++            Some(&serde_json::json!("UBOT"))
++        );
++        let failed = probe_slack(&SlackReadiness::Failed("invalid_auth".into())).unwrap();
++        assert_eq!(failed.status, "degraded");
++        assert!(failed.detail.unwrap().contains("invalid_auth"));
++    }
++
++    #[tokio::test]
++    async fn slack_only_gateway_counts_its_bot_and_adds_a_slack_check() {
++        let temp = tempfile::tempdir().unwrap();
++        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
++        let report = collect_runtime_readiness_with_slack(
++            &pool,
++            temp.path(),
++            "custom-model",
++            0,
++            &SlackReadiness::Connected {
++                bot_user_id: "UBOT".into(),
++                team_id: "T1".into(),
++            },
++        )
++        .await;
++        assert_eq!(report.checks["gateway"].status, "ok");
++        assert_eq!(report.checks["slack"].status, "ok");
++        let discord_only = collect_runtime_readiness(&pool, temp.path(), "custom-model", 1).await;
++        assert!(!discord_only.checks.contains_key("slack"));
++    }
++
+     #[test]
+     fn test_gateway_probe() {
+         let zero = probe_gateway(0);

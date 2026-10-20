@@ -29,6 +29,8 @@ const MAX_COMPRESSION_PROMPT_CHARS: usize = 120_000;
 const UNAUTHORIZED: &str = "You are not authorized to use this command.";
 const UNAUTHORIZED_CHANNEL: &str = "This command cannot be used in this channel.";
 const OWNER_ONLY: &str = "이 명령은 소유자만 사용할 수 있어요.";
+const THREAD_ONLY: &str =
+    "이 명령은 대화 스레드 안에서 실행해 주세요. 채널 최상위에서는 새 채널 세션을 만들지 않습니다.";
 const THREAD_ROOT_PREFIX: &str = "🧵 *";
 const PENDING_WRITES_FILE: &str = "pending-writes.json";
 
@@ -607,7 +609,49 @@ impl SlackCommands {
     }
 
     async fn execute(&self, invocation: &SlashInvocation, command: SlackCommand) -> Result<Reply> {
-        let key = session_key(invocation, &self.bot_user_id);
+        let mut key = session_key(invocation, &self.bot_user_id);
+        // At a channel's top level the slash payload carries no thread, so `key` is the
+        // channel-level session. Channel conversations live in thread sessions instead, and an
+        // existing channel-level session makes ingress answer every unmentioned message there,
+        // so these commands must not create one or miss the thread they mean.
+        if !invocation.is_dm()
+            && invocation.thread_ts.is_none()
+            && !super::ingress::session_exists(&self.data.pool, &key).await?
+        {
+            match &command {
+                SlackCommand::Model(_)
+                | SlackCommand::Yolo(_)
+                | SlackCommand::Steer(_)
+                | SlackCommand::Retry => return Ok(Reply::private(THREAD_ONLY)),
+                SlackCommand::Skill { action, .. } if action == "run" => {
+                    return Ok(Reply::private(THREAD_ONLY))
+                }
+                SlackCommand::Stop | SlackCommand::Deny(_) => {
+                    let stop = matches!(command, SlackCommand::Stop);
+                    let mut candidates = Vec::new();
+                    for thread in self.channel_thread_sessions(&invocation.channel_id).await? {
+                        let active = if stop {
+                            !self.data.multiplexer.session_is_idle(&thread).await?
+                        } else {
+                            !self.data.approvals.pending_for_session(&thread).is_empty()
+                        };
+                        if active {
+                            candidates.push(thread);
+                        }
+                    }
+                    match candidates.len() {
+                        0 if stop => return Ok(Reply::private("이 채널에 진행 중인 대화가 없습니다.")),
+                        0 => return Ok(Reply::private("No pending approval found to deny.")),
+                        1 => key = candidates.remove(0),
+                        _ => return Ok(Reply::private(
+                            "진행 중인 대화가 여러 개입니다. 멈추거나 거절할 대화의 스레드 안에서 실행해 주세요.",
+                        )),
+                    }
+                }
+                _ => {}
+            }
+        }
+        let key = key;
         match command {
             SlackCommand::Help => Ok(Reply::private(help_text())),
             SlackCommand::Model(name) => {
@@ -770,6 +814,24 @@ impl SlackCommands {
                 Ok(self.sessions(command, !invocation.is_dm()).await)
             }
         }
+    }
+
+    /// This bot's thread sessions in `channel`: where channel-level stop and deny look for the
+    /// running conversation.
+    async fn channel_thread_sessions(&self, channel: &str) -> Result<Vec<SessionKey>> {
+        let rows: Vec<String> = sqlx::query_scalar("SELECT session_key FROM sessions")
+            .fetch_all(&self.data.pool)
+            .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|raw| SessionKey::from_storage_key(raw).ok())
+            .filter(|key| {
+                key.platform == PLATFORM
+                    && key.channel_id == channel
+                    && key.thread_id.is_some()
+                    && key.bot_id.as_deref() == Some(self.bot_user_id.as_str())
+            })
+            .collect())
     }
 
     async fn pair(&self, invocation: &SlashInvocation, code: &str) -> Result<Reply> {
@@ -1836,6 +1898,90 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("*enabled*"));
+    }
+
+    #[tokio::test]
+    async fn channel_top_level_state_commands_never_create_a_channel_session() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        let channel_key =
+            SessionKey::new("slack", Some("T1"), "C1", None::<String>, "").with_bot_id("UBOT");
+
+        for (command, text) in [
+            ("/omo-yolo", "on"),
+            ("/omo-model", "opus"),
+            ("/omo-retry", ""),
+        ] {
+            commands
+                .handle(&with_response_url(
+                    invocation(command, text, "UOWNER", "C1"),
+                    &fake,
+                ))
+                .await
+                .unwrap();
+        }
+        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE session_key = ?")
+            .bind(channel_key.storage_key())
+            .fetch_one(&commands.data.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows, 0,
+            "a channel-level session makes ingress answer every message"
+        );
+        let requests = fake.requests.lock().clone();
+        assert_eq!(requests.len(), 3);
+        assert!(requests
+            .iter()
+            .all(|(_, body)| body["text"] == THREAD_ONLY && body["response_type"] == "ephemeral"));
+    }
+
+    #[tokio::test]
+    async fn channel_top_level_yolo_still_works_where_the_bot_reports() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        let channel_key =
+            SessionKey::new("slack", Some("T1"), "C1", None::<String>, "").with_bot_id("UBOT");
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, 'slack', 'C1', '', '{}')")
+            .bind(channel_key.storage_key())
+            .execute(&commands.data.pool)
+            .await
+            .unwrap();
+
+        commands
+            .handle(&with_response_url(
+                invocation("/omo-yolo", "on", "UOWNER", "C1"),
+                &fake,
+            ))
+            .await
+            .unwrap();
+        assert!(commands.data.approvals.is_yolo(&channel_key).await);
+    }
+
+    #[tokio::test]
+    async fn channel_top_level_stop_without_a_running_thread_says_so() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        let thread_key =
+            SessionKey::new("slack", Some("T1"), "C1", Some("1700.1"), "").with_bot_id("UBOT");
+        sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, 'slack', 'C1', '', '{}')")
+            .bind(thread_key.storage_key())
+            .execute(&commands.data.pool)
+            .await
+            .unwrap();
+
+        commands
+            .handle(&with_response_url(
+                invocation("/omo-stop", "", "UOWNER", "C1"),
+                &fake,
+            ))
+            .await
+            .unwrap();
+        let requests = fake.requests.lock().clone();
+        assert_eq!(
+            requests[0].1["text"],
+            "이 채널에 진행 중인 대화가 없습니다."
+        );
     }
 
     #[tokio::test]

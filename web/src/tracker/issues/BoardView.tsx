@@ -12,7 +12,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Ellipsis, Plus } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { sortOrderBetween, type IssueGroup, type TrackerState } from '../store'
 import type { Issue, IssuePatch } from '../types'
 import { ContextMenu, PriorityIcon } from '../ui'
@@ -21,6 +21,12 @@ import { mapPatchToIssueTeam, patchForMove, pickId, updateWithLaneToast, useColl
 import { AssigneeButton, GroupIcon, IssueChips, IssueStatusIcon } from './shared'
 
 const COLUMN_PREFIX = 'col:'
+
+function splitSortableId(rawId: string): [groupKey: string, issueId: string] {
+  const idx = rawId.lastIndexOf('::')
+  if (idx === -1) return ['', rawId]
+  return [rawId.slice(0, idx), rawId.slice(idx + 2)]
+}
 
 function CardBody({ issue, t, overlay = false }: { issue: Issue; t: TrackerState; overlay?: boolean }) {
   const c = useCollection()
@@ -69,9 +75,11 @@ function CardBody({ issue, t, overlay = false }: { issue: Issue; t: TrackerState
   )
 }
 
-function BoardCard({ issue, t }: { issue: Issue; t: TrackerState }) {
+function BoardCard({ issue, groupKey, t }: { issue: Issue; groupKey: string; t: TrackerState }) {
   const c = useCollection()
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: issue.id })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `${groupKey}::${issue.id}`,
+  })
   const selected = c.selection.has(issue.id)
   const focused = c.focusedId === issue.id
   return (
@@ -123,10 +131,10 @@ function BoardColumn({ group, t }: { group: IssueGroup; t: TrackerState }) {
           <Plus size={14} />
         </button>
       </div>
-      <SortableContext items={group.issues.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext items={group.issues.map((i) => `${group.key}::${i.id}`)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className="lic-col-body">
           {group.issues.map((issue) => (
-            <BoardCard key={issue.id} issue={issue} t={t} />
+            <BoardCard key={issue.id} issue={issue} groupKey={group.key} t={t} />
           ))}
           {group.issues.length === 0 && <div className="lic-col-empty t-4">No issues</div>}
         </div>
@@ -139,26 +147,29 @@ export function BoardView({ groups, t }: { groups: IssueGroup[]; t: TrackerState
   const c = useCollection()
   const [activeId, setActiveId] = useState<string | null>(null)
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
-  const groupOfIssue = useMemo(() => {
-    const map = new Map<string, IssueGroup>()
-    for (const group of groups) for (const issue of group.issues) if (!map.has(issue.id)) map.set(issue.id, group)
-    return map
-  }, [groups])
   const active = activeId ? t.issuesById.get(activeId) : undefined
 
-  const onDragStart = (event: DragStartEvent) => setActiveId(String(event.active.id))
+  const onDragStart = (event: DragStartEvent) => {
+    const [, issueId] = splitSortableId(String(event.active.id))
+    setActiveId(issueId)
+  }
 
   const onDragEnd = (event: DragEndEvent) => {
     setActiveId(null)
-    const overId = event.over ? String(event.over.id) : null
-    if (!overId) return
-    const issueId = String(event.active.id)
+    const overRawId = event.over ? String(event.over.id) : null
+    if (!overRawId) return
+    const [fromGroupKey, issueId] = splitSortableId(String(event.active.id))
     const issue = t.issuesById.get(issueId)
     if (!issue) return
-    const from = groupOfIssue.get(issueId)
-    const to = overId.startsWith(COLUMN_PREFIX)
-      ? groups.find((g) => g.key === overId.slice(COLUMN_PREFIX.length))
-      : groupOfIssue.get(overId)
+
+    const isColumnDrop = overRawId.startsWith(COLUMN_PREFIX)
+    const [toGroupKey, overId] = isColumnDrop
+      ? [overRawId.slice(COLUMN_PREFIX.length), null]
+      : splitSortableId(overRawId)
+    if (overId === issueId) return
+
+    const from = groups.find((g) => g.key === fromGroupKey)
+    const to = groups.find((g) => g.key === toGroupKey)
     if (!to) return
 
     let patch: IssuePatch = {}
@@ -168,12 +179,24 @@ export function BoardView({ groups, t }: { groups: IssueGroup[]; t: TrackerState
       patch = mapPatchToIssueTeam(movePatch, issue, t)
     }
     if (c.display.ordering === 'manual') {
-      const siblings = to.issues.filter((i) => i.id !== issueId)
-      const overIndex = overId.startsWith(COLUMN_PREFIX) ? siblings.length : siblings.findIndex((i) => i.id === overId)
-      const index = overIndex < 0 ? siblings.length : overIndex
-      const before = index > 0 ? siblings[index - 1].sort_order : null
-      const after = index < siblings.length ? siblings[index].sort_order : null
-      patch.sort_order = sortOrderBetween(before, after)
+      if (!isColumnDrop && from?.key === to.key) {
+        const activeIndex = to.issues.findIndex((i) => i.id === issueId)
+        const overIndex = to.issues.findIndex((i) => i.id === overId)
+        if (activeIndex >= 0 && overIndex >= 0) {
+          const before =
+            activeIndex < overIndex ? to.issues[overIndex].sort_order : (to.issues[overIndex - 1]?.sort_order ?? null)
+          const after =
+            activeIndex < overIndex ? (to.issues[overIndex + 1]?.sort_order ?? null) : to.issues[overIndex].sort_order
+          patch.sort_order = sortOrderBetween(before, after)
+        }
+      } else {
+        const siblings = to.issues.filter((i) => i.id !== issueId)
+        const overIndex = isColumnDrop ? siblings.length : siblings.findIndex((i) => i.id === overId)
+        const index = overIndex < 0 ? siblings.length : overIndex
+        const before = index > 0 ? siblings[index - 1].sort_order : null
+        const after = index < siblings.length ? siblings[index].sort_order : null
+        patch.sort_order = sortOrderBetween(before, after)
+      }
     }
     if (Object.keys(patch).length === 0) return
     void updateWithLaneToast(t, [issueId], patch)

@@ -1,0 +1,1769 @@
+diff --git a/src/sessions/overview.rs b/src/sessions/overview.rs
+new file mode 100644
+index 0000000..2ef8e99
+--- /dev/null
++++ b/src/sessions/overview.rs
+@@ -0,0 +1,791 @@
++use std::collections::BTreeMap;
++
++use chrono::{DateTime, Utc};
++use serde::{Deserialize, Serialize};
++
++use super::control::SessionControl;
++use super::probe::{LiveSession, MachineSnapshot, PendingQuestion, Probe};
++use super::registry::{CommandRunner, SessionList};
++
++pub const DISCORD_LIMIT: usize = 1900;
++
++#[derive(Debug, Clone, Serialize, Deserialize)]
++pub struct Overview {
++    pub list: SessionList,
++    pub snapshots: Vec<(String, Result<MachineSnapshot, String>)>,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum SessionState {
++    Working,
++    Question,
++    Blocked,
++    Idle,
++}
++
++pub fn state_of(s: &LiveSession) -> SessionState {
++    if !s.questions.is_empty() {
++        SessionState::Question
++    } else if s.blocking_question {
++        SessionState::Blocked
++    } else if s.streaming || s.compacting {
++        SessionState::Working
++    } else {
++        SessionState::Idle
++    }
++}
++
++pub fn compact(value: &str, max: usize) -> String {
++    value
++        .chars()
++        .map(|c| if c.is_control() { ' ' } else { c })
++        .take(max)
++        .collect()
++}
++
++pub fn home_relative(folder: &str) -> String {
++    for prefix in ["/Users/", "/home/"] {
++        if let Some(rest) = folder.strip_prefix(prefix) {
++            return match rest.split_once('/') {
++                Some((_, suffix)) => format!("~/{suffix}"),
++                None => "~".into(),
++            };
++        }
++    }
++    if folder == "/root" {
++        return "~".into();
++    }
++    folder
++        .strip_prefix("/root/")
++        .map_or_else(|| folder.to_owned(), |rest| format!("~/{rest}"))
++}
++
++pub fn activity(value: Option<&str>, now: DateTime<Utc>) -> String {
++    let Some(at) = value.and_then(|v| DateTime::parse_from_rfc3339(v).ok()) else {
++        return "활동 미상 (KST)".into();
++    };
++    let seconds = now.signed_duration_since(at).num_seconds().max(0);
++    let relative = if seconds < 60 {
++        format!("{seconds}초 전")
++    } else if seconds < 3600 {
++        format!("{}분 전", seconds / 60)
++    } else if seconds < 86400 {
++        format!("{}시간 전", seconds / 3600)
++    } else {
++        format!("{}일 전", seconds / 86400)
++    };
++    format!("{relative} (KST)")
++}
++
++fn collapse_newlines(text: &str) -> String {
++    text.split_whitespace().collect::<Vec<_>>().join(" ")
++}
++
++pub fn format_question_summary(question: &PendingQuestion) -> String {
++    if let Some(first) = question.questions.first() {
++        let text = first
++            .question
++            .as_deref()
++            .or(first.header.as_deref())
++            .unwrap_or("질문 대기 중");
++        let collapsed = collapse_newlines(text);
++        if first.options.is_empty() {
++            compact(&collapsed, 90)
++        } else {
++            let opts = first
++                .options
++                .iter()
++                .map(|opt| format!("[{}]", collapse_newlines(opt)))
++                .collect::<Vec<_>>()
++                .join(" ");
++            compact(&format!("{collapsed} {opts}"), 90)
++        }
++    } else {
++        "질문 대기 중".into()
++    }
++}
++
++/// Session ids share a time-ordered prefix, so 13 characters are needed to tell apart
++/// sessions started minutes apart; the result is a valid unique-prefix target.
++pub fn short_id(id: &str) -> &str {
++    id.char_indices().nth(13).map_or(id, |(end, _)| &id[..end])
++}
++
++pub fn format_overview(o: &Overview, now: DateTime<Utc>, max_chars: usize) -> String {
++    let mut machines = Vec::<String>::new();
++    let mut add_machine = |m: &str| {
++        if !machines.iter().any(|seen| seen == m) {
++            machines.push(m.to_owned());
++        }
++    };
++
++    for (m, _) in &o.snapshots {
++        add_machine(m);
++    }
++    for s in &o.list.sessions {
++        add_machine(&s.machine);
++    }
++    for e in &o.list.errors {
++        add_machine(&e.machine);
++    }
++    for s in &o.list.stale {
++        add_machine(&s.machine);
++    }
++
++    if machines.is_empty() {
++        machines.push("local".to_owned());
++    }
++
++    let snapshot_map: BTreeMap<&str, &Result<MachineSnapshot, String>> = o
++        .snapshots
++        .iter()
++        .map(|(m, res)| (m.as_str(), res))
++        .collect();
++
++    let mut lines = Vec::new();
++
++    for machine in &machines {
++        let m_str = machine.as_str();
++
++        let snap_res = snapshot_map.get(m_str);
++
++        if let Some(Err(err_msg)) = snap_res {
++            lines.push(format!(
++                "⚠️ {}: {}",
++                compact(m_str, 32),
++                compact(err_msg, 70)
++            ));
++            continue;
++        }
++
++        let snap_sessions = snap_res.and_then(|r| r.as_ref().ok()).map(|s| &s.sessions);
++
++        let listing_sessions: Vec<_> = o
++            .list
++            .sessions
++            .iter()
++            .filter(|s| s.machine == m_str)
++            .collect();
++
++        let stale_suffix = o
++            .list
++            .stale
++            .iter()
++            .find(|item| item.machine == m_str && item.stale)
++            .map(|item| format!(" · stale {}초 전", item.age_seconds))
++            .unwrap_or_default();
++
++        let mut working_items = Vec::new();
++        let mut question_items = Vec::new();
++        let mut blocked_items = Vec::new();
++        let mut idle_items = Vec::new();
++
++        let mut matched_snapshot_indices = std::collections::BTreeSet::new();
++
++        if let Some(snaps) = snap_sessions {
++            for (snap_idx, live) in snaps.iter().enumerate() {
++                matched_snapshot_indices.insert(snap_idx);
++                let state = state_of(live);
++
++                let matched_listing = listing_sessions.iter().find(|ls| {
++                    ls.session_id == live.session_id
++                        || ls.raw.get("durableSessionId").and_then(|v| v.as_str())
++                            == Some(&live.session_id)
++                });
++
++                let activity_str = activity(
++                    live.updated_at.as_deref().or_else(|| {
++                        matched_listing
++                            .and_then(|ls| ls.updated_at.as_deref().or(ls.last_activity.as_deref()))
++                    }),
++                    now,
++                );
++
++                let id8 = short_id(&live.session_id);
++
++                let name = live
++                    .name
++                    .as_deref()
++                    .filter(|name| !name.trim().is_empty())
++                    .or_else(|| matched_listing.and_then(|ls| ls.name.as_deref()))
++                    .or_else(|| {
++                        Some(live.last_user.as_str()).filter(|text| !text.trim().is_empty())
++                    })
++                    .unwrap_or(&live.session_id);
++
++                let cwd = live
++                    .cwd
++                    .as_deref()
++                    .or_else(|| matched_listing.and_then(|ls| ls.cwd.as_deref()))
++                    .unwrap_or("?");
++
++                let cwd_rel = home_relative(cwd);
++
++                match state {
++                    SessionState::Working => {
++                        let header_line = format!(
++                            "🟢 {} · {} · {} · `{}:{}`",
++                            compact(name, 32),
++                            compact(&cwd_rel, 36),
++                            activity_str,
++                            m_str,
++                            id8
++                        );
++                        let sub_line = format!(
++                            "  ↳ {}",
++                            compact(&collapse_newlines(&live.last_assistant), 90)
++                        );
++                        working_items.push((header_line, sub_line));
++                    }
++                    SessionState::Question => {
++                        let header_line = format!(
++                            "❓ {} · {} · {} · `{}:{}`",
++                            compact(name, 32),
++                            compact(&cwd_rel, 36),
++                            activity_str,
++                            m_str,
++                            id8
++                        );
++                        let q_summary = live
++                            .questions
++                            .first()
++                            .map(format_question_summary)
++                            .unwrap_or_else(|| "질문 대기 중".into());
++                        let sub_line = format!("  ↳ {q_summary}");
++                        question_items.push((header_line, sub_line));
++                    }
++                    SessionState::Blocked => {
++                        let header_line = format!(
++                            "⛔ {} · {} · {} · `{}:{}`",
++                            compact(name, 32),
++                            compact(&cwd_rel, 36),
++                            activity_str,
++                            m_str,
++                            id8
++                        );
++                        let sub_line = "  ↳ 터미널에서 답변 필요 (차단형 질문)".to_string();
++                        blocked_items.push((header_line, sub_line));
++                    }
++                    SessionState::Idle => {
++                        let idle_str = format!("⚪ {} · `{}:{}`", compact(name, 28), m_str, id8);
++                        idle_items.push(idle_str);
++                    }
++                }
++            }
++        }
++
++        for ls in &listing_sessions {
++            let already_included = snap_sessions.is_some_and(|snaps| {
++                snaps.iter().any(|live| {
++                    live.session_id == ls.session_id
++                        || ls.raw.get("durableSessionId").and_then(|v| v.as_str())
++                            == Some(&live.session_id)
++                })
++            });
++
++            if !already_included {
++                let id8 = short_id(&ls.session_id);
++                let name = ls.name.as_deref().unwrap_or(&ls.session_id);
++                idle_items.push(format!("⚪ {} · `{}:{}`", compact(name, 28), m_str, id8));
++            }
++        }
++
++        let working_cnt = working_items.len();
++        let question_cnt = question_items.len() + blocked_items.len();
++        let idle_cnt = idle_items.len();
++
++        let header = format!(
++            "🖥️ {} — 작업 중 {} · 답변 대기 {} · 대기 {}{}",
++            compact(m_str, 32),
++            working_cnt,
++            question_cnt,
++            idle_cnt,
++            stale_suffix
++        );
++        lines.push(header);
++
++        for (hl, sl) in working_items {
++            lines.push(hl);
++            lines.push(sl);
++        }
++        for (hl, sl) in question_items {
++            lines.push(hl);
++            lines.push(sl);
++        }
++        for (hl, sl) in blocked_items {
++            lines.push(hl);
++            lines.push(sl);
++        }
++
++        if !idle_items.is_empty() {
++            if idle_items.len() <= 8 {
++                for item in idle_items {
++                    lines.push(item);
++                }
++            } else {
++                for item in idle_items.iter().take(8) {
++                    lines.push(item.clone());
++                }
++                let overflow = idle_items.len() - 8;
++                lines.push(format!("… 외 {overflow}개 대기"));
++            }
++        }
++    }
++
++    for err in &o.list.errors {
++        if !snapshot_map.contains_key(err.machine.as_str()) {
++            lines.push(format!(
++                "⚠️ {}: {}",
++                compact(&err.machine, 32),
++                compact(&err.message, 70)
++            ));
++        }
++    }
++
++    if lines.is_empty() {
++        return "실행 중인 세션 없음".into();
++    }
++
++    apply_max_chars(lines, max_chars)
++}
++
++fn apply_max_chars(lines: Vec<String>, max_chars: usize) -> String {
++    let ellipsis = "… (일부 생략)";
++    let full = lines.join("\n");
++    if full.chars().count() <= max_chars {
++        return full;
++    }
++
++    let mut out_lines = Vec::new();
++    let mut current_chars = 0;
++    let ellipsis_chars = ellipsis.chars().count() + 1;
++
++    for line in lines {
++        let line_chars = line.chars().count() + if out_lines.is_empty() { 0 } else { 1 };
++        if current_chars + line_chars + ellipsis_chars > max_chars {
++            break;
++        }
++        current_chars += line_chars;
++        out_lines.push(line);
++    }
++
++    out_lines.push(ellipsis.to_string());
++    out_lines.join("\n")
++}
++
++pub fn format_detail(
++    target: &str,
++    s: &LiveSession,
++    transcript_tail: &[String],
++    max_chars: usize,
++) -> String {
++    let state = state_of(s);
++    let state_str = match state {
++        SessionState::Working => "작업 중 (Streaming/Compacting)",
++        SessionState::Question => "답변 대기 중",
++        SessionState::Blocked => "터미널 답변 대기 중 (차단형)",
++        SessionState::Idle => "대기 중 (Idle)",
++    };
++
++    let name = s.name.as_deref().unwrap_or(&s.session_id);
++    let cwd_rel = home_relative(s.cwd.as_deref().unwrap_or("?"));
++
++    let mut lines = Vec::new();
++    lines.push(format!("📌 세션 상세: `{target}` ({})", compact(name, 40)));
++    lines.push(format!("상태: {state_str}"));
++    lines.push(format!("경로: {cwd_rel}"));
++    lines.push(format!(
++        "메시지 수: {} (대기 중: {})",
++        s.message_count, s.pending_messages
++    ));
++
++    if let Some(err) = &s.messages_error {
++        lines.push(format!("⚠️ 메시지 조회 경고: {}", compact(err, 80)));
++    }
++
++    if !s.questions.is_empty() {
++        lines.push("❓ 대기 중인 질문:".into());
++        for q in &s.questions {
++            for item in &q.questions {
++                let q_text = item
++                    .question
++                    .as_deref()
++                    .or(item.header.as_deref())
++                    .unwrap_or("?");
++                lines.push(format!("  - [{}] {}", item.id, collapse_newlines(q_text)));
++                if !item.options.is_empty() {
++                    let opts = item
++                        .options
++                        .iter()
++                        .map(|opt| format!("[{}]", collapse_newlines(opt)))
++                        .collect::<Vec<_>>()
++                        .join(" ");
++                    lines.push(format!("    선택지: {opts}"));
++                }
++            }
++        }
++    }
++
++    if !transcript_tail.is_empty() {
++        lines.push("📜 최근 대화 내용:".into());
++        for entry in transcript_tail {
++            for l in entry.lines() {
++                lines.push(format!("  {l}"));
++            }
++        }
++    } else {
++        if !s.last_user.is_empty() {
++            lines.push(format!(
++                "👤 최근 사용자: {}",
++                compact(&collapse_newlines(&s.last_user), 120)
++            ));
++        }
++        if !s.last_assistant.is_empty() {
++            lines.push(format!(
++                "🤖 최근 어시스턴트: {}",
++                compact(&collapse_newlines(&s.last_assistant), 120)
++            ));
++        }
++    }
++
++    apply_max_chars(lines, max_chars)
++}
++
++pub async fn collect<R: CommandRunner + 'static>(
++    control: &SessionControl<R>,
++    text_limit: usize,
++) -> Overview {
++    let list = control.registry().list_all().await;
++
++    let mut machines = Vec::new();
++    machines.push("local".to_string());
++    for s in &list.sessions {
++        if !machines.contains(&s.machine) {
++            machines.push(s.machine.clone());
++        }
++    }
++    for e in &list.errors {
++        if !machines.contains(&e.machine) {
++            machines.push(e.machine.clone());
++        }
++    }
++
++    let probe = Probe::new(control.runner());
++    let snap_results = probe.snapshot_all(&machines, text_limit).await;
++
++    let snapshots = snap_results
++        .into_iter()
++        .map(|(m, res)| (m, res.map_err(|err| err.to_string())))
++        .collect();
++
++    Overview { list, snapshots }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::probe::QuestionItem;
++    use super::super::registry::Session;
++    use super::*;
++
++    #[test]
++    fn state_of_detects_all_states() {
++        let mut s = LiveSession::default();
++        assert_eq!(state_of(&s), SessionState::Idle);
++
++        s.streaming = true;
++        assert_eq!(state_of(&s), SessionState::Working);
++        s.streaming = false;
++
++        s.compacting = true;
++        assert_eq!(state_of(&s), SessionState::Working);
++        s.compacting = false;
++
++        s.blocking_question = true;
++        assert_eq!(state_of(&s), SessionState::Blocked);
++
++        s.questions.push(PendingQuestion {
++            request_id: "req1".into(),
++            questions: vec![QuestionItem {
++                id: "q1".into(),
++                header: None,
++                question: Some("진행할까요?".into()),
++                options: vec!["네".into(), "아니오".into()],
++            }],
++        });
++        assert_eq!(state_of(&s), SessionState::Question);
++    }
++
++    #[test]
++    fn format_overview_grouping_and_korean_counts() {
++        let now = DateTime::parse_from_rfc3339("2026-10-16T12:00:00+09:00")
++            .unwrap()
++            .with_timezone(&Utc);
++
++        let list = SessionList {
++            sessions: vec![
++                Session {
++                    session_id: "sess-11112222".into(),
++                    name: Some("worker-1".into()),
++                    cwd: Some("/home/indo/code/proj".into()),
++                    status: Some("working".into()),
++                    alive: None,
++                    surface: None,
++                    updated_at: Some("2026-10-16T11:58:00+09:00".into()),
++                    controls: vec![],
++                    machine: "local".into(),
++                    last_activity: None,
++                    raw: serde_json::json!({}),
++                },
++                Session {
++                    session_id: "sess-33334444".into(),
++                    name: Some("idle-worker".into()),
++                    cwd: Some("/home/indo/other".into()),
++                    status: Some("idle".into()),
++                    alive: None,
++                    surface: None,
++                    updated_at: None,
++                    controls: vec![],
++                    machine: "local".into(),
++                    last_activity: None,
++                    raw: serde_json::json!({}),
++                },
++            ],
++            errors: vec![],
++            stale: vec![],
++            exit_code: 0,
++        };
++
++        let snapshots = vec![(
++            "local".into(),
++            Ok(MachineSnapshot {
++                machine: "local".into(),
++                sessions: vec![LiveSession {
++                    machine: "local".into(),
++                    session_id: "sess-11112222".into(),
++                    routing_id: "sess-11112222".into(),
++                    endpoint_kind: "tui".into(),
++                    name: Some("worker-1".into()),
++                    cwd: Some("/home/indo/code/proj".into()),
++                    streaming: true,
++                    compacting: false,
++                    blocking_question: false,
++                    pending_messages: 0,
++                    message_count: 5,
++                    last_user: "작업해줘".into(),
++                    last_assistant: "작업을 진행하고\n있습니다.".into(),
++                    questions: vec![],
++                    messages_error: None,
++                    updated_at: None,
++                }],
++                errors: vec![],
++            }),
++        )];
++
++        let overview = Overview { list, snapshots };
++        let formatted = format_overview(&overview, now, 1900);
++
++        assert!(formatted.contains("🖥️ local — 작업 중 1 · 답변 대기 0 · 대기 1"));
++        assert!(
++            formatted.contains("🟢 worker-1 · ~/code/proj · 2분 전 (KST) · `local:sess-11112222`")
++        );
++        assert!(formatted.contains("  ↳ 작업을 진행하고 있습니다."));
++        assert!(formatted.contains("⚪ idle-worker · `local:sess-33334444`"));
++    }
++
++    #[test]
++    fn short_id_distinguishes_sessions_sharing_a_time_prefix() {
++        let a = "01a1428d-5e53-7f52-974a-0f2bcb7e9722";
++        let b = "01a1428d-6683-7c11-8f0e-1d2c3b4a5968";
++        assert_eq!(&a[..8], &b[..8]);
++        assert_ne!(short_id(a), short_id(b));
++        assert!(a.starts_with(short_id(a)));
++        assert_eq!(short_id("sess-1"), "sess-1");
++    }
++
++    #[test]
++    fn format_overview_question_rendering_with_options() {
++        let now = Utc::now();
++        let list = SessionList {
++            sessions: vec![],
++            errors: vec![],
++            stale: vec![],
++            exit_code: 0,
++        };
++        let snapshots = vec![(
++            "local".into(),
++            Ok(MachineSnapshot {
++                machine: "local".into(),
++                sessions: vec![LiveSession {
++                    machine: "local".into(),
++                    session_id: "sess-question1".into(),
++                    routing_id: "sess-question1".into(),
++                    endpoint_kind: "tui".into(),
++                    name: Some("q-bot".into()),
++                    cwd: Some("/Users/indo/repo".into()),
++                    streaming: false,
++                    compacting: false,
++                    blocking_question: false,
++                    pending_messages: 0,
++                    message_count: 2,
++                    last_user: "".into(),
++                    last_assistant: "".into(),
++                    questions: vec![PendingQuestion {
++                        request_id: "req-1".into(),
++                        questions: vec![QuestionItem {
++                            id: "q1".into(),
++                            header: Some("배포 승인".into()),
++                            question: Some("배포를 진행할까요?".into()),
++                            options: vec!["승인".into(), "거절".into()],
++                        }],
++                    }],
++                    messages_error: None,
++                    updated_at: None,
++                }],
++                errors: vec![],
++            }),
++        )];
++
++        let overview = Overview { list, snapshots };
++        let formatted = format_overview(&overview, now, 1900);
++
++        assert!(formatted.contains("❓ q-bot · ~/repo · 활동 미상 (KST) · `local:sess-question`"));
++        assert!(formatted.contains("  ↳ 배포를 진행할까요? [승인] [거절]"));
++    }
++
++    #[test]
++    fn format_overview_idle_overflow_and_unreachable_host() {
++        let now = Utc::now();
++        let mut sessions = Vec::new();
++        for i in 1..=12 {
++            sessions.push(LiveSession {
++                machine: "local".into(),
++                session_id: format!("sess-idle-{i:04}"),
++                routing_id: format!("sess-idle-{i:04}"),
++                endpoint_kind: "tui".into(),
++                name: Some(format!("idle-{i}")),
++                cwd: Some("/home/indo".into()),
++                streaming: false,
++                compacting: false,
++                blocking_question: false,
++                pending_messages: 0,
++                message_count: 0,
++                last_user: "".into(),
++                last_assistant: "".into(),
++                questions: vec![],
++                messages_error: None,
++                updated_at: None,
++            });
++        }
++
++        let list = SessionList {
++            sessions: vec![],
++            errors: vec![],
++            stale: vec![],
++            exit_code: 0,
++        };
++        let snapshots = vec![
++            (
++                "local".into(),
++                Ok(MachineSnapshot {
++                    machine: "local".into(),
++                    sessions,
++                    errors: vec![],
++                }),
++            ),
++            (
++                "remote-down".into(),
++                Err("ssh: connect to host remote-down port 22: Connection refused".into()),
++            ),
++        ];
++
++        let overview = Overview { list, snapshots };
++        let formatted = format_overview(&overview, now, 1900);
++
++        assert!(formatted.contains("🖥️ local — 작업 중 0 · 답변 대기 0 · 대기 12"));
++        assert!(formatted.contains("… 외 4개 대기"));
++        assert!(formatted.contains(
++            "⚠️ remote-down: ssh: connect to host remote-down port 22: Connection refused"
++        ));
++    }
++
++    #[test]
++    fn format_overview_max_chars_respected_for_200_sessions() {
++        let now = Utc::now();
++        let mut live_sessions = Vec::new();
++        for i in 0..200 {
++            live_sessions.push(LiveSession {
++                machine: "local".into(),
++                session_id: format!("session-uuid-number-{i:04}-abcd-efgh"),
++                routing_id: format!("session-uuid-number-{i:04}-abcd-efgh"),
++                endpoint_kind: "tui".into(),
++                name: Some(format!("worker-session-{i}")),
++                cwd: Some(format!("/home/indo/projects/repo-{i}")),
++                streaming: i % 2 == 0,
++                compacting: false,
++                blocking_question: false,
++                pending_messages: 0,
++                message_count: 10,
++                last_user: "명령".into(),
++                last_assistant: format!("작업 결과 내용 긴 텍스트 {i} 반복합니다."),
++                questions: vec![],
++                messages_error: None,
++                updated_at: None,
++            });
++        }
++
++        let list = SessionList {
++            sessions: vec![],
++            errors: vec![],
++            stale: vec![],
++            exit_code: 0,
++        };
++        let snapshots = vec![(
++            "local".into(),
++            Ok(MachineSnapshot {
++                machine: "local".into(),
++                sessions: live_sessions,
++                errors: vec![],
++            }),
++        )];
++
++        let overview = Overview { list, snapshots };
++        let max_chars = 1900;
++        let formatted = format_overview(&overview, now, max_chars);
++
++        assert!(formatted.chars().count() <= max_chars);
++        assert!(formatted.contains("… (일부 생략)"));
++    }
++
++    #[test]
++    fn format_detail_renders_state_and_tail() {
++        let live = LiveSession {
++            machine: "local".into(),
++            session_id: "0123456789abcdef".into(),
++            routing_id: "0123456789abcdef".into(),
++            endpoint_kind: "tui".into(),
++            name: Some("test-session".into()),
++            cwd: Some("/home/indo/work".into()),
++            streaming: true,
++            compacting: false,
++            blocking_question: false,
++            pending_messages: 1,
++            message_count: 15,
++            last_user: "코드 작성해줘".into(),
++            last_assistant: "완료했습니다.".into(),
++            questions: vec![],
++            messages_error: None,
++            updated_at: None,
++        };
++
++        let tail = vec![
++            "User: 안녕하세요".to_string(),
++            "Assistant: 무엇을 도와드릴까요?".to_string(),
++        ];
++        let detail = format_detail("local:01234567", &live, &tail, 1900);
++        assert!(detail.contains("📌 세션 상세: `local:01234567` (test-session)"));
++        assert!(detail.contains("상태: 작업 중 (Streaming/Compacting)"));
++        assert!(detail.contains("경로: ~/work"));
++        assert!(detail.contains("User: 안녕하세요"));
++        assert!(detail.contains("Assistant: 무엇을 도와드릴까요?"));
++    }
++}
+diff --git a/src/sessions/status_reply.rs b/src/sessions/status_reply.rs
+index 40942ef..7f11789 100644
+--- a/src/sessions/status_reply.rs
++++ b/src/sessions/status_reply.rs
+@@ -1,9 +1,9 @@
+-use std::collections::BTreeMap;
+ use std::time::Duration;
+ 
+-use chrono::{DateTime, Utc};
++use chrono::Utc;
+ 
+-use super::registry::{CommandRunner, SessionList, SessionRegistry};
++use super::control::SessionControl;
++use super::overview::{collect, format_overview, DISCORD_LIMIT};
+ use crate::{InboundEvent, SessionKey};
+ 
+ pub const REPLY_TIMEOUT: Duration = Duration::from_secs(25);
+@@ -46,9 +46,11 @@ pub fn owner_id() -> String {
+         .unwrap_or_else(|| crate::inbox::proposals::OWNER_ID.to_owned())
+ }
+ 
+-/// The local dashboard is an owner-only transport. Discord guild conversations
+-/// require the caller to establish thread privacy separately, not just bot ownership.
+ pub fn owner_dm(key: &SessionKey, author: &str, owner: &str) -> bool {
++    if key.platform == crate::slack::PLATFORM {
++        let slack_owner = crate::slack::owner_id();
++        return author == slack_owner && key.guild_id.is_none() && key.user_id == slack_owner;
++    }
+     author == owner
+         && key.guild_id.is_none()
+         && ((key.platform == "discord" && key.user_id == owner)
+@@ -63,6 +65,14 @@ pub fn eligible(event: &InboundEvent, private_owner_conversation: bool) -> bool
+ }
+ 
+ pub fn owner_thread(key: &SessionKey, author: &str, owner: &str) -> bool {
++    if key.platform == crate::slack::PLATFORM {
++        return slack_home_conversation(
++            key,
++            author,
++            &crate::slack::owner_id(),
++            std::env::var("SLACK_HOME_CHANNEL").ok().as_deref(),
++        );
++    }
+     author == owner
+         && key.platform == "discord"
+         && key.guild_id.is_some()
+@@ -73,6 +83,24 @@ pub fn owner_thread(key: &SessionKey, author: &str, owner: &str) -> bool {
+         && crate::multiplexer::SessionActor::is_owner_lead_session(key, None)
+ }
+ 
++/// Whether the dispatcher may treat this as private is still decided by
++/// `owner_thread_is_private` (channel membership limited to owner and bot).
++fn slack_home_conversation(
++    key: &SessionKey,
++    author: &str,
++    owner: &str,
++    home_channels: Option<&str>,
++) -> bool {
++    author == owner
++        && key.guild_id.is_some()
++        && home_channels.is_some_and(|configured| {
++            configured
++                .split(',')
++                .map(str::trim)
++                .any(|id| !id.is_empty() && id == key.channel_id)
++        })
++}
++
+ fn compact(value: &str, max: usize) -> String {
+     value
+         .chars()
+@@ -81,131 +109,33 @@ fn compact(value: &str, max: usize) -> String {
+         .collect()
+ }
+ 
+-fn home_relative(folder: &str) -> String {
+-    for prefix in ["/Users/", "/home/"] {
+-        if let Some(rest) = folder.strip_prefix(prefix) {
+-            return match rest.split_once('/') {
+-                Some((_, suffix)) => format!("~/{suffix}"),
+-                None => "~".into(),
+-            };
+-        }
+-    }
+-    if folder == "/root" {
+-        return "~".into();
+-    }
+-    folder
+-        .strip_prefix("/root/")
+-        .map_or_else(|| folder.to_owned(), |rest| format!("~/{rest}"))
+-}
+-
+-fn activity(value: Option<&str>, now: DateTime<Utc>) -> String {
+-    let Some(at) = value.and_then(|value| DateTime::parse_from_rfc3339(value).ok()) else {
+-        return "활동 미상 (KST)".into();
+-    };
+-    let seconds = now.signed_duration_since(at).num_seconds().max(0);
+-    let relative = if seconds < 60 {
+-        format!("{seconds}초 전")
+-    } else if seconds < 3600 {
+-        format!("{}분 전", seconds / 60)
+-    } else if seconds < 86400 {
+-        format!("{}시간 전", seconds / 3600)
+-    } else {
+-        format!("{}일 전", seconds / 86400)
+-    };
+-    format!("{relative} (KST)")
+-}
+-
+-pub fn format_reply(list: &SessionList, now: DateTime<Utc>) -> String {
+-    let mut groups = BTreeMap::<&str, Vec<_>>::new();
+-    for session in &list.sessions {
+-        groups.entry(&session.machine).or_default().push(session);
+-    }
+-    for stale in &list.stale {
+-        groups.entry(&stale.machine).or_default();
+-    }
+-    let mut lines = Vec::new();
+-    for (machine, sessions) in groups {
+-        let stale = list
+-            .stale
+-            .iter()
+-            .find(|item| item.machine == machine && item.stale)
+-            .map(|item| format!(" · stale {}초 전", item.age_seconds))
+-            .unwrap_or_default();
+-        lines.push(format!("{}{}", compact(machine, 32), stale));
+-        let mut counts = BTreeMap::<String, usize>::new();
+-        for session in sessions {
+-            let status = session.status.as_deref().unwrap_or("unknown");
+-            if status.eq_ignore_ascii_case("busy") || status.eq_ignore_ascii_case("working") {
+-                lines.push(format!(
+-                    "- {} · {} · {} · {}",
+-                    compact(session.name.as_deref().unwrap_or(&session.session_id), 24),
+-                    compact(&home_relative(session.cwd.as_deref().unwrap_or("?")), 40),
+-                    compact(status, 16),
+-                    activity(
+-                        session
+-                            .updated_at
+-                            .as_deref()
+-                            .or(session.last_activity.as_deref()),
+-                        now
+-                    )
+-                ));
+-            } else {
+-                *counts.entry(compact(status, 16)).or_default() += 1;
+-            }
+-        }
+-        if !counts.is_empty() {
+-            lines.push(format!(
+-                "- {}",
+-                compact(
+-                    &counts
+-                        .into_iter()
+-                        .map(|(status, count)| format!("{status} {count}"))
+-                        .collect::<Vec<_>>()
+-                        .join(", "),
+-                    110
+-                )
+-            ));
+-        }
+-    }
+-    for error in &list.errors {
+-        lines.push(format!(
+-            "{}: 오류 {}",
+-            compact(&error.machine, 32),
+-            compact(&error.message, 70)
+-        ));
+-    }
+-    if lines.is_empty() {
+-        lines.push("실행 중인 세션 없음".into());
+-    }
+-    if lines.len() > 15 {
+-        let omitted = lines.len() - 14;
+-        lines.truncate(14);
+-        lines.push(format!("... {omitted}줄 생략"));
+-    }
+-    lines.join("\n")
+-}
+-
+-pub async fn registry_reply<R: CommandRunner + 'static>(registry: &SessionRegistry<R>) -> String {
+-    bounded_reply(registry.list_all()).await
++pub async fn control_reply<R: super::registry::CommandRunner + 'static>(
++    control: &SessionControl<R>,
++) -> String {
++    bounded_reply(async {
++        let overview = collect(control, 120).await;
++        format_overview(&overview, Utc::now(), DISCORD_LIMIT)
++    })
++    .await
+ }
+ 
+-async fn bounded_reply(listing: impl std::future::Future<Output = SessionList>) -> String {
+-    match tokio::time::timeout(REPLY_TIMEOUT, listing).await {
+-        Ok(list) => format_reply(&list, Utc::now()),
++pub async fn bounded_reply(fetch: impl std::future::Future<Output = String>) -> String {
++    match tokio::time::timeout(REPLY_TIMEOUT, fetch).await {
++        Ok(reply) => reply,
+         Err(_) => "세션 상태 조회 오류: 25초 제한 시간 초과".into(),
+     }
+ }
+ 
+ pub async fn reply() -> String {
+-    match SessionRegistry::from_environment() {
+-        Ok(registry) => registry_reply(&registry).await,
++    match SessionControl::from_environment() {
++        Ok(control) => control_reply(&control).await,
+         Err(error) => format!("세션 상태 조회 오류: {}", compact(&error.to_string(), 120)),
+     }
+ }
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::super::registry::{parse_sessions, CommandOutput, HostError, StaleListing};
++    use super::super::registry::{CommandOutput, CommandRunner};
+     use super::*;
+     use crate::{
+         multiplexer::{AgentRunner, MultiplexerConfig, OutboundDispatcher, SessionMultiplexer},
+@@ -246,54 +176,6 @@ mod tests {
+         }
+     }
+ 
+-    #[test]
+-    fn formatter_groups_counts_stale_errors_and_activity() {
+-        let now = DateTime::parse_from_rfc3339("2026-10-12T09:00:00+09:00")
+-            .unwrap()
+-            .with_timezone(&Utc);
+-        let list = SessionList {
+-            sessions: parse_sessions(br#"[{"id":"1","name":"build","cwd":"/home/indo/project","status":"busy","updatedAt":"2026-10-12T08:58:00+09:00"},{"id":"2","status":"idle"},{"id":"3","status":"idle"}]"#, "local").unwrap(),
+-            errors: vec![HostError { machine: "remote".into(), message: "unreachable\nhost".into(), code: 3 }],
+-            stale: vec![StaleListing { machine: "local".into(), stale: true, age_seconds: 36 }], exit_code: 0,
+-        };
+-        let reply = format_reply(&list, now);
+-        assert!(reply.contains("~/project"));
+-        assert!(reply.contains("busy"));
+-        assert!(reply.contains("2분 전 (KST)"));
+-        assert!(reply.contains("idle 2"));
+-        assert!(reply.contains("stale 36"));
+-        assert!(reply.contains("remote: 오류 unreachable host"));
+-        assert_eq!(reply.lines().count(), 4);
+-    }
+-
+-    #[test]
+-    fn formatter_caps_lines_and_discord_size() {
+-        let mut list = SessionList {
+-            sessions: vec![],
+-            errors: vec![],
+-            stale: vec![],
+-            exit_code: 0,
+-        };
+-        for i in 0..40 {
+-            list.sessions.extend(
+-                parse_sessions(
+-                    format!(
+-                        r#"[{{"id":"{i}","status":"working","name":"{}","cwd":"/Users/indo/{}"}}]"#,
+-                        "n".repeat(300),
+-                        "x".repeat(300)
+-                    )
+-                    .as_bytes(),
+-                    "local",
+-                )
+-                .unwrap(),
+-            );
+-        }
+-        let reply = format_reply(&list, Utc::now());
+-        assert_eq!(reply.lines().count(), 15);
+-        assert!(reply.chars().count() < 2000);
+-        assert!(reply.contains("생략"));
+-    }
+-
+     struct FakeRegistry;
+     #[async_trait]
+     impl CommandRunner for FakeRegistry {
+@@ -324,6 +206,28 @@ mod tests {
+         let event = InboundEvent::message(key, "1", "session status");
+         assert!(!eligible(&event, false));
+     }
++
++    #[test]
++    fn slack_home_channel_from_owner_is_a_candidate_owner_thread() {
++        let home = Some("C0HOME, C0OTHER");
++        let thread = SessionKey::new("slack", Some("T1"), "C0HOME", Some("1700.0001"), "");
++        let top = SessionKey::new("slack", Some("T1"), "C0OTHER", None::<String>, "");
++        assert!(slack_home_conversation(&thread, "U0OWNER", "U0OWNER", home));
++        assert!(slack_home_conversation(&top, "U0OWNER", "U0OWNER", home));
++        assert!(!slack_home_conversation(
++            &thread, "U0ALICE", "U0OWNER", home
++        ));
++        assert!(!slack_home_conversation(
++            &thread, "U0OWNER", "U0OWNER", None
++        ));
++        let elsewhere = SessionKey::new("slack", Some("T1"), "C0WORK", Some("1700.0001"), "");
++        assert!(!slack_home_conversation(
++            &elsewhere, "U0OWNER", "U0OWNER", home
++        ));
++        let dm = SessionKey::new("slack", None::<String>, "C0HOME", None::<String>, "U0OWNER");
++        assert!(!slack_home_conversation(&dm, "U0OWNER", "U0OWNER", home));
++    }
++
+     struct CountingBackend(AtomicUsize);
+     #[async_trait]
+     impl AgentRunner for CountingBackend {
+@@ -332,6 +236,7 @@ mod tests {
+             Ok(())
+         }
+     }
++
+     struct Replies(AtomicUsize);
+     #[async_trait]
+     impl OutboundDispatcher for Replies {
+@@ -356,13 +261,13 @@ mod tests {
+         );
+         let key = SessionKey::new("discord", None::<String>, "dm", None::<String>, "owner");
+         let event = InboundEvent::message(key.clone(), "1", "세션 상태");
+-        let registry = SessionRegistry::new(Arc::new(FakeRegistry), vec![]);
++        let control = SessionControl::new(Arc::new(FakeRegistry), vec![]);
+         assert!(tokio::time::timeout(
+             REPLY_TIMEOUT,
+             mux.intercept_session_status_with(
+                 &event,
+                 owner_dm(&key, "owner", "owner"),
+-                registry_reply(&registry)
++                control_reply(&control)
+             )
+         )
+         .await
+diff --git a/src/sessions/watch.rs b/src/sessions/watch.rs
+new file mode 100644
+index 0000000..935e2e7
+--- /dev/null
++++ b/src/sessions/watch.rs
+@@ -0,0 +1,641 @@
++use std::collections::HashMap;
++use std::sync::Arc;
++use std::time::Duration;
++
++use chrono::{DateTime, TimeDelta, Timelike, Utc};
++use sqlx::SqlitePool;
++use tokio_util::sync::CancellationToken;
++
++use super::control::SessionControl;
++use super::overview::{collect, compact, short_id};
++use super::probe::LiveSession;
++use super::registry::CommandRunner;
++use crate::{OutboundAction, OutboundDispatcher, Result, SessionKey};
++
++pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(60);
++/// A question or blocked session is only reported after it has gone unanswered this long,
++/// so the owner is not pinged for questions they are about to answer at the terminal.
++pub const DEFAULT_NOTIFY_AFTER: Duration = Duration::from_secs(30 * 60);
++/// Owner sleep window in KST (start hour inclusive, end hour exclusive). Nothing is sent
++/// inside it; held notices go out after it ends if still unanswered.
++pub const DEFAULT_QUIET_HOURS: (u32, u32) = (0, 8);
++const KST: TimeDelta = TimeDelta::hours(9);
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct NotifyPolicy {
++    pub notify_after: Duration,
++    pub quiet_hours: Option<(u32, u32)>,
++}
++
++impl Default for NotifyPolicy {
++    fn default() -> Self {
++        Self {
++            notify_after: DEFAULT_NOTIFY_AFTER,
++            quiet_hours: Some(DEFAULT_QUIET_HOURS),
++        }
++    }
++}
++
++impl NotifyPolicy {
++    /// `OMON_SESSION_NOTIFY_AFTER_SECS` (default 1800) and `OMON_SESSION_QUIET_HOURS`
++    /// (`"0-8"` KST by default, `"off"` disables).
++    pub fn from_env() -> Self {
++        let mut policy = Self::default();
++        if let Some(secs) = std::env::var("OMON_SESSION_NOTIFY_AFTER_SECS")
++            .ok()
++            .and_then(|value| value.trim().parse::<u64>().ok())
++        {
++            policy.notify_after = Duration::from_secs(secs);
++        }
++        if let Ok(value) = std::env::var("OMON_SESSION_QUIET_HOURS") {
++            policy.quiet_hours = parse_quiet_hours(&value);
++        }
++        policy
++    }
++
++    fn is_quiet(&self, now: DateTime<Utc>) -> bool {
++        let Some((start, end)) = self.quiet_hours else {
++            return false;
++        };
++        let hour = (now + KST).hour();
++        if start <= end {
++            (start..end).contains(&hour)
++        } else {
++            hour >= start || hour < end
++        }
++    }
++}
++
++fn parse_quiet_hours(value: &str) -> Option<(u32, u32)> {
++    let (start, end) = value.trim().split_once('-')?;
++    let start = start.trim().parse::<u32>().ok().filter(|h| *h < 24)?;
++    let end = end.trim().parse::<u32>().ok().filter(|h| *h <= 24)?;
++    (start != end).then_some((start, end % 24))
++}
++
++pub async fn watch(pool: &SqlitePool, target: &str) -> Result<()> {
++    sqlx::query("INSERT OR IGNORE INTO session_watches(target, added_at) VALUES(?, ?)")
++        .bind(target)
++        .bind(Utc::now())
++        .execute(pool)
++        .await?;
++    Ok(())
++}
++
++pub async fn unwatch(pool: &SqlitePool, target: &str) -> Result<bool> {
++    let removed = sqlx::query("DELETE FROM session_watches WHERE target = ?")
++        .bind(target)
++        .execute(pool)
++        .await?;
++    Ok(removed.rows_affected() > 0)
++}
++
++pub async fn watched(pool: &SqlitePool) -> Result<Vec<String>> {
++    Ok(
++        sqlx::query_scalar("SELECT target FROM session_watches ORDER BY added_at")
++            .fetch_all(pool)
++            .await?,
++    )
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Notice {
++    pub dedupe_key: String,
++    pub target: String,
++    pub kind: String,
++    pub text: String,
++}
++
++pub struct Watcher<R> {
++    pool: SqlitePool,
++    control: SessionControl<R>,
++    interval: Duration,
++    streaming: Option<HashMap<String, bool>>,
++    policy: NotifyPolicy,
++    first_seen: HashMap<String, DateTime<Utc>>,
++    slack_hints: bool,
++}
++
++fn display_name(session: &LiveSession) -> &str {
++    session
++        .name
++        .as_deref()
++        .filter(|name| !name.trim().is_empty())
++        .unwrap_or(&session.session_id)
++}
++
++fn session_notices(
++    session: &LiveSession,
++    target: &str,
++    watched: bool,
++    was_streaming: Option<bool>,
++    slack_hints: bool,
++) -> Vec<Notice> {
++    let machine = &session.machine;
++    let name = compact(display_name(session), 40);
++    let shown = format!("{machine}:{}", short_id(&session.session_id));
++    let mut notices = Vec::new();
++    if session.blocking_question && session.questions.is_empty() {
++        notices.push(Notice {
++            dedupe_key: format!("b:{target}:{}", session.message_count),
++            target: target.to_owned(),
++            kind: "blocked".into(),
++            text: format!(
++                "⛔ {machine} · {name}: 터미널에서 답해야 하는 질문을 기다리고 있어요 (`{shown}`)"
++            ),
++        });
++    }
++    for pending in &session.questions {
++        let first = pending.questions.first();
++        let question = first
++            .and_then(|item| item.question.as_deref().or(item.header.as_deref()))
++            .unwrap_or("질문");
++        let options = first
++            .map(|item| item.options.join(" / "))
++            .filter(|options| !options.is_empty())
++            .map(|options| format!("\n선택지: {options}"))
++            .unwrap_or_default();
++        let question = compact(&question.replace(['\n', '\r'], " "), 160);
++        // Keyed by question text, not request id: an agent that re-asks the same question
++        // (new request id) must not re-notify.
++        let hint = if session.blocking_question {
++            "\n→ 터미널에서 답해 주세요".to_owned()
++        } else if slack_hints {
++            format!("\n→ `/omo-sessions answer {shown} …`")
++        } else {
++            format!("\n→ `/sessions answer target:{shown} text:…`")
++        };
++        notices.push(Notice {
++            dedupe_key: format!("q:{target}:{}", short_hash(&question)),
++            target: target.to_owned(),
++            kind: "question".into(),
++            text: format!("❓ {machine} · {name}: {question}{options}{hint}"),
++        });
++    }
++    if watched && was_streaming == Some(true) && !session.streaming {
++        notices.push(Notice {
++            dedupe_key: format!("c:{target}:{}", session.message_count),
++            target: target.to_owned(),
++            kind: "completion".into(),
++            text: format!(
++                "✅ {machine} · {name} 턴 완료 (`{shown}`)\n↳ {}",
++                compact(&session.last_assistant.replace(['\n', '\r'], " "), 300)
++            ),
++        });
++    }
++    notices
++}
++
++fn short_hash(text: &str) -> String {
++    use sha2::{Digest, Sha256};
++    let digest = Sha256::digest(text.as_bytes());
++    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
++}
++
++impl<R: CommandRunner + 'static> Watcher<R> {
++    pub fn new(pool: SqlitePool, control: SessionControl<R>, interval: Duration) -> Self {
++        Self::with_policy(pool, control, interval, NotifyPolicy::default())
++    }
++
++    pub fn with_policy(
++        pool: SqlitePool,
++        control: SessionControl<R>,
++        interval: Duration,
++        policy: NotifyPolicy,
++    ) -> Self {
++        Self {
++            pool,
++            control,
++            interval,
++            streaming: None,
++            policy,
++            first_seen: HashMap::new(),
++            slack_hints: false,
++        }
++    }
++
++    /// Notices not yet delivered. Completion needs a streaming -> idle edge, so the first
++    /// tick of a process only records baselines; question notices are deduplicated in SQLite
++    /// and therefore never repeat across restarts.
++    pub async fn tick(&mut self) -> Result<Vec<Notice>> {
++        self.tick_at(Utc::now()).await
++    }
++
++    /// Questions and blocked sessions are held until they stay unanswered for
++    /// `notify_after`; nothing is released during quiet hours.
++    pub async fn tick_at(&mut self, now: DateTime<Utc>) -> Result<Vec<Notice>> {
++        let overview = collect(&self.control, 300).await;
++        let watched = watched(&self.pool).await?;
++        let previous = self.streaming.take();
++        let mut current = HashMap::new();
++        let mut notices = Vec::new();
++        for (machine, snapshot) in &overview.snapshots {
++            let Ok(snapshot) = snapshot else {
++                if let Some(previous) = &previous {
++                    let prefix = format!("{machine}:");
++                    current.extend(
++                        previous
++                            .iter()
++                            .filter(|(target, _)| target.starts_with(&prefix))
++                            .map(|(target, streaming)| (target.clone(), *streaming)),
++                    );
++                }
++                continue;
++            };
++            for session in &snapshot.sessions {
++                let target = format!("{machine}:{}", session.session_id);
++                let routed = format!("{machine}:{}", session.routing_id);
++                let is_watched = watched.iter().any(|w| *w == target || *w == routed);
++                let was = previous.as_ref().and_then(|map| map.get(&target).copied());
++                current.insert(target.clone(), session.streaming);
++                notices.extend(session_notices(
++                    session,
++                    &target,
++                    is_watched,
++                    was,
++                    self.slack_hints,
++                ));
++            }
++        }
++        self.streaming = Some(current);
++        let present: std::collections::HashSet<&str> =
++            notices.iter().map(|n| n.dedupe_key.as_str()).collect();
++        self.first_seen
++            .retain(|key, _| present.contains(key.as_str()));
++        let quiet = self.policy.is_quiet(now);
++        let wait = TimeDelta::from_std(self.policy.notify_after).unwrap_or(TimeDelta::zero());
++        let mut fresh = Vec::new();
++        for notice in notices {
++            if notice.kind != "completion" {
++                let seen = *self
++                    .first_seen
++                    .entry(notice.dedupe_key.clone())
++                    .or_insert(now);
++                if now - seen < wait {
++                    continue;
++                }
++            }
++            if quiet {
++                continue;
++            }
++            let sent: bool = sqlx::query_scalar(
++                "SELECT EXISTS(SELECT 1 FROM session_watch_notices WHERE dedupe_key = ?)",
++            )
++            .bind(&notice.dedupe_key)
++            .fetch_one(&self.pool)
++            .await?;
++            if !sent {
++                fresh.push(notice);
++            }
++        }
++        Ok(fresh)
++    }
++
++    pub async fn mark_sent(&self, notice: &Notice) -> Result<()> {
++        sqlx::query(
++            "INSERT OR IGNORE INTO session_watch_notices(dedupe_key, target, kind, sent_at) VALUES(?, ?, ?, ?)",
++        )
++        .bind(&notice.dedupe_key)
++        .bind(&notice.target)
++        .bind(&notice.kind)
++        .bind(Utc::now())
++        .execute(&self.pool)
++        .await?;
++        Ok(())
++    }
++
++    pub async fn serve(
++        mut self,
++        dispatcher: Arc<dyn OutboundDispatcher>,
++        owner_dm: SessionKey,
++        shutdown: CancellationToken,
++    ) -> Result<()> {
++        self.slack_hints = owner_dm.platform == crate::slack::PLATFORM;
++        tracing::info!(
++            interval_secs = self.interval.as_secs(),
++            "session watcher started"
++        );
++        let mut ticker = tokio::time::interval(self.interval);
++        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
++        loop {
++            tokio::select! {
++                _ = shutdown.cancelled() => return Ok(()),
++                _ = ticker.tick() => {}
++            }
++            let notices = match self.tick().await {
++                Ok(notices) => notices,
++                Err(error) => {
++                    tracing::warn!(%error, "session watcher tick failed; will retry");
++                    continue;
++                }
++            };
++            for notice in notices {
++                let action = OutboundAction::SendMessage {
++                    session: owner_dm.clone(),
++                    content: notice.text.clone(),
++                    reply_to: None,
++                };
++                match dispatcher.dispatch(action).await {
++                    Ok(()) => {
++                        if let Err(error) = self.mark_sent(&notice).await {
++                            tracing::warn!(%error, key = %notice.dedupe_key, "session notice sent but not recorded");
++                        }
++                    }
++                    Err(error) => {
++                        tracing::warn!(%error, key = %notice.dedupe_key, "session notice delivery failed; will retry next tick");
++                    }
++                }
++            }
++        }
++    }
++}
++
++pub fn interval_from_env() -> Duration {
++    std::env::var("OMON_SESSION_WATCH_INTERVAL_SECS")
++        .ok()
++        .and_then(|value| value.trim().parse::<u64>().ok())
++        .filter(|secs| *secs >= 10)
++        .map_or(DEFAULT_INTERVAL, Duration::from_secs)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::super::probe::{PendingQuestion, QuestionItem};
++    use super::super::registry::CommandOutput;
++    use super::*;
++    use async_trait::async_trait;
++    use parking_lot::Mutex;
++    use serde_json::json;
++
++    struct Scripted {
++        snapshot: Mutex<serde_json::Value>,
++        remote_down: bool,
++    }
++
++    #[async_trait]
++    impl CommandRunner for Scripted {
++        async fn run(
++            &self,
++            _machine: &str,
++            argv: &[String],
++        ) -> std::result::Result<CommandOutput, String> {
++            let remote = argv.first().is_some_and(|word| word == "ssh");
++            if argv.iter().any(|word| word.contains("list"))
++                && argv.iter().any(|word| word.contains("thread"))
++            {
++                return Ok(CommandOutput {
++                    code: 0,
++                    stdout: b"[]".to_vec(),
++                    stderr: Vec::new(),
++                });
++            }
++            if remote && self.remote_down {
++                return Err("ssh: connect timed out".into());
++            }
++            let body = if remote {
++                json!({"sessions": [], "errors": []})
++            } else {
++                self.snapshot.lock().clone()
++            };
++            Ok(CommandOutput {
++                code: 0,
++                stdout: body.to_string().into_bytes(),
++                stderr: Vec::new(),
++            })
++        }
++    }
++
++    fn live(streaming: bool, questions: bool, messages: u64) -> serde_json::Value {
++        let pending = if questions {
++            json!([{"request_id": "toolu_1", "questions": [{"id": "q1", "header": "QA", "question": "Pick one", "options": ["Alpha", "Beta"]}]}])
++        } else {
++            json!([])
++        };
++        json!({"sessions": [{
++            "session_id": "01a1429e-8585-7e8a-b89b-2ea8458e4312", "routing_id": "rpc-2", "endpoint_kind": "rpc_host",
++            "name": "qa", "cwd": "/tmp/qa", "streaming": streaming, "compacting": false,
++            "blocking_question": false, "pending_messages": 0, "message_count": messages,
++            "last_user": "", "last_assistant": "finished the task", "questions": pending
++        }], "errors": []})
++    }
++
++    async fn pool() -> SqlitePool {
++        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
++        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
++        pool
++    }
++
++    fn watcher(pool: &SqlitePool, runner: Arc<Scripted>) -> Watcher<Scripted> {
++        policy_watcher(
++            pool,
++            runner,
++            NotifyPolicy {
++                notify_after: Duration::ZERO,
++                quiet_hours: None,
++            },
++        )
++    }
++
++    fn policy_watcher(
++        pool: &SqlitePool,
++        runner: Arc<Scripted>,
++        policy: NotifyPolicy,
++    ) -> Watcher<Scripted> {
++        Watcher::with_policy(
++            pool.clone(),
++            SessionControl::new(runner, vec!["omarchy".into()]),
++            DEFAULT_INTERVAL,
++            policy,
++        )
++    }
++
++    fn kst(hour: u32, minute: u32) -> DateTime<Utc> {
++        use chrono::TimeZone;
++        Utc.with_ymd_and_hms(2026, 10, 16, hour, minute, 0).unwrap() - KST
++    }
++
++    #[tokio::test]
++    async fn question_is_held_until_unanswered_for_notify_after() {
++        let pool = pool().await;
++        let runner = Arc::new(Scripted {
++            snapshot: Mutex::new(live(false, true, 3)),
++            remote_down: false,
++        });
++        let mut watcher = policy_watcher(&pool, runner.clone(), NotifyPolicy::default());
++        assert!(watcher.tick_at(kst(14, 0)).await.unwrap().is_empty());
++        assert!(watcher.tick_at(kst(14, 29)).await.unwrap().is_empty());
++        let notices = watcher.tick_at(kst(14, 30)).await.unwrap();
++        assert_eq!(notices.len(), 1);
++        assert_eq!(notices[0].kind, "question");
++
++        // Answered before the wait ran out: never sent.
++        let mut answered = policy_watcher(&pool, runner.clone(), NotifyPolicy::default());
++        *runner.snapshot.lock() = live(false, true, 3);
++        answered.tick_at(kst(15, 0)).await.unwrap();
++        *runner.snapshot.lock() = live(false, false, 4);
++        assert!(answered.tick_at(kst(15, 40)).await.unwrap().is_empty());
++    }
++
++    #[tokio::test]
++    async fn quiet_hours_hold_notices_until_morning() {
++        let pool = pool().await;
++        let runner = Arc::new(Scripted {
++            snapshot: Mutex::new(live(false, true, 3)),
++            remote_down: false,
++        });
++        let mut watcher = policy_watcher(&pool, runner, NotifyPolicy::default());
++        assert!(watcher.tick_at(kst(1, 0)).await.unwrap().is_empty());
++        assert!(watcher.tick_at(kst(3, 0)).await.unwrap().is_empty());
++        assert!(watcher.tick_at(kst(7, 59)).await.unwrap().is_empty());
++        assert_eq!(watcher.tick_at(kst(8, 0)).await.unwrap().len(), 1);
++    }
++
++    #[tokio::test]
++    async fn reasking_the_same_question_does_not_notify_again() {
++        let pool = pool().await;
++        let runner = Arc::new(Scripted {
++            snapshot: Mutex::new(live(false, true, 3)),
++            remote_down: false,
++        });
++        let mut watcher = watcher(&pool, runner.clone());
++        let notices = watcher.tick().await.unwrap();
++        assert_eq!(notices.len(), 1);
++        watcher.mark_sent(&notices[0]).await.unwrap();
++        let mut reasked = live(false, true, 9);
++        reasked["sessions"][0]["questions"][0]["request_id"] = json!("toolu_2");
++        *runner.snapshot.lock() = reasked;
++        assert!(watcher.tick().await.unwrap().is_empty());
++    }
++
++    #[test]
++    fn quiet_hours_parse_and_wrap_midnight() {
++        assert_eq!(parse_quiet_hours("0-8"), Some((0, 8)));
++        assert_eq!(parse_quiet_hours("23-7"), Some((23, 7)));
++        assert_eq!(parse_quiet_hours("off"), None);
++        let policy = NotifyPolicy {
++            notify_after: Duration::ZERO,
++            quiet_hours: Some((23, 7)),
++        };
++        assert!(policy.is_quiet(kst(23, 30)));
++        assert!(policy.is_quiet(kst(6, 59)));
++        assert!(!policy.is_quiet(kst(7, 0)));
++    }
++
++    #[tokio::test]
++    async fn question_notifies_once_and_survives_restart() {
++        let pool = pool().await;
++        let runner = Arc::new(Scripted {
++            snapshot: Mutex::new(live(false, true, 3)),
++            remote_down: false,
++        });
++        let mut first = watcher(&pool, runner.clone());
++        let notices = first.tick().await.unwrap();
++        assert_eq!(notices.len(), 1);
++        assert_eq!(notices[0].kind, "question");
++        assert!(notices[0].text.contains("Alpha / Beta"));
++        first.mark_sent(&notices[0]).await.unwrap();
++        assert!(first.tick().await.unwrap().is_empty());
++        let mut restarted = watcher(&pool, runner);
++        assert!(restarted.tick().await.unwrap().is_empty());
++    }
++
++    #[tokio::test]
++    async fn completion_only_for_watched_sessions_after_a_baseline() {
++        let pool = pool().await;
++        let runner = Arc::new(Scripted {
++            snapshot: Mutex::new(live(true, false, 5)),
++            remote_down: false,
++        });
++        let mut unwatched = watcher(&pool, runner.clone());
++        assert!(unwatched.tick().await.unwrap().is_empty());
++        *runner.snapshot.lock() = live(false, false, 7);
++        assert!(unwatched.tick().await.unwrap().is_empty());
++
++        watch(&pool, "local:01a1429e-8585-7e8a-b89b-2ea8458e4312")
++            .await
++            .unwrap();
++        *runner.snapshot.lock() = live(false, false, 7);
++        let mut fresh = watcher(&pool, runner.clone());
++        assert!(
++            fresh.tick().await.unwrap().is_empty(),
++            "first tick only records baselines"
++        );
++        *runner.snapshot.lock() = live(true, false, 8);
++        assert!(fresh.tick().await.unwrap().is_empty());
++        *runner.snapshot.lock() = live(false, false, 9);
++        let notices = fresh.tick().await.unwrap();
++        assert_eq!(notices.len(), 1);
++        assert_eq!(notices[0].kind, "completion");
++        assert!(notices[0].text.contains("finished the task"));
++        assert!(unwatch(&pool, "local:01a1429e-8585-7e8a-b89b-2ea8458e4312")
++            .await
++            .unwrap());
++        assert!(watched(&pool).await.unwrap().is_empty());
++    }
++
++    #[tokio::test]
++    async fn unreachable_host_does_not_hide_local_notices() {
++        let pool = pool().await;
++        let runner = Arc::new(Scripted {
++            snapshot: Mutex::new(live(false, true, 3)),
++            remote_down: true,
++        });
++        let notices = watcher(&pool, runner).tick().await.unwrap();
++        assert_eq!(notices.len(), 1);
++        assert_eq!(
++            notices[0].target,
++            "local:01a1429e-8585-7e8a-b89b-2ea8458e4312"
++        );
++    }
++
++    #[test]
++    fn blocked_question_tells_owner_to_use_the_terminal() {
++        let session = LiveSession {
++            machine: "omarchy".into(),
++            session_id: "01a13dca-860b-799b".into(),
++            blocking_question: true,
++            message_count: 4,
++            questions: vec![PendingQuestion {
++                request_id: "r".into(),
++                questions: vec![QuestionItem::default()],
++            }],
++            ..LiveSession::default()
++        };
++        let notices = session_notices(&session, "omarchy:01a13dca-860b-799b", false, None, false);
++        assert_eq!(
++            notices.iter().map(|n| n.kind.as_str()).collect::<Vec<_>>(),
++            ["question"],
++            "one message per question, not a second blocked ping"
++        );
++        assert!(notices[0].text.contains("터미널"));
++        assert!(!notices[0].text.contains("/sessions answer"));
++    }
++
++    #[test]
++    fn question_hint_uses_slack_command_syntax_for_slack_owner_dm() {
++        let session = LiveSession {
++            machine: "local".into(),
++            session_id: "01a13dca-860b-799b".into(),
++            questions: vec![PendingQuestion {
++                request_id: "r".into(),
++                questions: vec![QuestionItem::default()],
++            }],
++            ..LiveSession::default()
++        };
++        let target = "local:01a13dca-860b-799b";
++        let slack = session_notices(&session, target, false, None, true);
++        assert!(
++            slack[0].text.contains("/omo-sessions answer local:"),
++            "{}",
++            slack[0].text
++        );
++        assert!(!slack[0].text.contains("target:"));
++        let discord = session_notices(&session, target, false, None, false);
++        assert!(
++            discord[0].text.contains("/sessions answer target:local:"),
++            "{}",
++            discord[0].text
++        );
++        assert_eq!(slack[0].dedupe_key, discord[0].dedupe_key);
++    }
++}

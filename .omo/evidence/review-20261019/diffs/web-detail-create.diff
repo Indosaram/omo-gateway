@@ -1,0 +1,4598 @@
+diff --git a/web/src/tracker/create/CreateIssueModal.tsx b/web/src/tracker/create/CreateIssueModal.tsx
+new file mode 100644
+index 0000000..9d15f7c
+--- /dev/null
++++ b/web/src/tracker/create/CreateIssueModal.tsx
+@@ -0,0 +1,475 @@
++import { useEffect, useMemo, useRef, useState } from 'react'
++import type { MouseEvent, ReactNode } from 'react'
++import { Calendar, ChevronRight, Maximize2, Minimize2, X } from 'lucide-react'
++import { cycleLabel, shortDate, toDateOnly } from '../format'
++import { useHotkey, useHotkeyScope } from '../hotkeys'
++import { navigate } from '../router'
++import { teamDefaultState, useTracker } from '../store'
++import type { CreateDraft } from '../store'
++import type { ID, IssueCreate, Priority } from '../types'
++import { PRIORITY_LABELS } from '../types'
++import { Avatar, Button, IconButton, LabelDot, MenuList, Popover, toast } from '../ui'
++import type { MenuItem } from '../ui'
++import { menuId, notifyError, useAutosize, useIsMobile } from '../detail/shared'
++import {
++  assigneeItems,
++  cycleItems,
++  dueItems,
++  estimateItems,
++  iconFor,
++  labelItems,
++  NONE,
++  parseNullable,
++  priorityItems,
++  projectItems,
++  statusItems,
++} from './options'
++import './create.css'
++
++type ChipKind = 'team' | 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'cycle' | 'estimate' | 'due'
++
++interface Form {
++  team_id: ID
++  title: string
++  description: string
++  state_id: ID | null
++  priority: Priority
++  assignee_id: ID | null
++  label_ids: ID[]
++  project_id: ID | null
++  milestone_id: ID | null
++  cycle_id: ID | null
++  estimate: number | null
++  due_date: string | null
++  parent_id: ID | null
++}
++
++const CREATE_MORE_KEY = 'tracker.createMore'
++
++function readCreateMore(): boolean {
++  try {
++    return localStorage.getItem(CREATE_MORE_KEY) === '1'
++  } catch {
++    return false
++  }
++}
++
++export function CreateIssueModal() {
++  const t = useTracker()
++  const draft = t.createDraft
++  if (!draft || !t.ready) return null
++  return <CreateIssueDialog draft={draft} />
++}
++
++function initialForm(draft: CreateDraft, t: ReturnType<typeof useTracker>, fallbackTeam: ID): Form {
++  const team_id = draft.team_id && t.teamsById.has(draft.team_id) ? draft.team_id : fallbackTeam
++  const state = draft.state_id && t.statesById.get(draft.state_id)?.team_id === team_id ? draft.state_id : null
++  return {
++    team_id,
++    title: draft.title ?? '',
++    description: draft.description ?? '',
++    state_id: state ?? teamDefaultState(team_id, t.teamStates)?.id ?? null,
++    priority: draft.priority ?? 0,
++    assignee_id: draft.assignee_id ?? null,
++    label_ids: draft.label_ids ?? [],
++    project_id: draft.project_id ?? null,
++    milestone_id: draft.milestone_id ?? null,
++    cycle_id: draft.cycle_id ?? null,
++    estimate: draft.estimate ?? null,
++    due_date: draft.due_date ?? null,
++    parent_id: draft.parent_id ?? null,
++  }
++}
++
++function CreateIssueDialog({ draft }: { draft: CreateDraft }) {
++  const t = useTracker()
++  const mobile = useIsMobile()
++  const selectableTeams = useMemo(() => {
++    const normal = t.teams.filter((team) => !team.system)
++    return normal.length > 0 ? normal : t.teams
++  }, [t.teams])
++  const fallbackTeam = selectableTeams[0]?.id ?? ''
++  const [form, setForm] = useState<Form>(() => initialForm(draft, t, fallbackTeam))
++  const [createMore, setCreateMore] = useState(readCreateMore)
++  const [expanded, setExpanded] = useState(false)
++  const [busy, setBusy] = useState(false)
++  const [menu, setMenu] = useState<{ kind: ChipKind; anchor: HTMLElement } | null>(null)
++  const titleRef = useRef<HTMLTextAreaElement>(null)
++  const descRef = useRef<HTMLTextAreaElement>(null)
++  useAutosize(titleRef, form.title)
++  useAutosize(descRef, form.description, expanded ? 240 : 72)
++  useHotkeyScope('create-issue', true)
++
++  useEffect(() => {
++    titleRef.current?.focus()
++  }, [])
++
++  const team = t.teamsById.get(form.team_id)
++  const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }))
++  const close = () => t.closeCreate()
++
++  const changeTeam = (teamId: ID) => {
++    if (teamId === form.team_id) return
++    const teamLabelIds = new Set(t.labels.filter((l) => l.team_id === null || l.team_id === teamId).map((l) => l.id))
++    set({
++      team_id: teamId,
++      state_id: teamDefaultState(teamId, t.teamStates)?.id ?? null,
++      cycle_id: null,
++      label_ids: form.label_ids.filter((id) => teamLabelIds.has(id)),
++    })
++  }
++
++  const submit = async () => {
++    const title = form.title.trim()
++    if (!title || busy || !form.team_id) {
++      titleRef.current?.focus()
++      return
++    }
++    setBusy(true)
++    const input: IssueCreate = {
++      team_id: form.team_id,
++      title,
++      description: form.description.trim() || undefined,
++      state_id: form.state_id ?? undefined,
++      priority: form.priority,
++      assignee_id: form.assignee_id,
++      label_ids: form.label_ids,
++      project_id: form.project_id,
++      milestone_id: form.milestone_id,
++      cycle_id: form.cycle_id,
++      estimate: form.estimate,
++      due_date: form.due_date,
++      parent_id: form.parent_id,
++    }
++    try {
++      const issue = await t.createIssue(input)
++      toast(`${issue.identifier} created`, {
++        action: {
++          label: 'View issue',
++          onClick: () => navigate({ name: 'issue', identifier: issue.identifier }),
++        },
++      })
++      if (createMore) {
++        setForm((f) => ({ ...f, title: '', description: '' }))
++        requestAnimationFrame(() => titleRef.current?.focus())
++      } else {
++        close()
++      }
++    } catch (err) {
++      notifyError(err)
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  useHotkey('mod+enter', () => void submit(), { allowInInputs: true, scope: 'create-issue' })
++  useHotkey(
++    'escape',
++    () => {
++      if (menu) setMenu(null)
++      else close()
++    },
++    { allowInInputs: true, scope: 'create-issue' },
++  )
++
++  const toggleCreateMore = () => {
++    const next = !createMore
++    setCreateMore(next)
++    try {
++      localStorage.setItem(CREATE_MORE_KEY, next ? '1' : '0')
++    } catch (storageErr) {
++      console.warn('tracker: could not persist create-more preference', storageErr)
++    }
++  }
++
++  const open = (kind: ChipKind) => (e: MouseEvent<HTMLElement>) => setMenu({ kind, anchor: e.currentTarget })
++
++  const state = form.state_id ? t.statesById.get(form.state_id) : undefined
++  const assignee = form.assignee_id ? t.usersById.get(form.assignee_id) : undefined
++  const project = form.project_id ? t.projectsById.get(form.project_id) : undefined
++  const cycle = form.cycle_id ? t.cyclesById.get(form.cycle_id) : undefined
++  const labels = form.label_ids.map((id) => t.labelsById.get(id)).filter((l) => l !== undefined)
++  const parent = form.parent_id ? t.issuesById.get(form.parent_id) : undefined
++  const statuses = statusItems(t, form.team_id)
++  const priorities = priorityItems()
++  const projects = projectItems(t, form.team_id)
++  const cycles = cycleItems(t, form.team_id)
++  const estimates = estimateItems()
++
++  const menuContent = (): ReactNode => {
++    if (!menu) return null
++    const pick = (fn: (id: string) => void) => (item: MenuItem | string) => {
++      fn(menuId(item))
++      setMenu(null)
++    }
++    switch (menu.kind) {
++      case 'team':
++        return (
++          <MenuList
++            searchable
++            placeholder="Switch team…"
++            selectedIds={[form.team_id]}
++            items={selectableTeams.map((tm) => ({
++              id: tm.id,
++              label: tm.name,
++              hint: tm.key,
++              icon: (
++                <span className="ci-team-badge" style={{ background: tm.color }}>
++                  {tm.key.slice(0, 1)}
++                </span>
++              ),
++            }))}
++            onSelect={pick(changeTeam)}
++          />
++        )
++      case 'status':
++        return (
++          <MenuList
++            searchable
++            placeholder="Change status…"
++            items={statuses}
++            selectedIds={form.state_id ? [form.state_id] : []}
++            onSelect={pick((id) => set({ state_id: id }))}
++          />
++        )
++      case 'priority':
++        return (
++          <MenuList
++            searchable
++            placeholder="Set priority…"
++            items={priorities}
++            selectedIds={[String(form.priority)]}
++            onSelect={pick((id) => set({ priority: Number(id) as Priority }))}
++          />
++        )
++      case 'assignee':
++        return (
++          <MenuList
++            searchable
++            placeholder="Assign to…"
++            items={assigneeItems(t)}
++            selectedIds={[form.assignee_id ?? NONE]}
++            onSelect={pick((id) => set({ assignee_id: parseNullable(id) }))}
++          />
++        )
++      case 'labels':
++        return (
++          <MenuList
++            searchable
++            multi
++            placeholder="Add labels…"
++            items={labelItems(t, form.team_id)}
++            selectedIds={form.label_ids}
++            emptyText="No labels"
++            onSelect={(item: MenuItem | string) => {
++              const id = menuId(item)
++              setForm((f) => ({
++                ...f,
++                label_ids: f.label_ids.includes(id) ? f.label_ids.filter((l) => l !== id) : [...f.label_ids, id],
++              }))
++            }}
++          />
++        )
++      case 'project':
++        return (
++          <MenuList
++            searchable
++            placeholder="Add to project…"
++            items={projects}
++            selectedIds={[form.project_id ?? NONE]}
++            onSelect={pick((id) => set({ project_id: parseNullable(id), milestone_id: null }))}
++          />
++        )
++      case 'cycle':
++        return (
++          <MenuList
++            searchable
++            placeholder="Add to cycle…"
++            items={cycles}
++            selectedIds={[form.cycle_id ?? NONE]}
++            emptyText="Cycles are not enabled for this team"
++            onSelect={pick((id) => set({ cycle_id: parseNullable(id) }))}
++          />
++        )
++      case 'estimate':
++        return (
++          <MenuList
++            items={estimates}
++            placeholder="Set estimate…"
++            selectedIds={[form.estimate === null ? NONE : String(form.estimate)]}
++            onSelect={pick((id) => set({ estimate: id === NONE ? null : Number(id) }))}
++          />
++        )
++      case 'due':
++        return (
++          <div>
++            <MenuList
++              items={dueItems(form.due_date)}
++              selectedIds={form.due_date ? [form.due_date] : []}
++              onSelect={pick((id) => set({ due_date: parseNullable(id) }))}
++            />
++            <div className="ci-date-row">
++              <input
++                type="date"
++                className="ci-date"
++                aria-label="Custom due date"
++                value={form.due_date ?? ''}
++                min={toDateOnly(new Date(Date.now() - 365 * 86_400_000))}
++                onChange={(e) => {
++                  set({ due_date: e.target.value || null })
++                  if (e.target.value) setMenu(null)
++                }}
++              />
++            </div>
++          </div>
++        )
++    }
++  }
++
++  const chip = (kind: ChipKind, icon: ReactNode, label: string, muted: boolean, title: string) => (
++    <button
++      type="button"
++      className={`ci-chip ${muted ? 'ci-chip-muted' : ''}`}
++      aria-label={title}
++      title={title}
++      onClick={open(kind)}
++    >
++      {icon}
++      {label && <span className="ci-chip-text">{label}</span>}
++    </button>
++  )
++
++  const labelIcon =
++    labels.length === 0 ? (
++      <LabelDot color="var(--text-4)" />
++    ) : (
++      <span className="ci-dots">
++        {labels.slice(0, 3).map((l) => (
++          <LabelDot key={l.id} color={l.color} />
++        ))}
++      </span>
++    )
++
++  return (
++    <div className="ci-overlay anim-fade" onMouseDown={(e) => e.target === e.currentTarget && close()}>
++      <div
++        className={`ci-dialog anim-pop ${expanded ? 'ci-expanded' : ''} ${mobile ? 'ci-mobile' : ''}`}
++        role="dialog"
++        aria-modal="true"
++        aria-label="New issue"
++      >
++        <div className="ci-head">
++          <button type="button" className="ci-team" onClick={open('team')} aria-label="Team">
++            {team && (
++              <span className="ci-team-badge" style={{ background: team.color }}>
++                {team.key.slice(0, 1)}
++              </span>
++            )}
++            <span>{team?.key ?? 'Team'}</span>
++          </button>
++          <ChevronRight size={14} className="ci-sep" />
++          <span className="ci-crumb">{parent ? `Sub-issue of ${parent.identifier}` : 'New issue'}</span>
++          <span style={{ flex: 1 }} />
++          {!mobile && (
++            <IconButton
++              label={expanded ? 'Collapse' : 'Expand'}
++              icon={expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
++              size="sm"
++              onClick={() => setExpanded((v) => !v)}
++            />
++          )}
++          <IconButton label="Close" icon={<X size={16} />} size="sm" onClick={close} />
++        </div>
++
++        <div className="ci-body">
++          <textarea
++            ref={titleRef}
++            className="ci-title"
++            rows={1}
++            placeholder="Issue title"
++            aria-label="Issue title"
++            value={form.title}
++            onChange={(e) => set({ title: e.target.value.replace(/\n/g, ' ') })}
++            onKeyDown={(e) => {
++              if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
++                e.preventDefault()
++                descRef.current?.focus()
++              }
++            }}
++          />
++          <textarea
++            ref={descRef}
++            className="ci-desc"
++            placeholder="Add description…"
++            aria-label="Description"
++            value={form.description}
++            onChange={(e) => set({ description: e.target.value })}
++          />
++        </div>
++
++        <div className="ci-chips">
++          {chip(
++            'status',
++            iconFor(statuses, form.state_id),
++            state?.name ?? 'Status',
++            !state,
++            'Change status',
++          )}
++          {chip(
++            'priority',
++            iconFor(priorities, String(form.priority)),
++            form.priority === 0 ? 'Priority' : PRIORITY_LABELS[form.priority],
++            form.priority === 0,
++            'Set priority',
++          )}
++          {chip('assignee', <Avatar user={assignee ?? null} size={16} />, assignee?.name ?? 'Assignee', !assignee, 'Assign')}
++          {chip(
++            'labels',
++            labelIcon,
++            labels.length === 0 ? 'Labels' : labels.length === 1 ? labels[0].name : `${labels.length} labels`,
++            labels.length === 0,
++            'Add labels',
++          )}
++          {chip('project', iconFor(projects, form.project_id), project?.name ?? 'Project', !project, 'Add to project')}
++          {(team?.cycles_enabled || cycle) &&
++            chip('cycle', iconFor(cycles, form.cycle_id), cycle ? cycleLabel(cycle) : 'Cycle', !cycle, 'Add to cycle')}
++          {chip(
++            'estimate',
++            iconFor(estimates, form.estimate === null ? NONE : String(form.estimate)),
++            form.estimate === null ? '' : `${form.estimate}`,
++            form.estimate === null,
++            'Set estimate',
++          )}
++          {chip(
++            'due',
++            <Calendar size={14} />,
++            form.due_date ? shortDate(form.due_date) : '',
++            !form.due_date,
++            'Set due date',
++          )}
++        </div>
++
++        <div className="ci-foot">
++          <span style={{ flex: 1 }} />
++          <button type="button" className="ci-toggle" role="switch" aria-checked={createMore} onClick={toggleCreateMore}>
++            <span className="ci-switch" data-on={createMore} />
++            Create more
++          </button>
++          <Button variant="primary" size="md" disabled={!form.title.trim() || busy} onClick={() => void submit()}>
++            {busy ? 'Creating…' : 'Create issue'}
++          </Button>
++        </div>
++
++        <Popover
++          open={menu !== null}
++          onOpenChange={(o) => !o && setMenu(null)}
++          anchor={menu?.anchor ?? null}
++          align="start"
++          width={menu?.kind === 'team' ? 220 : 240}
++        >
++          {menuContent()}
++        </Popover>
++      </div>
++    </div>
++  )
++}
+diff --git a/web/src/tracker/create/create.css b/web/src/tracker/create/create.css
+new file mode 100644
+index 0000000..56654ca
+--- /dev/null
++++ b/web/src/tracker/create/create.css
+@@ -0,0 +1,243 @@
++.lin .ci-overlay {
++  position: fixed;
++  inset: 0;
++  z-index: 70;
++  background: var(--overlay);
++  display: flex;
++  justify-content: center;
++  align-items: flex-start;
++  padding: 12vh 16px 16px;
++}
++
++.lin .ci-dialog {
++  width: min(720px, 100%);
++  max-height: 76vh;
++  display: flex;
++  flex-direction: column;
++  background: var(--popover);
++  border-radius: var(--radius-dialog);
++  box-shadow: var(--shadow-dialog);
++  overflow: hidden;
++}
++
++.lin .ci-dialog.ci-expanded {
++  width: min(1040px, 100%);
++  max-height: 86vh;
++  min-height: 60vh;
++}
++
++.lin .ci-head {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  padding: 14px 14px 4px 18px;
++}
++
++.lin .ci-team {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 26px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  border: 1px solid var(--border-strong);
++  background: var(--bg-subtle);
++  font-size: 12.5px;
++  font-weight: 510;
++  color: var(--text-1);
++}
++
++.lin .ci-team:hover {
++  background: var(--bg-active);
++}
++
++.lin .ci-team-badge {
++  width: 16px;
++  height: 16px;
++  border-radius: 4px;
++  display: inline-grid;
++  place-items: center;
++  font-size: 9px;
++  font-weight: 590;
++  color: #fff;
++  flex: none;
++}
++
++.lin .ci-sep {
++  color: var(--text-4);
++}
++
++.lin .ci-crumb {
++  color: var(--text-3);
++  font-size: 12.5px;
++}
++
++.lin .ci-body {
++  flex: 1;
++  min-height: 0;
++  overflow-y: auto;
++  padding: 8px 20px 4px;
++}
++
++.lin .ci-title,
++.lin .ci-desc {
++  width: 100%;
++  display: block;
++  border: 0;
++  background: transparent;
++  resize: none;
++  overflow: hidden;
++}
++
++.lin .ci-title {
++  font-size: 18px;
++  line-height: 1.35;
++  font-weight: 590;
++  letter-spacing: -0.2px;
++  color: var(--text-1);
++  padding: 4px 0;
++}
++
++.lin .ci-desc {
++  margin-top: 6px;
++  font-size: 14.5px;
++  line-height: 1.6;
++  color: var(--text-2);
++  padding: 2px 0;
++}
++
++.lin .ci-title::placeholder,
++.lin .ci-desc::placeholder {
++  color: var(--text-4);
++}
++
++.lin .ci-chips {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
++  padding: 10px 18px 14px;
++}
++
++.lin .ci-chip {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 28px;
++  min-width: 32px;
++  justify-content: center;
++  padding: 0 9px;
++  border-radius: var(--radius-ctl);
++  border: 1px solid var(--border-strong);
++  background: var(--bg-subtle);
++  color: var(--text-1);
++  font-size: 12.5px;
++  font-weight: 510;
++  max-width: 220px;
++}
++
++.lin .ci-chip:hover {
++  background: var(--bg-active);
++}
++
++.lin .ci-chip-muted {
++  color: var(--text-3);
++}
++
++.lin .ci-chip-text {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.lin .ci-dots {
++  display: inline-flex;
++  gap: 2px;
++}
++
++.lin .ci-foot {
++  display: flex;
++  align-items: center;
++  gap: 16px;
++  padding: 12px 16px;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ci-toggle {
++  display: inline-flex;
++  align-items: center;
++  gap: 8px;
++  color: var(--text-3);
++  font-size: 13px;
++}
++
++.lin .ci-toggle:hover {
++  color: var(--text-2);
++}
++
++.lin .ci-switch {
++  position: relative;
++  width: 28px;
++  height: 16px;
++  border-radius: 8px;
++  background: var(--border-strong);
++  transition: background-color 140ms var(--ease);
++}
++
++.lin .ci-switch::after {
++  content: '';
++  position: absolute;
++  top: 2px;
++  left: 2px;
++  width: 12px;
++  height: 12px;
++  border-radius: 50%;
++  background: #fff;
++  transition: transform 140ms var(--ease);
++}
++
++.lin .ci-switch[data-on='true'] {
++  background: var(--accent);
++}
++
++.lin .ci-switch[data-on='true']::after {
++  transform: translateX(12px);
++}
++
++.lin .ci-date-row {
++  padding: 4px;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ci-date {
++  width: 100%;
++  height: 30px;
++  border: 1px solid var(--border-strong);
++  border-radius: var(--radius-ctl);
++  background: var(--input);
++  color: var(--text-1);
++  padding: 0 8px;
++}
++
++@media (max-width: 767px) {
++  .lin .ci-overlay {
++    padding: 0;
++    align-items: stretch;
++  }
++
++  .lin .ci-dialog,
++  .lin .ci-dialog.ci-mobile {
++    width: 100%;
++    max-height: none;
++    height: 100%;
++    border-radius: 0;
++  }
++
++  .lin .ci-body {
++    flex: 1;
++  }
++
++  .lin .ci-chips {
++    border-top: 1px solid var(--border);
++    padding-top: 10px;
++  }
++}
+diff --git a/web/src/tracker/create/index.ts b/web/src/tracker/create/index.ts
+new file mode 100644
+index 0000000..5c64acf
+--- /dev/null
++++ b/web/src/tracker/create/index.ts
+@@ -0,0 +1 @@
++export { CreateIssueModal } from './CreateIssueModal'
+diff --git a/web/src/tracker/create/options.tsx b/web/src/tracker/create/options.tsx
+new file mode 100644
+index 0000000..435cce2
+--- /dev/null
++++ b/web/src/tracker/create/options.tsx
+@@ -0,0 +1,124 @@
++import type { ReactNode } from 'react'
++import { cycleLabel, cycleStatus, dueShortcuts, shortDate, stateProgress } from '../format'
++import type { TrackerState } from '../store'
++import type { ID, Priority } from '../types'
++import { ESTIMATE_POINTS, PRIORITY_LABELS } from '../types'
++import { Avatar, CycleIcon, EstimateIcon, LabelDot, PriorityIcon, ProjectIcon, StatusIcon } from '../ui'
++import type { MenuItem } from '../ui'
++
++export const NONE = '__none__'
++
++export function statusItems(t: TrackerState, teamId: ID): MenuItem[] {
++  const states = t.teamStates(teamId)
++  return states.map((s) => ({
++    id: s.id,
++    label: s.name,
++    icon: <StatusIcon type={s.type} color={s.color} progress={stateProgress(s, states)} size={14} />,
++  }))
++}
++
++export const PRIORITY_ORDER: Priority[] = [0, 1, 2, 3, 4]
++
++export function priorityItems(): MenuItem[] {
++  return PRIORITY_ORDER.map((p) => ({
++    id: String(p),
++    label: PRIORITY_LABELS[p],
++    icon: <PriorityIcon priority={p} size={14} />,
++  }))
++}
++
++export function assigneeItems(t: TrackerState): MenuItem[] {
++  const humans = t.users.filter((u) => u.kind === 'human')
++  const agents = t.users.filter((u) => u.kind === 'agent')
++  const meFirst = [...humans].sort((a, b) => Number(b.is_me) - Number(a.is_me) || a.name.localeCompare(b.name))
++  return [
++    { id: NONE, label: 'No assignee', icon: <Avatar user={null} size={16} /> },
++    ...meFirst.map((u) => ({
++      id: u.id,
++      label: u.is_me ? `${u.name} (you)` : u.name,
++      icon: <Avatar user={u} size={16} />,
++      group: 'Members',
++    })),
++    ...agents.map((u) => ({
++      id: u.id,
++      label: u.name,
++      hint: u.model ?? undefined,
++      icon: <Avatar user={u} size={16} />,
++      group: 'Agents',
++    })),
++  ]
++}
++
++export function teamLabels(t: TrackerState, teamId: ID) {
++  return t.labels.filter((l) => l.team_id === null || l.team_id === teamId)
++}
++
++export function labelItems(t: TrackerState, teamId: ID): MenuItem[] {
++  return teamLabels(t, teamId).map((l) => ({
++    id: l.id,
++    label: l.name,
++    icon: <LabelDot color={l.color} />,
++    color: l.color,
++  }))
++}
++
++export function projectItems(t: TrackerState, teamId: ID): MenuItem[] {
++  const projects = t.projects.filter(
++    (p) => !p.archived_at && (p.team_ids.length === 0 || p.team_ids.includes(teamId)),
++  )
++  return [
++    { id: NONE, label: 'No project', icon: <ProjectIcon icon="box" color="var(--text-4)" /> },
++    ...projects.map((p) => ({ id: p.id, label: p.name, icon: <ProjectIcon icon={p.icon} color={p.color} /> })),
++  ]
++}
++
++export function milestoneItems(t: TrackerState, projectId: ID | null): MenuItem[] {
++  const list = projectId ? t.milestones.filter((m) => m.project_id === projectId) : []
++  return [
++    { id: NONE, label: 'No milestone' },
++    ...list
++      .slice()
++      .sort((a, b) => a.sort_order - b.sort_order)
++      .map((m) => ({ id: m.id, label: m.name, hint: m.target_date ? shortDate(m.target_date) : undefined })),
++  ]
++}
++
++export function cycleItems(t: TrackerState, teamId: ID): MenuItem[] {
++  const cycles = t.cycles
++    .filter((c) => c.team_id === teamId && cycleStatus(c) !== 'past')
++    .sort((a, b) => a.number - b.number)
++  return [
++    { id: NONE, label: 'No cycle', icon: <CycleIcon progress={0} /> },
++    ...cycles.map((c) => ({
++      id: c.id,
++      label: cycleLabel(c),
++      hint: cycleStatus(c) === 'current' ? 'Current' : `${shortDate(c.starts_at)} – ${shortDate(c.ends_at)}`,
++      icon: <CycleIcon progress={cycleStatus(c) === 'current' ? 0.5 : 0} />,
++    })),
++  ]
++}
++
++export function estimateItems(): MenuItem[] {
++  return [
++    { id: NONE, label: 'No estimate', icon: <EstimateIcon /> },
++    ...ESTIMATE_POINTS.map((n) => ({
++      id: String(n),
++      label: `${n} ${n === 1 ? 'point' : 'points'}`,
++      icon: <EstimateIcon />,
++    })),
++  ]
++}
++
++export function dueItems(current: string | null): MenuItem[] {
++  const items: MenuItem[] = dueShortcuts().map((s) => ({ id: s.date, label: s.label, hint: shortDate(s.date) }))
++  if (current) items.push({ id: NONE, label: 'Remove due date' })
++  return items
++}
++
++export function parseNullable(id: string): string | null {
++  return id === NONE ? null : id
++}
++
++export function iconFor(items: MenuItem[], id: string | null): ReactNode {
++  return items.find((i) => i.id === (id ?? NONE))?.icon ?? null
++}
+diff --git a/web/src/tracker/detail/Activity.tsx b/web/src/tracker/detail/Activity.tsx
+new file mode 100644
+index 0000000..7d85999
+--- /dev/null
++++ b/web/src/tracker/detail/Activity.tsx
+@@ -0,0 +1,518 @@
++import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
++import type { MouseEvent, ReactElement } from 'react'
++import {
++  Archive,
++  ArrowLeftRight,
++  Bot,
++  Calendar,
++  CircleCheck,
++  CircleDot,
++  Copy,
++  CornerDownRight,
++  Gauge,
++  GitBranch,
++  Hexagon,
++  Pencil,
++  Plus,
++  RotateCcw,
++  Smile,
++  Tag,
++  Trash2,
++  User as UserIcon,
++} from 'lucide-react'
++import { trackerApi } from '../api'
++import { fullDate, relativeTime } from '../format'
++import { useTracker } from '../store'
++import type { TrackerState } from '../store'
++import type { Activity, Comment, IssueDetail } from '../types'
++import { LANE_STATUS_LABELS, PRIORITY_LABELS } from '../types'
++import type { LaneStatus, Priority } from '../types'
++import { Avatar, Button, IconButton, Kbd, Popover, Tooltip } from '../ui'
++import { copyText, Markdown, notifyError, REACTION_EMOJIS, resolveValue, useAutosize } from './shared'
++
++function actorName(t: TrackerState, id: string | null) {
++  if (!id) return 'System'
++  return t.usersById.get(id)?.name ?? 'Someone'
++}
++
++function describe(a: Activity, t: TrackerState): { icon: ReactElement; text: ReactElement } {
++  const actor = <b>{actorName(t, a.actor_id)}</b>
++  const to = <b>{resolveValue(a.to_value, t)}</b>
++  const from = <b>{resolveValue(a.from_value, t)}</b>
++  switch (a.kind) {
++    case 'created':
++      return { icon: <Plus size={14} />, text: <>{actor} created the issue</> }
++    case 'title':
++      return { icon: <Pencil size={14} />, text: <>{actor} changed the title to {<b>{a.to_value}</b>}</> }
++    case 'description':
++      return { icon: <Pencil size={14} />, text: <>{actor} updated the description</> }
++    case 'state':
++      return { icon: <CircleDot size={14} />, text: <>{actor} changed status from {from} to {to}</> }
++    case 'priority': {
++      const p = (v: string | null) => <b>{PRIORITY_LABELS[(Number(v ?? 0) as Priority) ?? 0] ?? v}</b>
++      return { icon: <Gauge size={14} />, text: <>{actor} set priority to {p(a.to_value)}</> }
++    }
++    case 'assignee':
++      return {
++        icon: <UserIcon size={14} />,
++        text: a.to_value ? <>{actor} assigned the issue to {to}</> : <>{actor} removed assignee {from}</>,
++      }
++    case 'estimate':
++      return {
++        icon: <Gauge size={14} />,
++        text: a.to_value ? <>{actor} set estimate to {<b>{a.to_value} points</b>}</> : <>{actor} removed the estimate</>,
++      }
++    case 'label_added':
++      return { icon: <Tag size={14} />, text: <>{actor} added label {to}</> }
++    case 'label_removed':
++      return { icon: <Tag size={14} />, text: <>{actor} removed label {from}</> }
++    case 'project':
++      return {
++        icon: <Hexagon size={14} />,
++        text: a.to_value ? <>{actor} added the issue to project {to}</> : <>{actor} removed the issue from {from}</>,
++      }
++    case 'cycle':
++      return {
++        icon: <RotateCcw size={14} />,
++        text: a.to_value ? <>{actor} moved the issue to {to}</> : <>{actor} removed the issue from {from}</>,
++      }
++    case 'parent':
++      return {
++        icon: <CornerDownRight size={14} />,
++        text: a.to_value ? <>{actor} set parent to {to}</> : <>{actor} removed parent {from}</>,
++      }
++    case 'due_date':
++      return {
++        icon: <Calendar size={14} />,
++        text: a.to_value ? <>{actor} set due date to {to}</> : <>{actor} removed the due date</>,
++      }
++    case 'archived':
++      return { icon: <Archive size={14} />, text: <>{actor} archived the issue</> }
++    case 'unarchived':
++      return { icon: <Archive size={14} />, text: <>{actor} restored the issue</> }
++    case 'relation_added':
++      return { icon: <ArrowLeftRight size={14} />, text: <>{actor} added relation {to}</> }
++    case 'relation_removed':
++      return { icon: <ArrowLeftRight size={14} />, text: <>{actor} removed relation {from}</> }
++    case 'delegated':
++      return { icon: <Bot size={14} />, text: <>{actor} delegated the issue to an agent{a.to_value ? <> ({<b>{a.to_value}</b>})</> : null}</> }
++    case 'lane_status': {
++      const lane = (v: string | null) => <b>{v ? LANE_STATUS_LABELS[v as LaneStatus] ?? v : 'none'}</b>
++      return { icon: <GitBranch size={14} />, text: <>Agent lane moved from {lane(a.from_value)} to {lane(a.to_value)}</> }
++    }
++    default:
++      return { icon: <CircleDot size={14} />, text: <>{actor} updated {a.kind.replace(/_/g, ' ')}</> }
++  }
++}
++
++function Reactions({ comment, onChanged }: { comment: Comment; onChanged: () => void }) {
++  const t = useTracker()
++  const meId = t.me?.id
++  if (comment.reactions.length === 0) return null
++  return (
++    <div className="ld-reactions">
++      {comment.reactions
++        .filter((r) => r.user_ids.length > 0)
++        .map((r) => {
++          const mine = meId ? r.user_ids.includes(meId) : false
++          const names = r.user_ids.map((id) => t.usersById.get(id)?.name ?? 'Someone').join(', ')
++          return (
++            <Tooltip key={r.emoji} content={names}>
++              <button
++                type="button"
++                className="ld-reaction"
++                aria-pressed={mine}
++                onClick={() => trackerApi.toggleReaction(comment.id, r.emoji).then(onChanged).catch(notifyError)}
++              >
++                <span>{r.emoji}</span>
++                <span>{r.user_ids.length}</span>
++              </button>
++            </Tooltip>
++          )
++        })}
++    </div>
++  )
++}
++
++function EmojiButton({ comment, onChanged }: { comment: Comment; onChanged: () => void }) {
++  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
++  return (
++    <>
++      <IconButton
++        label="Add reaction"
++        icon={<Smile size={14} />}
++        size="sm"
++        onClick={(e: MouseEvent<HTMLElement>) => setAnchor(e.currentTarget)}
++      />
++      <Popover open={anchor !== null} onOpenChange={(o) => !o && setAnchor(null)} anchor={anchor} align="end">
++        <div className="ld-emoji-grid">
++          {REACTION_EMOJIS.map((emoji) => (
++            <button
++              key={emoji}
++              type="button"
++              aria-label={`React with ${emoji}`}
++              onClick={() => {
++                setAnchor(null)
++                trackerApi.toggleReaction(comment.id, emoji).then(onChanged).catch(notifyError)
++              }}
++            >
++              {emoji}
++            </button>
++          ))}
++        </div>
++      </Popover>
++    </>
++  )
++}
++
++function CommentItem({
++  comment,
++  isReply,
++  onReply,
++  onChanged,
++}: {
++  comment: Comment
++  isReply: boolean
++  onReply?: () => void
++  onChanged: () => void
++}) {
++  const t = useTracker()
++  const author = t.usersById.get(comment.user_id)
++  const mine = comment.user_id === t.me?.id
++  const [editing, setEditing] = useState(false)
++  const [draft, setDraft] = useState(comment.body)
++  const el = useRef<HTMLTextAreaElement>(null)
++  useAutosize(el, draft, 40)
++
++  const saveEdit = async () => {
++    const body = draft.trim()
++    if (!body || body === comment.body) {
++      setEditing(false)
++      return
++    }
++    try {
++      await trackerApi.updateComment(comment.id, { body })
++      setEditing(false)
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const remove = async () => {
++    if (!window.confirm('Delete this comment?')) return
++    try {
++      await trackerApi.deleteComment(comment.id)
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  return (
++    <div className={`ld-comment-item ${isReply ? 'ld-comment-reply' : ''}`} id={`comment-${comment.id}`}>
++      <div className="ld-comment-head">
++        <Avatar user={author ?? null} size={20} />
++        <span className="ld-comment-author">{author?.name ?? 'Unknown'}</span>
++        <Tooltip content={fullDate(comment.created_at)}>
++          <span className="ld-comment-time">
++            {relativeTime(comment.created_at)}
++            {comment.edited ? ' (edited)' : ''}
++          </span>
++        </Tooltip>
++        <span className="ld-comment-tools">
++          <EmojiButton comment={comment} onChanged={onChanged} />
++          {onReply && (
++            <IconButton label="Reply" icon={<CornerDownRight size={14} />} size="sm" onClick={onReply} />
++          )}
++          {!isReply && (
++            <IconButton
++              label={comment.resolved_at ? 'Unresolve thread' : 'Resolve thread'}
++              icon={<CircleCheck size={14} />}
++              size="sm"
++              active={comment.resolved_at !== null}
++              onClick={() =>
++                trackerApi
++                  .updateComment(comment.id, { resolved: comment.resolved_at === null })
++                  .then(onChanged)
++                  .catch(notifyError)
++              }
++            />
++          )}
++          <IconButton
++            label="Copy link to comment"
++            icon={<Copy size={14} />}
++            size="sm"
++            onClick={() => void copyText(`${window.location.href.split('#comment-')[0]}#comment-${comment.id}`, 'Comment link copied')}
++          />
++          {mine && (
++            <>
++              <IconButton
++                label="Edit"
++                icon={<Pencil size={14} />}
++                size="sm"
++                onClick={() => {
++                  setDraft(comment.body)
++                  setEditing(true)
++                  requestAnimationFrame(() => el.current?.focus())
++                }}
++              />
++              <IconButton label="Delete" icon={<Trash2 size={14} />} size="sm" onClick={() => void remove()} />
++            </>
++          )}
++        </span>
++      </div>
++      {editing ? (
++        <div className="ld-comment-body">
++          <div className="ld-composer" style={{ marginTop: 6 }}>
++            <textarea
++              ref={el}
++              value={draft}
++              aria-label="Edit comment"
++              onChange={(e) => setDraft(e.target.value)}
++              onKeyDown={(e) => {
++                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++                  e.preventDefault()
++                  void saveEdit()
++                } else if (e.key === 'Escape') {
++                  e.preventDefault()
++                  e.stopPropagation()
++                  setEditing(false)
++                }
++              }}
++            />
++            <div className="ld-composer-foot">
++              <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
++                Cancel
++              </Button>
++              <Button variant="primary" size="sm" onClick={() => void saveEdit()} disabled={!draft.trim()}>
++                Save
++              </Button>
++            </div>
++          </div>
++        </div>
++      ) : (
++        <div className="ld-comment-body">
++          <Markdown source={comment.body} />
++        </div>
++      )}
++      <Reactions comment={comment} onChanged={onChanged} />
++    </div>
++  )
++}
++
++export interface ComposerHandle {
++  focus: () => void
++}
++
++export const Composer = forwardRef<
++  ComposerHandle,
++  { issueId: string; parentId?: string | null; inline?: boolean; onPosted: () => void; onCancel?: () => void; autoFocus?: boolean }
++>(function Composer({ issueId, parentId = null, inline = false, onPosted, onCancel, autoFocus }, ref) {
++  const [body, setBody] = useState('')
++  const [busy, setBusy] = useState(false)
++  const el = useRef<HTMLTextAreaElement>(null)
++  useAutosize(el, body, inline ? 36 : 52)
++  useImperativeHandle(ref, () => ({
++    focus: () => {
++      el.current?.focus()
++      el.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
++    },
++  }))
++
++  const submit = async () => {
++    const value = body.trim()
++    if (!value || busy) return
++    setBusy(true)
++    try {
++      await trackerApi.addComment(issueId, value, parentId)
++      setBody('')
++      onPosted()
++    } catch (err) {
++      notifyError(err)
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  return (
++    <div className={`ld-composer ${inline ? 'ld-composer-inline' : ''}`}>
++      <textarea
++        ref={el}
++        value={body}
++        autoFocus={autoFocus}
++        placeholder={parentId ? 'Leave a reply…' : 'Leave a comment…'}
++        aria-label={parentId ? 'Reply' : 'Comment'}
++        onChange={(e) => setBody(e.target.value)}
++        onKeyDown={(e) => {
++          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++            e.preventDefault()
++            void submit()
++          } else if (e.key === 'Escape') {
++            e.preventDefault()
++            e.stopPropagation()
++            if (onCancel) onCancel()
++            else el.current?.blur()
++          }
++        }}
++      />
++      {(body.trim() || !inline) && (
++        <div className="ld-composer-foot">
++          <span className="ld-composer-hint">Markdown supported</span>
++          {onCancel && (
++            <Button variant="ghost" size="sm" onClick={onCancel}>
++              Cancel
++            </Button>
++          )}
++          <Button variant="primary" size="sm" disabled={!body.trim() || busy} onClick={() => void submit()}>
++            {parentId ? 'Reply' : 'Comment'}
++          </Button>
++        </div>
++      )}
++    </div>
++  )
++})
++
++function Thread({ root, replies, onChanged }: { root: Comment; replies: Comment[]; onChanged: () => void }) {
++  const t = useTracker()
++  const [replying, setReplying] = useState(false)
++  const [expanded, setExpanded] = useState(false)
++  const resolved = root.resolved_at !== null
++  if (resolved && !expanded) {
++    const author = t.usersById.get(root.user_id)
++    return (
++      <div className="ld-comment">
++        <button type="button" className="ld-resolved" style={{ width: '100%' }} onClick={() => setExpanded(true)}>
++          <CircleCheck size={14} color="var(--ok)" />
++          <span>
++            Resolved thread by {author?.name ?? 'Unknown'} · {replies.length + 1}{' '}
++            {replies.length === 0 ? 'comment' : 'comments'}
++          </span>
++          <span className="ld-spacer" style={{ flex: 1 }} />
++          <span>Show</span>
++        </button>
++      </div>
++    )
++  }
++  return (
++    <div className="ld-comment">
++      <CommentItem comment={root} isReply={false} onReply={() => setReplying(true)} onChanged={onChanged} />
++      {replies.map((r) => (
++        <CommentItem key={r.id} comment={r} isReply onChanged={onChanged} />
++      ))}
++      {replying ? (
++        <Composer
++          issueId={root.issue_id}
++          parentId={root.id}
++          inline
++          autoFocus
++          onPosted={() => {
++            setReplying(false)
++            onChanged()
++          }}
++          onCancel={() => setReplying(false)}
++        />
++      ) : (
++        replies.length > 0 && (
++          <button type="button" className="ld-resolved" onClick={() => setReplying(true)}>
++            <CornerDownRight size={14} />
++            Reply…
++          </button>
++        )
++      )}
++      {resolved && (
++        <button type="button" className="ld-resolved" onClick={() => setExpanded(false)}>
++          Collapse resolved thread
++        </button>
++      )}
++    </div>
++  )
++}
++
++type Entry = { at: string; kind: 'activity'; activity: Activity } | { at: string; kind: 'thread'; root: Comment; replies: Comment[] }
++
++export const ActivityFeed = forwardRef<
++  ComposerHandle,
++  {
++    detail: IssueDetail
++    subscribed: boolean
++    onToggleSubscribe: () => void
++    onChanged: () => void
++    compact?: boolean
++  }
++>(function ActivityFeed({ detail, subscribed, onToggleSubscribe, onChanged, compact = false }, ref) {
++  const t = useTracker()
++  const composer = useRef<ComposerHandle>(null)
++  const [showAll, setShowAll] = useState(false)
++  useImperativeHandle(ref, () => ({ focus: () => composer.current?.focus() }))
++
++  const entries = useMemo<Entry[]>(() => {
++    const byParent = new Map<string, Comment[]>()
++    for (const c of detail.comments) {
++      if (c.parent_id) {
++        const list = byParent.get(c.parent_id) ?? []
++        list.push(c)
++        byParent.set(c.parent_id, list)
++      }
++    }
++    const threads: Entry[] = detail.comments
++      .filter((c) => !c.parent_id)
++      .map((root) => ({
++        at: root.created_at,
++        kind: 'thread' as const,
++        root,
++        replies: (byParent.get(root.id) ?? []).sort((a, b) => a.created_at.localeCompare(b.created_at)),
++      }))
++    const events: Entry[] = detail.activity
++      .filter((a) => a.kind !== 'description')
++      .map((a) => ({ at: a.created_at, kind: 'activity' as const, activity: a }))
++    return [...threads, ...events].sort((a, b) => a.at.localeCompare(b.at))
++  }, [detail.comments, detail.activity])
++
++  const LIMIT = compact ? 6 : 30
++  const hidden = showAll ? 0 : Math.max(0, entries.length - LIMIT)
++  const visible = hidden > 0 ? entries.slice(hidden) : entries
++
++  return (
++    <section className="ld-activity" aria-label="Activity">
++      <div className="ld-activity-head">
++        <h3>Activity</h3>
++        <span style={{ flex: 1 }} />
++        <Button variant="ghost" size="sm" onClick={onToggleSubscribe}>
++          {subscribed ? 'Unsubscribe' : 'Subscribe'}
++        </Button>
++      </div>
++      {hidden > 0 && (
++        <button type="button" className="ld-event" onClick={() => setShowAll(true)}>
++          <span className="ld-event-icon">
++            <Plus size={14} />
++          </span>
++          Show {hidden} earlier {hidden === 1 ? 'item' : 'items'}
++        </button>
++      )}
++      {visible.map((entry) => {
++        if (entry.kind === 'thread') {
++          return <Thread key={entry.root.id} root={entry.root} replies={entry.replies} onChanged={onChanged} />
++        }
++        const { icon, text } = describe(entry.activity, t)
++        return (
++          <div key={`a${entry.activity.id}`} className="ld-event">
++            <span className="ld-event-icon">{icon}</span>
++            <span>
++              {text}
++              <Tooltip content={fullDate(entry.activity.created_at)}>
++                <span className="ld-event-time"> · {relativeTime(entry.activity.created_at)}</span>
++              </Tooltip>
++            </span>
++          </div>
++        )
++      })}
++      <Composer ref={composer} issueId={detail.issue.id} onPosted={onChanged} />
++      {!compact && (
++        <div className="ld-composer-hint" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
++          Press <Kbd keys={['M']} /> to comment, <Kbd keys={['⌘', 'Enter']} /> to submit
++        </div>
++      )}
++    </section>
++  )
++})
+diff --git a/web/src/tracker/detail/AgentPanel.tsx b/web/src/tracker/detail/AgentPanel.tsx
+new file mode 100644
+index 0000000..ffddd15
+--- /dev/null
++++ b/web/src/tracker/detail/AgentPanel.tsx
+@@ -0,0 +1,431 @@
++import { useState } from 'react'
++import { Bot, ChevronRight } from 'lucide-react'
++import { trackerApi } from '../api'
++import { fullDate, relativeTime } from '../format'
++import { useTracker } from '../store'
++import type { DelegateInput, IssueDetail, LaneAction, LaneStatus } from '../types'
++import { LANE_STATUS_LABELS } from '../types'
++import { AgentGlyph, Button, toast } from '../ui'
++import { errorMessage } from './shared'
++import { SessionAgentPanel } from './SessionAgentPanel'
++
++const LANE_COLORS: Record<LaneStatus, string> = {
++  queued: '#e2e2e2',
++  working: '#f2c94c',
++  blocked: '#eb5757',
++  done_claimed: '#4cb782',
++  not_done: '#fc7840',
++  verified_done: '#5e6ad2',
++  closed: '#5e6ad2',
++  failed: '#95a2b3',
++}
++
++const ALLOWED: Record<LaneStatus, LaneAction[]> = {
++  queued: ['send', 'close'],
++  working: ['send', 'close'],
++  blocked: ['send', 'close'],
++  done_claimed: ['object', 'send'],
++  not_done: ['send', 'close'],
++  verified_done: ['close', 'object'],
++  closed: ['reopen'],
++  failed: ['reopen'],
++}
++
++const ACTION_LABELS: Record<LaneAction, string> = {
++  send: 'Send message',
++  object: 'Object',
++  close: 'Close lane',
++  reopen: 'Reopen',
++}
++
++const TEXT_ACTIONS: LaneAction[] = ['send', 'object', 'reopen']
++
++export function LaneBadge({ status }: { status: LaneStatus }) {
++  return (
++    <span className="ld-lane-badge">
++      <span className="ld-lane-dot" style={{ background: LANE_COLORS[status] }} />
++      {LANE_STATUS_LABELS[status]}
++    </span>
++  )
++}
++
++export function AgentPanel({
++  detail,
++  onDetail,
++  compact = false,
++}: {
++  detail: IssueDetail
++  onDetail: (detail: IssueDetail) => void
++  compact?: boolean
++}) {
++  const issue = detail.issue
++  if (detail.session_detail) {
++    return <SessionAgentPanel detail={detail} onDetail={onDetail} compact={compact} />
++  }
++  if (issue.lane_key || detail.lane_detail) {
++    return <LanePanel detail={detail} onDetail={onDetail} compact={compact} />
++  }
++  return <DelegatePanel detail={detail} onDetail={onDetail} />
++}
++
++function LanePanel({
++  detail,
++  onDetail,
++  compact,
++}: {
++  detail: IssueDetail
++  onDetail: (detail: IssueDetail) => void
++  compact: boolean
++}) {
++  const t = useTracker()
++  const lane = detail.lane_detail?.lane
++  const summary = detail.issue.lane
++  const status = (lane?.status ?? summary?.status ?? 'queued') as LaneStatus
++  const [pending, setPending] = useState<LaneAction | null>(null)
++  const [text, setText] = useState('')
++  const [force, setForce] = useState(false)
++  const [busy, setBusy] = useState(false)
++  const [error, setError] = useState<string | null>(null)
++
++  const run = async (action: LaneAction) => {
++    setBusy(true)
++    setError(null)
++    try {
++      const opts: { text?: string; force?: boolean } = {}
++      if (text.trim()) opts.text = text.trim()
++      if (action === 'close' && force) opts.force = true
++      const next = await trackerApi.laneAction(detail.issue.id, action, opts)
++      onDetail(next)
++      setPending(null)
++      setText('')
++      setForce(false)
++      toast(`${ACTION_LABELS[action]}: done`)
++    } catch (err) {
++      setError(errorMessage(err))
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  const transcript = detail.lane_detail?.transcript ?? []
++  const history = detail.lane_detail?.history ?? []
++  const lastTranscript = transcript.slice(compact ? -3 : -12)
++  const model = lane?.model ?? summary?.model
++  const agentUser = detail.issue.assignee_id ? t.usersById.get(detail.issue.assignee_id) : undefined
++  const needsText = pending !== null && (pending === 'send' || pending === 'object')
++
++  return (
++    <section className="ld-agent" aria-label="Agent lane">
++      <div className="ld-agent-head">
++        <AgentGlyph />
++        <span className="ld-agent-title">Agent lane</span>
++        <LaneBadge status={status} />
++        <span style={{ flex: 1 }} />
++        <span className="ld-comment-time mono">{lane?.key ?? summary?.key}</span>
++      </div>
++      <dl className="ld-agent-grid">
++        <dt>Agent</dt>
++        <dd>{agentUser?.name ?? model ?? 'Auto'}</dd>
++        {model && (
++          <>
++            <dt>Model</dt>
++            <dd className="mono">{model}</dd>
++          </>
++        )}
++        <dt>Turns</dt>
++        <dd>{lane?.turns_run ?? summary?.turns_run ?? 0}</dd>
++        <dt>Last activity</dt>
++        <dd title={fullDate(lane?.last_activity_at ?? summary?.last_activity_at)}>
++          {relativeTime(lane?.last_activity_at ?? summary?.last_activity_at) || '—'}
++        </dd>
++        {lane?.cwd && (
++          <>
++            <dt>Working dir</dt>
++            <dd className="mono">{lane.cwd}</dd>
++          </>
++        )}
++        {lane?.last_turn_outcome && (
++          <>
++            <dt>Last outcome</dt>
++            <dd>{lane.last_turn_outcome}</dd>
++          </>
++        )}
++        {lane?.done_signals && !compact && (
++          <>
++            <dt>Done when</dt>
++            <dd>{lane.done_signals}</dd>
++          </>
++        )}
++        {lane?.objection && (
++          <>
++            <dt>Objection</dt>
++            <dd>{lane.objection}</dd>
++          </>
++        )}
++      </dl>
++      {lane?.last_report && (
++        <details className="ld-agent-block" open={!compact}>
++          <summary>
++            <ChevronRight size={12} />
++            Last report
++          </summary>
++          <pre className="ld-agent-pre">{lane.last_report}</pre>
++        </details>
++      )}
++      {lane?.claim_evidence && (
++        <details className="ld-agent-block">
++          <summary>
++            <ChevronRight size={12} />
++            Claim evidence
++          </summary>
++          <pre className="ld-agent-pre">{lane.claim_evidence}</pre>
++        </details>
++      )}
++      {lane?.brief_path && !compact && (
++        <details className="ld-agent-block">
++          <summary>
++            <ChevronRight size={12} />
++            Brief
++          </summary>
++          <pre className="ld-agent-pre">{lane.brief_path}</pre>
++        </details>
++      )}
++      {lastTranscript.length > 0 && (
++        <details className="ld-agent-block">
++          <summary>
++            <ChevronRight size={12} />
++            Transcript ({transcript.length})
++          </summary>
++          <div className="ld-agent-pre" style={{ fontFamily: 'inherit' }}>
++            {lastTranscript.map((line) => (
++              <div key={line.id} className="ld-transcript-item">
++                <div className="ld-transcript-role">
++                  {line.role} · {relativeTime(line.at)}
++                </div>
++                <div style={{ whiteSpace: 'pre-wrap' }}>{line.text}</div>
++              </div>
++            ))}
++          </div>
++        </details>
++      )}
++      {history.length > 0 && !compact && (
++        <details className="ld-agent-block">
++          <summary>
++            <ChevronRight size={12} />
++            Status history ({history.length})
++          </summary>
++          <div className="ld-agent-pre" style={{ fontFamily: 'inherit' }}>
++            {history
++              .slice()
++              .reverse()
++              .map((h) => (
++                <div key={h.id} className="ld-transcript-item">
++                  <span className="ld-transcript-role">{relativeTime(h.at)}</span>{' '}
++                  {h.from_status ? `${LANE_STATUS_LABELS[h.from_status as LaneStatus] ?? h.from_status} → ` : ''}
++                  {LANE_STATUS_LABELS[h.to_status as LaneStatus] ?? h.to_status}
++                  {h.reason ? ` — ${h.reason}` : ''}
++                </div>
++              ))}
++          </div>
++        </details>
++      )}
++
++      {pending === null ? (
++        <div className="ld-agent-actions">
++          {ALLOWED[status].map((action) => (
++            <Button
++              key={action}
++              variant={action === 'close' ? 'secondary' : action === 'send' ? 'primary' : 'secondary'}
++              size="sm"
++              onClick={() => {
++                setError(null)
++                setPending(action)
++              }}
++            >
++              {ACTION_LABELS[action]}
++            </Button>
++          ))}
++          {error && <span className="ld-error">{error}</span>}
++        </div>
++      ) : (
++        <form
++          className="ld-agent-form"
++          onSubmit={(e) => {
++            e.preventDefault()
++            void run(pending)
++          }}
++        >
++          {TEXT_ACTIONS.includes(pending) && (
++            <label>
++              {pending === 'object' ? 'Objection' : pending === 'reopen' ? 'Instructions (optional)' : 'Message to agent'}
++              <textarea
++                autoFocus
++                className="ld-field"
++                rows={3}
++                value={text}
++                onChange={(e) => setText(e.target.value)}
++                onKeyDown={(e) => {
++                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++                    e.preventDefault()
++                    if (!needsText || text.trim()) void run(pending)
++                  } else if (e.key === 'Escape') {
++                    e.stopPropagation()
++                    setPending(null)
++                  }
++                }}
++              />
++            </label>
++          )}
++          {pending === 'close' && status !== 'verified_done' && (
++            <>
++              <label style={{ flexDirection: 'row', alignItems: 'center', gap: 8, color: 'var(--text-2)' }}>
++                <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
++                Force close (lane is not verified)
++              </label>
++              {force && (
++                <label>
++                  Reason
++                  <input className="ld-field" value={text} onChange={(e) => setText(e.target.value)} />
++                </label>
++              )}
++            </>
++          )}
++          {error && <span className="ld-error">{error}</span>}
++          <div className="ld-agent-form-row">
++            <Button variant="ghost" size="sm" type="button" onClick={() => setPending(null)}>
++              Cancel
++            </Button>
++            <Button
++              variant={pending === 'close' ? 'danger' : 'primary'}
++              size="sm"
++              type="submit"
++              disabled={busy || (needsText && !text.trim())}
++            >
++              {busy ? 'Working…' : ACTION_LABELS[pending]}
++            </Button>
++          </div>
++        </form>
++      )}
++    </section>
++  )
++}
++
++function DelegatePanel({ detail, onDetail }: { detail: IssueDetail; onDetail: (detail: IssueDetail) => void }) {
++  const [open, setOpen] = useState(false)
++  const [cwd, setCwd] = useState(() => {
++    try {
++      return localStorage.getItem('tracker.delegate.cwd') ?? ''
++    } catch {
++      return ''
++    }
++  })
++  const [done, setDone] = useState('')
++  const [model, setModel] = useState<NonNullable<DelegateInput['model']>>('auto')
++  const [busy, setBusy] = useState(false)
++  const [error, setError] = useState<string | null>(null)
++
++  const submit = async () => {
++    if (!cwd.trim() || !done.trim()) return
++    setBusy(true)
++    setError(null)
++    try {
++      const next = await trackerApi.delegate(detail.issue.id, { cwd: cwd.trim(), done: done.trim(), model })
++      try {
++        localStorage.setItem('tracker.delegate.cwd', cwd.trim())
++      } catch (storageErr) {
++        console.warn('tracker: could not remember delegate cwd', storageErr)
++      }
++      onDetail(next)
++      setOpen(false)
++      toast(`${detail.issue.identifier} delegated to agent`)
++    } catch (err) {
++      setError(errorMessage(err))
++    } finally {
++      setBusy(false)
++    }
++  }
++
++  if (!open) {
++    return (
++      <section className="ld-agent" aria-label="Delegate">
++        <div className="ld-agent-head">
++          <Bot size={14} color="var(--text-3)" />
++          <span className="ld-comment-time" style={{ flex: 1 }}>
++            Hand this issue to an agent work lane.
++          </span>
++          <Button variant="secondary" size="sm" onClick={() => setOpen(true)}>
++            Delegate to agent
++          </Button>
++        </div>
++      </section>
++    )
++  }
++
++  return (
++    <section className="ld-agent" aria-label="Delegate">
++      <div className="ld-agent-head">
++        <AgentGlyph />
++        <span className="ld-agent-title">Delegate to agent</span>
++      </div>
++      <form
++        className="ld-agent-form"
++        style={{ borderTop: 0 }}
++        onSubmit={(e) => {
++          e.preventDefault()
++          void submit()
++        }}
++        onKeyDown={(e) => {
++          if (e.key === 'Escape') {
++            e.stopPropagation()
++            setOpen(false)
++          } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++            e.preventDefault()
++            void submit()
++          }
++        }}
++      >
++        <label>
++          Working directory
++          <input
++            autoFocus
++            className="ld-field mono"
++            placeholder="/Users/me/code/project"
++            value={cwd}
++            onChange={(e) => setCwd(e.target.value)}
++          />
++        </label>
++        <label>
++          Done when
++          <textarea
++            className="ld-field"
++            rows={3}
++            placeholder="Describe how the agent proves the work is finished"
++            value={done}
++            onChange={(e) => setDone(e.target.value)}
++          />
++        </label>
++        <label>
++          Model
++          <select
++            className="ld-field"
++            value={model}
++            onChange={(e) => setModel(e.target.value as NonNullable<DelegateInput['model']>)}
++          >
++            <option value="auto">Auto</option>
++            <option value="small">Small</option>
++            <option value="large">Large</option>
++          </select>
++        </label>
++        {error && <span className="ld-error">{error}</span>}
++        <div className="ld-agent-form-row">
++          <Button variant="ghost" size="sm" type="button" onClick={() => setOpen(false)}>
++            Cancel
++          </Button>
++          <Button variant="primary" size="sm" type="submit" disabled={busy || !cwd.trim() || !done.trim()}>
++            {busy ? 'Delegating…' : 'Delegate'}
++          </Button>
++        </div>
++      </form>
++    </section>
++  )
++}
+diff --git a/web/src/tracker/detail/Editors.tsx b/web/src/tracker/detail/Editors.tsx
+new file mode 100644
+index 0000000..e9ba3a4
+--- /dev/null
++++ b/web/src/tracker/detail/Editors.tsx
+@@ -0,0 +1,189 @@
++import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
++import { useTracker } from '../store'
++import type { Issue } from '../types'
++import { Markdown, notifyError, useAutosize } from './shared'
++
++export interface TitleHandle {
++  focus: () => void
++}
++
++export const TitleEditor = forwardRef<TitleHandle, { issue: Issue }>(function TitleEditor({ issue }, ref) {
++  const t = useTracker()
++  const [value, setValue] = useState(issue.title)
++  const [editing, setEditing] = useState(false)
++  const el = useRef<HTMLTextAreaElement>(null)
++  useAutosize(el, value)
++
++  useEffect(() => {
++    if (!editing) setValue(issue.title)
++  }, [issue.title, editing])
++
++  useImperativeHandle(ref, () => ({
++    focus: () => {
++      const node = el.current
++      if (!node) return
++      node.focus()
++      node.setSelectionRange(node.value.length, node.value.length)
++    },
++  }))
++
++  const commit = () => {
++    setEditing(false)
++    const next = value.replace(/\s+/g, ' ').trim()
++    if (!next) {
++      setValue(issue.title)
++      return
++    }
++    if (next !== issue.title) t.updateIssues([issue.id], { title: next }).catch(notifyError)
++  }
++
++  return (
++    <textarea
++      ref={el}
++      className="ld-title"
++      rows={1}
++      value={value}
++      aria-label="Issue title"
++      placeholder="Issue title"
++      onFocus={() => setEditing(true)}
++      onChange={(e) => setValue(e.target.value.replace(/\n/g, ''))}
++      onBlur={commit}
++      onKeyDown={(e) => {
++        if (e.key === 'Enter') {
++          e.preventDefault()
++          e.currentTarget.blur()
++        } else if (e.key === 'Escape') {
++          e.preventDefault()
++          e.stopPropagation()
++          setValue(issue.title)
++          setEditing(false)
++          requestAnimationFrame(() => el.current?.blur())
++        }
++      }}
++    />
++  )
++})
++
++const AUTOSAVE_MS = 800
++
++export function DescriptionEditor({ issue, compact = false }: { issue: Issue; compact?: boolean }) {
++  const t = useTracker()
++  const [editing, setEditing] = useState(false)
++  const [tab, setTab] = useState<'write' | 'preview'>('write')
++  const [value, setValue] = useState(issue.description)
++  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
++  const el = useRef<HTMLTextAreaElement>(null)
++  const timer = useRef<number | undefined>(undefined)
++  const lastSaved = useRef(issue.description)
++  const issueId = issue.id
++  const updateIssues = t.updateIssues
++  useAutosize(el, value, compact ? 80 : 120)
++
++  useEffect(() => {
++    if (!editing) {
++      setValue(issue.description)
++      lastSaved.current = issue.description
++    }
++  }, [issue.description, editing])
++
++  const save = (next: string) => {
++    window.clearTimeout(timer.current)
++    if (next === lastSaved.current) return
++    lastSaved.current = next
++    setSaveState('saving')
++    updateIssues([issueId], { description: next })
++      .then(() => setSaveState('saved'))
++      .catch((err) => {
++        setSaveState('idle')
++        notifyError(err)
++      })
++  }
++
++  useEffect(() => () => window.clearTimeout(timer.current), [])
++
++  const onChange = (next: string) => {
++    setValue(next)
++    window.clearTimeout(timer.current)
++    timer.current = window.setTimeout(() => save(next), AUTOSAVE_MS)
++  }
++
++  const finish = () => {
++    save(value)
++    setEditing(false)
++    setTab('write')
++  }
++
++  if (!editing) {
++    return (
++      <div
++        className="ld-desc ld-desc-view"
++        role="button"
++        tabIndex={0}
++        aria-label="Edit description"
++        onClick={(e) => {
++          if ((e.target as HTMLElement).closest('a')) return
++          setEditing(true)
++          requestAnimationFrame(() => el.current?.focus())
++        }}
++        onKeyDown={(e) => {
++          if (e.key === 'Enter') {
++            e.preventDefault()
++            setEditing(true)
++            requestAnimationFrame(() => el.current?.focus())
++          }
++        }}
++      >
++        {value.trim() ? <Markdown source={value} /> : <div className="ld-desc-placeholder">Add description…</div>}
++      </div>
++    )
++  }
++
++  return (
++    <div
++      className="ld-desc ld-desc-editor"
++      onBlur={(e) => {
++        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) finish()
++      }}
++    >
++      <div className="ld-desc-tabs" role="tablist">
++        <button type="button" role="tab" className="ld-tab" aria-selected={tab === 'write'} onClick={() => setTab('write')}>
++          Write
++        </button>
++        <button
++          type="button"
++          role="tab"
++          className="ld-tab"
++          aria-selected={tab === 'preview'}
++          onClick={() => setTab('preview')}
++        >
++          Preview
++        </button>
++        <span className="ld-desc-status">
++          {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Markdown supported'}
++        </span>
++      </div>
++      {tab === 'write' ? (
++        <textarea
++          ref={el}
++          className="ld-desc-textarea"
++          value={value}
++          placeholder="Add description…"
++          aria-label="Issue description"
++          onChange={(e) => onChange(e.target.value)}
++          onKeyDown={(e) => {
++            if (e.key === 'Escape' || (e.key === 'Enter' && (e.metaKey || e.ctrlKey))) {
++              e.preventDefault()
++              e.stopPropagation()
++              finish()
++              ;(document.activeElement as HTMLElement | null)?.blur()
++            }
++          }}
++        />
++      ) : (
++        <div className="ld-desc-preview" tabIndex={-1}>
++          {value.trim() ? <Markdown source={value} /> : <div className="ld-desc-placeholder">Nothing to preview</div>}
++        </div>
++      )}
++    </div>
++  )
++}
+diff --git a/web/src/tracker/detail/IssueView.tsx b/web/src/tracker/detail/IssueView.tsx
+new file mode 100644
+index 0000000..edb2ab6
+--- /dev/null
++++ b/web/src/tracker/detail/IssueView.tsx
+@@ -0,0 +1,441 @@
++import { useMemo, useRef, useState } from 'react'
++import type { MouseEvent, ReactNode } from 'react'
++import {
++  Archive,
++  Bell,
++  BellOff,
++  ChevronDown,
++  ChevronUp,
++  Copy,
++  GitBranch,
++  Link2,
++  Maximize2,
++  MoreHorizontal,
++  Star,
++  Trash2,
++  X,
++} from 'lucide-react'
++import { trackerApi } from '../api'
++import { branchName } from '../format'
++import { useHotkey } from '../hotkeys'
++import { hrefFor, navigate } from '../router'
++import { sortIssues, useTracker } from '../store'
++import type { Issue, IssueDetail } from '../types'
++import { Button, Dialog, IconButton, MenuList, Popover, PropertyChip, toast } from '../ui'
++import type { MenuItem } from '../ui'
++import { ActivityFeed } from './Activity'
++import type { ComposerHandle } from './Activity'
++import { AgentPanel } from './AgentPanel'
++import { DescriptionEditor, TitleEditor } from './Editors'
++import type { TitleHandle } from './Editors'
++import { PropertiesSidebar, PropertyPickers, usePickerState, usePropertyAnchors } from './Properties'
++import type { PropertyKind } from './Properties'
++import { RelationsAndLinks, SubIssues } from './Relations'
++import { copyText, menuId, notifyError } from './shared'
++import { useIssueDetail } from './useIssueDetail'
++import './detail.css'
++
++function issueUrl(issue: Issue) {
++  return `${window.location.origin}${window.location.pathname}${hrefFor({ name: 'issue', identifier: issue.identifier })}`
++}
++
++function useIssueActions(issue: Issue | null, onDeleted: () => void) {
++  const t = useTracker()
++  const [confirmDelete, setConfirmDelete] = useState(false)
++
++  const copyId = () => issue && void copyText(issue.identifier, `Copied ${issue.identifier} to clipboard`)
++  const copyBranch = () => issue && void copyText(branchName(issue, t.me), 'Copied git branch name to clipboard')
++  const copyLink = () => issue && void copyText(issueUrl(issue), 'Copied issue URL to clipboard')
++  const toggleArchive = () => {
++    if (!issue) return
++    const archived = !issue.archived_at
++    t.updateIssues([issue.id], { archived })
++      .then(() =>
++        toast(archived ? `${issue.identifier} archived` : `${issue.identifier} restored`, {
++          action: { label: 'Undo', onClick: () => void t.updateIssues([issue.id], { archived: !archived }).catch(notifyError) },
++        }),
++      )
++      .catch(notifyError)
++  }
++  const doDelete = async () => {
++    if (!issue) return
++    try {
++      await t.deleteIssue(issue.id)
++      setConfirmDelete(false)
++      toast(`${issue.identifier} deleted`)
++      onDeleted()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const deleteDialog = issue ? (
++    <Dialog
++      open={confirmDelete}
++      onOpenChange={setConfirmDelete}
++      title={`Delete ${issue.identifier}?`}
++      width={420}
++      footer={
++        <>
++          <Button variant="ghost" size="md" onClick={() => setConfirmDelete(false)}>
++            Cancel
++          </Button>
++          <Button variant="danger" size="md" autoFocus onClick={() => void doDelete()}>
++            Delete issue
++          </Button>
++        </>
++      }
++    >
++      <div className="ld-dialog-body">
++        {issue.lane_key
++          ? 'This issue is linked to an agent lane and cannot be deleted. Close the lane or archive the issue instead.'
++          : `"${issue.title}" and its comments will be permanently deleted. This cannot be undone.`}
++      </div>
++    </Dialog>
++  ) : null
++
++  const menuItems: MenuItem[] = issue
++    ? [
++        { id: 'copy-id', label: 'Copy ID', icon: <Copy size={14} />, kbd: '⌘.' },
++        { id: 'copy-link', label: 'Copy issue URL', icon: <Link2 size={14} />, kbd: '⌘⇧C' },
++        { id: 'copy-branch', label: 'Copy git branch name', icon: <GitBranch size={14} />, kbd: '⌘⇧,' },
++        {
++          id: 'favorite',
++          label: t.isFavorite('issue', issue.id) ? 'Remove from favorites' : 'Add to favorites',
++          icon: <Star size={14} />,
++        },
++        { id: 'archive', label: issue.archived_at ? 'Restore' : 'Archive', icon: <Archive size={14} />, kbd: '⌘⇧A' },
++        { id: 'delete', label: 'Delete…', icon: <Trash2 size={14} />, kbd: '⌘⌫', color: 'var(--danger)' },
++      ]
++    : []
++
++  const onMenu = (id: string) => {
++    if (!issue) return
++    switch (id) {
++      case 'copy-id':
++        return copyId()
++      case 'copy-link':
++        return copyLink()
++      case 'copy-branch':
++        return copyBranch()
++      case 'favorite':
++        return void t.toggleFavorite('issue', issue.id).catch(notifyError)
++      case 'archive':
++        return toggleArchive()
++      case 'delete':
++        return setConfirmDelete(true)
++    }
++  }
++
++  return {
++    copyId,
++    copyBranch,
++    copyLink,
++    toggleArchive,
++    askDelete: () => setConfirmDelete(true),
++    deleteDialog,
++    menuItems,
++    onMenu,
++  }
++}
++
++function MoreMenu({ items, onSelect }: { items: MenuItem[]; onSelect: (id: string) => void }) {
++  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
++  return (
++    <>
++      <IconButton
++        label="More actions"
++        icon={<MoreHorizontal size={16} />}
++        onClick={(e: MouseEvent<HTMLElement>) => setAnchor(e.currentTarget)}
++      />
++      <Popover open={anchor !== null} onOpenChange={(o) => !o && setAnchor(null)} anchor={anchor} align="end" width={240}>
++        <MenuList
++          items={items}
++          onSelect={(item: MenuItem | string) => {
++            setAnchor(null)
++            onSelect(menuId(item))
++          }}
++        />
++      </Popover>
++    </>
++  )
++}
++
++interface ViewProps {
++  idOrIdentifier: string
++  mode: 'page' | 'peek'
++  onClose?: () => void
++}
++
++function IssueView({ idOrIdentifier, mode, onClose }: ViewProps) {
++  const t = useTracker()
++  const handle = useIssueDetail(idOrIdentifier)
++  const { detail, issue, notFound, error, reload, setDetail } = handle
++  const title = useRef<TitleHandle>(null)
++  const composer = useRef<ComposerHandle>(null)
++  const { picker, setPicker, close: closePicker } = usePickerState()
++  const { anchors, register } = usePropertyAnchors()
++  const chipRow = useRef<HTMLDivElement>(null)
++
++  const leave = () => {
++    if (mode === 'peek') onClose?.()
++    else if (window.history.length > 1) window.history.back()
++    else navigate(issue ? `/team/${t.teamsById.get(issue.team_id)?.key ?? ''}/all` : '/')
++  }
++
++  const actions = useIssueActions(issue, () => {
++    if (mode === 'peek') onClose?.()
++    else navigate(issue ? `/team/${t.teamsById.get(issue.team_id)?.key ?? ''}/all` : '/', { replace: true })
++  })
++
++  const siblings = useMemo(() => {
++    if (!issue) return []
++    const pool = t.issues.filter((i) => i.team_id === issue.team_id && !i.archived_at)
++    return sortIssues(pool, 'priority', t.statesById)
++  }, [t.issues, t.statesById, issue?.team_id])
++  const index = issue ? siblings.findIndex((i) => i.id === issue.id) : -1
++
++  const goTo = (offset: number) => {
++    if (index < 0) return
++    const target = siblings[index + offset]
++    if (!target) return
++    if (mode === 'peek') t.setPeekIssueId(target.id)
++    else navigate({ name: 'issue', identifier: target.identifier })
++  }
++
++  const openPicker = (kind: PropertyKind) => {
++    const anchor =
++      anchors.current.get(kind) ??
++      (chipRow.current?.querySelector<HTMLElement>(`[data-kind="${kind}"]`) ?? chipRow.current ?? null)
++    setPicker({ kind, anchor })
++  }
++
++  const ready = issue !== null
++  const hotkeyOpts = { enabled: ready && picker === null }
++  useHotkey('s', () => openPicker('status'), hotkeyOpts)
++  useHotkey('p', () => openPicker('priority'), hotkeyOpts)
++  useHotkey('a', () => openPicker('assignee'), hotkeyOpts)
++  useHotkey('l', () => openPicker('labels'), hotkeyOpts)
++  useHotkey('shift+p', () => openPicker('project'), hotkeyOpts)
++  useHotkey('shift+c', () => openPicker('cycle'), hotkeyOpts)
++  useHotkey('shift+e', () => openPicker('estimate'), hotkeyOpts)
++  useHotkey(['d', 'shift+d'], () => openPicker('due'), hotkeyOpts)
++  useHotkey(
++    'i',
++    () => {
++      if (issue && t.me) t.updateIssues([issue.id], { assignee_id: t.me.id }).catch(notifyError)
++    },
++    hotkeyOpts,
++  )
++  useHotkey('e', () => title.current?.focus(), hotkeyOpts)
++  useHotkey('m', () => composer.current?.focus(), hotkeyOpts)
++  useHotkey('mod+.', actions.copyId, { enabled: ready })
++  useHotkey(['mod+shift+,', 'mod+shift+<'], actions.copyBranch, { enabled: ready })
++  useHotkey('mod+shift+c', actions.copyLink, { enabled: ready })
++  useHotkey('mod+shift+a', actions.toggleArchive, { enabled: ready })
++  useHotkey('mod+backspace', actions.askDelete, { enabled: ready })
++  useHotkey(['j', 'arrowdown'], () => goTo(1), { enabled: ready && mode === 'page' && picker === null })
++  useHotkey(['k', 'arrowup'], () => goTo(-1), { enabled: ready && mode === 'page' && picker === null })
++  useHotkey('escape', leave, {
++    enabled: picker === null && t.createDraft === null && (mode === 'peek' || t.peekIssueId === null),
++  })
++
++  const subscribed = detail && t.me ? detail.subscriber_ids.includes(t.me.id) : false
++  const toggleSubscribe = async () => {
++    if (!detail) return
++    try {
++      const result = await trackerApi.subscribe(detail.issue.id, !subscribed)
++      setDetail({
++        ...detail,
++        subscriber_ids: result.subscribed
++          ? Array.from(new Set([...detail.subscriber_ids, t.me?.id ?? '']))
++          : detail.subscriber_ids.filter((id) => id !== t.me?.id),
++      })
++      toast(result.subscribed ? 'Subscribed to issue' : 'Unsubscribed from issue')
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const team = issue ? t.teamsById.get(issue.team_id) : undefined
++  const parent = issue?.parent_id ? t.issuesById.get(issue.parent_id) : undefined
++  const changed = () => void reload()
++
++  const header = (
++    <header className="ld-header">
++      <nav className="ld-crumbs" aria-label="Breadcrumb">
++        {team && (
++          <a className="ld-crumb" href={hrefFor({ name: 'team-issues', teamKey: team.key, tab: 'all' })}>
++            <span className="ld-team-badge" style={{ background: team.color }}>
++              {team.key.slice(0, 1)}
++            </span>
++            {team.name}
++          </a>
++        )}
++        {parent && (
++          <>
++            <span aria-hidden>›</span>
++            <a className="ld-crumb" href={hrefFor({ name: 'issue', identifier: parent.identifier })}>
++              {parent.identifier}
++            </a>
++          </>
++        )}
++        {issue && (
++          <>
++            <span aria-hidden>›</span>
++            <span className="ld-crumb ld-crumb-current">{issue.identifier}</span>
++            <span className="ld-crumb-title">{issue.title}</span>
++          </>
++        )}
++      </nav>
++      <div className="ld-header-actions">
++        {issue && (
++          <>
++            {index >= 0 && siblings.length > 1 && (
++              <>
++                <span className="ld-nav-count">
++                  {index + 1} / {siblings.length}
++                </span>
++                <IconButton label="Previous issue" icon={<ChevronUp size={16} />} disabled={index <= 0} onClick={() => goTo(-1)} />
++                <IconButton
++                  label="Next issue"
++                  icon={<ChevronDown size={16} />}
++                  disabled={index >= siblings.length - 1}
++                  onClick={() => goTo(1)}
++                />
++              </>
++            )}
++            <IconButton
++              label={subscribed ? 'Unsubscribe' : 'Subscribe'}
++              icon={subscribed ? <BellOff size={16} /> : <Bell size={16} />}
++              active={subscribed}
++              onClick={() => void toggleSubscribe()}
++            />
++            <IconButton label="Copy issue URL" icon={<Link2 size={16} />} onClick={actions.copyLink} />
++            <MoreMenu items={actions.menuItems} onSelect={actions.onMenu} />
++            {mode === 'peek' && (
++              <IconButton
++                label="Open issue"
++                icon={<Maximize2 size={15} />}
++                onClick={() => {
++                  onClose?.()
++                  navigate({ name: 'issue', identifier: issue.identifier })
++                }}
++              />
++            )}
++          </>
++        )}
++        {mode === 'peek' && <IconButton label="Close" icon={<X size={16} />} onClick={onClose} />}
++      </div>
++    </header>
++  )
++
++  let body: ReactNode
++  if (!issue) {
++    body = notFound ? (
++      <div className="ld-empty">
++        <div>
++          <div className="t-1 w-510" style={{ fontSize: 15 }}>
++            Issue not found
++          </div>
++          <div style={{ marginTop: 4 }}>It may have been deleted or you followed a stale link.</div>
++        </div>
++      </div>
++    ) : error ? (
++      <div className="ld-empty">
++        <div>
++          <div className="ld-error">{error}</div>
++          <Button variant="secondary" size="sm" onClick={() => void reload()} style={{ marginTop: 10 }}>
++            Retry
++          </Button>
++        </div>
++      </div>
++    ) : (
++      <div className="ld-main">
++        <div className="ld-main-inner" aria-busy>
++          <div className="ld-skeleton" style={{ width: '60%', height: 24 }} />
++          <div className="ld-skeleton" style={{ width: '90%' }} />
++          <div className="ld-skeleton" style={{ width: '75%' }} />
++        </div>
++      </div>
++    )
++  } else {
++    const compact = mode === 'peek'
++    const showSidebar = mode === 'page'
++    const viewDetail: IssueDetail | null = detail ? { ...detail, issue } : null
++    body = (
++      <div className="ld-body">
++        <div className="ld-main">
++          <div className="ld-main-inner">
++            <TitleEditor key={issue.id} ref={title} issue={issue} />
++            {compact && (
++              <div className="ld-peek-props" ref={chipRow}>
++                {(['status', 'priority', 'assignee', 'labels', 'project', 'cycle', 'estimate', 'due'] as const).map((kind) => (
++                  <span key={kind} data-kind={kind}>
++                    <PropertyChip kind={kind} issue={issue} />
++                  </span>
++                ))}
++              </div>
++            )}
++            <DescriptionEditor key={`d${issue.id}`} issue={issue} compact={compact} />
++            {viewDetail ? (
++              <>
++                <SubIssues detail={viewDetail} onChanged={changed} />
++                <RelationsAndLinks detail={viewDetail} onChanged={changed} />
++                <AgentPanel detail={viewDetail} onDetail={setDetail} compact={compact} />
++                <ActivityFeed
++                  ref={composer}
++                  detail={viewDetail}
++                  subscribed={subscribed}
++                  onToggleSubscribe={() => void toggleSubscribe()}
++                  onChanged={changed}
++                  compact={compact}
++                />
++              </>
++            ) : (
++              <div className="ld-skeleton" style={{ width: '40%', marginTop: 28 }} />
++            )}
++          </div>
++        </div>
++        {showSidebar && (
++          <aside className="ld-side" aria-label="Issue properties">
++            <PropertiesSidebar issue={issue} openPicker={(kind, anchor) => setPicker({ kind, anchor })} register={register} />
++          </aside>
++        )}
++      </div>
++    )
++  }
++
++  return (
++    <>
++      {header}
++      {body}
++      {issue && <PropertyPickers issue={issue} picker={picker} onClose={closePicker} />}
++      {actions.deleteDialog}
++    </>
++  )
++}
++
++export function IssuePage({ idOrIdentifier }: { idOrIdentifier: string }) {
++  return (
++    <div className="ld-page">
++      <IssueView key={idOrIdentifier} idOrIdentifier={idOrIdentifier} mode="page" />
++    </div>
++  )
++}
++
++export function IssuePeek() {
++  const t = useTracker()
++  const id = t.peekIssueId
++  const close = () => t.setPeekIssueId(null)
++  useHotkey('space', close, { enabled: id !== null })
++  if (!id) return null
++  return (
++    <>
++      <div className="ld-peek-overlay" onMouseDown={close} aria-hidden />
++      <div className="ld-peek anim-slide-right" role="dialog" aria-modal="false" aria-label="Issue preview">
++        <IssueView key={id} idOrIdentifier={id} mode="peek" onClose={close} />
++      </div>
++    </>
++  )
++}
+diff --git a/web/src/tracker/detail/Properties.tsx b/web/src/tracker/detail/Properties.tsx
+new file mode 100644
+index 0000000..09c747e
+--- /dev/null
++++ b/web/src/tracker/detail/Properties.tsx
+@@ -0,0 +1,241 @@
++import { useRef, useState } from 'react'
++import type { ReactNode } from 'react'
++import { milestoneItems, NONE, parseNullable } from '../create/options'
++import { cycleLabel, dueState, isClosedType, shortDate, stateProgress } from '../format'
++import { useTracker } from '../store'
++import type { Issue } from '../types'
++import { PRIORITY_LABELS } from '../types'
++import {
++  AssigneePicker,
++  Avatar,
++  CycleIcon,
++  CyclePicker,
++  DueDatePicker,
++  EstimateIcon,
++  EstimatePicker,
++  LabelDot,
++  LabelPicker,
++  MenuList,
++  ParentPicker,
++  Popover,
++  PriorityIcon,
++  PriorityPicker,
++  ProjectIcon,
++  ProjectPicker,
++  StatusIcon,
++  StatusPicker,
++} from '../ui'
++import type { MenuItem } from '../ui'
++import { menuId, notifyError } from './shared'
++
++export type PropertyKind =
++  | 'status'
++  | 'priority'
++  | 'assignee'
++  | 'labels'
++  | 'project'
++  | 'milestone'
++  | 'cycle'
++  | 'estimate'
++  | 'due'
++  | 'parent'
++
++export interface PickerState {
++  kind: PropertyKind
++  anchor: HTMLElement | null
++}
++
++export function PropertyPickers({
++  issue,
++  picker,
++  onClose,
++}: {
++  issue: Issue
++  picker: PickerState | null
++  onClose: () => void
++}) {
++  const t = useTracker()
++  const ids = [issue.id]
++  const common = (kind: PropertyKind) => ({
++    issueIds: ids,
++    anchor: picker?.kind === kind ? picker.anchor : null,
++    open: picker?.kind === kind,
++    onOpenChange: (open: boolean) => {
++      if (!open) onClose()
++    },
++  })
++  const milestoneOpen = picker?.kind === 'milestone'
++  return (
++    <>
++      <StatusPicker {...common('status')} />
++      <PriorityPicker {...common('priority')} />
++      <AssigneePicker {...common('assignee')} />
++      <LabelPicker {...common('labels')} />
++      <ProjectPicker {...common('project')} />
++      <CyclePicker {...common('cycle')} />
++      <EstimatePicker {...common('estimate')} />
++      <DueDatePicker {...common('due')} />
++      <ParentPicker {...common('parent')} />
++      <Popover
++        open={milestoneOpen}
++        onOpenChange={(open) => {
++          if (!open) onClose()
++        }}
++        anchor={milestoneOpen ? picker?.anchor ?? null : null}
++        align="start"
++        width={240}
++      >
++        <MenuList
++          items={milestoneItems(t, issue.project_id)}
++          searchable
++          placeholder="Set milestone…"
++          selectedIds={[issue.milestone_id ?? NONE]}
++          emptyText="No milestones in this project"
++          onSelect={(item: MenuItem | string) => {
++            onClose()
++            t.updateIssues(ids, { milestone_id: parseNullable(menuId(item)) }).catch(notifyError)
++          }}
++        />
++      </Popover>
++    </>
++  )
++}
++
++function Row({
++  label,
++  onOpen,
++  children,
++  rowRef,
++  className = '',
++}: {
++  label: string
++  onOpen: (anchor: HTMLElement) => void
++  children: ReactNode
++  rowRef?: (el: HTMLButtonElement | null) => void
++  className?: string
++}) {
++  return (
++    <div className="ld-prop">
++      <span className="ld-prop-label">{label}</span>
++      <button
++        type="button"
++        ref={rowRef}
++        className={`ld-prop-value ${className}`}
++        onClick={(e) => onOpen(e.currentTarget)}
++      >
++        {children}
++      </button>
++    </div>
++  )
++}
++
++export function usePropertyAnchors() {
++  const anchors = useRef(new Map<PropertyKind, HTMLElement>())
++  const register = (kind: PropertyKind) => (el: HTMLElement | null) => {
++    if (el) anchors.current.set(kind, el)
++    else anchors.current.delete(kind)
++  }
++  return { anchors, register }
++}
++
++export function PropertiesSidebar({
++  issue,
++  openPicker,
++  register,
++}: {
++  issue: Issue
++  openPicker: (kind: PropertyKind, anchor: HTMLElement) => void
++  register: (kind: PropertyKind) => (el: HTMLElement | null) => void
++}) {
++  const t = useTracker()
++  const state = t.statesById.get(issue.state_id)
++  const teamStates = t.teamStates(issue.team_id)
++  const assignee = issue.assignee_id ? t.usersById.get(issue.assignee_id) : undefined
++  const project = issue.project_id ? t.projectsById.get(issue.project_id) : undefined
++  const milestone = issue.milestone_id ? t.milestones.find((m) => m.id === issue.milestone_id) : undefined
++  const cycle = issue.cycle_id ? t.cyclesById.get(issue.cycle_id) : undefined
++  const parent = issue.parent_id ? t.issuesById.get(issue.parent_id) : undefined
++  const labels = issue.label_ids.map((id) => t.labelsById.get(id)).filter((l) => l !== undefined)
++  const due = dueState(issue.due_date, state ? isClosedType(state.type) : false)
++
++  return (
++    <div className="ld-props">
++      <div className="ld-props-group">
++        <Row label="Status" onOpen={(a) => openPicker('status', a)} rowRef={register('status')}>
++          {state && <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, teamStates)} size={14} />}
++          <span className="ld-text">{state?.name ?? 'Unknown'}</span>
++        </Row>
++        <Row label="Priority" onOpen={(a) => openPicker('priority', a)} rowRef={register('priority')}>
++          <PriorityIcon priority={issue.priority} size={14} />
++          <span className={issue.priority === 0 ? 'ld-muted' : 'ld-text'}>{PRIORITY_LABELS[issue.priority]}</span>
++        </Row>
++        <Row label="Assignee" onOpen={(a) => openPicker('assignee', a)} rowRef={register('assignee')}>
++          <Avatar user={assignee ?? null} size={20} />
++          <span className={assignee ? 'ld-text' : 'ld-muted'}>{assignee?.name ?? 'Assign'}</span>
++        </Row>
++      </div>
++
++      <div className="ld-props-group">
++        <Row
++          label="Labels"
++          className="ld-labels"
++          onOpen={(a) => openPicker('labels', a)}
++          rowRef={register('labels')}
++        >
++          {labels.length === 0 ? (
++            <span className="ld-muted">Add label</span>
++          ) : (
++            labels.map((l) => (
++              <span key={l.id} className="ld-label-pill">
++                <LabelDot color={l.color} />
++                <span className="ld-text">{l.name}</span>
++              </span>
++            ))
++          )}
++        </Row>
++      </div>
++
++      <div className="ld-props-group">
++        <Row label="Project" onOpen={(a) => openPicker('project', a)} rowRef={register('project')}>
++          {project ? <ProjectIcon icon={project.icon} color={project.color} /> : null}
++          <span className={project ? 'ld-text' : 'ld-muted'}>{project?.name ?? 'Add to project'}</span>
++        </Row>
++        {project && (
++          <Row label="Milestone" onOpen={(a) => openPicker('milestone', a)} rowRef={register('milestone')}>
++            <span className={milestone ? 'ld-text' : 'ld-muted'}>{milestone?.name ?? 'Add milestone'}</span>
++          </Row>
++        )}
++        <Row label="Cycle" onOpen={(a) => openPicker('cycle', a)} rowRef={register('cycle')}>
++          <CycleIcon progress={cycle ? 0.5 : 0} />
++          <span className={cycle ? 'ld-text' : 'ld-muted'}>{cycle ? cycleLabel(cycle) : 'Add to cycle'}</span>
++        </Row>
++        <Row label="Estimate" onOpen={(a) => openPicker('estimate', a)} rowRef={register('estimate')}>
++          <EstimateIcon />
++          <span className={issue.estimate === null ? 'ld-muted' : 'ld-text'}>
++            {issue.estimate === null ? 'Set estimate' : `${issue.estimate} ${issue.estimate === 1 ? 'point' : 'points'}`}
++          </span>
++        </Row>
++        <Row
++          label="Due date"
++          onOpen={(a) => openPicker('due', a)}
++          rowRef={register('due')}
++          className={due === 'overdue' ? 'ld-due-overdue' : due === 'soon' ? 'ld-due-soon' : ''}
++        >
++          <span className={issue.due_date ? 'ld-text' : 'ld-muted'}>
++            {issue.due_date ? shortDate(issue.due_date) : 'Set due date'}
++          </span>
++        </Row>
++        <Row label="Parent" onOpen={(a) => openPicker('parent', a)} rowRef={register('parent')}>
++          <span className={parent ? 'ld-text' : 'ld-muted'}>
++            {parent ? `${parent.identifier} ${parent.title}` : 'Set parent issue'}
++          </span>
++        </Row>
++      </div>
++    </div>
++  )
++}
++
++export function usePickerState() {
++  const [picker, setPicker] = useState<PickerState | null>(null)
++  return { picker, setPicker, close: () => setPicker(null) }
++}
+diff --git a/web/src/tracker/detail/Relations.tsx b/web/src/tracker/detail/Relations.tsx
+new file mode 100644
+index 0000000..8a8e693
+--- /dev/null
++++ b/web/src/tracker/detail/Relations.tsx
+@@ -0,0 +1,399 @@
++import { useMemo, useRef, useState } from 'react'
++import type { MouseEvent, MutableRefObject } from 'react'
++import { ArrowUpRight, Link2, Plus, X } from 'lucide-react'
++import { trackerApi } from '../api'
++import { hrefFor } from '../router'
++import { stateProgress } from '../format'
++import { teamDefaultState, useTracker } from '../store'
++import type { Issue, IssueDetail, Relation, RelationType } from '../types'
++import { Avatar, Button, IconButton, MenuList, Popover, PriorityIcon, StatusIcon } from '../ui'
++import type { MenuItem } from '../ui'
++import { hostOf, menuId, notifyError } from './shared'
++
++function IssueRow({ issue, onRemove, removeLabel }: { issue: Issue; onRemove?: () => void; removeLabel?: string }) {
++  const t = useTracker()
++  const state = t.statesById.get(issue.state_id)
++  const assignee = issue.assignee_id ? t.usersById.get(issue.assignee_id) : undefined
++  return (
++    <a className="ld-row" href={hrefFor({ name: 'issue', identifier: issue.identifier })}>
++      <PriorityIcon priority={issue.priority} size={14} />
++      <span className="ld-row-id">{issue.identifier}</span>
++      {state && (
++        <StatusIcon
++          type={state.type}
++          color={state.color}
++          progress={stateProgress(state, t.teamStates(issue.team_id))}
++          size={14}
++        />
++      )}
++      <span className="ld-row-title">{issue.title}</span>
++      {onRemove && (
++        <span className="ld-row-actions">
++          <IconButton
++            label={removeLabel ?? 'Remove'}
++            icon={<X size={14} />}
++            size="sm"
++            onClick={(e: MouseEvent) => {
++              e.preventDefault()
++              e.stopPropagation()
++              onRemove()
++            }}
++          />
++        </span>
++      )}
++      <Avatar user={assignee ?? null} size={20} />
++    </a>
++  )
++}
++
++function ProgressRing({ done, total }: { done: number; total: number }) {
++  const r = 6
++  const c = 2 * Math.PI * r
++  const ratio = total === 0 ? 0 : done / total
++  return (
++    <span className="ld-progress">
++      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden>
++        <circle cx="8" cy="8" r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2" />
++        <circle
++          cx="8"
++          cy="8"
++          r={r}
++          fill="none"
++          stroke="var(--accent)"
++          strokeWidth="2"
++          strokeDasharray={c}
++          strokeDashoffset={c * (1 - ratio)}
++          transform="rotate(-90 8 8)"
++          strokeLinecap="round"
++        />
++      </svg>
++      {done}/{total}
++    </span>
++  )
++}
++
++export function SubIssues({ detail, onChanged }: { detail: IssueDetail; onChanged: () => void }) {
++  const t = useTracker()
++  const issue = detail.issue
++  const [adding, setAdding] = useState(false)
++  const [title, setTitle] = useState('')
++  const children = detail.children
++    .map((c) => t.issuesById.get(c.id) ?? c)
++    .filter((c) => !c.archived_at && c.parent_id === issue.id)
++  const done = children.filter((c) => t.statesById.get(c.state_id)?.type === 'completed').length
++
++  const submit = async () => {
++    const value = title.trim()
++    if (!value) {
++      setAdding(false)
++      return
++    }
++    try {
++      const state = teamDefaultState(issue.team_id, t.teamStates)
++      await t.createIssue({
++        team_id: issue.team_id,
++        title: value,
++        parent_id: issue.id,
++        state_id: state?.id,
++        project_id: issue.project_id,
++        cycle_id: issue.cycle_id,
++      })
++      setTitle('')
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  return (
++    <section className="ld-section" aria-label="Sub-issues">
++      <div className="ld-section-head">
++        <span>Sub-issues</span>
++        {children.length > 0 && <ProgressRing done={done} total={children.length} />}
++        <span className="ld-spacer" />
++        <IconButton label="Add sub-issue" icon={<Plus size={14} />} size="sm" onClick={() => setAdding(true)} />
++      </div>
++      {(children.length > 0 || adding) && (
++        <div className="ld-rows">
++          {children.map((c) => (
++            <IssueRow
++              key={c.id}
++              issue={c}
++              removeLabel="Remove from parent"
++              onRemove={() => t.updateIssues([c.id], { parent_id: null }).then(onChanged).catch(notifyError)}
++            />
++          ))}
++          {adding && (
++            <div className="ld-row">
++              <Plus size={14} color="var(--text-4)" />
++              <input
++                autoFocus
++                className="ld-inline-input"
++                placeholder="Sub-issue title"
++                value={title}
++                onChange={(e) => setTitle(e.target.value)}
++                onBlur={() => {
++                  if (!title.trim()) setAdding(false)
++                }}
++                onKeyDown={(e) => {
++                  if (e.key === 'Enter') {
++                    e.preventDefault()
++                    void submit()
++                  } else if (e.key === 'Escape') {
++                    e.preventDefault()
++                    e.stopPropagation()
++                    setTitle('')
++                    setAdding(false)
++                  }
++                }}
++              />
++            </div>
++          )}
++        </div>
++      )}
++    </section>
++  )
++}
++
++const RELATION_GROUPS: { direction: Relation['direction']; label: string }[] = [
++  { direction: 'blocked_by', label: 'Blocked by' },
++  { direction: 'blocks', label: 'Blocks' },
++  { direction: 'related', label: 'Related' },
++  { direction: 'duplicate', label: 'Duplicate of' },
++  { direction: 'duplicated_by', label: 'Duplicated by' },
++]
++
++type RelationChoice = 'blocks' | 'blocked_by' | 'related' | 'duplicate'
++
++const RELATION_CHOICES: { id: RelationChoice; label: string }[] = [
++  { id: 'blocked_by', label: 'Blocked by…' },
++  { id: 'blocks', label: 'Blocking…' },
++  { id: 'related', label: 'Related to…' },
++  { id: 'duplicate', label: 'Duplicate of…' },
++]
++
++export function RelationsAndLinks({
++  detail,
++  onChanged,
++  relationAnchorRef,
++}: {
++  detail: IssueDetail
++  onChanged: () => void
++  relationAnchorRef?: MutableRefObject<(() => void) | null>
++}) {
++  const t = useTracker()
++  const issue = detail.issue
++  const addButton = useRef<HTMLButtonElement | null>(null)
++  const [menuOpen, setMenuOpen] = useState(false)
++  const [choice, setChoice] = useState<RelationChoice | null>(null)
++  const [linkForm, setLinkForm] = useState(false)
++  const [url, setUrl] = useState('')
++  const [linkTitle, setLinkTitle] = useState('')
++
++  if (relationAnchorRef) relationAnchorRef.current = () => setMenuOpen(true)
++
++  const candidates: MenuItem[] = useMemo(() => {
++    const linked = new Set(detail.relations.map((r) => r.issue.id))
++    return t.issues
++      .filter((i) => i.id !== issue.id && !i.archived_at && !linked.has(i.id))
++      .slice(0, 500)
++      .map((i) => {
++        const s = t.statesById.get(i.state_id)
++        return {
++          id: i.id,
++          label: `${i.identifier} ${i.title}`,
++          icon: s ? <StatusIcon type={s.type} color={s.color} size={14} /> : undefined,
++        }
++      })
++  }, [t.issues, t.statesById, detail.relations, issue.id])
++
++  const addRelation = async (relatedId: string, kind: RelationChoice) => {
++    try {
++      if (kind === 'blocked_by') await trackerApi.addRelation(relatedId, 'blocks', issue.id)
++      else await trackerApi.addRelation(issue.id, kind as RelationType, relatedId)
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const removeRelation = async (id: string) => {
++    try {
++      await trackerApi.deleteRelation(id)
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const submitLink = async () => {
++    const value = url.trim()
++    if (!value) return
++    const normalized = /^[a-z]+:\/\//i.test(value) ? value : `https://${value}`
++    try {
++      await trackerApi.addLink(issue.id, normalized, linkTitle.trim() || undefined)
++      setUrl('')
++      setLinkTitle('')
++      setLinkForm(false)
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const removeLink = async (id: string) => {
++    try {
++      await trackerApi.deleteLink(id)
++      onChanged()
++    } catch (err) {
++      notifyError(err)
++    }
++  }
++
++  const hasContent = detail.relations.length > 0 || detail.links.length > 0
++
++  return (
++    <section className="ld-section" aria-label="Relations and links">
++      <div className="ld-section-head">
++        <span>Relations</span>
++        <span className="ld-spacer" />
++        <button
++          type="button"
++          ref={addButton}
++          className="ld-tab"
++          onClick={() => {
++            setChoice(null)
++            setMenuOpen(true)
++          }}
++        >
++          <Plus size={12} style={{ verticalAlign: '-2px', marginRight: 4 }} />
++          Add relation
++        </button>
++        <button type="button" className="ld-tab" onClick={() => setLinkForm(true)}>
++          <Link2 size={12} style={{ verticalAlign: '-2px', marginRight: 4 }} />
++          Add link
++        </button>
++      </div>
++
++      <Popover
++        open={menuOpen}
++        onOpenChange={(open) => {
++          setMenuOpen(open)
++          if (!open) setChoice(null)
++        }}
++        anchor={addButton.current}
++        align="end"
++        width={choice ? 360 : 220}
++      >
++        {choice === null ? (
++          <MenuList
++            items={RELATION_CHOICES.map((c) => ({ id: c.id, label: c.label }))}
++            onSelect={(item: MenuItem | string) => setChoice(menuId(item) as RelationChoice)}
++          />
++        ) : (
++          <MenuList
++            items={candidates}
++            searchable
++            placeholder="Search issues…"
++            emptyText="No issues found"
++            onSelect={(item: MenuItem | string) => {
++              const kind = choice
++              setMenuOpen(false)
++              setChoice(null)
++              void addRelation(menuId(item), kind)
++            }}
++          />
++        )}
++      </Popover>
++
++      {hasContent && (
++        <div>
++          {RELATION_GROUPS.map((group) => {
++            const items = detail.relations.filter((r) => r.direction === group.direction)
++            if (items.length === 0) return null
++            return (
++              <div key={group.direction} className="ld-rel-group">
++                <div className="ld-rel-label">{group.label}</div>
++                <div className="ld-rows">
++                  {items.map((r) => (
++                    <IssueRow
++                      key={r.id}
++                      issue={t.issuesById.get(r.issue.id) ?? r.issue}
++                      removeLabel="Remove relation"
++                      onRemove={() => void removeRelation(r.id)}
++                    />
++                  ))}
++                </div>
++              </div>
++            )
++          })}
++          {detail.links.length > 0 && (
++            <div className="ld-rel-group">
++              <div className="ld-rel-label">Links</div>
++              <div className="ld-rows">
++                {detail.links.map((l) => (
++                  <a key={l.id} className="ld-row" href={l.url} target="_blank" rel="noreferrer">
++                    <Link2 size={14} color="var(--text-3)" />
++                    <span className="ld-row-title">{l.title || l.url}</span>
++                    <span className="ld-row-meta">{hostOf(l.url)}</span>
++                    <span className="ld-row-actions">
++                      <IconButton
++                        label="Remove link"
++                        icon={<X size={14} />}
++                        size="sm"
++                        onClick={(e: MouseEvent) => {
++                          e.preventDefault()
++                          e.stopPropagation()
++                          void removeLink(l.id)
++                        }}
++                      />
++                    </span>
++                    <ArrowUpRight size={14} color="var(--text-4)" />
++                  </a>
++                ))}
++              </div>
++            </div>
++          )}
++        </div>
++      )}
++
++      {linkForm && (
++        <form
++          className="ld-link-form"
++          onSubmit={(e) => {
++            e.preventDefault()
++            void submitLink()
++          }}
++          onKeyDown={(e) => {
++            if (e.key === 'Escape') {
++              e.stopPropagation()
++              setLinkForm(false)
++            }
++          }}
++        >
++          <input
++            autoFocus
++            className="ld-field"
++            style={{ flex: '2 1 220px' }}
++            placeholder="https://"
++            value={url}
++            onChange={(e) => setUrl(e.target.value)}
++          />
++          <input
++            className="ld-field"
++            style={{ flex: '1 1 140px' }}
++            placeholder="Title (optional)"
++            value={linkTitle}
++            onChange={(e) => setLinkTitle(e.target.value)}
++          />
++          <Button variant="ghost" size="sm" type="button" onClick={() => setLinkForm(false)}>
++            Cancel
++          </Button>
++          <Button variant="primary" size="sm" type="submit" disabled={!url.trim()}>
++            Add link
++          </Button>
++        </form>
++      )}
++    </section>
++  )
++}
+diff --git a/web/src/tracker/detail/SessionAgentPanel.tsx b/web/src/tracker/detail/SessionAgentPanel.tsx
+new file mode 100644
+index 0000000..95e3e96
+--- /dev/null
++++ b/web/src/tracker/detail/SessionAgentPanel.tsx
+@@ -0,0 +1,281 @@
++import { useState } from 'react'
++import { ChevronRight, CircleStop, MessageSquareReply, Send, SquareTerminal } from 'lucide-react'
++import { trackerApi } from '../api'
++import { fullDate, modKey, relativeTime } from '../format'
++import { useTracker } from '../store'
++import type { IssueDetail, SessionActionResult, SessionDetail, SessionQuestion, SessionState } from '../types'
++import { Button, Dialog, toast } from '../ui'
++import { errorMessage } from './shared'
++
++const STATE_LABELS: Record<SessionState, string> = {
++  question: 'Needs answer',
++  blocked: 'Blocked',
++  working: 'Working',
++  idle: 'Idle',
++  ended: 'Ended',
++}
++
++// Same colours as the seeded SES workflow states, so the panel matches the board column.
++const STATE_COLORS: Record<SessionState, string> = {
++  question: '#eb5757',
++  blocked: '#fc7840',
++  working: '#f2c94c',
++  idle: '#e2e2e2',
++  ended: '#95a2b3',
++}
++
++export function sessionKey(session: Pick<SessionDetail, 'machine' | 'session_id'>): string {
++  return `${session.machine}:${session.session_id}`
++}
++
++function shortenPath(path: string | null): string {
++  if (!path) return ''
++  return path.replace(/^\/Users\/indo(?=\/|$)/, '~')
++}
++
++export function SessionAgentPanel({
++  detail,
++  onDetail,
++  compact = false,
++}: {
++  detail: IssueDetail
++  onDetail: (detail: IssueDetail) => void
++  compact?: boolean
++}) {
++  const t = useTracker()
++  const session = detail.session_detail as SessionDetail
++  const [message, setMessage] = useState('')
++  const [busy, setBusy] = useState<string | null>(null)
++  const [confirmInterrupt, setConfirmInterrupt] = useState(false)
++  const label = STATE_LABELS[session.state] ?? session.state
++  const ended = session.state === 'ended'
++
++  const run = async (name: string, action: () => Promise<SessionActionResult>, success: string): Promise<boolean> => {
++    setBusy(name)
++    try {
++      const result = await action()
++      if (!result.ok) {
++        toast.error(`${name} failed`)
++        return false
++      }
++      toast.success(success)
++      void t.refreshIssues()
++      try {
++        onDetail(await trackerApi.issue(detail.issue.id))
++      } catch (err) {
++        toast.error(`Could not reload ${detail.issue.identifier}: ${errorMessage(err)}`)
++      }
++      return true
++    } catch (err) {
++      toast.error(`${name} failed: ${errorMessage(err)}`)
++      return false
++    } finally {
++      setBusy(null)
++    }
++  }
++
++  const send = async () => {
++    const text = message.trim()
++    if (!text || busy) return
++    if (await run('Send', () => trackerApi.sessions.send(session.machine, session.session_id, text), 'Message sent')) {
++      setMessage('')
++    }
++  }
++
++  const answer = (text: string, request: string) =>
++    run('Answer', () => trackerApi.sessions.answer(session.machine, session.session_id, text, request), 'Answer sent')
++
++  const interrupt = async () => {
++    setConfirmInterrupt(false)
++    await run('Interrupt', () => trackerApi.sessions.interrupt(session.machine, session.session_id), 'Session interrupted')
++  }
++
++  return (
++    <section className="ld-agent" aria-label="omo session">
++      <div className="ld-agent-head">
++        <SquareTerminal size={14} color="var(--text-3)" />
++        <span className="ld-agent-title">omo session</span>
++        <span className="ld-lane-badge">
++          <span className="ld-lane-dot" style={{ background: STATE_COLORS[session.state] ?? STATE_COLORS.idle }} />
++          {label}
++        </span>
++        <span style={{ flex: 1 }} />
++        {session.streaming ? (
++          <Button
++            size="sm"
++            variant="danger"
++            icon={<CircleStop size={13} />}
++            disabled={busy !== null}
++            onClick={() => setConfirmInterrupt(true)}
++          >
++            Interrupt
++          </Button>
++        ) : null}
++      </div>
++      <dl className="ld-agent-grid">
++        <dt>Machine</dt>
++        <dd>
++          <span className="ld-session-chip">{session.machine}</span>
++        </dd>
++        {session.cwd ? (
++          <>
++            <dt>Directory</dt>
++            <dd className="mono" title={session.cwd}>
++              {shortenPath(session.cwd)}
++            </dd>
++          </>
++        ) : null}
++        {!compact ? (
++          <>
++            <dt>Session</dt>
++            <dd className="mono">{session.session_id}</dd>
++          </>
++        ) : null}
++        <dt>Messages</dt>
++        <dd>
++          {session.message_count}
++          {session.pending_messages > 0 ? ` · ${session.pending_messages} queued` : ''}
++        </dd>
++        <dt>Updated</dt>
++        <dd title={fullDate(session.updated_at)}>{relativeTime(session.updated_at) || '—'}</dd>
++      </dl>
++
++      {session.questions.map((q) => (
++        <QuestionBlock key={q.request_id} question={q} disabled={busy !== null} onAnswer={answer} />
++      ))}
++
++      <details className="ld-agent-block" open={!compact}>
++        <summary>
++          <ChevronRight size={12} />
++          Last user message
++        </summary>
++        <pre className="ld-agent-pre">{session.last_user || 'No messages yet'}</pre>
++      </details>
++      <details className="ld-agent-block" open={!compact}>
++        <summary>
++          <ChevronRight size={12} />
++          Last assistant message
++        </summary>
++        <pre className="ld-agent-pre">{session.last_assistant || 'No reply yet'}</pre>
++      </details>
++
++      {!ended ? (
++        <form
++          className="ld-agent-form"
++          onSubmit={(e) => {
++            e.preventDefault()
++            void send()
++          }}
++        >
++          <label>
++            Send message
++            <textarea
++              className="ld-field"
++              rows={3}
++              value={message}
++              placeholder={session.streaming ? 'Steer the running turn…' : 'Message this session…'}
++              onChange={(e) => setMessage(e.target.value)}
++              onKeyDown={(e) => {
++                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++                  e.preventDefault()
++                  void send()
++                } else if (e.key === 'Escape') {
++                  e.stopPropagation()
++                  ;(e.target as HTMLTextAreaElement).blur()
++                }
++              }}
++            />
++          </label>
++          <div className="ld-agent-form-row">
++            <span className="ld-comment-time" style={{ flex: 1 }}>
++              {modKey()} Enter to send
++            </span>
++            <Button size="sm" variant="primary" type="submit" icon={<Send size={13} />} disabled={!message.trim() || busy !== null}>
++              {busy === 'Send' ? 'Sending…' : 'Send'}
++            </Button>
++          </div>
++        </form>
++      ) : null}
++
++      <Dialog
++        open={confirmInterrupt}
++        onOpenChange={setConfirmInterrupt}
++        title="Interrupt session?"
++        width={400}
++        footer={
++          <>
++            <Button variant="ghost" onClick={() => setConfirmInterrupt(false)}>
++              Cancel
++            </Button>
++            <Button variant="danger" data-autofocus onClick={() => void interrupt()}>
++              Interrupt
++            </Button>
++          </>
++        }
++      >
++        <p className="t-2" style={{ fontSize: 13, margin: 0 }}>
++          This stops the running turn in <b className="w-510">{detail.issue.title}</b> on {session.machine}.
++        </p>
++      </Dialog>
++    </section>
++  )
++}
++
++function QuestionBlock({
++  question,
++  disabled,
++  onAnswer,
++}: {
++  question: SessionQuestion
++  disabled: boolean
++  onAnswer: (text: string, request: string) => Promise<boolean>
++}) {
++  const [text, setText] = useState('')
++  const submit = async () => {
++    const value = text.trim()
++    if (!value || disabled) return
++    if (await onAnswer(value, question.request_id)) setText('')
++  }
++  return (
++    <div className="ld-agent-form ld-session-question">
++      <span className="ld-session-question-title">
++        <MessageSquareReply size={13} />
++        Pending question
++      </span>
++      {question.questions.map((item) => (
++        <div key={item.id} className="ld-session-question-item">
++          {item.header ? <div className="ld-session-question-header">{item.header}</div> : null}
++          {item.question ? <div className="ld-session-question-text">{item.question}</div> : null}
++          {item.options.length > 0 ? (
++            <div className="ld-session-options">
++              {item.options.map((option) => (
++                <Button key={option} size="sm" variant="secondary" disabled={disabled} onClick={() => void onAnswer(option, question.request_id)}>
++                  {option}
++                </Button>
++              ))}
++            </div>
++          ) : null}
++        </div>
++      ))}
++      <div className="ld-agent-form-row">
++        <input
++          className="ld-field"
++          style={{ flex: 1 }}
++          value={text}
++          placeholder="Write an answer…"
++          aria-label="Answer"
++          onChange={(e) => setText(e.target.value)}
++          onKeyDown={(e) => {
++            if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
++              e.preventDefault()
++              void submit()
++            }
++          }}
++        />
++        <Button size="sm" variant="primary" disabled={!text.trim() || disabled} onClick={() => void submit()}>
++          Answer
++        </Button>
++      </div>
++    </div>
++  )
++}
+diff --git a/web/src/tracker/detail/detail.css b/web/src/tracker/detail/detail.css
+new file mode 100644
+index 0000000..3c34d68
+--- /dev/null
++++ b/web/src/tracker/detail/detail.css
+@@ -0,0 +1,980 @@
++.lin .ld-page {
++  display: flex;
++  flex-direction: column;
++  height: 100%;
++  min-height: 0;
++  background: var(--panel);
++}
++
++.lin .ld-header {
++  height: var(--header-h);
++  flex: none;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 12px 0 16px;
++  border-bottom: 1px solid var(--border);
++}
++
++.lin .ld-crumbs {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  min-width: 0;
++  flex: 1;
++  color: var(--text-3);
++  font-size: 13px;
++}
++
++.lin .ld-crumb {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 24px;
++  padding: 0 6px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-2);
++  white-space: nowrap;
++}
++
++.lin a.ld-crumb:hover,
++.lin button.ld-crumb:hover {
++  background: var(--bg-hover);
++  color: var(--text-1);
++}
++
++.lin .ld-crumb-current {
++  color: var(--text-1);
++  font-weight: 510;
++}
++
++.lin .ld-crumb-title {
++  color: var(--text-3);
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  min-width: 0;
++}
++
++.lin .ld-team-badge {
++  width: 16px;
++  height: 16px;
++  border-radius: 4px;
++  display: inline-grid;
++  place-items: center;
++  font-size: 9px;
++  font-weight: 590;
++  color: #fff;
++  flex: none;
++}
++
++.lin .ld-header-actions {
++  display: flex;
++  align-items: center;
++  gap: 2px;
++  flex: none;
++}
++
++.lin .ld-nav-count {
++  color: var(--text-3);
++  font-size: 12px;
++  padding: 0 4px;
++  font-variant-numeric: tabular-nums;
++}
++
++.lin .ld-body {
++  flex: 1;
++  min-height: 0;
++  display: flex;
++}
++
++.lin .ld-main {
++  flex: 1;
++  min-width: 0;
++  overflow-y: auto;
++}
++
++.lin .ld-main-inner {
++  max-width: 820px;
++  margin: 0 auto;
++  padding: 32px 40px 80px;
++}
++
++.lin .ld-side {
++  width: 300px;
++  flex: none;
++  border-left: 1px solid var(--border);
++  overflow-y: auto;
++  padding: 12px 12px 40px;
++}
++
++.lin .ld-title {
++  width: 100%;
++  resize: none;
++  border: 0;
++  background: transparent;
++  font-size: 24px;
++  line-height: 1.3;
++  font-weight: 590;
++  letter-spacing: -0.4px;
++  color: var(--text-1);
++  padding: 2px 0;
++  overflow: hidden;
++  display: block;
++}
++
++.lin .ld-title::placeholder {
++  color: var(--text-4);
++}
++
++.lin .ld-desc {
++  margin-top: 12px;
++  min-height: 40px;
++  border-radius: var(--radius-ctl);
++}
++
++.lin .ld-desc-view {
++  cursor: text;
++  min-height: 28px;
++}
++
++.lin .ld-desc-placeholder {
++  color: var(--text-4);
++  font-size: 15px;
++}
++
++.lin .ld-desc-editor {
++  border: 1px solid var(--border);
++  border-radius: var(--radius-pop);
++  background: var(--bg-subtle);
++}
++
++.lin .ld-desc-tabs {
++  display: flex;
++  align-items: center;
++  gap: 2px;
++  padding: 4px;
++  border-bottom: 1px solid var(--border);
++}
++
++.lin .ld-tab {
++  height: 24px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-3);
++  font-size: 12px;
++  font-weight: 510;
++}
++
++.lin .ld-tab:hover {
++  color: var(--text-1);
++  background: var(--bg-hover);
++}
++
++.lin .ld-tab[aria-selected='true'] {
++  color: var(--text-1);
++  background: var(--bg-active);
++}
++
++.lin .ld-desc-status {
++  margin-left: auto;
++  padding-right: 6px;
++  color: var(--text-4);
++  font-size: 12px;
++}
++
++.lin .ld-desc-textarea {
++  width: 100%;
++  resize: none;
++  border: 0;
++  background: transparent;
++  color: var(--text-1);
++  font-size: 15px;
++  line-height: 1.6;
++  padding: 10px 12px;
++  display: block;
++  overflow: hidden;
++}
++
++.lin .ld-desc-preview {
++  padding: 10px 12px;
++  min-height: 80px;
++}
++
++.lin .ld-section {
++  margin-top: 28px;
++}
++
++.lin .ld-section-head {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  height: 28px;
++  color: var(--text-2);
++  font-size: 13px;
++  font-weight: 510;
++}
++
++.lin .ld-section-head .ld-count {
++  color: var(--text-3);
++  font-weight: 400;
++}
++
++.lin .ld-section-head .ld-spacer {
++  flex: 1;
++}
++
++.lin .ld-progress {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  color: var(--text-3);
++  font-size: 12px;
++  font-weight: 400;
++}
++
++.lin .ld-progress svg circle {
++  transition: stroke-dashoffset 180ms var(--ease);
++}
++
++.lin .ld-rows {
++  margin-top: 4px;
++  border: 1px solid var(--border);
++  border-radius: var(--radius-pop);
++  overflow: hidden;
++}
++
++.lin .ld-row {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  height: 36px;
++  padding: 0 10px;
++  color: var(--text-1);
++  border-top: 1px solid var(--border);
++  min-width: 0;
++}
++
++.lin .ld-row:first-child {
++  border-top: 0;
++}
++
++.lin .ld-row:hover {
++  background: var(--bg-hover);
++}
++
++.lin .ld-row-id {
++  color: var(--text-3);
++  font-size: 12px;
++  width: 64px;
++  flex: none;
++  font-variant-numeric: tabular-nums;
++}
++
++.lin .ld-row-title {
++  flex: 1;
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  font-weight: 510;
++}
++
++.lin .ld-row-meta {
++  color: var(--text-3);
++  font-size: 12px;
++  flex: none;
++}
++
++.lin .ld-row-actions {
++  opacity: 0;
++  display: flex;
++  gap: 2px;
++  transition: opacity 120ms var(--ease);
++}
++
++.lin .ld-row:hover .ld-row-actions,
++.lin .ld-row:focus-within .ld-row-actions {
++  opacity: 1;
++}
++
++.lin .ld-inline-input {
++  flex: 1;
++  border: 0;
++  background: transparent;
++  height: 34px;
++  color: var(--text-1);
++  min-width: 0;
++}
++
++.lin .ld-inline-input::placeholder {
++  color: var(--text-4);
++}
++
++.lin .ld-rel-group {
++  margin-top: 6px;
++}
++
++.lin .ld-rel-label {
++  font-size: 12px;
++  color: var(--text-3);
++  margin: 10px 0 4px;
++}
++
++.lin .ld-link-form {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
++  margin-top: 6px;
++  padding: 8px;
++  border: 1px solid var(--border);
++  border-radius: var(--radius-pop);
++}
++
++.lin .ld-field {
++  height: 30px;
++  border: 1px solid var(--border-strong);
++  border-radius: var(--radius-ctl);
++  background: var(--input);
++  padding: 0 8px;
++  color: var(--text-1);
++  min-width: 0;
++}
++
++.lin .ld-field::placeholder {
++  color: var(--text-4);
++}
++
++.lin .ld-field:focus {
++  border-color: var(--accent);
++}
++
++.lin textarea.ld-field {
++  height: auto;
++  padding: 6px 8px;
++  resize: vertical;
++  line-height: 1.5;
++}
++
++.lin .ld-activity {
++  margin-top: 36px;
++  padding-top: 20px;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-activity-head {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  margin-bottom: 12px;
++}
++
++.lin .ld-activity-head h3 {
++  margin: 0;
++  font-size: 15px;
++  font-weight: 590;
++  color: var(--text-1);
++}
++
++.lin .ld-event {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  min-height: 28px;
++  padding: 2px 0 2px 4px;
++  color: var(--text-3);
++  font-size: 12.5px;
++}
++
++.lin .ld-event-icon {
++  width: 20px;
++  height: 20px;
++  display: grid;
++  place-items: center;
++  flex: none;
++  color: var(--text-3);
++}
++
++.lin .ld-event b {
++  color: var(--text-2);
++  font-weight: 510;
++}
++
++.lin .ld-event-time {
++  color: var(--text-4);
++}
++
++.lin .ld-comment {
++  margin: 10px 0;
++  border: 1px solid var(--border);
++  border-radius: var(--radius-pop);
++  background: var(--card);
++}
++
++.lin .ld-comment-item {
++  padding: 10px 12px;
++  position: relative;
++}
++
++.lin .ld-comment-item + .ld-comment-item {
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-comment-reply {
++  padding-left: 40px;
++}
++
++.lin .ld-comment-head {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  font-size: 13px;
++}
++
++.lin .ld-comment-author {
++  color: var(--text-1);
++  font-weight: 510;
++}
++
++.lin .ld-comment-time {
++  color: var(--text-4);
++  font-size: 12px;
++}
++
++.lin .ld-comment-tools {
++  margin-left: auto;
++  display: flex;
++  gap: 2px;
++  opacity: 0;
++  transition: opacity 120ms var(--ease);
++}
++
++.lin .ld-comment-item:hover .ld-comment-tools,
++.lin .ld-comment-item:focus-within .ld-comment-tools {
++  opacity: 1;
++}
++
++.lin .ld-comment-body {
++  margin: 4px 0 0 28px;
++}
++
++.lin .ld-comment-body .lin-markdown {
++  font-size: 13.5px;
++}
++
++.lin .ld-reactions {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 4px;
++  margin: 6px 0 0 28px;
++}
++
++.lin .ld-reaction {
++  display: inline-flex;
++  align-items: center;
++  gap: 4px;
++  height: 22px;
++  padding: 0 7px;
++  border-radius: 11px;
++  border: 1px solid var(--border-strong);
++  font-size: 12px;
++  color: var(--text-2);
++}
++
++.lin .ld-reaction:hover {
++  background: var(--bg-hover);
++}
++
++.lin .ld-reaction[aria-pressed='true'] {
++  background: var(--bg-selected);
++  border-color: rgba(113, 112, 255, 0.4);
++  color: var(--text-1);
++}
++
++.lin .ld-emoji-grid {
++  display: grid;
++  grid-template-columns: repeat(4, 32px);
++  gap: 2px;
++  padding: 4px;
++}
++
++.lin .ld-emoji-grid button {
++  height: 32px;
++  border-radius: var(--radius-ctl);
++  font-size: 16px;
++}
++
++.lin .ld-emoji-grid button:hover {
++  background: var(--bg-active);
++}
++
++.lin .ld-resolved {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 8px 12px;
++  color: var(--text-3);
++  font-size: 12.5px;
++}
++
++.lin .ld-composer {
++  margin-top: 16px;
++  border: 1px solid var(--border-strong);
++  border-radius: var(--radius-pop);
++  background: var(--card);
++  transition: border-color 120ms var(--ease);
++}
++
++.lin .ld-composer:focus-within {
++  border-color: var(--accent);
++}
++
++.lin .ld-composer textarea {
++  width: 100%;
++  border: 0;
++  background: transparent;
++  resize: none;
++  padding: 10px 12px 4px;
++  color: var(--text-1);
++  font-size: 13.5px;
++  line-height: 1.55;
++  display: block;
++  overflow: hidden;
++}
++
++.lin .ld-composer textarea::placeholder {
++  color: var(--text-4);
++}
++
++.lin .ld-composer-foot {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  gap: 8px;
++  padding: 4px 8px 8px;
++}
++
++.lin .ld-composer-hint {
++  color: var(--text-4);
++  font-size: 12px;
++  margin-right: auto;
++  padding-left: 4px;
++}
++
++.lin .ld-composer.ld-composer-inline {
++  margin: 0;
++  border-width: 0;
++  border-top: 1px solid var(--border);
++  border-radius: 0 0 var(--radius-pop) var(--radius-pop);
++  background: transparent;
++}
++
++.lin .ld-props {
++  display: flex;
++  flex-direction: column;
++  gap: 1px;
++}
++
++.lin .ld-props-group {
++  padding: 6px 0;
++}
++
++.lin .ld-props-group + .ld-props-group {
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-props-title {
++  font-size: 12px;
++  color: var(--text-3);
++  padding: 4px 8px;
++  font-weight: 510;
++}
++
++.lin .ld-prop {
++  display: flex;
++  align-items: center;
++  min-height: 32px;
++}
++
++.lin .ld-prop-label {
++  width: 92px;
++  flex: none;
++  padding-left: 8px;
++  color: var(--text-3);
++  font-size: 12.5px;
++}
++
++.lin .ld-prop-value {
++  flex: 1;
++  min-width: 0;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  min-height: 30px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-1);
++  font-size: 13px;
++  text-align: left;
++}
++
++.lin .ld-prop-value:hover {
++  background: var(--bg-hover);
++}
++
++.lin .ld-prop-value .ld-muted {
++  color: var(--text-3);
++}
++
++.lin .ld-prop-value .ld-text {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  min-width: 0;
++}
++
++.lin .ld-label-pill {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 22px;
++  padding: 0 8px;
++  border-radius: 11px;
++  border: 1px solid var(--border-strong);
++  color: var(--text-2);
++  font-size: 12px;
++  max-width: 100%;
++}
++
++.lin .ld-labels {
++  flex-wrap: wrap;
++  padding-top: 4px;
++  padding-bottom: 4px;
++  gap: 4px;
++}
++
++.lin .ld-due-overdue {
++  color: var(--danger);
++}
++
++.lin .ld-due-soon {
++  color: var(--warn);
++}
++
++.lin .ld-agent {
++  margin-top: 24px;
++  border: 1px solid var(--border);
++  border-radius: var(--radius-pop);
++  background: var(--bg-subtle);
++}
++
++.lin .ld-agent-head {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 10px 12px;
++  border-bottom: 1px solid var(--border);
++}
++
++.lin .ld-agent-title {
++  font-weight: 590;
++  color: var(--text-1);
++}
++
++.lin .ld-lane-badge {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 22px;
++  padding: 0 8px;
++  border-radius: 11px;
++  font-size: 12px;
++  font-weight: 510;
++  background: var(--bg-active);
++  color: var(--text-1);
++}
++
++.lin .ld-lane-dot {
++  width: 7px;
++  height: 7px;
++  border-radius: 50%;
++}
++
++.lin .ld-agent-grid {
++  display: grid;
++  grid-template-columns: 110px 1fr;
++  gap: 4px 12px;
++  padding: 10px 12px;
++  font-size: 12.5px;
++}
++
++.lin .ld-agent-grid dt {
++  color: var(--text-3);
++}
++
++.lin .ld-agent-grid dd {
++  margin: 0;
++  color: var(--text-2);
++  min-width: 0;
++  overflow-wrap: anywhere;
++}
++
++.lin .ld-agent-block {
++  padding: 8px 12px;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-agent-block summary {
++  cursor: default;
++  color: var(--text-2);
++  font-size: 12.5px;
++  font-weight: 510;
++  list-style: none;
++  display: flex;
++  align-items: center;
++  gap: 6px;
++}
++
++.lin .ld-agent-block summary::-webkit-details-marker {
++  display: none;
++}
++
++.lin .ld-agent-pre {
++  margin: 6px 0 0;
++  max-height: 260px;
++  overflow: auto;
++  white-space: pre-wrap;
++  font-family: var(--font-mono);
++  font-size: 12px;
++  line-height: 1.5;
++  color: var(--text-2);
++}
++
++.lin .ld-agent-actions {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
++  padding: 10px 12px;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-agent-form {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  padding: 10px 12px;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-agent-form label {
++  display: flex;
++  flex-direction: column;
++  gap: 4px;
++  font-size: 12px;
++  color: var(--text-3);
++}
++
++.lin .ld-agent-form-row {
++  display: flex;
++  gap: 8px;
++  justify-content: flex-end;
++  align-items: center;
++}
++
++.lin .ld-error {
++  color: var(--danger);
++  font-size: 12.5px;
++}
++
++.lin .ld-transcript-item {
++  padding: 4px 0;
++  border-top: 1px solid var(--border);
++}
++
++.lin .ld-transcript-item:first-child {
++  border-top: 0;
++}
++
++.lin .ld-transcript-role {
++  color: var(--text-3);
++  font-size: 11.5px;
++  text-transform: uppercase;
++  letter-spacing: 0.3px;
++}
++
++.lin .ld-session-chip {
++  display: inline-flex;
++  align-items: center;
++  height: 18px;
++  padding: 0 6px;
++  border-radius: 4px;
++  background: var(--bg-active);
++  color: var(--text-2);
++  font-size: 11.5px;
++  font-weight: 510;
++}
++
++.lin .ld-session-question-title {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  color: var(--text-1);
++  font-size: 12.5px;
++  font-weight: 590;
++}
++
++.lin .ld-session-question-item {
++  display: grid;
++  gap: 6px;
++}
++
++.lin .ld-session-question-header {
++  color: var(--text-3);
++  font-size: 11.5px;
++  text-transform: uppercase;
++  letter-spacing: 0.3px;
++}
++
++.lin .ld-session-question-text {
++  color: var(--text-1);
++  font-size: 13px;
++  line-height: 1.5;
++  white-space: pre-wrap;
++}
++
++.lin .ld-session-options {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 6px;
++}
++
++.lin .ld-empty {
++  flex: 1;
++  display: grid;
++  place-items: center;
++  color: var(--text-3);
++  padding: 40px;
++  text-align: center;
++}
++
++.lin .ld-skeleton {
++  height: 14px;
++  border-radius: 4px;
++  background: var(--bg-active);
++  margin: 10px 0;
++}
++
++.lin .ld-peek-overlay {
++  position: fixed;
++  inset: 0;
++  z-index: 60;
++  background: transparent;
++}
++
++.lin .ld-peek {
++  position: fixed;
++  top: 8px;
++  right: 8px;
++  bottom: 8px;
++  width: min(680px, calc(100vw - 280px));
++  z-index: 61;
++  display: flex;
++  flex-direction: column;
++  background: var(--panel);
++  border-radius: var(--radius-pop);
++  box-shadow: var(--shadow-dialog);
++  overflow: hidden;
++}
++
++.lin .ld-peek .ld-main-inner {
++  padding: 20px 24px 60px;
++}
++
++.lin .ld-peek .ld-title {
++  font-size: 20px;
++}
++
++.lin .ld-peek-props {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 4px;
++  margin-top: 14px;
++}
++
++.lin .ld-chip {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 26px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  border: 1px solid var(--border-strong);
++  color: var(--text-2);
++  font-size: 12.5px;
++  max-width: 220px;
++}
++
++.lin .ld-chip:hover {
++  background: var(--bg-hover);
++  color: var(--text-1);
++}
++
++.lin .ld-chip .ld-text {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.lin .ld-dialog-body {
++  color: var(--text-2);
++  font-size: 13px;
++  line-height: 1.55;
++}
++
++@media (max-width: 767px) {
++  .lin .ld-body {
++    flex-direction: column;
++    overflow-y: auto;
++  }
++
++  .lin .ld-main {
++    overflow: visible;
++  }
++
++  .lin .ld-main-inner {
++    padding: 16px 16px 80px;
++  }
++
++  .lin .ld-side {
++    order: -1;
++    width: 100%;
++    border-left: 0;
++    border-bottom: 1px solid var(--border);
++    overflow: visible;
++    padding: 8px;
++  }
++
++  .lin .ld-title {
++    font-size: 20px;
++  }
++
++  .lin .ld-crumb-title,
++  .lin .ld-nav-count {
++    display: none;
++  }
++
++  .lin .ld-peek {
++    inset: 0;
++    width: 100%;
++    border-radius: 0;
++  }
++
++  .lin .ld-row-actions,
++  .lin .ld-comment-tools {
++    opacity: 1;
++  }
++
++  .lin .ld-comment-reply {
++    padding-left: 20px;
++  }
++}
+diff --git a/web/src/tracker/detail/index.ts b/web/src/tracker/detail/index.ts
+new file mode 100644
+index 0000000..4d94d2b
+--- /dev/null
++++ b/web/src/tracker/detail/index.ts
+@@ -0,0 +1 @@
++export { IssuePage, IssuePeek } from './IssueView'
+diff --git a/web/src/tracker/detail/shared.tsx b/web/src/tracker/detail/shared.tsx
+new file mode 100644
+index 0000000..2caebbb
+--- /dev/null
++++ b/web/src/tracker/detail/shared.tsx
+@@ -0,0 +1,96 @@
++import { useEffect, useLayoutEffect, useState } from 'react'
++import type { RefObject } from 'react'
++import ReactMarkdown from 'react-markdown'
++import { TrackerApiError } from '../api'
++import type { TrackerState } from '../store'
++import { cycleLabel } from '../format'
++import { toast } from '../ui'
++import type { MenuItem } from '../ui'
++
++const MOBILE_QUERY = '(max-width: 767px)'
++
++export function useIsMobile(): boolean {
++  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches)
++  useEffect(() => {
++    const mq = window.matchMedia(MOBILE_QUERY)
++    const onChange = () => setMobile(mq.matches)
++    onChange()
++    mq.addEventListener('change', onChange)
++    return () => mq.removeEventListener('change', onChange)
++  }, [])
++  return mobile
++}
++
++export function useAutosize(ref: RefObject<HTMLTextAreaElement>, value: string, minHeight = 0) {
++  useLayoutEffect(() => {
++    const el = ref.current
++    if (!el) return
++    el.style.height = '0px'
++    el.style.height = `${Math.max(minHeight, el.scrollHeight)}px`
++  }, [ref, value, minHeight])
++}
++
++export function errorMessage(err: unknown): string {
++  return err instanceof TrackerApiError || err instanceof Error ? err.message : String(err)
++}
++
++export function notifyError(err: unknown) {
++  toast(errorMessage(err))
++}
++
++export async function copyText(text: string, confirmation: string) {
++  try {
++    await navigator.clipboard.writeText(text)
++    toast(confirmation)
++  } catch (err) {
++    notifyError(err)
++  }
++}
++
++// FE-A's MenuList contract does not pin whether onSelect receives the item or its id; accept both.
++export function menuId(arg: MenuItem | string): string {
++  return typeof arg === 'string' ? arg : arg.id
++}
++
++export const REACTION_EMOJIS = ['👍', '👎', '❤️', '😄', '🎉', '😕', '🚀', '👀']
++
++export function Markdown({ source, className = '' }: { source: string; className?: string }) {
++  return (
++    <div className={`lin-markdown ${className}`}>
++      <ReactMarkdown
++        components={{
++          a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
++        }}
++      >
++        {source}
++      </ReactMarkdown>
++    </div>
++  )
++}
++
++export function resolveValue(value: string | null, t: TrackerState): string {
++  if (value === null || value === '') return 'none'
++  const state = t.statesById.get(value)
++  if (state) return state.name
++  const user = t.usersById.get(value)
++  if (user) return user.name
++  const label = t.labelsById.get(value)
++  if (label) return label.name
++  const project = t.projectsById.get(value)
++  if (project) return project.name
++  const cycle = t.cyclesById.get(value)
++  if (cycle) return cycleLabel(cycle)
++  const issue = t.issuesById.get(value)
++  if (issue) return issue.identifier
++  const milestone = t.milestones.find((m) => m.id === value)
++  if (milestone) return milestone.name
++  return value
++}
++
++export function hostOf(url: string): string {
++  try {
++    return new URL(url).host
++  } catch {
++    return url
++  }
++}
+diff --git a/web/src/tracker/detail/useIssueDetail.ts b/web/src/tracker/detail/useIssueDetail.ts
+new file mode 100644
+index 0000000..65e2309
+--- /dev/null
++++ b/web/src/tracker/detail/useIssueDetail.ts
+@@ -0,0 +1,88 @@
++import { useCallback, useEffect, useRef, useState } from 'react'
++import { trackerApi } from '../api'
++import { useTracker } from '../store'
++import type { Issue, IssueDetail } from '../types'
++import { errorMessage } from './shared'
++
++export interface IssueDetailHandle {
++  detail: IssueDetail | null
++  issue: Issue | null
++  loading: boolean
++  error: string | null
++  notFound: boolean
++  reload: () => Promise<void>
++  setDetail: (detail: IssueDetail) => void
++}
++
++export function useIssueDetail(idOrIdentifier: string | null): IssueDetailHandle {
++  const t = useTracker()
++  const [detail, setDetailState] = useState<IssueDetail | null>(null)
++  const [loading, setLoading] = useState(false)
++  const [error, setError] = useState<string | null>(null)
++  const [notFound, setNotFound] = useState(false)
++  const requestId = useRef(0)
++  const upsertIssue = t.upsertIssue
++
++  const reload = useCallback(async () => {
++    if (!idOrIdentifier) return
++    const current = ++requestId.current
++    setLoading(true)
++    try {
++      const next = await trackerApi.issue(idOrIdentifier)
++      if (current !== requestId.current) return
++      setDetailState(next)
++      setError(null)
++      setNotFound(false)
++      upsertIssue(next.issue)
++    } catch (err) {
++      if (current !== requestId.current) return
++      const status = (err as { status?: number }).status
++      setNotFound(status === 404)
++      setError(errorMessage(err))
++    } finally {
++      if (current === requestId.current) setLoading(false)
++    }
++  }, [idOrIdentifier, upsertIssue])
++
++  useEffect(() => {
++    setDetailState(null)
++    setNotFound(false)
++    setError(null)
++    void reload()
++  }, [reload])
++
++  const storeIssue =
++    (detail && t.issuesById.get(detail.issue.id)) ||
++    (idOrIdentifier ? t.issuesById.get(idOrIdentifier) ?? t.issuesByIdentifier.get(idOrIdentifier) : undefined) ||
++    null
++
++  // The store polls every 10s; when it sees a newer revision, pull the full detail (comments, activity) too.
++  const storeStamp = storeIssue?.updated_at
++  const detailStamp = detail?.issue.updated_at
++  const laneStamp = storeIssue?.lane ? `${storeIssue.lane.status}:${storeIssue.lane.last_activity_at}` : null
++  const seenLane = useRef<string | null>(null)
++  useEffect(() => {
++    if (!detail || !storeStamp || !detailStamp) return
++    const laneChanged = laneStamp !== null && seenLane.current !== null && seenLane.current !== laneStamp
++    seenLane.current = laneStamp
++    if (storeStamp > detailStamp || laneChanged) void reload()
++  }, [storeStamp, detailStamp, laneStamp, detail, reload])
++
++  const setDetail = useCallback(
++    (next: IssueDetail) => {
++      setDetailState(next)
++      upsertIssue(next.issue)
++    },
++    [upsertIssue],
++  )
++
++  return {
++    detail,
++    issue: storeIssue ?? detail?.issue ?? null,
++    loading,
++    error,
++    notFound,
++    reload,
++    setDetail,
++  }
++}

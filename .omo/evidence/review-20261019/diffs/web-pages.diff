@@ -1,0 +1,2488 @@
+diff --git a/web/src/tracker/pages/CyclePage.tsx b/web/src/tracker/pages/CyclePage.tsx
+new file mode 100644
+index 0000000..532b5f6
+--- /dev/null
++++ b/web/src/tracker/pages/CyclePage.tsx
+@@ -0,0 +1,103 @@
++import { Star } from 'lucide-react'
++import { useMemo } from 'react'
++import { cycleLabel, cycleProgressRatio, cycleStatus, shortDate } from '../format'
++import { IssueCollection } from '../issues'
++import { BurnUpChart, CycleLegend, cycleIssues, cycleStats } from '../projects/cycles'
++import { hrefFor } from '../router'
++import { PageHeader } from '../shell/Header'
++import { useTracker } from '../store'
++import { IconButton } from '../ui'
++
++const STATUS_LABEL = { current: 'Current', upcoming: 'Upcoming', past: 'Completed' } as const
++
++export function CyclePage({ cycleId }: { cycleId: string }) {
++  const t = useTracker()
++  const cycle = t.cyclesById.get(cycleId)
++  const issues = useMemo(() => cycleIssues(cycleId, t.issues), [cycleId, t.issues])
++
++  if (!cycle) {
++    return (
++      <div className="flex h-full flex-col">
++        <PageHeader title="Cycle" />
++        <div className="flex flex-1 items-center justify-center text-[13px] t-3">{t.ready ? 'Cycle not found' : 'Loading...'}</div>
++      </div>
++    )
++  }
++
++  const team = t.teamsById.get(cycle.team_id)
++  const status = cycleStatus(cycle)
++  const stats = cycleStats(cycle.id, t.issues, t.statesById)
++  const favorited = t.isFavorite('cycle', cycle.id)
++  const daysLeft = Math.max(0, Math.ceil((new Date(cycle.ends_at).getTime() - Date.now()) / 86_400_000))
++
++  return (
++    <div className="flex h-full min-h-0 flex-col">
++      <PageHeader
++        title={
++          <span className="flex min-w-0 items-center gap-1.5">
++            {team && (
++              <>
++                <span className="h-3.5 w-3.5 rounded-[4px]" style={{ background: team.color }} />
++                <a href={hrefFor(`/team/${team.key}/cycles`)} className="t-3 hover:text-[var(--text-1)]">
++                  {team.name}
++                </a>
++                <span className="t-4">›</span>
++              </>
++            )}
++            <span className="truncate t-1">{cycleLabel(cycle)}</span>
++          </span>
++        }
++        actions={
++          <IconButton
++            label={favorited ? 'Remove from favorites' : 'Add to favorites'}
++            icon={<Star size={14} fill={favorited ? 'var(--warn)' : 'none'} color={favorited ? 'var(--warn)' : undefined} />}
++            active={favorited}
++            onClick={() => void t.toggleFavorite('cycle', cycle.id).catch(t.reportError)}
++          />
++        }
++      />
++      <div className="min-h-0 flex-1 overflow-auto">
++        <div className="flex gap-6 border-b px-6 py-5 max-lg:flex-col max-md:px-4">
++          <div className="flex min-w-[220px] flex-col gap-3">
++            <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
++              <span className="rounded-[4px] px-1.5 py-0.5 t-2" style={{ background: 'var(--bg-active)' }}>
++                {STATUS_LABEL[status]}
++              </span>
++              <span className="rounded-[4px] px-1.5 py-0.5 t-2 tabular" style={{ background: 'var(--bg-active)' }}>
++                {shortDate(cycle.starts_at)} → {shortDate(cycle.ends_at)}
++              </span>
++            </div>
++            <h1 className="text-[20px] w-590 t-1">{cycleLabel(cycle)}</h1>
++            {cycle.description && <p className="text-[13px] t-3">{cycle.description}</p>}
++            <p className="text-[12px] t-3">
++              {status === 'current'
++                ? `${daysLeft} ${daysLeft === 1 ? 'day' : 'days'} left · ${Math.round(cycleProgressRatio(cycle) * 100)}% elapsed`
++                : status === 'upcoming'
++                  ? `Starts ${shortDate(cycle.starts_at)}`
++                  : `Ended ${shortDate(cycle.completed_at ?? cycle.ends_at)}`}
++            </p>
++            <div className="mt-2">
++              <div className="mb-3 text-[13px] w-510 t-2">Progress</div>
++              <CycleLegend stats={stats} />
++            </div>
++          </div>
++          <div className="min-w-0 flex-1">
++            <BurnUpChart cycle={cycle} issues={t.issues} />
++          </div>
++        </div>
++        <IssueCollection
++          issues={issues}
++          viewKey={`cycle:${cycle.id}`}
++          defaultDisplay={{ grouping: 'status' }}
++          emptyState={
++            <div className="p-10 text-center text-[13px] t-3">
++              No issues in this cycle. Add issues from the backlog with <span className="t-2">⇧C</span>.
++            </div>
++          }
++        />
++      </div>
++    </div>
++  )
++}
++
++export default CyclePage
+diff --git a/web/src/tracker/pages/CyclesPage.tsx b/web/src/tracker/pages/CyclesPage.tsx
+new file mode 100644
+index 0000000..2145234
+--- /dev/null
++++ b/web/src/tracker/pages/CyclesPage.tsx
+@@ -0,0 +1,127 @@
++import { Plus } from 'lucide-react'
++import { useMemo, useState } from 'react'
++import { cycleLabel, cycleProgressRatio, cycleStatus, shortDate } from '../format'
++import { CreateCycleDialog, cycleStats } from '../projects/cycles'
++import { ProgressBar, percent } from '../projects/shared'
++import { hrefFor } from '../router'
++import { PageHeader } from '../shell/Header'
++import { useTracker } from '../store'
++import type { Cycle } from '../types'
++import { Button, CycleIcon } from '../ui'
++
++const SECTIONS: { id: ReturnType<typeof cycleStatus>; label: string }[] = [
++  { id: 'current', label: 'Current' },
++  { id: 'upcoming', label: 'Upcoming' },
++  { id: 'past', label: 'Past' },
++]
++
++export function CyclesPage({ teamKey }: { teamKey: string }) {
++  const t = useTracker()
++  const team = t.teamsByKey.get(teamKey)
++  const [creating, setCreating] = useState(false)
++
++  const cycles = useMemo(() => (team ? t.cycles.filter((c) => c.team_id === team.id) : []), [t.cycles, team])
++  const grouped = useMemo(() => {
++    const out: Record<string, Cycle[]> = { current: [], upcoming: [], past: [] }
++    for (const c of cycles) out[cycleStatus(c)].push(c)
++    out.current.sort((a, b) => a.starts_at.localeCompare(b.starts_at))
++    out.upcoming.sort((a, b) => a.starts_at.localeCompare(b.starts_at))
++    out.past.sort((a, b) => b.starts_at.localeCompare(a.starts_at))
++    return out
++  }, [cycles])
++
++  if (!team) {
++    return (
++      <div className="flex h-full flex-col">
++        <PageHeader title="Cycles" />
++        <div className="flex flex-1 items-center justify-center text-[13px] t-3">{t.ready ? `Team ${teamKey} not found` : 'Loading...'}</div>
++      </div>
++    )
++  }
++
++  return (
++    <div className="flex h-full min-h-0 flex-col">
++      <PageHeader
++        title={
++          <span className="flex items-center gap-1.5">
++            <span className="h-3.5 w-3.5 rounded-[4px]" style={{ background: team.color }} />
++            <span className="t-1">{team.name}</span>
++            <span className="t-4">›</span>
++            <span className="t-1">Cycles</span>
++          </span>
++        }
++        actions={
++          <Button variant="secondary" size="sm" icon={<Plus size={14} />} onClick={() => setCreating(true)}>
++            New cycle
++          </Button>
++        }
++      />
++      <div className="min-h-0 flex-1 overflow-auto">
++        {cycles.length === 0 ? (
++          <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
++            <div className="text-[15px] w-510 t-1">Cycles</div>
++            <p className="max-w-[380px] text-[13px] t-3">
++              Cycles are time-boxed periods of work, similar to sprints. Plan upcoming work and track the team's progress.
++            </p>
++            <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
++              Create cycle
++            </Button>
++          </div>
++        ) : (
++          SECTIONS.filter((s) => grouped[s.id].length > 0).map((s) => (
++            <section key={s.id}>
++              <div className="flex h-[34px] items-center gap-2 border-b px-4 text-[13px]" style={{ background: 'var(--bg-group)' }}>
++                <span className="w-510 t-1">{s.label}</span>
++                <span className="t-3 tabular">{grouped[s.id].length}</span>
++              </div>
++              {grouped[s.id].map((c) => (
++                <CycleRow key={c.id} cycle={c} />
++              ))}
++            </section>
++          ))
++        )}
++      </div>
++      <CreateCycleDialog team={team} cycles={cycles} open={creating} onOpenChange={setCreating} />
++    </div>
++  )
++}
++
++function CycleRow({ cycle }: { cycle: Cycle }) {
++  const t = useTracker()
++  const stats = cycleStats(cycle.id, t.issues, t.statesById)
++  const status = cycleStatus(cycle)
++  const timeRatio = cycleProgressRatio(cycle)
++  return (
++    <a
++      href={hrefFor(`/cycle/${cycle.id}`)}
++      className="lin-hover grid min-h-[52px] grid-cols-[minmax(200px,1fr)_160px_200px_120px] items-center gap-4 border-b px-4 py-2 text-[13px] max-md:grid-cols-[1fr_auto]"
++    >
++      <span className="flex min-w-0 items-center gap-2.5">
++        <CycleIcon progress={status === 'past' ? 1 : status === 'current' ? timeRatio : 0} />
++        <span className="flex min-w-0 flex-col">
++          <span className="truncate w-510 t-1">{cycleLabel(cycle)}</span>
++          <span className="text-[12px] t-3 tabular">
++            {shortDate(cycle.starts_at)} → {shortDate(cycle.ends_at)}
++          </span>
++        </span>
++      </span>
++      <span className="text-[12px] t-3 max-md:hidden">
++        {status === 'current' ? `${Math.round(timeRatio * 100)}% of time elapsed` : status === 'upcoming' ? 'Upcoming' : cycle.completed_at ? 'Completed' : 'Ended'}
++      </span>
++      <span className="flex items-center gap-2 max-md:hidden">
++        <span className="flex-1">
++          <ProgressBar ratio={stats.ratio} />
++        </span>
++        <span className="w-9 text-right text-[12px] t-3 tabular">{percent(stats.ratio)}</span>
++      </span>
++      <span className="flex justify-end gap-3 text-[12px] t-3 tabular">
++        <span title="Scope">{stats.scope} scope</span>
++        <span title="Completed" style={{ color: 'var(--accent-hi)' }}>
++          {stats.completed} done
++        </span>
++      </span>
++    </a>
++  )
++}
++
++export default CyclesPage
+diff --git a/web/src/tracker/pages/InboxPage.tsx b/web/src/tracker/pages/InboxPage.tsx
+new file mode 100644
+index 0000000..e9ca9cc
+--- /dev/null
++++ b/web/src/tracker/pages/InboxPage.tsx
+@@ -0,0 +1,379 @@
++import { ArrowLeft, BellOff, Check, CheckCheck, Clock, Inbox, Mail, MailOpen, Trash2 } from 'lucide-react'
++import { useEffect, useMemo, useState, type MouseEvent } from 'react'
++import { trackerApi } from '../api'
++import { IssuePage } from '../detail'
++import { compactRelative, relativeTime } from '../format'
++import { useHotkey } from '../hotkeys'
++import {
++  INBOX_FILTERS,
++  describe,
++  filterCount,
++  filterNotifications,
++  kindIcon,
++  notificationTitle,
++  snoozeOptions,
++  type InboxFilter,
++} from '../inbox/model'
++import { hrefFor, navigate } from '../router'
++import { PageHeader } from '../shell/Header'
++import { useTracker } from '../store'
++import type { Notification } from '../types'
++import { Avatar, Button, ContextMenu, IconButton, MenuList, Popover, ProjectIcon, StatusIcon, toast } from '../ui'
++import type { MenuItem } from '../ui'
++
++function useIsMobile(): boolean {
++  const query = '(max-width: 767px)'
++  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(query).matches)
++  useEffect(() => {
++    const mql = window.matchMedia(query)
++    const onChange = () => setMobile(mql.matches)
++    mql.addEventListener('change', onChange)
++    return () => mql.removeEventListener('change', onChange)
++  }, [])
++  return mobile
++}
++
++export function InboxPage({ notificationId }: { notificationId?: string | null }) {
++  const t = useTracker()
++  const mobile = useIsMobile()
++  const [filter, setFilter] = useState<InboxFilter>('all')
++  const [snooze, setSnooze] = useState<{ anchor: HTMLElement; id: string } | null>(null)
++
++  const list = useMemo(() => filterNotifications(t.notifications, filter), [t.notifications, filter])
++  const selected = notificationId ? t.notifications.find((n) => n.id === notificationId) ?? null : null
++  const selectedIndex = selected ? list.findIndex((n) => n.id === selected.id) : -1
++
++  const patch = async (n: Notification, input: { read?: boolean; snoozed_until?: string | null; archived?: boolean }) => {
++    const optimistic: Notification = {
++      ...n,
++      read_at: input.read === undefined ? n.read_at : input.read ? new Date().toISOString() : null,
++      snoozed_until: input.snoozed_until === undefined ? n.snoozed_until : input.snoozed_until,
++      archived_at: input.archived === undefined ? n.archived_at : input.archived ? new Date().toISOString() : null,
++    }
++    t.upsertNotification(optimistic)
++    try {
++      t.upsertNotification(await trackerApi.updateNotification(n.id, input))
++    } catch (err) {
++      t.upsertNotification(n)
++      t.reportError(err)
++    }
++  }
++
++  const open = (n: Notification) => {
++    navigate(`/inbox/${n.id}`, { replace: Boolean(notificationId) })
++    if (!n.read_at) void patch(n, { read: true })
++  }
++
++  const neighbourAfterRemoval = (n: Notification): Notification | null => {
++    const index = list.findIndex((x) => x.id === n.id)
++    return list[index + 1] ?? list[index - 1] ?? null
++  }
++
++  const removeFromList = (n: Notification, input: { archived?: boolean; snoozed_until?: string }, message: string) => {
++    const next = selected?.id === n.id ? neighbourAfterRemoval(n) : null
++    void patch(n, input)
++    if (selected?.id === n.id) navigate(next ? `/inbox/${next.id}` : '/inbox', { replace: true })
++    toast(message, {
++      action: {
++        label: 'Undo',
++        onClick: () => void patch({ ...n }, input.archived ? { archived: false } : { snoozed_until: null }),
++      },
++    })
++  }
++
++  const remove = (n: Notification) => removeFromList(n, { archived: true }, 'Notification deleted')
++  const snoozeUntil = (n: Notification, until: string) => removeFromList(n, { snoozed_until: until }, 'Notification snoozed')
++
++  const markAllRead = async () => {
++    try {
++      const result = await trackerApi.readAllNotifications()
++      await t.refreshNotifications()
++      toast(result.updated === 1 ? '1 notification marked as read' : `${result.updated} notifications marked as read`)
++    } catch (err) {
++      t.reportError(err)
++    }
++  }
++
++  const step = (delta: number) => {
++    if (list.length === 0) return
++    const index = selectedIndex < 0 ? (delta > 0 ? 0 : list.length - 1) : Math.min(list.length - 1, Math.max(0, selectedIndex + delta))
++    open(list[index])
++  }
++
++  useHotkey('e', () => selected && void patch(selected, { read: true }), { enabled: Boolean(selected) })
++  useHotkey('u', () => selected && void patch(selected, { read: !selected.read_at }), { enabled: Boolean(selected) })
++  useHotkey(['backspace', 'delete'], () => selected && remove(selected), { enabled: Boolean(selected) })
++  useHotkey(['j', 'arrowdown'], () => step(1))
++  useHotkey(['k', 'arrowup'], () => step(-1))
++  useHotkey('h', () => {
++    if (!selected) return
++    const anchor = document.querySelector<HTMLElement>(`[data-notification="${selected.id}"]`)
++    if (anchor) setSnooze({ anchor, id: selected.id })
++  }, { enabled: Boolean(selected) })
++  useHotkey('mod+shift+u', () => void markAllRead())
++  useHotkey('escape', () => selected && navigate('/inbox', { replace: true }), { enabled: Boolean(selected), preventDefault: false })
++
++  const unread = t.notifications.filter((n) => !n.read_at && !n.archived_at).length
++  const showList = !mobile || !selected
++  const showDetail = !mobile || Boolean(selected)
++  const snoozeTarget = snooze ? t.notifications.find((n) => n.id === snooze.id) ?? null : null
++
++  return (
++    <div className="flex h-full min-h-0">
++      {showList && (
++        <div className="flex min-h-0 w-[380px] shrink-0 flex-col border-r max-md:w-full max-md:border-r-0">
++          <PageHeader
++            title="Inbox"
++            actions={
++              <IconButton
++                label="Mark all as read"
++                icon={<CheckCheck size={14} />}
++                onClick={() => void markAllRead()}
++                disabled={unread === 0}
++              />
++            }
++          />
++          <div className="flex shrink-0 items-center gap-1 overflow-x-auto px-3 py-2">
++            {INBOX_FILTERS.map((f) => {
++              const count = filterCount(t.notifications, f.id)
++              return (
++                <button
++                  key={f.id}
++                  type="button"
++                  onClick={() => setFilter(f.id)}
++                  className="inline-flex h-[26px] shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[12px] w-510"
++                  style={{
++                    background: filter === f.id ? 'var(--bg-active)' : 'transparent',
++                    borderColor: filter === f.id ? 'var(--border-strong)' : 'var(--border)',
++                    color: filter === f.id ? 'var(--text-1)' : 'var(--text-3)',
++                  }}
++                >
++                  {f.label}
++                  {count > 0 && <span className="t-4 tabular">{count}</span>}
++                </button>
++              )
++            })}
++          </div>
++          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2" role="listbox" aria-label="Notifications">
++            {list.length === 0 ? (
++              <div className="flex flex-col items-center gap-2 px-6 py-16 text-center">
++                <Inbox size={28} className="t-4" />
++                <p className="text-[13px] t-3">{filter === 'snoozed' ? 'No snoozed notifications' : 'You’re all caught up'}</p>
++              </div>
++            ) : (
++              list.map((n) => (
++                <NotificationRow
++                  key={n.id}
++                  notification={n}
++                  selected={n.id === selected?.id}
++                  onOpen={() => open(n)}
++                  onToggleRead={() => void patch(n, { read: !n.read_at })}
++                  onDelete={() => remove(n)}
++                  onSnooze={(anchor) => setSnooze({ anchor, id: n.id })}
++                />
++              ))
++            )}
++          </div>
++        </div>
++      )}
++      {showDetail && (
++        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
++          {selected ? (
++            <>
++              <div className="flex h-11 shrink-0 items-center gap-1 border-b px-3">
++                {mobile && (
++                  <IconButton label="Back to inbox" icon={<ArrowLeft size={15} />} onClick={() => navigate('/inbox', { replace: true })} />
++                )}
++                <span className="min-w-0 flex-1 truncate text-[12px] t-3">{relativeTime(selected.created_at)}</span>
++                <IconButton
++                  label={selected.read_at ? 'Mark as unread' : 'Mark as read'}
++                  icon={selected.read_at ? <Mail size={14} /> : <MailOpen size={14} />}
++                  onClick={() => void patch(selected, { read: !selected.read_at })}
++                />
++                <IconButton
++                  label="Snooze"
++                  icon={<Clock size={14} />}
++                  onClick={(e: MouseEvent<HTMLButtonElement>) => setSnooze({ anchor: e.currentTarget, id: selected.id })}
++                />
++                <IconButton label="Delete notification" icon={<Trash2 size={14} />} onClick={() => remove(selected)} />
++              </div>
++              <div className="min-h-0 flex-1 overflow-auto">
++                <NotificationTarget notification={selected} />
++              </div>
++            </>
++          ) : (
++            <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
++              <Inbox size={36} className="t-4" />
++              <p className="text-[13px] t-3">{unread > 0 ? `${unread} unread ${unread === 1 ? 'notification' : 'notifications'}` : 'No notification selected'}</p>
++            </div>
++          )}
++        </div>
++      )}
++      <Popover open={snoozeTarget !== null} onOpenChange={(v) => !v && setSnooze(null)} anchor={snooze?.anchor ?? null} width={220}>
++        {snoozeTarget && (
++          <MenuList
++            items={[
++              ...snoozeOptions().map((o) => ({ id: o.id, label: o.label, icon: <Clock size={14} /> })),
++              ...(snoozeTarget.snoozed_until ? [{ id: 'unsnooze', label: 'Unsnooze', icon: <BellOff size={14} /> }] : []),
++            ]}
++            onSelect={(item: MenuItem) => {
++              setSnooze(null)
++              if (item.id === 'unsnooze') {
++                void patch(snoozeTarget, { snoozed_until: null })
++                return
++              }
++              const option = snoozeOptions().find((o) => o.id === item.id)
++              if (option) snoozeUntil(snoozeTarget, option.until)
++            }}
++          />
++        )}
++      </Popover>
++    </div>
++  )
++}
++
++function NotificationRow({
++  notification: n,
++  selected,
++  onOpen,
++  onToggleRead,
++  onDelete,
++  onSnooze,
++}: {
++  notification: Notification
++  selected: boolean
++  onOpen: () => void
++  onToggleRead: () => void
++  onDelete: () => void
++  onSnooze: (anchor: HTMLElement) => void
++}) {
++  const t = useTracker()
++  const actor = n.actor_id ? t.usersById.get(n.actor_id) ?? null : null
++  const issue = n.issue_id ? t.issuesById.get(n.issue_id) : undefined
++  const project = n.project_id ? t.projectsById.get(n.project_id) : undefined
++  const state = issue ? t.statesById.get(issue.state_id) : undefined
++  const { id, title } = notificationTitle(n, issue, project)
++  const unread = !n.read_at
++
++  return (
++    <ContextMenu
++      items={[
++        { id: 'read', label: unread ? 'Mark as read' : 'Mark as unread', kbd: 'U' },
++        { id: 'snooze', label: 'Snooze', kbd: 'H' },
++        { id: 'delete', label: 'Delete notification', kbd: '⌫' },
++      ]}
++      onSelect={(item) => {
++        if (item.id === 'read') onToggleRead()
++        if (item.id === 'delete') onDelete()
++        if (item.id === 'snooze') {
++          const el = document.querySelector<HTMLElement>(`[data-notification="${n.id}"]`)
++          if (el) onSnooze(el)
++        }
++      }}
++    >
++      <a
++        href={hrefFor(`/inbox/${n.id}`)}
++        data-notification={n.id}
++        role="option"
++        aria-selected={selected}
++        onClick={(e) => {
++          e.preventDefault()
++          onOpen()
++        }}
++        className="group relative flex items-start gap-3 rounded-[6px] px-2.5 py-2"
++        style={{ background: selected ? 'var(--bg-selected)' : undefined }}
++        onMouseEnter={(e) => {
++          if (!selected) e.currentTarget.style.background = 'var(--bg-hover)'
++        }}
++        onMouseLeave={(e) => {
++          e.currentTarget.style.background = selected ? 'var(--bg-selected)' : ''
++        }}
++      >
++        <span className="relative mt-0.5 shrink-0">
++          <Avatar user={actor} size={32} />
++          <span
++            className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full t-2"
++            style={{ background: 'var(--popover)', boxShadow: '0 0 0 2px var(--panel)' }}
++          >
++            {kindIcon(n.kind)}
++          </span>
++        </span>
++        <span className="flex min-w-0 flex-1 flex-col">
++          <span className="flex min-w-0 items-center gap-1.5 text-[13px]">
++            {unread && <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: 'var(--accent)' }} aria-label="Unread" />}
++            {id && <span className={`shrink-0 tabular ${unread ? 't-2' : 't-3'}`}>{id}</span>}
++            <span className={`truncate ${unread ? 'w-510 t-1' : 't-3'}`}>{title}</span>
++          </span>
++          <span className={`truncate text-[12px] ${unread ? 't-3' : 't-4'}`}>{describe(n, actor)}</span>
++        </span>
++        <span className="flex shrink-0 flex-col items-end gap-1">
++          {state ? (
++            <StatusIcon type={state.type} color={state.color} size={14} />
++          ) : project ? (
++            <ProjectIcon icon={project.icon} color={project.color} />
++          ) : (
++            <span className="h-3.5" />
++          )}
++          <span className="text-[12px] t-4 tabular group-hover:hidden">{compactRelative(n.created_at)}</span>
++          <span className="hidden items-center gap-0.5 group-hover:flex">
++            <button
++              type="button"
++              aria-label={unread ? 'Mark as read' : 'Mark as unread'}
++              title={unread ? 'Mark as read' : 'Mark as unread'}
++              className="flex h-5 w-5 items-center justify-center rounded-[4px] t-3 hover:text-[var(--text-1)]"
++              onClick={(e) => {
++                e.preventDefault()
++                e.stopPropagation()
++                onToggleRead()
++              }}
++            >
++              <Check size={12} />
++            </button>
++            <button
++              type="button"
++              aria-label="Delete notification"
++              title="Delete notification"
++              className="flex h-5 w-5 items-center justify-center rounded-[4px] t-3 hover:text-[var(--text-1)]"
++              onClick={(e) => {
++                e.preventDefault()
++                e.stopPropagation()
++                onDelete()
++              }}
++            >
++              <Trash2 size={12} />
++            </button>
++          </span>
++        </span>
++      </a>
++    </ContextMenu>
++  )
++}
++
++function NotificationTarget({ notification: n }: { notification: Notification }) {
++  const t = useTracker()
++  if (n.issue_id) {
++    const issue = t.issuesById.get(n.issue_id)
++    return <IssuePage key={n.issue_id} idOrIdentifier={issue?.identifier ?? n.issue_id} />
++  }
++  const project = n.project_id ? t.projectsById.get(n.project_id) : undefined
++  return (
++    <div className="mx-auto flex max-w-[640px] flex-col gap-4 px-6 py-10">
++      {project && (
++        <div className="flex items-center gap-2 text-[15px] w-510 t-1">
++          <ProjectIcon icon={project.icon} color={project.color} />
++          {project.name}
++        </div>
++      )}
++      <p className="whitespace-pre-wrap text-[14px] t-2">{n.body || 'No details for this notification.'}</p>
++      {project && (
++        <div>
++          <Button variant="secondary" size="sm" onClick={() => navigate(`/project/${project.id}/updates`)}>
++            Open project
++          </Button>
++        </div>
++      )}
++    </div>
++  )
++}
++
++export default InboxPage
+diff --git a/web/src/tracker/pages/MyIssuesPage.tsx b/web/src/tracker/pages/MyIssuesPage.tsx
+new file mode 100644
+index 0000000..6282a85
+--- /dev/null
++++ b/web/src/tracker/pages/MyIssuesPage.tsx
+@@ -0,0 +1,60 @@
++import { useMemo } from 'react'
++import { IssueCollection } from '../issues/IssueCollection'
++import type { MyIssuesTab } from '../router'
++import { PageHeader } from '../shell/Header'
++import { useTracker } from '../store'
++import { Avatar } from '../ui'
++
++const TABS: { id: MyIssuesTab; label: string }[] = [
++  { id: 'assigned', label: 'Assigned' },
++  { id: 'created', label: 'Created' },
++  { id: 'subscribed', label: 'Subscribed' },
++  { id: 'activity', label: 'Activity' },
++]
++
++export function MyIssuesPage({ tab }: { tab: MyIssuesTab }) {
++  const t = useTracker()
++  const meId = t.me?.id ?? null
++
++  const issues = useMemo(() => {
++    if (!meId) return []
++    const live = t.issues.filter((issue) => !issue.archived_at)
++    switch (tab) {
++      case 'assigned':
++        return live.filter((issue) => issue.assignee_id === meId)
++      case 'created':
++        return live.filter((issue) => issue.creator_id === meId)
++      case 'subscribed':
++        // TODO(FE-C): the issue list payload has no subscriber_ids; creators and assignees are auto-subscribed,
++        // so this approximates subscriptions until the API exposes them on Issue.
++        return live.filter((issue) => issue.creator_id === meId || issue.assignee_id === meId)
++      case 'activity': {
++        const since = Date.now() - 14 * 86_400_000
++        return live.filter(
++          (issue) =>
++            (issue.creator_id === meId || issue.assignee_id === meId) && new Date(issue.updated_at).getTime() >= since,
++        )
++      }
++    }
++  }, [t.issues, meId, tab])
++
++  return (
++    <IssueCollection
++      key={tab}
++      issues={issues}
++      viewKey={`my:${tab}`}
++      showTeamTabs
++      defaultDisplay={tab === 'activity' ? { ordering: 'updated', grouping: 'none' } : undefined}
++      renderHeader={(toolbar) => (
++        <PageHeader
++          crumbs={[{ label: 'My issues', icon: <Avatar user={t.me} size={16} /> }]}
++          tabs={TABS.map((x) => ({ id: x.id, label: x.label, href: `/my-issues/${x.id}` }))}
++          activeTab={tab}
++          tabsRight={toolbar}
++        />
++      )}
++    />
++  )
++}
++
++export default MyIssuesPage
+diff --git a/web/src/tracker/pages/ProjectPage.tsx b/web/src/tracker/pages/ProjectPage.tsx
+new file mode 100644
+index 0000000..9b1a0b6
+--- /dev/null
++++ b/web/src/tracker/pages/ProjectPage.tsx
+@@ -0,0 +1,468 @@
++import { Calendar, Star } from 'lucide-react'
++import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
++import { trackerApi } from '../api'
++import { shortDate } from '../format'
++import { IssueCollection } from '../issues'
++import { HealthLabel, PROJECT_STATUSES, ProgressBar, ProjectStatusIcon, percent, projectIssueStats } from '../projects/shared'
++import { MilestoneList } from '../projects/Milestones'
++import { UpdateCard, UpdateComposer } from '../projects/Updates'
++import { hrefFor, navigate, type ProjectTab } from '../router'
++import { PageHeader } from '../shell/Header'
++import { useTracker } from '../store'
++import type { ID, Milestone, Priority, Project, ProjectDetail, ProjectUpdate } from '../types'
++import { PRIORITY_LABELS, PROJECT_STATUS_LABELS } from '../types'
++import type { MenuItem } from '../ui'
++import { Avatar, Button, IconButton, MenuList, Popover, PriorityIcon, ProjectIcon } from '../ui'
++
++const TABS: { id: ProjectTab; label: string }[] = [
++  { id: 'overview', label: 'Overview' },
++  { id: 'issues', label: 'Issues' },
++  { id: 'updates', label: 'Updates' },
++]
++
++export function ProjectPage({ projectId, tab }: { projectId: string; tab: ProjectTab }) {
++  const t = useTracker()
++  const project = t.projectsById.get(projectId)
++  const [detail, setDetail] = useState<ProjectDetail | null>(null)
++  const [loadError, setLoadError] = useState<string | null>(null)
++
++  const load = useCallback(async () => {
++    try {
++      const next = await trackerApi.project(projectId)
++      setDetail(next)
++      setLoadError(null)
++    } catch (err) {
++      setLoadError(err instanceof Error ? err.message : String(err))
++    }
++  }, [projectId])
++
++  useEffect(() => {
++    setDetail(null)
++    void load()
++  }, [load])
++
++  const current = project ?? detail?.project
++  const issues = useMemo(() => t.issues.filter((i) => i.project_id === projectId && !i.archived_at), [t.issues, projectId])
++
++  const save = async (patch: Partial<Project>) => {
++    if (!current) return
++    t.upsertProject({ ...current, ...patch })
++    try {
++      t.upsertProject(await trackerApi.updateProject(current.id, patch))
++    } catch (err) {
++      t.upsertProject(current)
++      t.reportError(err)
++    }
++  }
++
++  if (!current) {
++    return (
++      <div className="flex h-full flex-col">
++        <PageHeader title="Project" />
++        <div className="flex flex-1 items-center justify-center text-[13px] t-3">
++          {loadError ? `Project not found: ${loadError}` : t.ready ? 'Loading project...' : 'Loading...'}
++        </div>
++      </div>
++    )
++  }
++
++  const favorited = t.isFavorite('project', current.id)
++
++  return (
++    <div className="flex h-full min-h-0 flex-col">
++      <PageHeader
++        title={
++          <span className="flex min-w-0 items-center gap-1.5">
++            <a href={hrefFor('/projects')} className="t-3 hover:text-[var(--text-1)]">
++              Projects
++            </a>
++            <span className="t-4">›</span>
++            <ProjectIcon icon={current.icon} color={current.color} />
++            <span className="truncate t-1">{current.name}</span>
++          </span>
++        }
++        actions={
++          <IconButton
++            label={favorited ? 'Remove from favorites' : 'Add to favorites'}
++            icon={<Star size={14} fill={favorited ? 'var(--warn)' : 'none'} color={favorited ? 'var(--warn)' : undefined} />}
++            active={favorited}
++            onClick={() => void t.toggleFavorite('project', current.id).catch(t.reportError)}
++          />
++        }
++      />
++      <div className="flex h-10 shrink-0 items-center gap-1 border-b px-4">
++        {TABS.map((x) => (
++          <a
++            key={x.id}
++            href={hrefFor(`/project/${current.id}/${x.id}`)}
++            className="inline-flex h-[26px] items-center rounded-[6px] border px-2.5 text-[12px] w-510"
++            style={{
++              background: tab === x.id ? 'var(--bg-active)' : 'transparent',
++              borderColor: tab === x.id ? 'var(--border-strong)' : 'var(--border)',
++              color: tab === x.id ? 'var(--text-1)' : 'var(--text-3)',
++            }}
++          >
++            {x.label}
++            {x.id === 'issues' && <span className="ml-1.5 t-4 tabular">{issues.length}</span>}
++          </a>
++        ))}
++      </div>
++      <div className="min-h-0 flex-1 overflow-auto">
++        {tab === 'overview' && (
++          <Overview
++            project={current}
++            detail={detail}
++            onSave={save}
++            onMilestones={(milestones) => setDetail((d) => (d ? { ...d, milestones } : d))}
++          />
++        )}
++        {tab === 'issues' && (
++          <IssueCollection
++            issues={issues}
++            viewKey={`project:${current.id}`}
++            defaultDisplay={{ grouping: 'status' }}
++            emptyState={
++              <div className="flex flex-col items-center gap-3 p-10 text-center">
++                <p className="text-[13px] t-3">No issues in this project yet.</p>
++                <Button variant="primary" size="sm" onClick={() => t.openCreate({ project_id: current.id, team_id: current.team_ids[0] })}>
++                  Create issue
++                </Button>
++              </div>
++            }
++          />
++        )}
++        {tab === 'updates' && (
++          <UpdatesFeed
++            project={current}
++            updates={detail?.updates ?? []}
++            onChange={(updates) => {
++              setDetail((d) => (d ? { ...d, updates } : d))
++              const latest = updates.slice().sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
++              t.upsertProject({ ...current, latest_health: latest?.health ?? null })
++            }}
++          />
++        )}
++      </div>
++    </div>
++  )
++}
++
++function Overview({
++  project,
++  detail,
++  onSave,
++  onMilestones,
++}: {
++  project: Project
++  detail: ProjectDetail | null
++  onSave: (patch: Partial<Project>) => Promise<void>
++  onMilestones: (milestones: Milestone[]) => void
++}) {
++  const t = useTracker()
++  const stats = projectIssueStats(project.id, t.issues, t.statesById)
++  const latest = (detail?.updates ?? []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at))[0]
++  const issues = t.issues.filter((i) => i.project_id === project.id && !i.archived_at)
++
++  return (
++    <div className="mx-auto flex max-w-[860px] flex-col gap-6 px-6 py-8 max-md:px-4">
++      <div className="flex flex-col gap-3">
++        <span className="flex h-10 w-10 items-center justify-center rounded-[8px]" style={{ background: 'var(--bg-active)' }}>
++          <ProjectIcon icon={project.icon} color={project.color} />
++        </span>
++        <EditableText
++          value={project.name}
++          placeholder="Project name"
++          className="text-[26px] w-590 t-1"
++          onCommit={(name) => name.trim() && void onSave({ name: name.trim() })}
++        />
++        <EditableText
++          value={project.summary}
++          placeholder="Add a short summary..."
++          className="text-[16px] t-2"
++          onCommit={(summary) => void onSave({ summary })}
++        />
++      </div>
++
++      <Properties project={project} onSave={onSave} />
++
++      <div className="flex flex-col gap-2 rounded-[8px] border p-4">
++        <div className="flex items-center justify-between text-[13px]">
++          <span className="w-510 t-2">Progress</span>
++          <span className="t-3 tabular">
++            {stats.completed} of {stats.total} issues · {percent(stats.ratio)}
++          </span>
++        </div>
++        <ProgressBar ratio={stats.ratio} />
++        <div className="flex gap-4 text-[12px] t-3">
++          <span>
++            <span className="mr-1 inline-block h-2 w-2 rounded-[2px]" style={{ background: 'var(--text-4)' }} />
++            Scope {stats.total}
++          </span>
++          <span>
++            <span className="mr-1 inline-block h-2 w-2 rounded-[2px]" style={{ background: 'var(--warn)' }} />
++            Started {stats.started}
++          </span>
++          <span>
++            <span className="mr-1 inline-block h-2 w-2 rounded-[2px]" style={{ background: 'var(--accent)' }} />
++            Completed {stats.completed}
++          </span>
++        </div>
++      </div>
++
++      <section className="flex flex-col gap-2">
++        <div className="flex items-center gap-2 text-[13px]">
++          <span className="w-510 t-2">Latest update</span>
++          <a href={hrefFor(`/project/${project.id}/updates`)} className="t-3 hover:text-[var(--text-1)]">
++            {latest ? 'View all' : 'Write update'}
++          </a>
++        </div>
++        {latest ? <UpdateCard update={latest} compact /> : <p className="text-[13px] t-4">No updates yet.</p>}
++      </section>
++
++      <section className="flex flex-col gap-2">
++        <h3 className="text-[13px] w-510 t-2">Description</h3>
++        <EditableText
++          multiline
++          value={project.description}
++          placeholder="Write a description, a project brief, or collect ideas..."
++          className="text-[15px] t-2"
++          onCommit={(description) => void onSave({ description })}
++        />
++      </section>
++
++      <MilestoneList projectId={project.id} milestones={detail?.milestones ?? []} issues={issues} onChange={onMilestones} />
++    </div>
++  )
++}
++
++function EditableText({
++  value,
++  placeholder,
++  className,
++  multiline,
++  onCommit,
++}: {
++  value: string
++  placeholder: string
++  className: string
++  multiline?: boolean
++  onCommit: (value: string) => void
++}) {
++  const [draft, setDraft] = useState(value)
++  const focused = useRef(false)
++  useEffect(() => {
++    if (!focused.current) setDraft(value)
++  }, [value])
++  const commit = () => {
++    focused.current = false
++    if (draft !== value) onCommit(draft)
++  }
++  const common = {
++    value: draft,
++    placeholder,
++    onFocus: () => {
++      focused.current = true
++    },
++    onBlur: commit,
++    className: `w-full resize-none bg-transparent placeholder:text-[var(--text-4)] ${className}`,
++  }
++  if (multiline) {
++    return (
++      <textarea
++        {...common}
++        rows={Math.max(3, draft.split('\n').length)}
++        onChange={(e) => setDraft(e.target.value)}
++        onKeyDown={(e) => {
++          if (e.key === 'Escape') (e.target as HTMLTextAreaElement).blur()
++        }}
++      />
++    )
++  }
++  return (
++    <input
++      {...common}
++      onChange={(e) => setDraft(e.target.value)}
++      onKeyDown={(e) => {
++        if (e.key === 'Enter' || e.key === 'Escape') (e.target as HTMLInputElement).blur()
++      }}
++    />
++  )
++}
++
++type PropKind = 'status' | 'priority' | 'lead' | 'teams'
++
++function Properties({ project, onSave }: { project: Project; onSave: (patch: Partial<Project>) => Promise<void> }) {
++  const t = useTracker()
++  const [open, setOpen] = useState<{ kind: PropKind; anchor: HTMLElement } | null>(null)
++  const lead = project.lead_id ? t.usersById.get(project.lead_id) ?? null : null
++
++  const items = (kind: PropKind): MenuItem[] => {
++    switch (kind) {
++      case 'status':
++        return PROJECT_STATUSES.map((s) => ({ id: s, label: PROJECT_STATUS_LABELS[s], icon: <ProjectStatusIcon status={s} /> }))
++      case 'priority':
++        return ([0, 1, 2, 3, 4] as Priority[]).map((p) => ({ id: String(p), label: PRIORITY_LABELS[p], icon: <PriorityIcon priority={p} /> }))
++      case 'lead':
++        return [
++          { id: 'none', label: 'No lead' },
++          ...t.users.map((u) => ({ id: u.id, label: u.display_name || u.name, icon: <Avatar user={u} size={16} /> })),
++        ]
++      case 'teams':
++        return t.teams.map((team) => ({
++          id: team.id,
++          label: team.name,
++          icon: <span className="block h-2.5 w-2.5 rounded-[3px]" style={{ background: team.color }} />,
++        }))
++    }
++  }
++
++  const select = (kind: PropKind, item: MenuItem) => {
++    if (kind === 'status') void onSave({ status: item.id as Project['status'] })
++    if (kind === 'priority') void onSave({ priority: Number(item.id) as Priority })
++    if (kind === 'lead') void onSave({ lead_id: item.id === 'none' ? null : (item.id as ID) })
++    if (kind === 'teams') {
++      const next = project.team_ids.includes(item.id) ? project.team_ids.filter((id) => id !== item.id) : [...project.team_ids, item.id]
++      void onSave({ team_ids: next })
++      return
++    }
++    setOpen(null)
++  }
++
++  const chip = (kind: PropKind, content: ReactNode) => (
++    <button
++      type="button"
++      onClick={(e) => setOpen({ kind, anchor: e.currentTarget })}
++      className="lin-hover inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2 text-[13px] t-2"
++    >
++      {content}
++    </button>
++  )
++
++  const teamNames = project.team_ids.map((id) => t.teamsById.get(id)?.name).filter(Boolean)
++
++  return (
++    <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
++      <span className="mr-2 w-[88px] text-[13px] t-3 max-sm:w-full">Properties</span>
++      {chip(
++        'status',
++        <>
++          <ProjectStatusIcon status={project.status} />
++          {PROJECT_STATUS_LABELS[project.status]}
++        </>,
++      )}
++      {chip(
++        'priority',
++        <>
++          <PriorityIcon priority={project.priority} />
++          {PRIORITY_LABELS[project.priority]}
++        </>,
++      )}
++      {chip(
++        'lead',
++        <>
++          <Avatar user={lead} size={16} />
++          {lead ? lead.display_name || lead.name : 'Lead'}
++        </>,
++      )}
++      <span className="inline-flex h-7 items-center gap-1.5 px-1 text-[13px] t-2">
++        <Calendar size={14} className="t-3" />
++        <DateInput value={project.start_date} label="Start" onChange={(v) => void onSave({ start_date: v })} />
++        <span className="t-4">→</span>
++        <DateInput value={project.target_date} label="Target" onChange={(v) => void onSave({ target_date: v })} />
++      </span>
++      {chip('teams', <>{teamNames.length === 0 ? 'Teams' : teamNames.length > 2 ? `${teamNames.length} teams` : teamNames.join(', ')}</>)}
++      <span className="ml-1 text-[13px]">
++        <HealthLabel health={project.latest_health} />
++      </span>
++      <Popover open={open !== null} onOpenChange={(v) => !v && setOpen(null)} anchor={open?.anchor ?? null} width={240}>
++        {open && (
++          <MenuList
++            items={items(open.kind)}
++            searchable={open.kind === 'lead' || open.kind === 'teams'}
++            multi={open.kind === 'teams'}
++            selectedIds={
++              open.kind === 'teams'
++                ? project.team_ids
++                : open.kind === 'status'
++                  ? [project.status]
++                  : open.kind === 'priority'
++                    ? [String(project.priority)]
++                    : [project.lead_id ?? 'none']
++            }
++            onSelect={(item: MenuItem) => select(open.kind, item)}
++          />
++        )}
++      </Popover>
++    </div>
++  )
++}
++
++function DateInput({ value, label, onChange }: { value: string | null; label: string; onChange: (value: string | null) => void }) {
++  const ref = useRef<HTMLInputElement>(null)
++  return (
++    <span className="relative inline-flex items-center">
++      <button
++        type="button"
++        className="lin-hover rounded-[6px] px-1 py-0.5"
++        onClick={() => {
++          const input = ref.current
++          if (!input) return
++          if (typeof input.showPicker === 'function') input.showPicker()
++          else input.focus()
++        }}
++      >
++        {value ? shortDate(value) : <span className="t-4">{label}</span>}
++      </button>
++      <input
++        ref={ref}
++        type="date"
++        aria-label={`${label} date`}
++        value={value ?? ''}
++        onChange={(e) => onChange(e.target.value || null)}
++        className="pointer-events-none absolute inset-0 opacity-0"
++        tabIndex={-1}
++      />
++    </span>
++  )
++}
++
++function UpdatesFeed({
++  project,
++  updates,
++  onChange,
++}: {
++  project: Project
++  updates: ProjectUpdate[]
++  onChange: (updates: ProjectUpdate[]) => void
++}) {
++  const t = useTracker()
++  const sorted = updates.slice().sort((a, b) => b.created_at.localeCompare(a.created_at))
++  return (
++    <div className="mx-auto flex max-w-[760px] flex-col gap-4 px-6 py-6 max-md:px-4">
++      <UpdateComposer projectId={project.id} onPosted={(u) => onChange([u, ...updates])} />
++      {sorted.length === 0 && <p className="py-6 text-center text-[13px] t-4">No project updates yet. Share progress with your team.</p>}
++      {sorted.map((u) => (
++        <UpdateCard
++          key={u.id}
++          update={u}
++          onDelete={
++            u.user_id === t.me?.id
++              ? () =>
++                  void trackerApi
++                    .deleteProjectUpdate(u.id)
++                    .then(() => onChange(updates.filter((x) => x.id !== u.id)))
++                    .catch(t.reportError)
++              : undefined
++          }
++        />
++      ))}
++      {sorted.length > 0 && (
++        <button type="button" className="self-center text-[12px] t-3" onClick={() => navigate(`/project/${project.id}/overview`)}>
++          Back to overview
++        </button>
++      )}
++    </div>
++  )
++}
++
++export default ProjectPage
+diff --git a/web/src/tracker/pages/ProjectsPage.tsx b/web/src/tracker/pages/ProjectsPage.tsx
+new file mode 100644
+index 0000000..0869852
+--- /dev/null
++++ b/web/src/tracker/pages/ProjectsPage.tsx
+@@ -0,0 +1,157 @@
++import { Plus } from 'lucide-react'
++import { useMemo, useState } from 'react'
++import { useHotkey } from '../hotkeys'
++import { CreateProjectDialog } from '../projects/CreateProjectDialog'
++import { HealthLabel, ProgressRing, ProjectStatusLabel, percent, projectProgress } from '../projects/shared'
++import { hrefFor, navigate } from '../router'
++import { PageHeader } from '../shell/Header'
++import { shortDate } from '../format'
++import { useTracker } from '../store'
++import type { Project, ProjectStatus } from '../types'
++import { PRIORITY_LABELS } from '../types'
++import { Avatar, Button, ContextMenu, PriorityIcon, ProjectIcon } from '../ui'
++
++type Tab = 'all' | 'active' | 'planned' | 'completed'
++
++const TABS: { id: Tab; label: string; statuses: ProjectStatus[] | null }[] = [
++  { id: 'all', label: 'All projects', statuses: null },
++  { id: 'active', label: 'Active', statuses: ['started', 'paused'] },
++  { id: 'planned', label: 'Planned', statuses: ['backlog', 'planned'] },
++  { id: 'completed', label: 'Completed', statuses: ['completed', 'canceled'] },
++]
++
++const GRID = 'minmax(220px,1fr) 120px 100px 64px 96px 120px 72px'
++
++export function ProjectsPage() {
++  const t = useTracker()
++  const [tab, setTab] = useState<Tab>('all')
++  const [creating, setCreating] = useState(false)
++
++  useHotkey('n', () => setCreating(true), { enabled: !creating })
++
++  const rows = useMemo(() => {
++    const statuses = TABS.find((x) => x.id === tab)?.statuses
++    return t.projects
++      .filter((p) => !p.archived_at && (!statuses || statuses.includes(p.status)))
++      .slice()
++      .sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
++  }, [t.projects, tab])
++
++  return (
++    <div className="flex h-full min-h-0 flex-col">
++      <PageHeader
++        title="Projects"
++        actions={
++          <Button variant="secondary" size="sm" icon={<Plus size={14} />} onClick={() => setCreating(true)}>
++            New project
++          </Button>
++        }
++      />
++      <div className="flex h-10 shrink-0 items-center gap-1 border-b px-4">
++        {TABS.map((x) => (
++          <button
++            key={x.id}
++            type="button"
++            onClick={() => setTab(x.id)}
++            className="h-[26px] rounded-[6px] border px-2.5 text-[12px] w-510"
++            style={{
++              background: tab === x.id ? 'var(--bg-active)' : 'transparent',
++              borderColor: tab === x.id ? 'var(--border-strong)' : 'var(--border)',
++              color: tab === x.id ? 'var(--text-1)' : 'var(--text-3)',
++            }}
++          >
++            {x.label}
++          </button>
++        ))}
++      </div>
++      <div className="min-h-0 flex-1 overflow-auto">
++        {rows.length === 0 ? (
++          <EmptyProjects onCreate={() => setCreating(true)} />
++        ) : (
++          <div className="min-w-[760px]">
++            <div
++              className="sticky top-0 z-[1] grid h-9 items-center border-b px-4 text-[12px] t-3"
++              style={{ gridTemplateColumns: GRID, background: 'var(--panel)' }}
++            >
++              <span>Name</span>
++              <span>Health</span>
++              <span>Priority</span>
++              <span>Lead</span>
++              <span>Target date</span>
++              <span>Status</span>
++              <span className="text-right">Progress</span>
++            </div>
++            {rows.map((p) => (
++              <ProjectRow key={p.id} project={p} />
++            ))}
++          </div>
++        )}
++      </div>
++      <CreateProjectDialog open={creating} onOpenChange={setCreating} />
++    </div>
++  )
++}
++
++function ProjectRow({ project }: { project: Project }) {
++  const t = useTracker()
++  const lead = project.lead_id ? t.usersById.get(project.lead_id) ?? null : null
++  const ratio = projectProgress(project, t.issues, t.statesById)
++  const favorited = t.isFavorite('project', project.id)
++  return (
++    <ContextMenu
++      items={[
++        { id: 'open', label: 'Open project' },
++        { id: 'favorite', label: favorited ? 'Remove from favorites' : 'Add to favorites' },
++        { id: 'copy', label: 'Copy link' },
++      ]}
++      onSelect={(item) => {
++        if (item.id === 'open') navigate(`/project/${project.id}/overview`)
++        if (item.id === 'favorite') void t.toggleFavorite('project', project.id).catch(t.reportError)
++        if (item.id === 'copy') void navigator.clipboard?.writeText(`${window.location.origin}${window.location.pathname}${hrefFor(`/project/${project.id}/overview`)}`)
++      }}
++    >
++      <a
++        href={hrefFor(`/project/${project.id}/overview`)}
++        className="lin-hover grid h-11 items-center border-b px-4 text-[13px]"
++        style={{ gridTemplateColumns: GRID }}
++      >
++        <span className="flex min-w-0 items-center gap-2.5">
++          <ProjectIcon icon={project.icon} color={project.color} />
++          <span className="truncate w-510 t-1">{project.name}</span>
++        </span>
++        <span className="text-[12px]">
++          <HealthLabel health={project.latest_health} />
++        </span>
++        <span className="flex items-center gap-1.5 text-[12px] t-3" title={PRIORITY_LABELS[project.priority]}>
++          <PriorityIcon priority={project.priority} />
++          <span className="max-md:hidden">{project.priority === 0 ? '' : PRIORITY_LABELS[project.priority]}</span>
++        </span>
++        <span>{lead ? <Avatar user={lead} size={20} /> : <span className="t-4">-</span>}</span>
++        <span className="text-[12px] t-3 tabular">{project.target_date ? shortDate(project.target_date) : ''}</span>
++        <span className="text-[12px]">
++          <ProjectStatusLabel status={project.status} />
++        </span>
++        <span className="flex items-center justify-end gap-1.5 text-[12px] t-3 tabular">
++          <ProgressRing ratio={ratio} />
++          {percent(ratio)}
++        </span>
++      </a>
++    </ContextMenu>
++  )
++}
++
++function EmptyProjects({ onCreate }: { onCreate: () => void }) {
++  return (
++    <div className="flex h-full flex-col items-center justify-center gap-3 p-10 text-center">
++      <div className="text-[15px] w-510 t-1">Projects</div>
++      <p className="max-w-[360px] text-[13px] t-3">
++        Projects are larger units of work with a clear outcome, such as a feature launch. They can be shared across multiple teams.
++      </p>
++      <Button variant="primary" size="sm" onClick={onCreate}>
++        Create new project
++      </Button>
++    </div>
++  )
++}
++
++export default ProjectsPage
+diff --git a/web/src/tracker/pages/SearchPage.tsx b/web/src/tracker/pages/SearchPage.tsx
+new file mode 100644
+index 0000000..591d3d2
+--- /dev/null
++++ b/web/src/tracker/pages/SearchPage.tsx
+@@ -0,0 +1,207 @@
++import React, { useEffect, useMemo, useRef, useState } from 'react'
++import { Search } from 'lucide-react'
++import { trackerApi } from '../api'
++import { hrefFor, navigate } from '../router'
++import { useTracker } from '../store'
++import type { Issue, Project } from '../types'
++import { PROJECT_STATUS_LABELS } from '../types'
++import { shortDate, stateProgress } from '../format'
++import { PageHeader } from '../shell/Header'
++import { Avatar, PriorityIcon, ProjectIcon, StatusIcon } from '../ui'
++import { fuzzyScore } from '../shell/CommandPalette'
++
++function Highlight({ text, query }: { text: string; query: string }) {
++  const q = query.trim()
++  if (!q) return <>{text}</>
++  const index = text.toLowerCase().indexOf(q.toLowerCase())
++  if (index < 0) return <>{text}</>
++  return (
++    <>
++      {text.slice(0, index)}
++      <mark className="ls-mark">{text.slice(index, index + q.length)}</mark>
++      {text.slice(index + q.length)}
++    </>
++  )
++}
++
++export function SearchPage({ q }: { q: string }) {
++  const t = useTracker()
++  const [input, setInput] = useState(q)
++  const [remote, setRemote] = useState<{ q: string; issues: Issue[]; projects: Project[] } | null>(null)
++  const [loading, setLoading] = useState(false)
++  const [active, setActive] = useState(0)
++  const inputRef = useRef<HTMLInputElement>(null)
++
++  useEffect(() => setInput(q), [q])
++  useEffect(() => inputRef.current?.focus(), [])
++
++  useEffect(() => {
++    const handle = window.setTimeout(() => {
++      if (input !== q) navigate(input.trim() ? `/search?q=${encodeURIComponent(input)}` : '/search', { replace: true })
++    }, 250)
++    return () => window.clearTimeout(handle)
++  }, [input, q])
++
++  useEffect(() => {
++    const query = q.trim()
++    if (!query) {
++      setRemote(null)
++      return
++    }
++    let cancelled = false
++    setLoading(true)
++    trackerApi
++      .search(query)
++      .then((result) => {
++        if (!cancelled) setRemote({ q: query, ...result })
++      })
++      .catch((err) => {
++        if (!cancelled) t.reportError(err)
++      })
++      .finally(() => {
++        if (!cancelled) setLoading(false)
++      })
++    return () => {
++      cancelled = true
++    }
++  }, [q, t.reportError])
++
++  const issues = useMemo(() => {
++    const query = input.trim()
++    if (!query) return []
++    const local = t.issues
++      .map((issue) => ({ issue, score: Math.max(fuzzyScore(query, `${issue.identifier} ${issue.title}`), issue.description.toLowerCase().includes(query.toLowerCase()) ? 50 : -1) }))
++      .filter((x) => x.score > 0)
++    const seen = new Set(local.map((x) => x.issue.id))
++    const fromServer = (remote?.issues ?? []).filter((i) => !seen.has(i.id)).map((issue) => ({ issue: t.issuesById.get(issue.id) ?? issue, score: 10 }))
++    return [...local, ...fromServer]
++      .sort((a, b) => b.score - a.score || b.issue.updated_at.localeCompare(a.issue.updated_at))
++      .slice(0, 100)
++      .map((x) => x.issue)
++  }, [input, t.issues, t.issuesById, remote])
++
++  const projects = useMemo(() => {
++    const query = input.trim().toLowerCase()
++    if (!query) return []
++    const byId = new Map<string, Project>()
++    for (const p of t.projects) if (p.name.toLowerCase().includes(query)) byId.set(p.id, p)
++    for (const p of remote?.projects ?? []) if (!byId.has(p.id)) byId.set(p.id, t.projectsById.get(p.id) ?? p)
++    return [...byId.values()].slice(0, 10)
++  }, [input, t.projects, t.projectsById, remote])
++
++  const total = projects.length + issues.length
++  useEffect(() => setActive(0), [input])
++
++  const openAt = (index: number) => {
++    if (index < projects.length) navigate(`/project/${projects[index].id}/overview`)
++    else {
++      const issue = issues[index - projects.length]
++      if (issue) navigate(`/issue/${issue.identifier}`)
++    }
++  }
++
++  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
++    if (event.key === 'ArrowDown') {
++      event.preventDefault()
++      setActive((i) => Math.min(total - 1, i + 1))
++    } else if (event.key === 'ArrowUp') {
++      event.preventDefault()
++      setActive((i) => Math.max(0, i - 1))
++    } else if (event.key === 'Enter' && total > 0) {
++      event.preventDefault()
++      openAt(active)
++    } else if (event.key === 'Escape') {
++      ;(event.target as HTMLInputElement).blur()
++    }
++  }
++
++  return (
++    <>
++      <PageHeader crumbs={[{ label: 'Search' }]} />
++      <div className="ls-search-bar">
++        <Search size={16} className="t-3" />
++        <input
++          ref={inputRef}
++          value={input}
++          onChange={(e) => setInput(e.target.value)}
++          onKeyDown={onKeyDown}
++          placeholder="Search issues and projects…"
++          aria-label="Search"
++        />
++        {loading ? <span className="t-4" style={{ fontSize: 12 }}>Searching…</span> : null}
++        {input.trim() ? <span className="t-3" style={{ fontSize: 12 }}>{total} results</span> : null}
++      </div>
++      <div className="ls-scroll">
++        {!input.trim() ? (
++          <div className="ls-empty">
++            <div>
++              <div className="t-1 w-510" style={{ fontSize: 15, marginBottom: 4 }}>Search your workspace</div>
++              <div>Find issues by identifier, title or description, and projects by name.</div>
++            </div>
++          </div>
++        ) : total === 0 && !loading ? (
++          <div className="ls-empty">
++            <div>
++              <div className="t-1 w-510" style={{ fontSize: 15, marginBottom: 4 }}>No results</div>
++              <div>Nothing matches “{input.trim()}”.</div>
++            </div>
++          </div>
++        ) : (
++          <>
++            {projects.length > 0 ? (
++              <>
++                <div className="ls-palette-group" style={{ padding: '12px 20px 6px' }}>Projects</div>
++                {projects.map((project, index) => (
++                  <a
++                    key={project.id}
++                    className={`ls-result ${active === index ? 'is-active' : ''}`}
++                    href={hrefFor(`/project/${project.id}/overview`)}
++                    onMouseMove={() => setActive(index)}
++                  >
++                    <ProjectIcon icon={project.icon} color={project.color} />
++                    <span className="ls-result-title">
++                      <Highlight text={project.name} query={input} />
++                    </span>
++                    <span className="ls-result-meta">{PROJECT_STATUS_LABELS[project.status]}</span>
++                  </a>
++                ))}
++              </>
++            ) : null}
++            {issues.length > 0 ? (
++              <>
++                <div className="ls-palette-group" style={{ padding: '12px 20px 6px' }}>Issues</div>
++                {issues.map((issue, i) => {
++                  const index = projects.length + i
++                  const state = t.statesById.get(issue.state_id)
++                  const assignee = issue.assignee_id ? t.usersById.get(issue.assignee_id) ?? null : null
++                  return (
++                    <a
++                      key={issue.id}
++                      className={`ls-result ${active === index ? 'is-active' : ''}`}
++                      href={hrefFor(`/issue/${issue.identifier}`)}
++                      onMouseMove={() => setActive(index)}
++                    >
++                      <PriorityIcon priority={issue.priority} size={14} />
++                      <span className="ls-result-id mono">
++                        <Highlight text={issue.identifier} query={input} />
++                      </span>
++                      {state ? <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, t.teamStates(state.team_id))} size={14} /> : null}
++                      <span className="ls-result-title" style={issue.archived_at ? { opacity: 0.6 } : undefined}>
++                        <Highlight text={issue.title} query={input} />
++                      </span>
++                      {issue.archived_at ? <span className="ls-result-meta">Archived</span> : null}
++                      <span className="ls-result-meta ls-hide-mobile">{shortDate(issue.updated_at)}</span>
++                      <Avatar user={assignee} size={20} />
++                    </a>
++                  )
++                })}
++              </>
++            ) : null}
++          </>
++        )}
++      </div>
++    </>
++  )
++}
++
++export default SearchPage
+diff --git a/web/src/tracker/pages/SettingsPage.tsx b/web/src/tracker/pages/SettingsPage.tsx
+new file mode 100644
+index 0000000..a2f72aa
+--- /dev/null
++++ b/web/src/tracker/pages/SettingsPage.tsx
+@@ -0,0 +1,603 @@
++import React, { useEffect, useMemo, useState } from 'react'
++import { ArrowDown, ArrowUp, Monitor, Moon, Plus, Sun, Trash2 } from 'lucide-react'
++import { trackerApi } from '../api'
++import { hrefFor, navigate, type SettingsSection } from '../router'
++import { useTracker } from '../store'
++import type { ID, Label, StateType, Team, User, WorkflowState } from '../types'
++import { STATE_TYPE_ORDER } from '../types'
++import { relativeTime, stateProgress } from '../format'
++import { PageHeader } from '../shell/Header'
++import { TeamIcon } from '../shell/Sidebar'
++import { Avatar, Button, LabelDot, StatusIcon, toast } from '../ui'
++
++const PALETTE = ['#5e6ad2', '#26b5ce', '#4cb782', '#f2c94c', '#fc7840', '#eb5757', '#bb87fc', '#4ea7fc', '#95a2b3', '#e2e2e2']
++const STATE_TYPE_LABELS: Record<StateType, string> = {
++  triage: 'Triage',
++  backlog: 'Backlog',
++  unstarted: 'Unstarted',
++  started: 'Started',
++  completed: 'Completed',
++  canceled: 'Canceled',
++}
++
++function useSave() {
++  const { reportError } = useTracker()
++  return async <T,>(fn: () => Promise<T>, message?: string): Promise<T | undefined> => {
++    try {
++      const result = await fn()
++      if (message) toast(message)
++      return result
++    } catch (err) {
++      reportError(err)
++      return undefined
++    }
++  }
++}
++
++function Switch({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
++  return <button type="button" role="switch" aria-checked={on} aria-label={label} className={`ls-switch ${on ? 'is-on' : ''}`} onClick={() => onChange(!on)} />
++}
++
++function Row({ title, desc, children }: { title: React.ReactNode; desc?: React.ReactNode; children?: React.ReactNode }) {
++  return (
++    <div className="ls-row">
++      <div className="ls-row-main">
++        <div className="ls-row-title">{title}</div>
++        {desc ? <div className="ls-row-desc">{desc}</div> : null}
++      </div>
++      {children}
++    </div>
++  )
++}
++
++function InlineText({ value, onCommit, placeholder, width = 220, ariaLabel }: { value: string; onCommit: (v: string) => void; placeholder?: string; width?: number; ariaLabel: string }) {
++  const [draft, setDraft] = useState(value)
++  useEffect(() => setDraft(value), [value])
++  const commit = () => {
++    const next = draft.trim()
++    if (next && next !== value) onCommit(next)
++    else setDraft(value)
++  }
++  return (
++    <input
++      className="ls-input"
++      style={{ width }}
++      value={draft}
++      placeholder={placeholder}
++      aria-label={ariaLabel}
++      onChange={(e) => setDraft(e.target.value)}
++      onBlur={commit}
++      onKeyDown={(e) => {
++        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
++        if (e.key === 'Escape') {
++          setDraft(value)
++          ;(e.target as HTMLInputElement).blur()
++        }
++      }}
++    />
++  )
++}
++
++function ColorInput({ value, onChange, label }: { value: string; onChange: (v: string) => void; label: string }) {
++  return <input type="color" className="ls-color" aria-label={label} value={value.length === 7 ? value : '#5e6ad2'} onChange={(e) => onChange(e.target.value)} />
++}
++
++function AccountSection() {
++  const t = useTracker()
++  const save = useSave()
++  const me = t.me
++  if (!me) return null
++  const update = (patch: Partial<User>) =>
++    save(async () => {
++      const user = await trackerApi.updateUser(me.id, patch)
++      t.upsertUser(user)
++      await t.refresh()
++    }, 'Profile updated')
++  return (
++    <>
++      <h1 className="ls-h1">Profile</h1>
++      <p className="ls-sub">Manage how you appear to teammates and agents.</p>
++      <div className="ls-card">
++        <Row title="Avatar" desc="Shown next to issues you create or are assigned to.">
++          <Avatar user={me} size={32} />
++          <ColorInput label="Avatar color" value={me.avatar_color} onChange={(avatar_color) => void update({ avatar_color })} />
++        </Row>
++        <Row title="Full name">
++          <InlineText ariaLabel="Full name" value={me.name} onCommit={(name) => void update({ name })} />
++        </Row>
++        <Row title="Username" desc="Used for mentions and git branch names.">
++          <InlineText ariaLabel="Username" value={me.display_name} onCommit={(display_name) => void update({ display_name })} />
++        </Row>
++        <Row title="Email">
++          <InlineText ariaLabel="Email" value={me.email ?? ''} placeholder="you@example.com" onCommit={(email) => void update({ email })} />
++        </Row>
++      </div>
++    </>
++  )
++}
++
++function PreferencesSection() {
++  const t = useTracker()
++  const system = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
++  return (
++    <>
++      <h1 className="ls-h1">Preferences</h1>
++      <p className="ls-sub">Customize the look and behavior of the app.</p>
++      <h2 className="ls-h2">Interface and theme</h2>
++      <div className="ls-card">
++        <Row title="Interface theme" desc="Select or customize your interface color scheme.">
++          <div className="ls-seg" role="radiogroup" aria-label="Interface theme">
++            <button type="button" role="radio" aria-checked={false} onClick={() => t.setTheme(system)}>
++              <Monitor size={13} /> System
++            </button>
++            <button type="button" role="radio" aria-checked={t.theme === 'light'} className={t.theme === 'light' ? 'is-on' : ''} onClick={() => t.setTheme('light')}>
++              <Sun size={13} /> Light
++            </button>
++            <button type="button" role="radio" aria-checked={t.theme === 'dark'} className={t.theme === 'dark' ? 'is-on' : ''} onClick={() => t.setTheme('dark')}>
++              <Moon size={13} /> Dark
++            </button>
++          </div>
++        </Row>
++        <Row title="Show sidebar" desc="Toggle with [ from anywhere.">
++          <Switch label="Show sidebar" on={!t.sidebarCollapsed} onChange={(v) => t.setSidebarCollapsed(!v)} />
++        </Row>
++      </div>
++      <h2 className="ls-h2">Keyboard</h2>
++      <div className="ls-card">
++        <Row title="Keyboard shortcuts" desc="See every shortcut available in the app.">
++          <Button variant="secondary" size="sm" onClick={() => t.setShortcutsOpen(true)}>
++            View shortcuts
++          </Button>
++        </Row>
++      </div>
++    </>
++  )
++}
++
++function TeamsSection() {
++  const t = useTracker()
++  const save = useSave()
++  const [key, setKey] = useState('')
++  const [name, setName] = useState('')
++  const valid = /^[A-Z][A-Z0-9]{0,4}$/.test(key) && name.trim().length > 0 && !t.teamsByKey.has(key)
++  const create = async (event: React.FormEvent) => {
++    event.preventDefault()
++    if (!valid) return
++    const team = await save(() => trackerApi.createTeam({ key, name: name.trim(), color: PALETTE[t.teams.length % PALETTE.length] }), `Created team ${name.trim()}`)
++    if (team) {
++      setKey('')
++      setName('')
++      await t.refresh()
++    }
++  }
++  return (
++    <>
++      <h1 className="ls-h1">Teams</h1>
++      <p className="ls-sub">Teams group issues, workflows and cycles.</p>
++      <div className="ls-card">
++        {t.teams.map((team) => {
++          const count = t.issues.filter((i) => i.team_id === team.id && !i.archived_at).length
++          return (
++            <Row key={team.id} title={<span style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}><TeamIcon team={team} />{team.name}<span className="t-3 mono" style={{ fontSize: 12 }}>{team.key}</span></span>} desc={`${count} issues${team.system ? ' · Managed by agent lanes' : ''}`}>
++              <Button variant="ghost" size="sm" onClick={() => navigate(`/settings/team/${team.key}`)}>
++                Settings
++              </Button>
++            </Row>
++          )
++        })}
++      </div>
++      <h2 className="ls-h2">Create team</h2>
++      <form className="ls-card" onSubmit={create}>
++        <Row title="Name and identifier" desc="Identifiers are 1-5 uppercase letters and prefix every issue ID.">
++          <input className="ls-input" style={{ width: 160 }} placeholder="Team name" aria-label="Team name" value={name} onChange={(e) => setName(e.target.value)} />
++          <input
++            className="ls-input mono"
++            style={{ width: 80 }}
++            placeholder="KEY"
++            aria-label="Team identifier"
++            value={key}
++            onChange={(e) => setKey(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5))}
++          />
++          <Button variant="primary" size="sm" type="submit" disabled={!valid}>
++            Create
++          </Button>
++        </Row>
++      </form>
++    </>
++  )
++}
++
++function TeamSection({ team }: { team: Team }) {
++  const t = useTracker()
++  const save = useSave()
++  const update = (patch: Partial<Team>) =>
++    save(async () => {
++      const next = await trackerApi.updateTeam(team.id, patch)
++      t.upsertTeam(next)
++    }, 'Team updated')
++  return (
++    <>
++      <h1 className="ls-h1" style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
++        <TeamIcon team={team} size={24} />
++        {team.name}
++      </h1>
++      <p className="ls-sub">
++        Team settings · <a className="t-2" href={hrefFor(`/settings/workflow/${team.key}`)}>Workflow</a>
++      </p>
++      <div className="ls-card">
++        <Row title="Name">
++          <InlineText ariaLabel="Team name" value={team.name} onCommit={(name) => void update({ name })} />
++        </Row>
++        <Row title="Identifier" desc="Changing the identifier is not supported once issues exist.">
++          <span className="mono t-2">{team.key}</span>
++        </Row>
++        <Row title="Color">
++          <ColorInput label="Team color" value={team.color} onChange={(color) => void update({ color })} />
++        </Row>
++      </div>
++      <h2 className="ls-h2">Features</h2>
++      <div className="ls-card">
++        <Row title="Cycles" desc="Time-boxed iterations for planning work.">
++          <Switch label="Enable cycles" on={team.cycles_enabled} onChange={(cycles_enabled) => void update({ cycles_enabled })} />
++        </Row>
++        {team.cycles_enabled ? (
++          <Row title="Cycle duration">
++            <select className="ls-select" aria-label="Cycle duration" value={team.cycle_weeks} onChange={(e) => void update({ cycle_weeks: Number(e.target.value) })}>
++              {[1, 2, 3, 4, 6, 8].map((w) => (
++                <option key={w} value={w}>
++                  {w} {w === 1 ? 'week' : 'weeks'}
++                </option>
++              ))}
++            </select>
++          </Row>
++        ) : null}
++        <Row title="Triage" desc="Route new issues from integrations and other teams into a triage inbox.">
++          <Switch label="Enable triage" on={team.triage_enabled} onChange={(triage_enabled) => void update({ triage_enabled })} />
++        </Row>
++      </div>
++    </>
++  )
++}
++
++function WorkflowSection({ team }: { team: Team }) {
++  const t = useTracker()
++  const save = useSave()
++  const states = t.teamStates(team.id)
++  const [adding, setAdding] = useState<StateType | null>(null)
++  const [newName, setNewName] = useState('')
++  const locked = team.system
++
++  const updateState = (state: WorkflowState, patch: Partial<WorkflowState>) =>
++    save(async () => {
++      const next = await trackerApi.updateState(state.id, patch)
++      t.upsertState(next)
++    })
++
++  const move = (state: WorkflowState, dir: -1 | 1) => {
++    const siblings = states.filter((s) => s.type === state.type)
++    const index = siblings.findIndex((s) => s.id === state.id)
++    const other = siblings[index + dir]
++    if (!other) return
++    void updateState(state, { position: other.position })
++    void updateState(other, { position: state.position })
++  }
++
++  const remove = async (state: WorkflowState) => {
++    const used = t.issues.some((i) => i.state_id === state.id)
++    if (used) {
++      toast(`Move issues out of ${state.name} before deleting it`)
++      return
++    }
++    await save(async () => {
++      await trackerApi.deleteState(state.id)
++      t.removeState(state.id)
++    }, `Deleted ${state.name}`)
++  }
++
++  const add = async (type: StateType) => {
++    const name = newName.trim()
++    if (!name) return
++    const last = states.filter((s) => s.type === type).at(-1)
++    const created = await save(
++      () => trackerApi.createState({ team_id: team.id, name, type, color: last?.color ?? '#95a2b3', position: (last?.position ?? 0) + 1 }),
++      `Added ${name}`,
++    )
++    if (created) {
++      t.upsertState(created)
++      setNewName('')
++      setAdding(null)
++    }
++  }
++
++  const types = STATE_TYPE_ORDER.filter((type) => type !== 'triage' || team.triage_enabled || states.some((s) => s.type === 'triage'))
++  return (
++    <>
++      <h1 className="ls-h1">Workflow</h1>
++      <p className="ls-sub">
++        {team.name} issue statuses.{' '}
++        {locked ? 'This team mirrors agent lanes, so its workflow is managed by the gateway.' : 'Statuses are grouped by category.'}
++      </p>
++      {types.map((type) => {
++        const group = states.filter((s) => s.type === type)
++        return (
++          <section key={type}>
++            <h2 className="ls-h2" style={{ display: 'flex', alignItems: 'center' }}>
++              <span style={{ flex: 1 }}>{STATE_TYPE_LABELS[type]}</span>
++              {!locked ? (
++                <button type="button" className="ls-icon-btn" aria-label={`Add ${STATE_TYPE_LABELS[type]} status`} onClick={() => setAdding(type)}>
++                  <Plus size={14} />
++                </button>
++              ) : null}
++            </h2>
++            <div className="ls-card">
++              {group.map((state, index) => (
++                <div className="ls-row" key={state.id}>
++                  <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, states)} size={14} />
++                  {locked ? (
++                    <span className="ls-row-main ls-row-title">{state.name}</span>
++                  ) : (
++                    <div className="ls-row-main">
++                      <InlineText ariaLabel={`${state.name} name`} value={state.name} width={200} onCommit={(name) => void updateState(state, { name })} />
++                    </div>
++                  )}
++                  {state.lane_status ? <span className="t-3 mono" style={{ fontSize: 11 }}>{state.lane_status}</span> : null}
++                  <span className="t-3" style={{ fontSize: 12 }}>
++                    {t.issues.filter((i) => i.state_id === state.id && !i.archived_at).length} issues
++                  </span>
++                  {!locked ? (
++                    <>
++                      <ColorInput label={`${state.name} color`} value={state.color} onChange={(color) => void updateState(state, { color })} />
++                      <button type="button" className="ls-icon-btn" aria-label="Move up" disabled={index === 0} onClick={() => move(state, -1)}>
++                        <ArrowUp size={13} />
++                      </button>
++                      <button type="button" className="ls-icon-btn" aria-label="Move down" disabled={index === group.length - 1} onClick={() => move(state, 1)}>
++                        <ArrowDown size={13} />
++                      </button>
++                      <button type="button" className="ls-icon-btn" aria-label={`Delete ${state.name}`} disabled={group.length <= 1 && type !== 'triage'} onClick={() => void remove(state)}>
++                        <Trash2 size={13} />
++                      </button>
++                    </>
++                  ) : null}
++                </div>
++              ))}
++              {adding === type ? (
++                <form
++                  className="ls-row"
++                  onSubmit={(e) => {
++                    e.preventDefault()
++                    void add(type)
++                  }}
++                >
++                  <input autoFocus className="ls-input" style={{ flex: 1 }} placeholder="Status name" aria-label="New status name" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setAdding(null)} />
++                  <Button variant="ghost" size="sm" type="button" onClick={() => setAdding(null)}>
++                    Cancel
++                  </Button>
++                  <Button variant="primary" size="sm" type="submit" disabled={!newName.trim()}>
++                    Add
++                  </Button>
++                </form>
++              ) : null}
++              {group.length === 0 && adding !== type ? <Row title={<span className="t-3">No statuses</span>} /> : null}
++            </div>
++          </section>
++        )
++      })}
++    </>
++  )
++}
++
++function LabelsSection() {
++  const t = useTracker()
++  const save = useSave()
++  const [query, setQuery] = useState('')
++  const [name, setName] = useState('')
++  const [color, setColor] = useState(PALETTE[0])
++  const [teamId, setTeamId] = useState<ID | ''>('')
++  const filtered = useMemo(
++    () => t.labels.filter((l) => l.name.toLowerCase().includes(query.trim().toLowerCase())).sort((a, b) => a.name.localeCompare(b.name)),
++    [t.labels, query],
++  )
++  const usage = (label: Label) => t.issues.filter((i) => i.label_ids.includes(label.id)).length
++  const create = async (event: React.FormEvent) => {
++    event.preventDefault()
++    if (!name.trim()) return
++    const label = await save(() => trackerApi.createLabel({ name: name.trim(), color, team_id: teamId || null }), `Created label ${name.trim()}`)
++    if (label) {
++      t.upsertLabel(label)
++      setName('')
++      setColor(PALETTE[(PALETTE.indexOf(color) + 1) % PALETTE.length])
++    }
++  }
++  const update = (label: Label, patch: Partial<Label>) =>
++    save(async () => {
++      const next = await trackerApi.updateLabel(label.id, patch)
++      t.upsertLabel(next)
++    })
++  const remove = async (label: Label) => {
++    if (!window.confirm(`Delete label "${label.name}"? It will be removed from ${usage(label)} issues.`)) return
++    await save(async () => {
++      await trackerApi.deleteLabel(label.id)
++      t.removeLabel(label.id)
++      await t.refreshIssues()
++    }, `Deleted ${label.name}`)
++  }
++  return (
++    <>
++      <h1 className="ls-h1">Labels</h1>
++      <p className="ls-sub">Workspace labels are available to every team; team labels only within their team.</p>
++      <form className="ls-card" onSubmit={create} style={{ marginBottom: 16 }}>
++        <div className="ls-row">
++          <ColorInput label="New label color" value={color} onChange={setColor} />
++          <input className="ls-input" style={{ flex: 1 }} placeholder="Label name" aria-label="New label name" value={name} onChange={(e) => setName(e.target.value)} />
++          <select className="ls-select" aria-label="Label scope" value={teamId} onChange={(e) => setTeamId(e.target.value)}>
++            <option value="">Workspace</option>
++            {t.teams.map((team) => (
++              <option key={team.id} value={team.id}>
++                {team.name}
++              </option>
++            ))}
++          </select>
++          <Button variant="primary" size="sm" type="submit" disabled={!name.trim()}>
++            Create label
++          </Button>
++        </div>
++      </form>
++      <input className="ls-input" style={{ width: '100%', marginBottom: 10 }} placeholder="Filter labels…" aria-label="Filter labels" value={query} onChange={(e) => setQuery(e.target.value)} />
++      <div className="ls-card">
++        {filtered.length === 0 ? <Row title={<span className="t-3">No labels</span>} /> : null}
++        {filtered.map((label) => (
++          <div className="ls-row" key={label.id}>
++            <LabelDot color={label.color} />
++            <div className="ls-row-main">
++              <InlineText ariaLabel={`${label.name} name`} value={label.name} width={220} onCommit={(n) => void update(label, { name: n })} />
++            </div>
++            <span className="t-3" style={{ fontSize: 12 }}>{label.team_id ? t.teamsById.get(label.team_id)?.name ?? 'Team' : 'Workspace'}</span>
++            <span className="t-3" style={{ fontSize: 12, width: 72, textAlign: 'right' }}>{usage(label)} issues</span>
++            <ColorInput label={`${label.name} color`} value={label.color} onChange={(c) => void update(label, { color: c })} />
++            <button type="button" className="ls-icon-btn" aria-label={`Delete ${label.name}`} onClick={() => void remove(label)}>
++              <Trash2 size={13} />
++            </button>
++          </div>
++        ))}
++      </div>
++    </>
++  )
++}
++
++function MembersSection() {
++  const t = useTracker()
++  const save = useSave()
++  const [name, setName] = useState('')
++  const [email, setEmail] = useState('')
++  const humans = t.users.filter((u) => u.kind === 'human')
++  const agents = t.users.filter((u) => u.kind === 'agent')
++  const invite = async (event: React.FormEvent) => {
++    event.preventDefault()
++    if (!name.trim()) return
++    const user = await save(
++      () => trackerApi.createUser({ name: name.trim(), email: email.trim() || undefined, avatar_color: PALETTE[t.users.length % PALETTE.length] }),
++      `Added ${name.trim()}`,
++    )
++    if (user) {
++      t.upsertUser(user)
++      setName('')
++      setEmail('')
++    }
++  }
++  const assigned = (u: User) => t.issues.filter((i) => i.assignee_id === u.id && !i.archived_at).length
++  const renderUser = (u: User) => (
++    <div className="ls-row" key={u.id}>
++      <Avatar user={u} size={24} />
++      <div className="ls-row-main">
++        <div className="ls-row-title">
++          {u.name}
++          {u.is_me ? <span className="t-3"> (you)</span> : null}
++        </div>
++        <div className="ls-row-desc">{u.kind === 'agent' ? u.model ?? 'Agent' : u.email ?? u.display_name}</div>
++      </div>
++      <span className="t-3" style={{ fontSize: 12 }}>{assigned(u)} assigned</span>
++      <span className="t-4" style={{ fontSize: 12, width: 110, textAlign: 'right' }}>Joined {relativeTime(u.created_at)}</span>
++    </div>
++  )
++  return (
++    <>
++      <h1 className="ls-h1">Members</h1>
++      <p className="ls-sub">People and agents in this workspace.</p>
++      <form className="ls-card" onSubmit={invite} style={{ marginBottom: 8 }}>
++        <div className="ls-row">
++          <input className="ls-input" style={{ flex: 1 }} placeholder="Name" aria-label="Member name" value={name} onChange={(e) => setName(e.target.value)} />
++          <input className="ls-input" style={{ flex: 1 }} placeholder="Email (optional)" aria-label="Member email" value={email} onChange={(e) => setEmail(e.target.value)} />
++          <Button variant="primary" size="sm" type="submit" disabled={!name.trim()}>
++            Add member
++          </Button>
++        </div>
++      </form>
++      <h2 className="ls-h2">People · {humans.length}</h2>
++      <div className="ls-card">{humans.map(renderUser)}</div>
++      <h2 className="ls-h2">Agents · {agents.length}</h2>
++      <div className="ls-card">
++        {agents.length === 0 ? <Row title={<span className="t-3">No agents yet</span>} desc="Agents appear when a lane starts work." /> : agents.map(renderUser)}
++      </div>
++    </>
++  )
++}
++
++export function SettingsPage({ section, teamKey }: { section: SettingsSection; teamKey?: string | null }) {
++  const t = useTracker()
++  const team = teamKey ? t.teamsByKey.get(teamKey) : undefined
++  const nav: { id: string; label: string; href: string; active: boolean }[] = [
++    { id: 'account', label: 'Profile', href: '/settings/account', active: section === 'account' },
++    { id: 'preferences', label: 'Preferences', href: '/settings/preferences', active: section === 'preferences' },
++    { id: 'members', label: 'Members', href: '/settings/members', active: section === 'members' },
++    { id: 'labels', label: 'Labels', href: '/settings/labels', active: section === 'labels' },
++    { id: 'teams', label: 'Teams', href: '/settings/teams', active: section === 'teams' },
++  ]
++
++  let body: React.ReactNode
++  switch (section) {
++    case 'account':
++      body = <AccountSection />
++      break
++    case 'preferences':
++      body = <PreferencesSection />
++      break
++    case 'teams':
++      body = <TeamsSection />
++      break
++    case 'labels':
++      body = <LabelsSection />
++      break
++    case 'members':
++      body = <MembersSection />
++      break
++    case 'team':
++      body = team ? <TeamSection team={team} /> : <p className="t-3">Team not found.</p>
++      break
++    case 'workflow':
++      body = team ? <WorkflowSection team={team} /> : <p className="t-3">Team not found.</p>
++      break
++  }
++
++  return (
++    <>
++      <PageHeader crumbs={[{ label: 'Settings', href: '/settings/preferences' }]} title={team && (section === 'team' || section === 'workflow') ? `${team.name} · ${section === 'team' ? 'General' : 'Workflow'}` : undefined} />
++      <div className="ls-settings">
++        <nav className="ls-settings-nav ls-hide-mobile" aria-label="Settings">
++          <div className="ls-section-head" style={{ cursor: 'default' }}>Account</div>
++          {nav.slice(0, 2).map((item) => (
++            <a key={item.id} className={`ls-item ${item.active ? 'is-active' : ''}`} href={hrefFor(item.href)}>
++              <span className="ls-item-label">{item.label}</span>
++            </a>
++          ))}
++          <div className="ls-section-head" style={{ cursor: 'default', marginTop: 12 }}>Workspace</div>
++          {nav.slice(2).map((item) => (
++            <a key={item.id} className={`ls-item ${item.active ? 'is-active' : ''}`} href={hrefFor(item.href)}>
++              <span className="ls-item-label">{item.label}</span>
++            </a>
++          ))}
++          <div className="ls-section-head" style={{ cursor: 'default', marginTop: 12 }}>Your teams</div>
++          {t.teams.map((tm) => (
++            <React.Fragment key={tm.id}>
++              <a className={`ls-item ${section === 'team' && teamKey === tm.key ? 'is-active' : ''}`} href={hrefFor(`/settings/team/${tm.key}`)}>
++                <span className="ls-item-icon">
++                  <TeamIcon team={tm} size={16} />
++                </span>
++                <span className="ls-item-label">{tm.name}</span>
++              </a>
++              {teamKey === tm.key ? (
++                <a className={`ls-item is-sub ${section === 'workflow' ? 'is-active' : ''}`} href={hrefFor(`/settings/workflow/${tm.key}`)}>
++                  <span className="ls-item-label">Workflow</span>
++                </a>
++              ) : null}
++            </React.Fragment>
++          ))}
++        </nav>
++        <div className="ls-settings-body">
++          <div className="ls-settings-inner">{body}</div>
++        </div>
++      </div>
++    </>
++  )
++}
++
++export default SettingsPage
+diff --git a/web/src/tracker/pages/TeamIssuesPage.tsx b/web/src/tracker/pages/TeamIssuesPage.tsx
+new file mode 100644
+index 0000000..1e2792f
+--- /dev/null
++++ b/web/src/tracker/pages/TeamIssuesPage.tsx
+@@ -0,0 +1,66 @@
++import { useMemo } from 'react'
++import { IssueCollection } from '../issues/IssueCollection'
++import type { IssueTab } from '../router'
++import { PageHeader } from '../shell/Header'
++import { useTracker } from '../store'
++import type { StateType, ViewDisplay } from '../types'
++import { TeamIcon } from '../ui'
++
++const TAB_TYPES: Record<IssueTab, StateType[] | undefined> = {
++  all: undefined,
++  active: ['unstarted', 'started'],
++  backlog: ['backlog'],
++  triage: ['triage'],
++}
++
++const TAB_LABELS: Record<IssueTab, string> = {
++  all: 'All issues',
++  active: 'Active',
++  backlog: 'Backlog',
++  triage: 'Triage',
++}
++
++/** omo sessions mirror into the system team SES; its states are live session states, so a board reads best. */
++const SESSIONS_DISPLAY: Partial<ViewDisplay> = { layout: 'board', grouping: 'status', show_empty_groups: true }
++
++export function TeamIssuesPage({ teamKey, tab }: { teamKey: string; tab: IssueTab }) {
++  const t = useTracker()
++  const team = t.teamsByKey.get(teamKey)
++  const types = TAB_TYPES[tab]
++
++  const issues = useMemo(() => {
++    if (!team) return []
++    return t.issues.filter((issue) => {
++      if (issue.team_id !== team.id || issue.archived_at) return false
++      if (!types) return true
++      const state = t.statesById.get(issue.state_id)
++      return state ? types.includes(state.type) : false
++    })
++  }, [t.issues, t.statesById, team, types])
++
++  if (!team) return null
++
++  const tabs: IssueTab[] = team.triage_enabled ? ['triage', 'all', 'active', 'backlog'] : ['all', 'active', 'backlog']
++
++  return (
++    <IssueCollection
++      key={`${teamKey}:${tab}`}
++      issues={issues}
++      viewKey={`team:${teamKey}:${tab}`}
++      teamId={team.id}
++      stateTypes={types}
++      defaultDisplay={teamKey === 'SES' ? SESSIONS_DISPLAY : tab === 'backlog' ? { show_empty_groups: false } : undefined}
++      renderHeader={(toolbar) => (
++        <PageHeader
++          crumbs={[{ label: team.name, icon: <TeamIcon color={team.color} name={team.name} size={16} />, href: `/team/${team.key}/all` }]}
++          title={TAB_LABELS[tab]}
++          tabs={tabs.map((id) => ({ id, label: TAB_LABELS[id], href: `/team/${team.key}/${id}` }))}
++          activeTab={tab}
++          tabsRight={toolbar}
++        />
++      )}
++    />
++  )
++}
++
++export default TeamIssuesPage
+diff --git a/web/src/tracker/pages/ViewPage.tsx b/web/src/tracker/pages/ViewPage.tsx
+new file mode 100644
+index 0000000..ab1c259
+--- /dev/null
++++ b/web/src/tracker/pages/ViewPage.tsx
+@@ -0,0 +1,170 @@
++import { Layers, Star, Trash2 } from 'lucide-react'
++import { useEffect, useMemo, useRef, useState } from 'react'
++import { trackerApi } from '../api'
++import { IssueCollection } from '../issues/IssueCollection'
++import { errorMessage } from '../issues/model'
++import { navigate } from '../router'
++import { PageHeader } from '../shell/Header'
++import { applyFilters, useTracker } from '../store'
++import type { View, ViewDisplay, ViewFilters } from '../types'
++import { DEFAULT_DISPLAY } from '../types'
++import { Button, Dialog, IconButton, iconComponent, toast } from '../ui'
++
++function sameJson(a: unknown, b: unknown): boolean {
++  return JSON.stringify(a) === JSON.stringify(b)
++}
++
++function ViewBody({ view }: { view: View }) {
++  const t = useTracker()
++  const viewKey = `view:${view.id}`
++  const seeded = useRef<string | null>(null)
++  const [confirmDelete, setConfirmDelete] = useState(false)
++  const [saving, setSaving] = useState(false)
++
++  useEffect(() => {
++    if (seeded.current === view.id) return
++    seeded.current = view.id
++    t.setFiltersFor(viewKey, view.filters ?? {})
++    t.setDisplayFor(viewKey, { ...DEFAULT_DISPLAY, ...view.display })
++  }, [view.id, view.filters, view.display, viewKey, t])
++
++  const issues = useMemo(
++    () => t.issues.filter((issue) => !issue.archived_at && (!view.team_id || issue.team_id === view.team_id)),
++    [t.issues, view.team_id],
++  )
++
++  const currentFilters = t.filtersFor(viewKey)
++  const currentDisplay = t.displayFor(viewKey, view.display)
++  const dirty = !sameJson(currentFilters, view.filters ?? {}) || !sameJson(currentDisplay, { ...DEFAULT_DISPLAY, ...view.display })
++  const Icon = iconComponent(view.icon)
++  const favorite = t.isFavorite('view', view.id)
++
++  const saveChanges = async (filters: ViewFilters, display: ViewDisplay) => {
++    setSaving(true)
++    try {
++      const updated = await trackerApi.updateView(view.id, { filters, display })
++      t.upsertView(updated)
++      toast.success('View updated')
++    } catch (err) {
++      toast.error(errorMessage(err))
++    } finally {
++      setSaving(false)
++    }
++  }
++
++  const remove = async () => {
++    try {
++      await trackerApi.deleteView(view.id)
++      t.removeView(view.id)
++      setConfirmDelete(false)
++      navigate({ name: 'views' })
++    } catch (err) {
++      toast.error(errorMessage(err))
++    }
++  }
++
++  const team = view.team_id ? t.teamsById.get(view.team_id) : undefined
++
++  return (
++    <>
++      <IssueCollection
++        issues={issues}
++        viewKey={viewKey}
++        teamId={view.team_id}
++        showTeamTabs={!view.team_id}
++        defaultDisplay={view.display}
++        toolbarExtra={
++          dirty ? (
++            <>
++              <Button
++                size="sm"
++                variant="ghost"
++                onClick={() => {
++                  t.setFiltersFor(viewKey, view.filters ?? {})
++                  t.setDisplayFor(viewKey, { ...DEFAULT_DISPLAY, ...view.display })
++                }}
++              >
++                Reset
++              </Button>
++              <Button size="sm" variant="primary" disabled={saving} onClick={() => void saveChanges(currentFilters, currentDisplay)}>
++                Save changes
++              </Button>
++            </>
++          ) : null
++        }
++        renderHeader={(toolbar) => (
++          <PageHeader
++            crumbs={[
++              { label: 'Views', href: '/views', icon: <Layers size={14} /> },
++              ...(team ? [{ label: team.name, muted: true }] : []),
++            ]}
++            title={view.name}
++            icon={<Icon size={14} color={view.color ?? 'var(--text-3)'} />}
++            actions={
++              <>
++                <IconButton
++                  label={favorite ? 'Remove from favorites' : 'Add to favorites'}
++                  size="sm"
++                  active={favorite}
++                  icon={<Star size={14} fill={favorite ? 'currentColor' : 'none'} />}
++                  onClick={() => t.toggleFavorite('view', view.id).catch((err: unknown) => toast.error(errorMessage(err)))}
++                />
++                <IconButton label="Delete view" size="sm" icon={<Trash2 size={14} />} onClick={() => setConfirmDelete(true)} />
++              </>
++            }
++            tabs={[{ id: 'issues', label: 'Issues', active: true }]}
++            tabsRight={toolbar}
++          />
++        )}
++      />
++      <Dialog
++        open={confirmDelete}
++        onOpenChange={setConfirmDelete}
++        title={`Delete view "${view.name}"?`}
++        width={420}
++        footer={
++          <>
++            <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
++              Cancel
++            </Button>
++            <Button variant="danger" onClick={() => void remove()}>
++              Delete view
++            </Button>
++          </>
++        }
++      >
++        <p className="t-2" style={{ margin: 0 }}>
++          Issues are not affected. Anyone who favorited this view loses it.
++        </p>
++      </Dialog>
++    </>
++  )
++}
++
++export function ViewPage({ viewId }: { viewId: string }) {
++  const t = useTracker()
++  const view = t.views.find((v) => v.id === viewId)
++  if (!view) {
++    return (
++      <>
++        <PageHeader crumbs={[{ label: 'Views', href: '/views' }]} title="Not found" />
++        <div className="lic-empty">
++          <div className="lic-empty-inner">
++            <div className="t-1 w-510">This view does not exist</div>
++            <a className="lic-link" href="#/tracker/views">
++              Back to views
++            </a>
++          </div>
++        </div>
++      </>
++    )
++  }
++  return <ViewBody key={view.id} view={view} />
++}
++
++export function viewIssueCount(view: View, t: ReturnType<typeof useTracker>): number {
++  const base = t.issues.filter((issue) => !issue.archived_at && (!view.team_id || issue.team_id === view.team_id))
++  return applyFilters(base, view.filters ?? {}, t).length
++}
++
++export default ViewPage
+diff --git a/web/src/tracker/pages/ViewsPage.tsx b/web/src/tracker/pages/ViewsPage.tsx
+new file mode 100644
+index 0000000..5ae3093
+--- /dev/null
++++ b/web/src/tracker/pages/ViewsPage.tsx
+@@ -0,0 +1,82 @@
++import { Layers, Plus, Star } from 'lucide-react'
++import { useMemo, useState } from 'react'
++import { relativeTime } from '../format'
++import { SaveViewDialog } from '../issues/SaveViewDialog'
++import { hrefFor } from '../router'
++import { PageHeader } from '../shell/Header'
++import { filterCount, useTracker } from '../store'
++import { DEFAULT_DISPLAY } from '../types'
++import { Avatar, Button, iconComponent } from '../ui'
++import { viewIssueCount } from './ViewPage'
++import '../issues/issues.css'
++
++export function ViewsPage() {
++  const t = useTracker()
++  const [creating, setCreating] = useState(false)
++  const views = useMemo(() => t.views.slice().sort((a, b) => a.name.localeCompare(b.name)), [t.views])
++
++  return (
++    <>
++      <PageHeader
++        crumbs={[{ label: 'Views', icon: <Layers size={14} /> }]}
++        actions={
++          <Button size="sm" variant="secondary" icon={<Plus size={14} />} onClick={() => setCreating(true)}>
++            New view
++          </Button>
++        }
++      />
++      <div className="lic-scroll">
++        {views.length === 0 ? (
++          <div className="lic-empty">
++            <div className="lic-empty-inner">
++              <Layers size={28} className="t-4" />
++              <div className="t-1 w-510">Views</div>
++              <div className="t-3" style={{ maxWidth: 360, textAlign: 'center' }}>
++                Save a set of filters and display options as a view. Apply filters on any issue list and choose Save view.
++              </div>
++              <Button size="sm" variant="primary" onClick={() => setCreating(true)}>
++                Create view
++              </Button>
++            </div>
++          </div>
++        ) : (
++          <div className="lic-views" role="list">
++            <div className="lic-views-head t-3">
++              <span>Name</span>
++              <span>Issues</span>
++              <span>Filters</span>
++              <span>Owner</span>
++              <span>Updated</span>
++            </div>
++            {views.map((view) => {
++              const Icon = iconComponent(view.icon)
++              const owner = t.usersById.get(view.owner_id) ?? null
++              const team = view.team_id ? t.teamsById.get(view.team_id) : undefined
++              const favorite = t.isFavorite('view', view.id)
++              return (
++                <a key={view.id} className="lic-views-row" role="listitem" href={hrefFor({ name: 'view', viewId: view.id })} data-view-row={view.id}>
++                  <span className="lic-views-name">
++                    <Icon size={14} color={view.color ?? 'var(--text-3)'} />
++                    <span className="w-510 t-1">{view.name}</span>
++                    {favorite && <Star size={12} className="t-3" fill="currentColor" />}
++                    {team && <span className="t-4">{team.key}</span>}
++                    {view.description && <span className="t-3 lic-views-desc">{view.description}</span>}
++                  </span>
++                  <span className="t-2 tabular">{viewIssueCount(view, t)}</span>
++                  <span className="t-3 tabular">{filterCount(view.filters ?? {})}</span>
++                  <span>
++                    <Avatar user={owner} size={18} />
++                  </span>
++                  <span className="t-3">{relativeTime(view.updated_at)}</span>
++                </a>
++              )
++            })}
++          </div>
++        )}
++      </div>
++      <SaveViewDialog open={creating} onOpenChange={setCreating} filters={{}} display={DEFAULT_DISPLAY} teamId={null} t={t} />
++    </>
++  )
++}
++
++export default ViewsPage

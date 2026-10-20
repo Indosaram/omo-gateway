@@ -1,0 +1,2027 @@
+diff --git a/src/tracker/lanes.rs b/src/tracker/lanes.rs
+new file mode 100644
+index 0000000..848d718
+--- /dev/null
++++ b/src/tracker/lanes.rs
+@@ -0,0 +1,796 @@
++use std::path::PathBuf;
++
++use chrono::{SecondsFormat, Utc};
++use sha2::{Digest, Sha256};
++use sqlx::{Row, SqlitePool};
++use uuid::Uuid;
++
++use crate::error::{OmonError, Result};
++use crate::inbox::triage::production_judge;
++use crate::lanes::cli::{execute, LaneCommand, LaneModel, StartArgs};
++use crate::tracker::model::{
++    DelegateInput, LaneActionInput, LaneDetail, LaneEventEntry, LaneHistoryEntry, LaneSummary,
++    LaneTranscriptEntry,
++};
++use crate::tracker::seed::now_utc;
++
++fn invalid(message: impl Into<String>) -> OmonError {
++    OmonError::Config(message.into())
++}
++
++pub fn model_short_name(model: &str) -> String {
++    model.rsplit('/').next().unwrap_or(model).to_string()
++}
++
++pub fn deterministic_avatar_color(seed: &str) -> String {
++    let mut hasher = Sha256::new();
++    hasher.update(seed.as_bytes());
++    let hash = hasher.finalize();
++    let r = 40 + (hash[0] % 180);
++    let g = 40 + (hash[1] % 180);
++    let b = 40 + (hash[2] % 180);
++    format!("#{r:02x}{g:02x}{b:02x}")
++}
++
++pub async fn ensure_agent_user(pool: &SqlitePool, model: Option<&str>) -> Result<String> {
++    let full_model = model.unwrap_or("agent");
++    let short_name = model_short_name(full_model);
++
++    let existing: Option<String> = sqlx::query_scalar(
++        "SELECT id FROM tracker_users WHERE kind = 'agent' AND (model = ? OR (model IS NULL AND name = ?)) LIMIT 1",
++    )
++    .bind(full_model)
++    .bind(&short_name)
++    .fetch_optional(pool)
++    .await?;
++
++    if let Some(id) = existing {
++        return Ok(id);
++    }
++
++    let id = Uuid::new_v4().to_string();
++    let color = deterministic_avatar_color(&short_name);
++    let now = now_utc();
++
++    sqlx::query(
++        "INSERT INTO tracker_users (id, name, display_name, email, avatar_color, kind, model, is_me, created_at)
++         VALUES (?, ?, ?, NULL, ?, 'agent', ?, 0, ?)
++         ON CONFLICT(id) DO NOTHING",
++    )
++    .bind(&id)
++    .bind(&short_name)
++    .bind(&short_name)
++    .bind(&color)
++    .bind(full_model)
++    .bind(&now)
++    .execute(pool)
++    .await?;
++
++    Ok(id)
++}
++
++pub fn map_lane_status_to_type(status: &str) -> (&'static str, &'static str) {
++    match status {
++        "queued" => ("unstarted", "Queued"),
++        "working" => ("started", "Working"),
++        "blocked" => ("started", "Blocked"),
++        "done_claimed" => ("started", "In Review"),
++        "not_done" => ("started", "Changes Requested"),
++        "verified_done" => ("completed", "Verified"),
++        "closed" => ("completed", "Done"),
++        "failed" => ("canceled", "Failed"),
++        _ => ("started", "Working"),
++    }
++}
++
++pub async fn read_brief_content(brief_path: &str) -> String {
++    if brief_path.is_empty() {
++        return String::new();
++    }
++    match tokio::fs::read(brief_path).await {
++        Ok(bytes) => {
++            let limit = bytes.len().min(20 * 1024);
++            String::from_utf8_lossy(&bytes[..limit]).into_owned()
++        }
++        Err(_) => String::new(),
++    }
++}
++
++pub async fn sync(pool: &SqlitePool) -> Result<()> {
++    let lanes = sqlx::query(
++        "SELECT key, title, cwd, brief_path, model, status FROM lanes ORDER BY created_at ASC",
++    )
++    .fetch_all(pool)
++    .await?;
++
++    let agt_team: Option<(String, i64)> =
++        sqlx::query_as("SELECT id, issue_seq FROM tracker_teams WHERE key = 'AGT'")
++            .fetch_optional(pool)
++            .await?;
++
++    let Some((agt_team_id, mut agt_seq)) = agt_team else {
++        return Ok(());
++    };
++
++    let agt_states = sqlx::query(
++        "SELECT id, type, lane_status FROM tracker_states WHERE team_id = ? AND lane_status IS NOT NULL",
++    )
++    .bind(&agt_team_id)
++    .fetch_all(pool)
++    .await?;
++
++    let mut state_by_lane_status = std::collections::HashMap::<String, (String, String)>::new();
++    for row in agt_states {
++        let id: String = row.get("id");
++        let state_type: String = row.get("type");
++        let lane_status: String = row.get("lane_status");
++        state_by_lane_status.insert(lane_status, (id, state_type));
++    }
++
++    let me_user_id: Option<String> =
++        sqlx::query_scalar("SELECT id FROM tracker_users WHERE is_me = 1 LIMIT 1")
++            .fetch_optional(pool)
++            .await?;
++
++    for lane_row in lanes {
++        let lane_key: String = lane_row.get("key");
++        let lane_title: String = lane_row.get("title");
++        let brief_path: String = lane_row.get("brief_path");
++        let lane_model: Option<String> = lane_row.get("model");
++        let lane_status: String = lane_row.get("status");
++
++        let existing_issue = sqlx::query(
++            "SELECT id, team_id, state_id, started_at
++             FROM tracker_issues WHERE lane_key = ?",
++        )
++        .bind(&lane_key)
++        .fetch_optional(pool)
++        .await?;
++
++        let now = now_utc();
++
++        if let Some(issue) = existing_issue {
++            let issue_id: String = issue.get("id");
++            let issue_team_id: String = issue.get("team_id");
++            let prev_state_id: String = issue.get("state_id");
++            let mut started_at: Option<String> = issue.get("started_at");
++            let completed_at: Option<String>;
++            let canceled_at: Option<String>;
++
++            // A human move the lane accepted stays visible while its close/reopen request is
++            // pending; otherwise the issue always converges back to the lane's real status.
++            let last_lane_status: Option<String> = sqlx::query_scalar(
++                "SELECT to_value FROM tracker_activity WHERE issue_id = ? AND kind = 'lane_status' ORDER BY id DESC LIMIT 1",
++            )
++            .bind(&issue_id)
++            .fetch_optional(pool)
++            .await?;
++            let status_changed = last_lane_status.as_deref() != Some(lane_status.as_str());
++            if !status_changed {
++                let pending: i64 = sqlx::query_scalar(
++                    "SELECT (SELECT COUNT(*) FROM lane_close_intents WHERE lane_key = ?1 AND state IN ('pending','running'))
++                          + (SELECT COUNT(*) FROM lane_owner_replies WHERE lane_key = ?1 AND state = 'pending')",
++                )
++                .bind(&lane_key)
++                .fetch_one(pool)
++                .await?;
++                if pending > 0 {
++                    continue;
++                }
++            }
++
++            let target_state_id = if issue_team_id == agt_team_id {
++                state_by_lane_status
++                    .get(&lane_status)
++                    .map(|(id, _)| id.clone())
++            } else {
++                let (mapped_type, _) = map_lane_status_to_type(&lane_status);
++                sqlx::query_scalar::<_, String>(
++                    "SELECT id FROM tracker_states WHERE team_id = ? AND type = ? ORDER BY position ASC LIMIT 1",
++                )
++                .bind(&issue_team_id)
++                .bind(mapped_type)
++                .fetch_optional(pool)
++                .await?
++            };
++
++            if let Some(new_state_id) = target_state_id {
++                let new_state_type: String =
++                    sqlx::query_scalar("SELECT type FROM tracker_states WHERE id = ?")
++                        .bind(&new_state_id)
++                        .fetch_one(pool)
++                        .await?;
++
++                if new_state_id != prev_state_id {
++                    match new_state_type.as_str() {
++                        "started" => {
++                            if started_at.is_none() {
++                                started_at = Some(now.clone());
++                            }
++                            completed_at = None;
++                            canceled_at = None;
++                        }
++                        "completed" => {
++                            completed_at = Some(now.clone());
++                            canceled_at = None;
++                        }
++                        "canceled" => {
++                            canceled_at = Some(now.clone());
++                            completed_at = None;
++                        }
++                        _ => {
++                            completed_at = None;
++                            canceled_at = None;
++                        }
++                    }
++
++                    sqlx::query(
++                        "UPDATE tracker_issues
++                         SET state_id = ?, started_at = ?, completed_at = ?, canceled_at = ?, updated_at = ?
++                         WHERE id = ?",
++                    )
++                    .bind(&new_state_id)
++                    .bind(&started_at)
++                    .bind(&completed_at)
++                    .bind(&canceled_at)
++                    .bind(&now)
++                    .bind(&issue_id)
++                    .execute(pool)
++                    .await?;
++                }
++            }
++
++            if !status_changed {
++                continue;
++            }
++
++            sqlx::query(
++                "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
++                 VALUES (?, NULL, 'lane_status', ?, ?, ?)",
++            )
++            .bind(&issue_id)
++            .bind(last_lane_status.as_deref())
++            .bind(&lane_status)
++            .bind(&now)
++            .execute(pool)
++            .await?;
++
++            if matches!(
++                lane_status.as_str(),
++                "blocked" | "done_claimed" | "verified_done" | "failed"
++            ) {
++                if let Some(ref me_id) = me_user_id {
++                    let notif_id = Uuid::new_v4().to_string();
++                    let kind = format!("lane_{lane_status}");
++                    let body = format!("Lane {lane_key} entered status {lane_status}");
++                    sqlx::query(
++                        "INSERT INTO tracker_notifications (id, user_id, issue_id, project_id, kind, actor_id, body, created_at)
++                         VALUES (?, ?, ?, NULL, ?, NULL, ?, ?)",
++                    )
++                    .bind(notif_id)
++                    .bind(me_id)
++                    .bind(&issue_id)
++                    .bind(kind)
++                    .bind(body)
++                    .bind(&now)
++                    .execute(pool)
++                    .await?;
++                }
++            }
++        } else {
++            let agent_user_id = ensure_agent_user(pool, lane_model.as_deref()).await?;
++            let brief_text = read_brief_content(&brief_path).await;
++
++            let (target_state_id, state_type) = if let Some((id, t)) =
++                state_by_lane_status.get(&lane_status)
++            {
++                (id.clone(), t.clone())
++            } else {
++                let default_state: (String, String) = sqlx::query_as(
++                    "SELECT id, type FROM tracker_states WHERE team_id = ? ORDER BY position ASC LIMIT 1",
++                )
++                .bind(&agt_team_id)
++                .fetch_one(pool)
++                .await?;
++                default_state
++            };
++
++            agt_seq += 1;
++            let identifier = format!("AGT-{agt_seq}");
++            let issue_id = Uuid::new_v4().to_string();
++
++            let (started_at, completed_at, canceled_at) = match state_type.as_str() {
++                "started" => (Some(now.clone()), None, None),
++                "completed" => (None, Some(now.clone()), None),
++                "canceled" => (None, None, Some(now.clone())),
++                _ => (None, None, None),
++            };
++
++            sqlx::query("UPDATE tracker_teams SET issue_seq = ? WHERE id = ?")
++                .bind(agt_seq)
++                .bind(&agt_team_id)
++                .execute(pool)
++                .await?;
++
++            sqlx::query(
++                "INSERT INTO tracker_issues (
++                    id, team_id, number, identifier, title, description, state_id,
++                    priority, estimate, assignee_id, creator_id, project_id, milestone_id,
++                    cycle_id, parent_id, due_date, sort_order, lane_key, created_at, updated_at,
++                    started_at, completed_at, canceled_at, archived_at, snoozed_until
++                 ) VALUES (
++                    ?, ?, ?, ?, ?, ?, ?,
++                    0, NULL, ?, ?, NULL, NULL,
++                    NULL, NULL, NULL, 0.0, ?, ?, ?,
++                    ?, ?, ?, NULL, NULL
++                 )",
++            )
++            .bind(&issue_id)
++            .bind(&agt_team_id)
++            .bind(agt_seq)
++            .bind(&identifier)
++            .bind(&lane_title)
++            .bind(&brief_text)
++            .bind(&target_state_id)
++            .bind(&agent_user_id)
++            .bind(&agent_user_id)
++            .bind(&lane_key)
++            .bind(&now)
++            .bind(&now)
++            .bind(&started_at)
++            .bind(&completed_at)
++            .bind(&canceled_at)
++            .execute(pool)
++            .await?;
++
++            sqlx::query(
++                "INSERT INTO tracker_subscribers (issue_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
++            )
++            .bind(&issue_id)
++            .bind(&agent_user_id)
++            .execute(pool)
++            .await?;
++
++            sqlx::query(
++                "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
++                 VALUES (?, ?, 'created', NULL, NULL, ?)",
++            )
++            .bind(&issue_id)
++            .bind(&agent_user_id)
++            .bind(&now)
++            .execute(pool)
++            .await?;
++
++            sqlx::query(
++                "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
++                 VALUES (?, NULL, 'lane_status', NULL, ?, ?)",
++            )
++            .bind(&issue_id)
++            .bind(&lane_status)
++            .bind(&now)
++            .execute(pool)
++            .await?;
++
++            if matches!(
++                lane_status.as_str(),
++                "blocked" | "done_claimed" | "verified_done" | "failed"
++            ) {
++                if let Some(ref me_id) = me_user_id {
++                    let notif_id = Uuid::new_v4().to_string();
++                    let kind = format!("lane_{lane_status}");
++                    let body = format!("Lane {lane_key} entered status {lane_status}");
++                    sqlx::query(
++                        "INSERT INTO tracker_notifications (id, user_id, issue_id, project_id, kind, actor_id, body, created_at)
++                         VALUES (?, ?, ?, NULL, ?, NULL, ?, ?)",
++                    )
++                    .bind(notif_id)
++                    .bind(me_id)
++                    .bind(&issue_id)
++                    .bind(kind)
++                    .bind(body)
++                    .bind(&now)
++                    .execute(pool)
++                    .await?;
++                }
++            }
++        }
++    }
++
++    Ok(())
++}
++
++pub enum LaneTransitionError {
++    LaneNotVerified,
++    IllegalLaneTransition(String),
++    CommandFailed(String),
++}
++
++pub async fn handle_lane_state_transition(
++    pool: &SqlitePool,
++    lane_key: &str,
++    target_state_type: &str,
++    force_note: Option<&str>,
++) -> std::result::Result<(), LaneTransitionError> {
++    let lane_status: Option<String> = sqlx::query_scalar("SELECT status FROM lanes WHERE key = ?")
++        .bind(lane_key)
++        .fetch_optional(pool)
++        .await
++        .map_err(|e| LaneTransitionError::CommandFailed(e.to_string()))?;
++
++    let Some(current_status) = lane_status else {
++        return Err(LaneTransitionError::IllegalLaneTransition(format!(
++            "lane {lane_key} not found"
++        )));
++    };
++
++    let command = match target_state_type {
++        "completed" => {
++            if current_status == "verified_done" {
++                LaneCommand::Close {
++                    key: lane_key.to_string(),
++                    force: false,
++                    note: None,
++                }
++            } else if let Some(note) = force_note.filter(|n| !n.trim().is_empty()) {
++                LaneCommand::Close {
++                    key: lane_key.to_string(),
++                    force: true,
++                    note: Some(format!("forced: {note}")),
++                }
++            } else {
++                return Err(LaneTransitionError::LaneNotVerified);
++            }
++        }
++        "canceled" => {
++            if matches!(
++                current_status.as_str(),
++                "working" | "blocked" | "verified_done"
++            ) {
++                LaneCommand::Close {
++                    key: lane_key.to_string(),
++                    force: true,
++                    note: Some("forced: canceled from tracker".to_string()),
++                }
++            } else {
++                return Err(LaneTransitionError::IllegalLaneTransition(format!(
++                    "lane cannot be canceled from status {current_status}"
++                )));
++            }
++        }
++        "started" | "unstarted" | "backlog" => {
++            if matches!(current_status.as_str(), "closed" | "failed") {
++                LaneCommand::Reopen {
++                    key: lane_key.to_string(),
++                    text: None,
++                }
++            } else {
++                return Err(LaneTransitionError::IllegalLaneTransition(format!(
++                    "lane is already in active status {current_status}"
++                )));
++            }
++        }
++        _ => {
++            return Err(LaneTransitionError::IllegalLaneTransition(format!(
++                "unsupported target state type {target_state_type}"
++            )));
++        }
++    };
++
++    let judge = production_judge(pool.clone());
++    let (code, output) = execute(pool, command, &judge)
++        .await
++        .map_err(|e| LaneTransitionError::CommandFailed(e.to_string()))?;
++
++    if code == 0 || code == 4 {
++        sync(pool)
++            .await
++            .map_err(|e| LaneTransitionError::CommandFailed(e.to_string()))?;
++        Ok(())
++    } else {
++        Err(LaneTransitionError::CommandFailed(output.to_string()))
++    }
++}
++
++pub async fn delegate_issue(pool: &SqlitePool, issue_id: &str, input: DelegateInput) -> Result<()> {
++    let issue_row = sqlx::query(
++        "SELECT identifier, title, description, lane_key FROM tracker_issues WHERE id = ?",
++    )
++    .bind(issue_id)
++    .fetch_optional(pool)
++    .await?
++    .ok_or_else(|| invalid("issue not found"))?;
++
++    let current_lane_key: Option<String> = issue_row.get("lane_key");
++    if current_lane_key.is_some() {
++        return Err(invalid("issue already delegated to a lane"));
++    }
++
++    let identifier: String = issue_row.get("identifier");
++    let title: String = issue_row.get("title");
++    let description: String = issue_row.get("description");
++
++    let hex_suffix = format!("{:04x}", rand_u16());
++    let raw_key = format!("{}-{hex_suffix}", identifier.to_lowercase());
++    let lane_key = sanitize_lane_key(&raw_key);
++
++    let brief_dir = std::env::var("OMON_TRACKER_BRIEF_DIR")
++        .unwrap_or_else(|_| ".omo/tracker-briefs".to_string());
++    let brief_dir_path = PathBuf::from(brief_dir);
++    tokio::fs::create_dir_all(&brief_dir_path)
++        .await
++        .map_err(|e| invalid(e.to_string()))?;
++
++    let brief_path = brief_dir_path.join(format!("{lane_key}.md"));
++    let brief_content = format!("# {identifier}: {title}\n\n{description}");
++    tokio::fs::write(&brief_path, brief_content)
++        .await
++        .map_err(|e| invalid(e.to_string()))?;
++
++    let model = match input.model.as_deref() {
++        Some("small") => LaneModel::Small,
++        Some("large") => LaneModel::Large,
++        _ => LaneModel::Auto,
++    };
++
++    let thread = input.thread;
++
++    let start_args = StartArgs {
++        key: lane_key.clone(),
++        title,
++        brief: brief_path,
++        done: input.done,
++        thread,
++        cwd: Some(PathBuf::from(input.cwd)),
++        lead: None,
++        model,
++    };
++
++    let judge = production_judge(pool.clone());
++    let (code, output) = execute(pool, LaneCommand::Start(start_args), &judge).await?;
++
++    if code == 0 || code == 4 {
++        let now = now_utc();
++        sqlx::query("UPDATE tracker_issues SET lane_key = ?, updated_at = ? WHERE id = ?")
++            .bind(&lane_key)
++            .bind(&now)
++            .bind(issue_id)
++            .execute(pool)
++            .await?;
++
++        let me_id: Option<String> =
++            sqlx::query_scalar("SELECT id FROM tracker_users WHERE is_me = 1 LIMIT 1")
++                .fetch_optional(pool)
++                .await?;
++
++        sqlx::query(
++            "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
++             VALUES (?, ?, 'delegated', NULL, ?, ?)",
++        )
++        .bind(issue_id)
++        .bind(me_id)
++        .bind(&lane_key)
++        .bind(&now)
++        .execute(pool)
++        .await?;
++
++        sync(pool).await?;
++        Ok(())
++    } else {
++        Err(invalid(format!("lane start failed: {output}")))
++    }
++}
++
++pub async fn execute_lane_action(
++    pool: &SqlitePool,
++    issue_id: &str,
++    input: LaneActionInput,
++) -> Result<()> {
++    let lane_key: Option<String> =
++        sqlx::query_scalar("SELECT lane_key FROM tracker_issues WHERE id = ?")
++            .bind(issue_id)
++            .fetch_optional(pool)
++            .await?
++            .ok_or_else(|| invalid("issue not found"))?;
++
++    let Some(lane_key) = lane_key else {
++        return Err(invalid("issue is not linked to a lane"));
++    };
++
++    let command = match input.action.as_str() {
++        "send" => LaneCommand::Send {
++            key: lane_key.clone(),
++            text: input.text.unwrap_or_default(),
++        },
++        "object" => LaneCommand::Object {
++            key: lane_key.clone(),
++            reason: input.text.unwrap_or_default(),
++        },
++        "close" => {
++            let force = input.force.unwrap_or(false);
++            let note = if force {
++                let text = input.text.unwrap_or_default();
++                let text = text.trim();
++                Some(if text.starts_with("forced:") {
++                    text.to_string()
++                } else if text.is_empty() {
++                    "forced: closed from tracker".to_string()
++                } else {
++                    format!("forced: {text}")
++                })
++            } else {
++                input.text.filter(|text| !text.trim().is_empty())
++            };
++            LaneCommand::Close {
++                key: lane_key.clone(),
++                force,
++                note,
++            }
++        }
++        "reopen" => LaneCommand::Reopen {
++            key: lane_key.clone(),
++            text: input.text,
++        },
++        _ => return Err(invalid(format!("unknown lane action: {}", input.action))),
++    };
++
++    let judge = production_judge(pool.clone());
++    let (code, output) = execute(pool, command, &judge).await?;
++
++    if code == 0 || code == 4 {
++        sync(pool).await?;
++        Ok(())
++    } else {
++        Err(invalid(format!("lane action failed: {output}")))
++    }
++}
++
++fn rand_u16() -> u16 {
++    let nanos = Utc::now().timestamp_subsec_nanos();
++    ((nanos ^ (nanos >> 16)) & 0xFFFF) as u16
++}
++
++fn sanitize_lane_key(key: &str) -> String {
++    let mut out = String::with_capacity(key.len());
++    for ch in key.chars() {
++        if ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' {
++            out.push(ch);
++        } else if ch.is_ascii_uppercase() {
++            out.push(ch.to_ascii_lowercase());
++        }
++    }
++    if out.is_empty() {
++        out.push_str("lane-1");
++    }
++    if out.len() > 48 {
++        out.truncate(48);
++    }
++    out
++}
++
++pub async fn load_lane_summary(pool: &SqlitePool, lane_key: &str) -> Result<Option<LaneSummary>> {
++    let row = sqlx::query(
++        "SELECT key, status, model, turns_run, last_activity_at, thread_channel_id
++         FROM lanes WHERE key = ?",
++    )
++    .bind(lane_key)
++    .fetch_optional(pool)
++    .await?;
++
++    let Some(r) = row else {
++        return Ok(None);
++    };
++
++    let last_activity: chrono::DateTime<Utc> = r.get("last_activity_at");
++    let last_activity_at = last_activity.to_rfc3339_opts(SecondsFormat::Millis, true);
++
++    Ok(Some(LaneSummary {
++        key: r.get("key"),
++        status: r.get("status"),
++        model: r.get("model"),
++        turns_run: r.get("turns_run"),
++        last_activity_at,
++        thread_channel_id: r.get("thread_channel_id"),
++    }))
++}
++
++pub async fn load_lane_detail(pool: &SqlitePool, lane_key: &str) -> Result<Option<LaneDetail>> {
++    let lane_row = sqlx::query(
++        "SELECT key, title, status, cwd, brief_path, model, done_signals, claim_evidence,
++                objection, turns_run, last_turn_outcome, last_report, last_activity_at,
++                thread_channel_id, created_at
++         FROM lanes WHERE key = ?",
++    )
++    .bind(lane_key)
++    .fetch_optional(pool)
++    .await?;
++
++    let Some(lr) = lane_row else {
++        return Ok(None);
++    };
++
++    let last_activity: chrono::DateTime<Utc> = lr.get("last_activity_at");
++    let last_activity_at = last_activity.to_rfc3339_opts(SecondsFormat::Millis, true);
++
++    let created_at: Option<chrono::DateTime<Utc>> = lr.try_get("created_at").ok();
++    let created_at_str = created_at.map(|c| c.to_rfc3339_opts(SecondsFormat::Millis, true));
++
++    let lane_json = serde_json::json!({
++        "key": lr.get::<String, _>("key"),
++        "title": lr.get::<String, _>("title"),
++        "status": lr.get::<String, _>("status"),
++        "cwd": lr.get::<String, _>("cwd"),
++        "brief_path": lr.get::<String, _>("brief_path"),
++        "model": lr.get::<Option<String>, _>("model"),
++        "done_signals": lr.get::<String, _>("done_signals"),
++        "claim_evidence": lr.get::<Option<String>, _>("claim_evidence"),
++        "objection": lr.get::<Option<String>, _>("objection"),
++        "turns_run": lr.get::<i64, _>("turns_run"),
++        "last_turn_outcome": lr.get::<Option<String>, _>("last_turn_outcome"),
++        "last_report": lr.get::<Option<String>, _>("last_report"),
++        "last_activity_at": last_activity_at,
++        "thread_channel_id": lr.get::<Option<String>, _>("thread_channel_id"),
++        "created_at": created_at_str,
++    });
++
++    let history_rows = sqlx::query(
++        "SELECT id, at, from_status, to_status, reason FROM lane_history WHERE lane_key = ? ORDER BY id ASC",
++    )
++    .bind(lane_key)
++    .fetch_all(pool)
++    .await?;
++
++    let mut history = Vec::with_capacity(history_rows.len());
++    for hr in history_rows {
++        let at_dt: chrono::DateTime<Utc> = hr.get("at");
++        history.push(LaneHistoryEntry {
++            id: hr.get("id"),
++            at: at_dt.to_rfc3339_opts(SecondsFormat::Millis, true),
++            from_status: hr.get("from_status"),
++            to_status: hr.get("to_status"),
++            reason: hr.get("reason"),
++        });
++    }
++
++    let transcript_rows = sqlx::query(
++        "SELECT id, at, role, text FROM lane_transcript WHERE lane_key = ? ORDER BY id DESC LIMIT 200",
++    )
++    .bind(lane_key)
++    .fetch_all(pool)
++    .await?;
++
++    let mut transcript = Vec::with_capacity(transcript_rows.len());
++    for tr in transcript_rows.into_iter().rev() {
++        let at_dt: chrono::DateTime<Utc> = tr.get("at");
++        transcript.push(LaneTranscriptEntry {
++            id: tr.get("id"),
++            at: at_dt.to_rfc3339_opts(SecondsFormat::Millis, true),
++            role: tr.get("role"),
++            text: tr.get("text"),
++        });
++    }
++
++    let event_rows = sqlx::query(
++        "SELECT id, kind, body, created_at FROM lane_events WHERE lane_key = ? ORDER BY id DESC LIMIT 100",
++    )
++    .bind(lane_key)
++    .fetch_all(pool)
++    .await?;
++
++    let mut events = Vec::with_capacity(event_rows.len());
++    for er in event_rows.into_iter().rev() {
++        let created_dt: chrono::DateTime<Utc> = er.get("created_at");
++        events.push(LaneEventEntry {
++            id: er.get("id"),
++            kind: er.get("kind"),
++            body: er.get("body"),
++            created_at: created_dt.to_rfc3339_opts(SecondsFormat::Millis, true),
++        });
++    }
++
++    Ok(Some(LaneDetail {
++        lane: lane_json,
++        history,
++        transcript,
++        events,
++    }))
++}
+diff --git a/src/tracker/sessions.rs b/src/tracker/sessions.rs
+new file mode 100644
+index 0000000..2788b89
+--- /dev/null
++++ b/src/tracker/sessions.rs
+@@ -0,0 +1,852 @@
++use std::collections::{HashMap, HashSet};
++use std::sync::{Arc, OnceLock, RwLock};
++use std::time::{Duration, Instant};
++
++use axum::extract::{Path, Query};
++use axum::Json;
++use chrono::{DateTime, SecondsFormat, Utc};
++use serde::Deserialize;
++use serde_json::{json, Value};
++use sqlx::{Row, SqlitePool};
++use tokio::sync::Mutex;
++use uuid::Uuid;
++
++use crate::error::{OmonError, Result};
++use crate::sessions::control::{ControlError, SendMode, SessionControl, Target};
++use crate::sessions::overview::{self, home_relative, short_id, state_of, Overview, SessionState};
++use crate::sessions::probe::{LiveSession, MachineSnapshot};
++use crate::sessions::registry::configured_hosts;
++use crate::tracker::api::{non_empty, ApiResult, TrackerError};
++use crate::tracker::lanes::deterministic_avatar_color;
++use crate::tracker::model::{SessionDetail, SessionSummary};
++use crate::tracker::seed;
++
++const CACHE_TTL: Duration = Duration::from_secs(15);
++/// Probe text limit; the issue detail shows last messages up to this many characters.
++pub const TEXT_LIMIT: usize = 4000;
++pub const PREVIEW_CHARS: usize = 400;
++/// Set to "0" to skip mirroring live sessions into tracker issues (collection still serves the board).
++pub const SYNC_ENV: &str = "OMON_TRACKER_SESSION_SYNC";
++
++struct Collected {
++    at: Instant,
++    overview: Arc<Overview>,
++    board: Value,
++}
++
++type Cached = Mutex<Option<Collected>>;
++
++fn cache() -> &'static Cached {
++    static CACHE: OnceLock<Cached> = OnceLock::new();
++    CACHE.get_or_init(|| Mutex::new(None))
++}
++
++/// Latest known live sessions keyed by session_ref; machines that failed keep their previous entries.
++fn live_map() -> &'static RwLock<HashMap<String, LiveSession>> {
++    static LIVE: OnceLock<RwLock<HashMap<String, LiveSession>>> = OnceLock::new();
++    LIVE.get_or_init(|| RwLock::new(HashMap::new()))
++}
++
++fn sync_lock() -> &'static Arc<Mutex<()>> {
++    static LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
++    LOCK.get_or_init(|| Arc::new(Mutex::new(())))
++}
++
++pub fn session_ref(machine: &str, session_id: &str) -> String {
++    format!("{machine}:{session_id}")
++}
++
++fn answered(overview: &Overview) -> impl Iterator<Item = (&String, &MachineSnapshot)> {
++    overview
++        .snapshots
++        .iter()
++        .filter_map(|(machine, snapshot)| snapshot.as_ref().ok().map(|s| (machine, s)))
++}
++
++fn remember(overview: &Overview) {
++    let ok: HashSet<&str> = answered(overview).map(|(m, _)| m.as_str()).collect();
++    let mut map = live_map()
++        .write()
++        .unwrap_or_else(|poisoned| poisoned.into_inner());
++    map.retain(|reference, _| {
++        reference
++            .split_once(':')
++            .is_some_and(|(machine, _)| !ok.contains(machine))
++    });
++    for (machine, snapshot) in answered(overview) {
++        for live in &snapshot.sessions {
++            map.insert(session_ref(machine, &live.session_id), live.clone());
++        }
++    }
++}
++
++fn live_session(reference: &str) -> Option<LiveSession> {
++    live_map()
++        .read()
++        .unwrap_or_else(|poisoned| poisoned.into_inner())
++        .get(reference)
++        .cloned()
++}
++
++async fn current(refresh: bool) -> ApiResult<(Arc<Overview>, Value)> {
++    let mut cached = cache().lock().await;
++    if !refresh {
++        if let Some(collected) = cached.as_ref() {
++            if collected.at.elapsed() < CACHE_TTL {
++                return Ok((collected.overview.clone(), collected.board.clone()));
++            }
++        }
++    }
++    let control = control()?;
++    let overview = Arc::new(overview::collect(&control, TEXT_LIMIT).await);
++    let board = shape(&overview, Utc::now());
++    remember(&overview);
++    *cached = Some(Collected {
++        at: Instant::now(),
++        overview: overview.clone(),
++        board: board.clone(),
++    });
++    Ok((overview, board))
++}
++
++async fn invalidate() {
++    *cache().lock().await = None;
++}
++
++fn state_name(state: SessionState) -> &'static str {
++    match state {
++        SessionState::Working => "working",
++        SessionState::Question => "question",
++        SessionState::Blocked => "blocked",
++        SessionState::Idle => "idle",
++    }
++}
++
++fn state_rank(state: SessionState) -> u8 {
++    match state {
++        SessionState::Question => 0,
++        SessionState::Blocked => 1,
++        SessionState::Working => 2,
++        SessionState::Idle => 3,
++    }
++}
++
++fn preview(text: &str) -> String {
++    text.chars().take(PREVIEW_CHARS).collect()
++}
++
++fn parse_time(value: Option<&str>) -> Option<DateTime<Utc>> {
++    value
++        .and_then(|v| DateTime::parse_from_rfc3339(v).ok())
++        .map(|at| at.with_timezone(&Utc))
++}
++
++struct Resolved {
++    name: Option<String>,
++    cwd: Option<String>,
++    updated_at: Option<String>,
++}
++
++/// Fills gaps in a probed session from the registry listing of the same machine.
++fn resolve(overview: &Overview, machine: &str, live: &LiveSession) -> Resolved {
++    let listing = overview.list.sessions.iter().find(|s| {
++        s.machine == machine
++            && (s.session_id == live.session_id
++                || s.raw.get("durableSessionId").and_then(Value::as_str)
++                    == Some(live.session_id.as_str()))
++    });
++    Resolved {
++        name: live
++            .name
++            .clone()
++            .filter(|name| !name.trim().is_empty())
++            .or_else(|| listing.and_then(|s| s.name.clone())),
++        cwd: live
++            .cwd
++            .clone()
++            .or_else(|| listing.and_then(|s| s.cwd.clone())),
++        updated_at: live
++            .updated_at
++            .clone()
++            .or_else(|| listing.and_then(|s| s.updated_at.clone().or(s.last_activity.clone()))),
++    }
++}
++
++/// Shapes a collected overview into the board JSON; pure so it can be tested without ssh.
++pub fn shape(overview: &Overview, now: DateTime<Utc>) -> Value {
++    let mut machines = Vec::new();
++    let mut rows = Vec::new();
++
++    for (machine, snapshot) in &overview.snapshots {
++        match snapshot {
++            Err(error) => machines.push(json!({
++                "machine": machine,
++                "ok": false,
++                "error": error,
++                "session_count": 0,
++            })),
++            Ok(snapshot) => {
++                machines.push(json!({
++                    "machine": machine,
++                    "ok": true,
++                    "error": null,
++                    "session_count": snapshot.sessions.len(),
++                }));
++                for live in &snapshot.sessions {
++                    let Resolved {
++                        name,
++                        cwd,
++                        updated_at,
++                    } = resolve(overview, machine, live);
++                    let state = state_of(live);
++                    let sort_key = (state_rank(state), parse_time(updated_at.as_deref()));
++                    rows.push((
++                        sort_key,
++                        json!({
++                            "machine": machine,
++                            "session_id": live.session_id,
++                            "name": name,
++                            "cwd": cwd,
++                            "state": state_name(state),
++                            "streaming": live.streaming,
++                            "compacting": live.compacting,
++                            "message_count": live.message_count,
++                            "pending_messages": live.pending_messages,
++                            "last_user": preview(&live.last_user),
++                            "last_assistant": preview(&live.last_assistant),
++                            "questions": live.questions,
++                            "updated_at": updated_at,
++                        }),
++                    ));
++                }
++            }
++        }
++    }
++
++    for error in &overview.list.errors {
++        if !overview.snapshots.iter().any(|(m, _)| *m == error.machine) {
++            machines.push(json!({
++                "machine": error.machine,
++                "ok": false,
++                "error": error.message,
++                "session_count": 0,
++            }));
++        }
++    }
++
++    // State order first, then most recent activity first; unknown times sink.
++    rows.sort_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
++
++    let count = |name: &str| rows.iter().filter(|(_, row)| row["state"] == name).count();
++    let counts = json!({
++        "working": count("working"),
++        "question": count("question"),
++        "blocked": count("blocked"),
++        "idle": count("idle"),
++        "total": rows.len(),
++    });
++
++    json!({
++        "collected_at": now.to_rfc3339(),
++        "machines": machines,
++        "sessions": rows.into_iter().map(|(_, row)| row).collect::<Vec<_>>(),
++        "counts": counts,
++    })
++}
++
++fn control_error(error: ControlError) -> TrackerError {
++    match error {
++        ControlError::InvalidTarget
++        | ControlError::InvalidText
++        | ControlError::Ambiguous(_)
++        | ControlError::Unsupported(_) => TrackerError::bad_request(error.to_string()),
++        other => OmonError::ToolExecution(other.to_string()).into(),
++    }
++}
++
++fn control() -> ApiResult<SessionControl> {
++    SessionControl::from_environment().map_err(control_error)
++}
++
++#[derive(Debug, Default, Deserialize)]
++pub struct BoardQuery {
++    #[serde(default)]
++    refresh: Option<String>,
++}
++
++pub async fn list(Query(query): Query<BoardQuery>) -> ApiResult<Json<Value>> {
++    let refresh = matches!(query.refresh.as_deref(), Some("1" | "true"));
++    let (_, board) = current(refresh).await?;
++    Ok(Json(board))
++}
++
++fn target(machine: &str, session_id: &str) -> ApiResult<Target> {
++    if machine != "local" {
++        let hosts =
++            configured_hosts().map_err(|error| control_error(ControlError::Registry(error)))?;
++        if !hosts.iter().any(|host| host == machine) {
++            return Err(TrackerError::not_found("machine"));
++        }
++    }
++    format!("{machine}:{session_id}")
++        .parse()
++        .map_err(control_error)
++}
++
++#[derive(Debug, Deserialize)]
++pub struct SendBody {
++    text: String,
++}
++
++#[derive(Debug, Deserialize)]
++pub struct AnswerBody {
++    text: String,
++    #[serde(default)]
++    request: Option<String>,
++}
++
++pub async fn send(
++    Path((machine, session_id)): Path<(String, String)>,
++    Json(body): Json<SendBody>,
++) -> ApiResult<Json<Value>> {
++    let target = target(&machine, &session_id)?;
++    let text = non_empty(&body.text, "text")?;
++    let result = control()?
++        .send(&target, &text, SendMode::Auto, uuid::Uuid::new_v4())
++        .await;
++    invalidate().await;
++    Ok(Json(
++        json!({"ok": true, "result": result.map_err(control_error)?}),
++    ))
++}
++
++pub async fn interrupt(
++    Path((machine, session_id)): Path<(String, String)>,
++) -> ApiResult<Json<Value>> {
++    let target = target(&machine, &session_id)?;
++    let result = control()?.interrupt(&target).await;
++    invalidate().await;
++    Ok(Json(
++        json!({"ok": true, "result": result.map_err(control_error)?}),
++    ))
++}
++
++pub async fn answer(
++    Path((machine, session_id)): Path<(String, String)>,
++    Json(body): Json<AnswerBody>,
++) -> ApiResult<Json<Value>> {
++    let target = target(&machine, &session_id)?;
++    let text = non_empty(&body.text, "text")?;
++    let request = body.request.as_deref().filter(|r| !r.trim().is_empty());
++    let result = control()?.answer(&target, &text, request).await;
++    invalidate().await;
++    Ok(Json(
++        json!({"ok": true, "result": result.map_err(control_error)?}),
++    ))
++}
++
++/// Issue title: the session name, unless it is empty or a transcript path, then the cwd
++/// basename, then the short session id.
++pub fn session_title(name: Option<&str>, cwd: Option<&str>, session_id: &str) -> String {
++    let name = name.map(str::trim).unwrap_or_default();
++    if !name.is_empty() && !name.starts_with('/') {
++        return name.to_string();
++    }
++    cwd.and_then(|cwd| cwd.trim_end_matches('/').rsplit('/').next())
++        .filter(|base| !base.is_empty())
++        .map_or_else(|| short_id(session_id).to_string(), str::to_string)
++}
++
++fn session_description(
++    machine: &str,
++    cwd: Option<&str>,
++    session_id: &str,
++    last_user: &str,
++    last_assistant: &str,
++) -> String {
++    let mut header = format!("**Machine** {machine}");
++    if let Some(cwd) = cwd {
++        header.push_str(&format!(" · **Directory** `{}`", home_relative(cwd)));
++    }
++    header.push_str(&format!(" · **Session** `{session_id}`"));
++    let or_none = |text: &str| {
++        if text.trim().is_empty() {
++            "_None_".to_string()
++        } else {
++            text.to_string()
++        }
++    };
++    format!(
++        "{header}\n\n### Last user message\n{}\n\n### Last assistant message\n{}",
++        or_none(last_user),
++        or_none(last_assistant)
++    )
++}
++
++fn build_summary(
++    reference: &str,
++    state: Option<&str>,
++    live: Option<&LiveSession>,
++) -> Option<SessionSummary> {
++    let (machine, session_id) = reference.split_once(':')?;
++    let state = state
++        .map(str::to_string)
++        .or_else(|| live.map(|l| state_name(state_of(l)).to_string()))
++        .unwrap_or_else(|| "ended".to_string());
++    Some(SessionSummary {
++        machine: machine.to_string(),
++        session_id: session_id.to_string(),
++        state,
++        streaming: live.is_some_and(|l| l.streaming),
++        message_count: live.map_or(0, |l| l.message_count),
++        pending_messages: live.map_or(0, |l| l.pending_messages),
++        cwd: live.and_then(|l| l.cwd.clone()),
++        updated_at: live.and_then(|l| l.updated_at.clone()),
++        questions: live.map(|l| l.questions.clone()).unwrap_or_default(),
++    })
++}
++
++/// Summary for an SES issue; `state` is the session_state of the issue's workflow state.
++pub fn session_summary(reference: &str, state: Option<&str>) -> Option<SessionSummary> {
++    build_summary(reference, state, live_session(reference).as_ref())
++}
++
++pub fn session_detail(summary: &SessionSummary) -> SessionDetail {
++    let live = live_session(&session_ref(&summary.machine, &summary.session_id));
++    SessionDetail {
++        summary: summary.clone(),
++        last_user: live
++            .as_ref()
++            .map(|l| l.last_user.clone())
++            .unwrap_or_default(),
++        last_assistant: live.map(|l| l.last_assistant).unwrap_or_default(),
++    }
++}
++
++/// How long a tracker request waits for a stale collection before answering from the DB;
++/// the collection keeps running in the background and the next request sees its result.
++const SYNC_WAIT: Duration = Duration::from_secs(3);
++
++/// Mirrors live sessions into SES issues. Never fails the caller: collection or sync errors
++/// are logged and skipped, and a slow probe never holds the request longer than SYNC_WAIT.
++pub async fn sync_issues(pool: &SqlitePool) {
++    if std::env::var(SYNC_ENV).as_deref() == Ok("0") {
++        return;
++    }
++    // A sync already in flight will publish its result; later requests never queue behind it.
++    let Ok(guard) = sync_lock().clone().try_lock_owned() else {
++        return;
++    };
++    let pool = pool.clone();
++    let task = tokio::spawn(async move {
++        let _guard = guard;
++        sync_locked(&pool).await;
++    });
++    match tokio::time::timeout(SYNC_WAIT, task).await {
++        Ok(Ok(())) => {}
++        Ok(Err(error)) => tracing::warn!(%error, "tracker session sync task failed"),
++        Err(_) => tracing::debug!("tracker session sync still running; serving current issues"),
++    }
++}
++
++async fn sync_now(pool: &SqlitePool) {
++    let _guard = sync_lock().lock().await;
++    sync_locked(pool).await;
++}
++
++async fn sync_locked(pool: &SqlitePool) {
++    let overview = match current(false).await {
++        Ok((overview, _)) => overview,
++        Err(error) => {
++            tracing::warn!(
++                ?error,
++                "session collection failed; tracker session sync skipped"
++            );
++            return;
++        }
++    };
++    if let Err(error) = sync_from_overview(pool, &overview, Utc::now()).await {
++        tracing::warn!(%error, "tracker session sync failed");
++    }
++}
++
++struct SyncContext {
++    team_id: String,
++    /// session_state -> (state id, state type)
++    states: HashMap<String, (String, String)>,
++    /// state id -> session_state
++    by_state_id: HashMap<String, String>,
++    me: Option<String>,
++}
++
++struct Existing {
++    id: String,
++    identifier: String,
++    title: String,
++    description: String,
++    state_id: String,
++    assignee_id: Option<String>,
++    started_at: Option<String>,
++}
++
++async fn ensure_machine_user(pool: &SqlitePool, machine: &str) -> Result<String> {
++    let model = format!("omo@{machine}");
++    let existing: Option<String> = sqlx::query_scalar(
++        "SELECT id FROM tracker_users WHERE kind = 'agent' AND model = ? LIMIT 1",
++    )
++    .bind(&model)
++    .fetch_optional(pool)
++    .await?;
++    if let Some(id) = existing {
++        return Ok(id);
++    }
++    let id = Uuid::new_v4().to_string();
++    sqlx::query(
++        "INSERT INTO tracker_users (id, name, display_name, email, avatar_color, kind, model, is_me, created_at)
++         VALUES (?, ?, ?, NULL, ?, 'agent', ?, 0, ?)",
++    )
++    .bind(&id)
++    .bind(machine)
++    .bind(machine)
++    .bind(deterministic_avatar_color(&model))
++    .bind(&model)
++    .bind(seed::now_utc())
++    .execute(pool)
++    .await?;
++    Ok(id)
++}
++
++#[allow(clippy::too_many_arguments)]
++async fn record_state(
++    pool: &SqlitePool,
++    ctx: &SyncContext,
++    issue_id: &str,
++    identifier: &str,
++    title: &str,
++    actor: Option<&str>,
++    from: Option<&str>,
++    to: &str,
++    now: &str,
++) -> Result<()> {
++    sqlx::query(
++        "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
++         VALUES (?, NULL, 'session_state', ?, ?, ?)",
++    )
++    .bind(issue_id)
++    .bind(from)
++    .bind(to)
++    .bind(now)
++    .execute(pool)
++    .await?;
++    let body = match to {
++        "question" => format!("{identifier} needs an answer: {title}"),
++        "blocked" => format!("{identifier} is blocked: {title}"),
++        _ => return Ok(()),
++    };
++    if let Some(me) = ctx.me.as_deref() {
++        sqlx::query(
++            "INSERT INTO tracker_notifications (id, user_id, issue_id, project_id, kind, actor_id, body, created_at)
++             VALUES (?, ?, ?, NULL, ?, ?, ?, ?)",
++        )
++        .bind(Uuid::new_v4().to_string())
++        .bind(me)
++        .bind(issue_id)
++        .bind(format!("session_{to}"))
++        .bind(actor)
++        .bind(body)
++        .bind(now)
++        .execute(pool)
++        .await?;
++    }
++    Ok(())
++}
++
++/// Moves an existing issue to the state mirroring `target`; returns whether it moved.
++async fn move_to(
++    pool: &SqlitePool,
++    ctx: &SyncContext,
++    issue: &Existing,
++    target: &str,
++    now: &str,
++) -> Result<bool> {
++    let Some((state_id, state_type)) = ctx.states.get(target) else {
++        return Ok(false);
++    };
++    if *state_id == issue.state_id {
++        return Ok(false);
++    }
++    let (started_at, completed_at) = match state_type.as_str() {
++        "started" => (
++            issue.started_at.clone().or_else(|| Some(now.to_string())),
++            None,
++        ),
++        "completed" => (issue.started_at.clone(), Some(now.to_string())),
++        _ => (issue.started_at.clone(), None),
++    };
++    sqlx::query(
++        "UPDATE tracker_issues
++         SET state_id = ?, started_at = ?, completed_at = ?, canceled_at = NULL, updated_at = ?
++         WHERE id = ?",
++    )
++    .bind(state_id)
++    .bind(&started_at)
++    .bind(&completed_at)
++    .bind(now)
++    .bind(&issue.id)
++    .execute(pool)
++    .await?;
++    record_state(
++        pool,
++        ctx,
++        &issue.id,
++        &issue.identifier,
++        &issue.title,
++        issue.assignee_id.as_deref(),
++        ctx.by_state_id.get(&issue.state_id).map(String::as_str),
++        target,
++        now,
++    )
++    .await?;
++    Ok(true)
++}
++
++async fn load_existing(pool: &SqlitePool, reference: &str) -> Result<Option<Existing>> {
++    let row = sqlx::query(
++        "SELECT id, identifier, title, description, state_id, assignee_id, started_at
++         FROM tracker_issues WHERE session_ref = ?",
++    )
++    .bind(reference)
++    .fetch_optional(pool)
++    .await?;
++    Ok(row.map(|row| Existing {
++        id: row.get("id"),
++        identifier: row.get("identifier"),
++        title: row.get("title"),
++        description: row.get("description"),
++        state_id: row.get("state_id"),
++        assignee_id: row.get("assignee_id"),
++        started_at: row.get("started_at"),
++    }))
++}
++
++#[allow(clippy::too_many_arguments)]
++async fn upsert(
++    pool: &SqlitePool,
++    ctx: &SyncContext,
++    reference: &str,
++    machine: &str,
++    title: &str,
++    description: &str,
++    target: &str,
++    now: &str,
++) -> Result<()> {
++    if let Some(issue) = load_existing(pool, reference).await? {
++        let mut changed = move_to(pool, ctx, &issue, target, now).await?;
++        if issue.title != title || issue.description != description {
++            sqlx::query("UPDATE tracker_issues SET title = ?, description = ? WHERE id = ?")
++                .bind(title)
++                .bind(description)
++                .bind(&issue.id)
++                .execute(pool)
++                .await?;
++            changed = true;
++        }
++        if changed {
++            sqlx::query("UPDATE tracker_issues SET updated_at = ? WHERE id = ?")
++                .bind(now)
++                .bind(&issue.id)
++                .execute(pool)
++                .await?;
++        }
++        return Ok(());
++    }
++
++    let Some((state_id, state_type)) = ctx.states.get(target) else {
++        return Ok(());
++    };
++    let agent = ensure_machine_user(pool, machine).await?;
++    let number: i64 = sqlx::query_scalar(
++        "UPDATE tracker_teams SET issue_seq = issue_seq + 1 WHERE id = ? RETURNING issue_seq",
++    )
++    .bind(&ctx.team_id)
++    .fetch_one(pool)
++    .await?;
++    let identifier = format!("SES-{number}");
++    let id = Uuid::new_v4().to_string();
++    let started_at =
++        matches!(state_type.as_str(), "started" | "completed").then(|| now.to_string());
++    let completed_at = (state_type == "completed").then(|| now.to_string());
++    sqlx::query(
++        "INSERT INTO tracker_issues (id, team_id, number, identifier, title, description, state_id, priority,
++            estimate, assignee_id, creator_id, project_id, milestone_id, cycle_id, parent_id, due_date,
++            sort_order, lane_key, session_ref, created_at, updated_at, started_at, completed_at, canceled_at)
++         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, 0.0, NULL, ?, ?, ?, ?, ?, NULL)",
++    )
++    .bind(&id)
++    .bind(&ctx.team_id)
++    .bind(number)
++    .bind(&identifier)
++    .bind(title)
++    .bind(description)
++    .bind(state_id)
++    .bind(&agent)
++    .bind(&agent)
++    .bind(reference)
++    .bind(now)
++    .bind(now)
++    .bind(&started_at)
++    .bind(&completed_at)
++    .execute(pool)
++    .await?;
++    for user in std::iter::once(agent.as_str()).chain(ctx.me.as_deref()) {
++        sqlx::query(
++            "INSERT INTO tracker_subscribers (issue_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
++        )
++        .bind(&id)
++        .bind(user)
++        .execute(pool)
++        .await?;
++    }
++    sqlx::query(
++        "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
++         VALUES (?, ?, 'created', NULL, NULL, ?)",
++    )
++    .bind(&id)
++    .bind(&agent)
++    .bind(now)
++    .execute(pool)
++    .await?;
++    record_state(
++        pool,
++        ctx,
++        &id,
++        &identifier,
++        title,
++        Some(agent.as_str()),
++        None,
++        target,
++        now,
++    )
++    .await
++}
++
++/// Mirrors one collected overview into SES issues. Machines whose snapshot failed (or answered
++/// only partially) keep their issues untouched; sessions gone from a machine that answered
++/// move to Ended; issues are never deleted.
++pub async fn sync_from_overview(
++    pool: &SqlitePool,
++    overview: &Overview,
++    now: DateTime<Utc>,
++) -> Result<()> {
++    remember(overview);
++    let team_id = seed::ensure_sessions_team(pool).await?;
++    let now = now.to_rfc3339_opts(SecondsFormat::Millis, true);
++    let mut states = HashMap::new();
++    let mut by_state_id = HashMap::new();
++    for row in sqlx::query(
++        "SELECT id, type, session_state FROM tracker_states WHERE team_id = ? AND session_state IS NOT NULL",
++    )
++    .bind(&team_id)
++    .fetch_all(pool)
++    .await?
++    {
++        let id: String = row.get("id");
++        let session_state: String = row.get("session_state");
++        by_state_id.insert(id.clone(), session_state.clone());
++        states.insert(session_state, (id, row.get::<String, _>("type")));
++    }
++    let me: Option<String> =
++        sqlx::query_scalar("SELECT id FROM tracker_users WHERE is_me = 1 LIMIT 1")
++            .fetch_optional(pool)
++            .await?;
++    let ctx = SyncContext {
++        team_id,
++        states,
++        by_state_id,
++        me,
++    };
++
++    for (machine, snapshot) in answered(overview) {
++        let mut present = HashSet::new();
++        for live in &snapshot.sessions {
++            let reference = session_ref(machine, &live.session_id);
++            let resolved = resolve(overview, machine, live);
++            let title = session_title(
++                resolved.name.as_deref(),
++                resolved.cwd.as_deref(),
++                &live.session_id,
++            );
++            let description = session_description(
++                machine,
++                resolved.cwd.as_deref(),
++                &live.session_id,
++                &live.last_user,
++                &live.last_assistant,
++            );
++            let target = state_name(state_of(live));
++            upsert(
++                pool,
++                &ctx,
++                &reference,
++                machine,
++                &title,
++                &description,
++                target,
++                &now,
++            )
++            .await?;
++            present.insert(reference);
++        }
++
++        // A partial answer cannot tell a finished session from an unreachable endpoint.
++        if !snapshot.errors.is_empty() {
++            continue;
++        }
++        let tracked: Vec<String> = sqlx::query_scalar(
++            "SELECT session_ref FROM tracker_issues WHERE session_ref IS NOT NULL",
++        )
++        .fetch_all(pool)
++        .await?;
++        for reference in tracked {
++            let same_machine = reference
++                .split_once(':')
++                .is_some_and(|(m, _)| m == machine.as_str());
++            if !same_machine || present.contains(&reference) {
++                continue;
++            }
++            if let Some(issue) = load_existing(pool, &reference).await? {
++                move_to(pool, &ctx, &issue, "ended", &now).await?;
++            }
++        }
++    }
++    Ok(())
++}
++
++/// Handles a human state move on an SES issue: moving to Ended while the session streams
++/// interrupts it; every other move is rejected because sync owns the state.
++pub async fn manual_state_move(
++    pool: &SqlitePool,
++    reference: &str,
++    target_state_id: &str,
++) -> ApiResult<()> {
++    let target: Option<Option<String>> =
++        sqlx::query_scalar("SELECT session_state FROM tracker_states WHERE id = ?")
++            .bind(target_state_id)
++            .fetch_optional(pool)
++            .await?;
++    let streaming = live_session(reference).is_some_and(|live| live.streaming);
++    if target.flatten().as_deref() == Some("ended") && streaming {
++        let (machine, session_id) = reference
++            .split_once(':')
++            .ok_or_else(|| TrackerError::bad_request("invalid session reference"))?;
++        let target = self::target(machine, session_id)?;
++        control()?.interrupt(&target).await.map_err(control_error)?;
++        invalidate().await;
++        sync_now(pool).await;
++        return Ok(());
++    }
++    Err(TrackerError::conflict(
++        "session issues follow the live session state; only Ended on a streaming session (interrupt) is allowed",
++        "session_state_managed",
++    ))
++}
+diff --git a/src/tracker/threads.rs b/src/tracker/threads.rs
+new file mode 100644
+index 0000000..e128d82
+--- /dev/null
++++ b/src/tracker/threads.rs
+@@ -0,0 +1,361 @@
++use axum::extract::{Path, State};
++use axum::http::StatusCode;
++use axum::Json;
++use sqlx::SqlitePool;
++
++use crate::tracker::api::{me_id, new_id, non_empty, one_of, ApiResult, TrackerError};
++use crate::tracker::issues::{
++    fetch_issue_detail, load_comments, load_issue, notify, record_activity, relation_direction,
++    resolve_issue_id, row_count_error, subscribe_user,
++};
++use crate::tracker::lanes;
++use crate::tracker::model::{
++    Comment, CommentCreate, CommentPatch, DelegateInput, IssueDetail, LaneActionInput, Link,
++    LinkCreate, ReactionToggle, Relation, RelationCreate, RelationDetail, SubscribeInput,
++};
++use crate::tracker::seed::now_utc;
++
++async fn load_comment(pool: &SqlitePool, id: &str) -> ApiResult<Comment> {
++    load_comments(pool, "WHERE id = ?", id)
++        .await?
++        .into_iter()
++        .next()
++        .ok_or_else(|| TrackerError::not_found("comment"))
++}
++
++async fn touch_issue(pool: &SqlitePool, issue_id: &str) -> ApiResult<()> {
++    sqlx::query("UPDATE tracker_issues SET updated_at = ? WHERE id = ?")
++        .bind(now_utc())
++        .bind(issue_id)
++        .execute(pool)
++        .await?;
++    Ok(())
++}
++
++pub async fn add_comment(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<CommentCreate>,
++) -> ApiResult<(StatusCode, Json<Comment>)> {
++    let me = me_id(&pool).await?;
++    let issue_id = resolve_issue_id(&pool, &id).await?;
++    let body = non_empty(&input.body, "body")?;
++    if let Some(parent) = input.parent_id.as_deref() {
++        let parent_issue: Option<String> =
++            sqlx::query_scalar("SELECT issue_id FROM tracker_comments WHERE id = ?")
++                .bind(parent)
++                .fetch_optional(&pool)
++                .await?;
++        if parent_issue.as_deref() != Some(issue_id.as_str()) {
++            return Err(TrackerError::bad_request(
++                "parent comment belongs to another issue",
++            ));
++        }
++    }
++    let comment_id = new_id();
++    let now = now_utc();
++    sqlx::query(
++        "INSERT INTO tracker_comments (id, issue_id, user_id, body, parent_id, created_at, updated_at, edited, resolved_at)
++         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)",
++    )
++    .bind(&comment_id)
++    .bind(&issue_id)
++    .bind(&me)
++    .bind(&body)
++    .bind(&input.parent_id)
++    .bind(&now)
++    .bind(&now)
++    .execute(&pool)
++    .await?;
++    subscribe_user(&pool, &issue_id, &me).await?;
++    touch_issue(&pool, &issue_id).await?;
++
++    let identifier: String =
++        sqlx::query_scalar("SELECT identifier FROM tracker_issues WHERE id = ?")
++            .bind(&issue_id)
++            .fetch_one(&pool)
++            .await?;
++    let subscribers: Vec<String> = sqlx::query_scalar(
++        "SELECT s.user_id FROM tracker_subscribers s JOIN tracker_users u ON u.id = s.user_id
++         WHERE s.issue_id = ? AND s.user_id != ? AND u.kind = 'human'",
++    )
++    .bind(&issue_id)
++    .bind(&me)
++    .fetch_all(&pool)
++    .await?;
++    let excerpt: String = body.chars().take(140).collect();
++    for user in subscribers {
++        notify(
++            &pool,
++            &user,
++            &issue_id,
++            "comment",
++            &me,
++            &format!("New comment on {identifier}: {excerpt}"),
++        )
++        .await?;
++    }
++    Ok((
++        StatusCode::CREATED,
++        Json(load_comment(&pool, &comment_id).await?),
++    ))
++}
++
++pub async fn update_comment(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<CommentPatch>,
++) -> ApiResult<Json<Comment>> {
++    let current = load_comment(&pool, &id).await?;
++    let now = now_utc();
++    if let Some(body) = input.body.as_deref() {
++        let body = non_empty(body, "body")?;
++        if body != current.body {
++            sqlx::query(
++                "UPDATE tracker_comments SET body = ?, edited = 1, updated_at = ? WHERE id = ?",
++            )
++            .bind(&body)
++            .bind(&now)
++            .bind(&id)
++            .execute(&pool)
++            .await?;
++        }
++    }
++    if let Some(resolved) = input.resolved {
++        sqlx::query("UPDATE tracker_comments SET resolved_at = ? WHERE id = ?")
++            .bind(resolved.then_some(now.as_str()))
++            .bind(&id)
++            .execute(&pool)
++            .await?;
++    }
++    Ok(Json(load_comment(&pool, &id).await?))
++}
++
++pub async fn delete_comment(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++) -> ApiResult<StatusCode> {
++    let result = sqlx::query("DELETE FROM tracker_comments WHERE id = ?")
++        .bind(&id)
++        .execute(&pool)
++        .await?;
++    row_count_error(result.rows_affected(), "comment")?;
++    Ok(StatusCode::NO_CONTENT)
++}
++
++pub async fn toggle_reaction(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<ReactionToggle>,
++) -> ApiResult<Json<Comment>> {
++    let me = me_id(&pool).await?;
++    load_comment(&pool, &id).await?;
++    let emoji = non_empty(&input.emoji, "emoji")?;
++    let removed = sqlx::query(
++        "DELETE FROM tracker_reactions WHERE comment_id = ? AND user_id = ? AND emoji = ?",
++    )
++    .bind(&id)
++    .bind(&me)
++    .bind(&emoji)
++    .execute(&pool)
++    .await?;
++    if removed.rows_affected() == 0 {
++        sqlx::query("INSERT INTO tracker_reactions (comment_id, user_id, emoji) VALUES (?, ?, ?)")
++            .bind(&id)
++            .bind(&me)
++            .bind(&emoji)
++            .execute(&pool)
++            .await?;
++    }
++    Ok(Json(load_comment(&pool, &id).await?))
++}
++
++pub async fn add_relation(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<RelationCreate>,
++) -> ApiResult<(StatusCode, Json<RelationDetail>)> {
++    let me = me_id(&pool).await?;
++    let issue_id = resolve_issue_id(&pool, &id).await?;
++    let related = resolve_issue_id(&pool, &input.related_issue_id).await?;
++    one_of(
++        &input.relation_type,
++        &["blocks", "related", "duplicate"],
++        "type",
++    )?;
++    if related == issue_id {
++        return Err(TrackerError::bad_request(
++            "an issue cannot relate to itself",
++        ));
++    }
++    let relation = Relation {
++        id: new_id(),
++        issue_id: issue_id.clone(),
++        related_issue_id: related.clone(),
++        relation_type: input.relation_type,
++        created_at: now_utc(),
++    };
++    sqlx::query(
++        "INSERT INTO tracker_relations (id, issue_id, related_issue_id, type, created_at) VALUES (?, ?, ?, ?, ?)",
++    )
++    .bind(&relation.id)
++    .bind(&relation.issue_id)
++    .bind(&relation.related_issue_id)
++    .bind(&relation.relation_type)
++    .bind(&relation.created_at)
++    .execute(&pool)
++    .await?;
++    record_activity(
++        &pool,
++        &issue_id,
++        Some(&me),
++        "relation_added",
++        None,
++        Some(&related),
++    )
++    .await?;
++    touch_issue(&pool, &issue_id).await?;
++    let direction = relation_direction(&relation, &issue_id).to_string();
++    let other = load_issue(&pool, &related).await?;
++    Ok((
++        StatusCode::CREATED,
++        Json(RelationDetail {
++            id: relation.id,
++            issue_id: relation.issue_id,
++            related_issue_id: relation.related_issue_id,
++            relation_type: relation.relation_type,
++            created_at: relation.created_at,
++            issue: other,
++            direction,
++        }),
++    ))
++}
++
++pub async fn delete_relation(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++) -> ApiResult<StatusCode> {
++    let me = me_id(&pool).await?;
++    let relation: Option<(String, String)> =
++        sqlx::query_as("SELECT issue_id, related_issue_id FROM tracker_relations WHERE id = ?")
++            .bind(&id)
++            .fetch_optional(&pool)
++            .await?;
++    let (issue_id, related) = relation.ok_or_else(|| TrackerError::not_found("relation"))?;
++    sqlx::query("DELETE FROM tracker_relations WHERE id = ?")
++        .bind(&id)
++        .execute(&pool)
++        .await?;
++    record_activity(
++        &pool,
++        &issue_id,
++        Some(&me),
++        "relation_removed",
++        Some(&related),
++        None,
++    )
++    .await?;
++    Ok(StatusCode::NO_CONTENT)
++}
++
++pub async fn add_link(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<LinkCreate>,
++) -> ApiResult<(StatusCode, Json<Link>)> {
++    let issue_id = resolve_issue_id(&pool, &id).await?;
++    let url = non_empty(&input.url, "url")?;
++    if !(url.starts_with("http://") || url.starts_with("https://")) {
++        return Err(TrackerError::bad_request(
++            "url must start with http:// or https://",
++        ));
++    }
++    let title = input
++        .title
++        .map(|title| title.trim().to_string())
++        .filter(|title| !title.is_empty())
++        .unwrap_or_else(|| url.clone());
++    let link = Link {
++        id: new_id(),
++        issue_id,
++        url,
++        title,
++        created_at: now_utc(),
++    };
++    sqlx::query(
++        "INSERT INTO tracker_links (id, issue_id, url, title, created_at) VALUES (?, ?, ?, ?, ?)",
++    )
++    .bind(&link.id)
++    .bind(&link.issue_id)
++    .bind(&link.url)
++    .bind(&link.title)
++    .bind(&link.created_at)
++    .execute(&pool)
++    .await?;
++    Ok((StatusCode::CREATED, Json(link)))
++}
++
++pub async fn delete_link(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++) -> ApiResult<StatusCode> {
++    let result = sqlx::query("DELETE FROM tracker_links WHERE id = ?")
++        .bind(&id)
++        .execute(&pool)
++        .await?;
++    row_count_error(result.rows_affected(), "link")?;
++    Ok(StatusCode::NO_CONTENT)
++}
++
++pub async fn subscribe(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<SubscribeInput>,
++) -> ApiResult<Json<serde_json::Value>> {
++    let me = me_id(&pool).await?;
++    let issue_id = resolve_issue_id(&pool, &id).await?;
++    if input.subscribed {
++        subscribe_user(&pool, &issue_id, &me).await?;
++    } else {
++        sqlx::query("DELETE FROM tracker_subscribers WHERE issue_id = ? AND user_id = ?")
++            .bind(&issue_id)
++            .bind(&me)
++            .execute(&pool)
++            .await?;
++    }
++    Ok(Json(serde_json::json!({ "subscribed": input.subscribed })))
++}
++
++pub async fn delegate(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<DelegateInput>,
++) -> ApiResult<Json<IssueDetail>> {
++    me_id(&pool).await?;
++    let issue_id = resolve_issue_id(&pool, &id).await?;
++    non_empty(&input.cwd, "cwd")?;
++    non_empty(&input.done, "done")?;
++    if let Some(model) = input.model.as_deref() {
++        one_of(model, &["auto", "small", "large"], "model")?;
++    }
++    lanes::delegate_issue(&pool, &issue_id, input).await?;
++    Ok(Json(fetch_issue_detail(&pool, &issue_id).await?))
++}
++
++pub async fn lane_action(
++    State(pool): State<SqlitePool>,
++    Path(id): Path<String>,
++    Json(input): Json<LaneActionInput>,
++) -> ApiResult<Json<IssueDetail>> {
++    me_id(&pool).await?;
++    let issue_id = resolve_issue_id(&pool, &id).await?;
++    one_of(
++        &input.action,
++        &["send", "object", "close", "reopen"],
++        "action",
++    )?;
++    lanes::execute_lane_action(&pool, &issue_id, input)
++        .await
++        .map_err(|error| TrackerError::conflict(error.to_string(), "lane_command_failed"))?;
++    Ok(Json(fetch_issue_detail(&pool, &issue_id).await?))
++}

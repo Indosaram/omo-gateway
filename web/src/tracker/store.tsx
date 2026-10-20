@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { TrackerApiError, trackerApi } from './api'
 import { cycleStatus, dueState, isClosedType, parseDateOnly, toDateOnly } from './format'
+import { isSnoozed } from './inbox/model'
 import type {
   Bootstrap,
   Cycle,
@@ -377,7 +378,7 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
     favorites,
     issues,
     notifications,
-    unreadCount: notifications.filter((n) => !n.read_at && !n.archived_at).length,
+    unreadCount: notifications.filter((n) => !n.read_at && !n.archived_at && !isSnoozed(n)).length,
     usersById,
     teamsById,
     teamsByKey,

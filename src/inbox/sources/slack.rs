@@ -29,10 +29,12 @@ impl InboxSource for SlackSource {
     }
 
     async fn fetch_since(&self, cursor: Option<&str>) -> Result<(Vec<InboxItem>, String)> {
-        let after = cursor.unwrap_or("");
-        // Ingress keys thread documents by thread_ts, so links recover the real channel.
+        let after_rowid: i64 = cursor.and_then(|c| c.parse().ok()).unwrap_or(0);
+        // Use rowid instead of message_id as the cursor: message_id is a Slack timestamp
+        // ordered by creation, but rows can be indexed out of order (reconcile, debounce),
+        // so a message_id cursor skips late-indexed messages forever.
         let rows = sqlx::query(
-            "SELECT d.guild_id, d.thread_id, d.message_id, d.author_id, d.author_name, \
+            "SELECT d.rowid, d.guild_id, d.thread_id, d.message_id, d.author_id, d.author_name, \
                     d.content, d.timestamp, \
                     COALESCE( \
                       json_extract(d.metadata_json, '$.channel_id'), \
@@ -58,7 +60,7 @@ impl InboxSource for SlackSource {
                     END AS calculated_room_type \
              FROM message_search_documents d \
              WHERE d.platform = 'slack' \
-               AND d.message_id > ? \
+               AND d.rowid > ? \
                AND d.author_id <> '' \
                AND d.author_id <> ? \
                AND d.author_id <> ? \
@@ -77,10 +79,10 @@ impl InboxSource for SlackSource {
                      AND parent.message_id <> d.message_id \
                  ) \
                ) \
-             ORDER BY d.message_id",
+             ORDER BY d.rowid",
         )
         .bind(&self.owner_id)
-        .bind(after)
+        .bind(after_rowid)
         .bind(&self.owner_id)
         .bind(&self.bot_id)
         .bind(format!("<@{}>", self.owner_id))
@@ -88,9 +90,10 @@ impl InboxSource for SlackSource {
         .fetch_all(&self.pool)
         .await?;
         let mut items = Vec::new();
-        let mut next = after.to_owned();
+        let mut next_rowid: i64 = after_rowid;
         for row in rows {
             use sqlx::Row;
+            let rid: i64 = row.try_get("rowid")?;
             let ts: String = row.try_get("message_id")?;
             let content: String = row.try_get("content")?;
             let received = match ts_to_datetime(&ts) {
@@ -120,10 +123,10 @@ impl InboxSource for SlackSource {
             });
             item.author = Some(author);
             item.room_type = Some(row.try_get("calculated_room_type")?);
-            next = next.max(ts);
+            next_rowid = next_rowid.max(rid);
             items.push(item);
         }
-        Ok((items, next))
+        Ok((items, next_rowid.to_string()))
     }
 }
 
@@ -266,7 +269,7 @@ mod tests {
                 "1700000101.000100"
             ]
         );
-        assert_eq!(cursor, "1700000101.000100");
+        assert_eq!(cursor, "5");
         assert!(items
             .iter()
             .all(|item| item.source == InboxSourceKind::Slack));
@@ -288,6 +291,42 @@ mod tests {
         let (again, next) = source.fetch_since(Some(&cursor)).await.unwrap();
         assert!(again.is_empty());
         assert_eq!(next, cursor);
+    }
+
+    #[tokio::test]
+    async fn collects_older_message_indexed_after_cursor_advanced() {
+        let pool = pool().await;
+        let index = MessageSearchIndex::new(pool.clone());
+        let source = SlackSource::new(pool, OWNER.into(), BOT.into());
+        let newer = doc(None, "D1", None, "1700000002.000100", "U0ALICE", "newer");
+        index.upsert(&newer).await.unwrap();
+        let (_, cursor) = source.fetch_since(None).await.unwrap();
+        index
+            .upsert(&doc(
+                None,
+                "D1",
+                None,
+                "1700000001.000100",
+                "U0ALICE",
+                "late",
+            ))
+            .await
+            .unwrap();
+        index.upsert(&newer).await.unwrap();
+        let (items, next) = source.fetch_since(Some(&cursor)).await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_ref, "1700000001.000100");
+        assert!(source.fetch_since(Some(&next)).await.unwrap().0.is_empty());
+        // Existing timestamp cursors rescan once instead of skipping the entire index.
+        assert_eq!(
+            source
+                .fetch_since(Some("1700000002.000100"))
+                .await
+                .unwrap()
+                .0
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]

@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use parking_lot::Mutex;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
@@ -49,17 +47,14 @@ pub struct ReportClaimRow {
     pub checked_at: Option<String>,
 }
 
-/// Buffers cumulative or incremental stream chunks per `(session_key, stream_id)` and strips
-/// `[[measure [...] expect~"..."]]` markers — including incomplete `[[...` suffixes split across
-/// chunk boundaries — so no marker text ever reaches the user.
+/// Strips `[[measure [...] expect~"..."]]` markers from cumulative stream chunks — holding back
+/// an incomplete `[[...` suffix until it closes — so no marker text ever reaches the user.
 #[derive(Default, Clone)]
-pub struct StreamClaimFilter {
-    accumulated: Arc<Mutex<HashMap<(String, Uuid), String>>>,
-}
+pub struct StreamClaimFilter;
 
 impl StreamClaimFilter {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 
     /// Accepts the latest stream chunk text (either cumulative or delta) and returns the safe,
@@ -72,23 +67,14 @@ impl StreamClaimFilter {
         chunk_text: &str,
         is_final: bool,
     ) -> (String, Vec<ExtractedClaim>) {
-        let key = (session_key.to_string(), stream_id);
-        let full = {
-            let mut map = self.accumulated.lock();
-            let entry = map.entry(key.clone()).or_default();
-            // Gateway stream chunks are cumulative: each one carries the whole reply so far.
-            *entry = chunk_text.to_string();
-            let current = entry.clone();
-            if is_final {
-                map.remove(&key);
-            }
-            current
-        };
-
+        let _ = (session_key, stream_id);
+        // Gateway stream chunks are cumulative (each carries the whole reply so far), so no
+        // per-stream state is kept: a stream that never sends its final chunk (failed or
+        // stopped turn) must not pin its partial text in memory forever.
         if is_final {
-            strip_and_extract_claims(&full)
+            strip_and_extract_claims(chunk_text)
         } else {
-            let safe_prefix = hold_incomplete_marker_suffix(&full);
+            let safe_prefix = hold_incomplete_marker_suffix(chunk_text);
             let (stripped, _) = strip_and_extract_claims(safe_prefix);
             (stripped, Vec::new())
         }

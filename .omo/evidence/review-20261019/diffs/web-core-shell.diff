@@ -1,0 +1,4377 @@
+diff --git a/web/src/App.tsx b/web/src/App.tsx
+index 40ee236..68a073b 100644
+--- a/web/src/App.tsx
++++ b/web/src/App.tsx
+@@ -95,6 +95,9 @@ import {
+ } from './components/ui'
+ 
+ import { BotsPage } from './pages/BotsPage'
++import { isTrackerHash } from './tracker/router'
++
++const TrackerApp = React.lazy(() => import('./tracker/TrackerApp'))
+ 
+ type Page = 'overview' | 'bots' | 'chat' | 'cron' | 'sessions' | 'capabilities' | 'settings' | 'logs'
+ 
+@@ -122,6 +125,23 @@ function pageFromHash(): Page {
+ }
+ 
+ export default function App() {
++  const [trackerActive, setTrackerActive] = useState(() => isTrackerHash())
++  useEffect(() => {
++    const onHash = () => setTrackerActive(isTrackerHash())
++    window.addEventListener('hashchange', onHash)
++    return () => window.removeEventListener('hashchange', onHash)
++  }, [])
++  if (trackerActive) {
++    return (
++      <React.Suspense fallback={null}>
++        <TrackerApp />
++      </React.Suspense>
++    )
++  }
++  return <DashboardApp />
++}
++
++function DashboardApp() {
+   const [page, setPage] = useState<Page>(pageFromHash)
+   const [status, setStatus] = useState<StatusResponse | null>(null)
+   const [statusError, setStatusError] = useState<string | null>(null)
+@@ -191,6 +211,13 @@ export default function App() {
+           <div className="text-[11px] font-medium text-muted-foreground/70 px-2 pb-1 uppercase tracking-wider">
+             Management
+           </div>
++          <a
++            href="#/tracker"
++            className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-all text-muted-foreground hover:text-foreground hover:bg-accent/60"
++          >
++            <ListTodo className="w-4 h-4" />
++            <span>Issues</span>
++          </a>
+           {NAV_ITEMS.map((item) => {
+             const active = page === item.id
+             return (
+diff --git a/web/src/tracker/TrackerApp.tsx b/web/src/tracker/TrackerApp.tsx
+new file mode 100644
+index 0000000..2ade851
+--- /dev/null
++++ b/web/src/tracker/TrackerApp.tsx
+@@ -0,0 +1,258 @@
++import React, { useCallback, useEffect, useMemo, useState } from 'react'
++import { PanelLeft } from 'lucide-react'
++import './linear.css'
++import './shell/shell.css'
++import { TrackerProvider, useTracker } from './store'
++import { navigate, useRoute, type Route } from './router'
++import { Toaster, toast } from './ui'
++import { Sidebar, useSidebarWidth } from './shell/Sidebar'
++import { HeaderPresenceContext, NavToggleButton, PageHeader, useIsMobile } from './shell/Header'
++import { CommandPalette } from './shell/CommandPalette'
++import { ShortcutsDialog } from './shell/ShortcutsDialog'
++import { GlobalHotkeys } from './shell/GlobalHotkeys'
++import { SettingsPage } from './pages/SettingsPage'
++import { SearchPage } from './pages/SearchPage'
++import { MyIssuesPage, TeamIssuesPage, ViewPage, ViewsPage } from './issues'
++import { IssuePage, IssuePeek } from './detail'
++import { CreateIssueModal } from './create'
++import { ProjectsPage } from './pages/ProjectsPage'
++import { ProjectPage } from './pages/ProjectPage'
++import { CyclesPage } from './pages/CyclesPage'
++import { CyclePage } from './pages/CyclePage'
++import { InboxPage } from './pages/InboxPage'
++
++function routeKey(route: Route): string {
++  switch (route.name) {
++    case 'team-issues':
++      return `team:${route.teamKey}:${route.tab}`
++    case 'team-cycles':
++      return `cycles:${route.teamKey}`
++    case 'issue':
++      return `issue:${route.identifier}`
++    case 'project':
++      return `project:${route.projectId}`
++    case 'cycle':
++      return `cycle:${route.cycleId}`
++    case 'view':
++      return `view:${route.viewId}`
++    default:
++      return route.name
++  }
++}
++
++function NotFound({ message }: { message: string }) {
++  return (
++    <>
++      <PageHeader crumbs={[{ label: 'Not found' }]} />
++      <div className="ls-empty">
++        <div>
++          <div className="t-1 w-510" style={{ fontSize: 15, marginBottom: 4 }}>
++            {message}
++          </div>
++          <a className="t-3" href="#/tracker/my-issues/assigned">
++            Go to My issues
++          </a>
++        </div>
++      </div>
++    </>
++  )
++}
++
++function RouteView({ route }: { route: Route }) {
++  const t = useTracker()
++  const hasSessionsTeam = t.teamsByKey.has('SES')
++  useEffect(() => {
++    if (route.name === 'home') navigate(hasSessionsTeam ? '/team/SES/all' : '/my-issues/assigned', { replace: true })
++  }, [route.name, hasSessionsTeam])
++
++  switch (route.name) {
++    case 'home':
++      return null
++    case 'inbox':
++      return <InboxPage notificationId={route.notificationId ?? undefined} />
++    case 'my-issues':
++      return <MyIssuesPage tab={route.tab} />
++    case 'team-issues':
++      return t.teamsByKey.has(route.teamKey) ? (
++        <TeamIssuesPage teamKey={route.teamKey} tab={route.tab} />
++      ) : (
++        <NotFound message={`Team ${route.teamKey} not found`} />
++      )
++    case 'team-cycles':
++      return t.teamsByKey.has(route.teamKey) ? <CyclesPage teamKey={route.teamKey} /> : <NotFound message={`Team ${route.teamKey} not found`} />
++    case 'cycle':
++      return <CyclePage cycleId={route.cycleId} />
++    case 'projects':
++      return <ProjectsPage />
++    case 'project':
++      return <ProjectPage projectId={route.projectId} tab={route.tab} />
++    case 'views':
++      return <ViewsPage />
++    case 'view':
++      return <ViewPage viewId={route.viewId} />
++    case 'issue':
++      return <IssuePage idOrIdentifier={route.identifier} />
++    case 'search':
++      return <SearchPage q={route.q} />
++    case 'settings':
++      return <SettingsPage section={route.section} teamKey={route.teamKey} />
++  }
++}
++
++function LoadingState({ error, onRetry }: { error: string | null; onRetry: () => void }) {
++  return (
++    <div className="ls-loading">
++      {error ? (
++        <div style={{ textAlign: 'center' }}>
++          <div className="t-1 w-510" style={{ marginBottom: 4 }}>
++            Could not load the workspace
++          </div>
++          <div className="t-3" style={{ marginBottom: 12, maxWidth: 420 }}>
++            {error}
++          </div>
++          <button type="button" className="ls-tab is-active" onClick={onRetry}>
++            Try again
++          </button>
++        </div>
++      ) : (
++        <div style={{ display: 'grid', gap: 10, width: 240 }} aria-label="Loading" role="status">
++          <div className="ls-skel" style={{ width: '70%' }} />
++          <div className="ls-skel" />
++          <div className="ls-skel" style={{ width: '50%' }} />
++        </div>
++      )}
++    </div>
++  )
++}
++
++function Shell() {
++  const t = useTracker()
++  const route = useRoute()
++  const mobile = useIsMobile()
++  const [width, setWidth] = useSidebarWidth()
++  const [headers, setHeaders] = useState(0)
++  const registerHeader = useCallback((delta: number) => setHeaders((n) => n + delta), [])
++  const { setMobileNavOpen, mobileNavOpen, setPeekIssueId, setSelection } = t
++  const key = useMemo(() => routeKey(route), [route])
++
++  useEffect(() => {
++    setMobileNavOpen(false)
++    setPeekIssueId(null)
++    setSelection(new Set())
++  }, [key, setMobileNavOpen, setPeekIssueId, setSelection])
++
++  useEffect(() => {
++    if (t.lastError) toast(t.lastError.message)
++  }, [t.lastError])
++
++  useEffect(() => {
++    if (!mobile) setMobileNavOpen(false)
++  }, [mobile, setMobileNavOpen])
++
++  useEffect(() => {
++    if (!mobileNavOpen) return
++    const onKey = (event: KeyboardEvent) => {
++      if (event.key === 'Escape') {
++        event.preventDefault()
++        setMobileNavOpen(false)
++      }
++    }
++    window.addEventListener('keydown', onKey)
++    return () => window.removeEventListener('keydown', onKey)
++  }, [mobileNavOpen, setMobileNavOpen])
++
++  useEffect(() => {
++    const title = (() => {
++      switch (route.name) {
++        case 'inbox':
++          return 'Inbox'
++        case 'my-issues':
++          return 'My issues'
++        case 'team-issues':
++          return t.teamsByKey.get(route.teamKey)?.name ?? 'Issues'
++        case 'issue': {
++          const issue = t.issuesByIdentifier.get(route.identifier)
++          return issue ? `${issue.identifier} ${issue.title}` : route.identifier
++        }
++        case 'projects':
++          return 'Projects'
++        case 'views':
++          return 'Views'
++        case 'search':
++          return 'Search'
++        case 'settings':
++          return 'Settings'
++        default:
++          return 'Issues'
++      }
++    })()
++    document.title = `${title} - Omon`
++  }, [route, t.teamsByKey, t.issuesByIdentifier])
++
++  const showDesktopSidebar = !mobile && !t.sidebarCollapsed
++
++  return (
++    <div className="ls-root">
++      {showDesktopSidebar ? <Sidebar route={route} width={width} onResize={setWidth} /> : null}
++      {mobile && mobileNavOpen ? (
++        <>
++          <div className="ls-scrim" onClick={() => setMobileNavOpen(false)} aria-hidden />
++          <div className="ls-drawer" role="dialog" aria-modal="true" aria-label="Navigation">
++            <Sidebar route={route} width={Math.min(300, window.innerWidth * 0.86)} onNavigate={() => setMobileNavOpen(false)} />
++          </div>
++        </>
++      ) : null}
++      <main className={`ls-main ${showDesktopSidebar ? '' : 'is-full'}`}>
++        <div className="ls-panel">
++          {!mobile && t.sidebarCollapsed ? (
++            <button
++              type="button"
++              className="ls-icon-btn"
++              aria-label="Show sidebar"
++              title="Show sidebar ["
++              style={{ position: 'absolute', left: 6, bottom: 6, zIndex: 3 }}
++              onClick={() => t.setSidebarCollapsed(false)}
++            >
++              <PanelLeft size={15} />
++            </button>
++          ) : null}
++          {mobile && headers === 0 ? <NavToggleButton className="ls-fab-nav" /> : null}
++          <HeaderPresenceContext.Provider value={registerHeader}>
++            <div className="ls-page" key={key}>
++              {t.ready ? <RouteView route={route} /> : <LoadingState error={t.error} onRetry={() => void t.refresh()} />}
++            </div>
++          </HeaderPresenceContext.Provider>
++        </div>
++      </main>
++      {t.ready ? (
++        <>
++          <IssuePeek />
++          <CreateIssueModal />
++          <CommandPalette />
++          <ShortcutsDialog />
++          <GlobalHotkeys />
++        </>
++      ) : null}
++      <Toaster />
++    </div>
++  )
++}
++
++function Themed({ children }: { children: React.ReactNode }) {
++  const { theme } = useTracker()
++  return (
++    <div className="lin" data-theme={theme}>
++      {children}
++    </div>
++  )
++}
++
++export default function TrackerApp() {
++  return (
++    <TrackerProvider>
++      <Themed>
++        <Shell />
++      </Themed>
++    </TrackerProvider>
++  )
++}
+diff --git a/web/src/tracker/api.ts b/web/src/tracker/api.ts
+new file mode 100644
+index 0000000..4788ada
+--- /dev/null
++++ b/web/src/tracker/api.ts
+@@ -0,0 +1,163 @@
++import type {
++  Bootstrap,
++  Comment,
++  Cycle,
++  DelegateInput,
++  Favorite,
++  FavoriteKind,
++  ID,
++  Issue,
++  IssueCreate,
++  IssueDetail,
++  IssuePatch,
++  Label,
++  LaneAction,
++  Link,
++  Milestone,
++  Notification,
++  Project,
++  ProjectDetail,
++  ProjectUpdate,
++  Relation,
++  RelationType,
++  SessionActionResult,
++  SessionsOverview,
++  Team,
++  User,
++  View,
++  WorkflowState,
++} from './types'
++
++export class TrackerApiError extends Error {
++  constructor(
++    message: string,
++    readonly status: number,
++    readonly code: string | null,
++  ) {
++    super(message)
++  }
++}
++
++const BASE = '/api/tracker'
++
++async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
++  const response = await fetch(`${BASE}${path}`, {
++    method,
++    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
++    body: body === undefined ? undefined : JSON.stringify(body),
++  })
++  if (response.status === 204) return undefined as T
++  const text = await response.text()
++  const payload = text ? JSON.parse(text) : null
++  if (!response.ok) {
++    throw new TrackerApiError(
++      payload?.error ?? `${response.status} ${response.statusText}`,
++      response.status,
++      payload?.code ?? null,
++    )
++  }
++  return payload as T
++}
++
++const get = <T>(path: string) => call<T>('GET', path)
++const post = <T>(path: string, body: unknown = {}) => call<T>('POST', path, body)
++const patch = <T>(path: string, body: unknown) => call<T>('PATCH', path, body)
++const del = (path: string) => call<void>('DELETE', path)
++const enc = encodeURIComponent
++
++export const trackerApi = {
++  bootstrap: () => get<Bootstrap>('/bootstrap'),
++  issues: (opts: { team_id?: ID; include_archived?: boolean } = {}) => {
++    const q = new URLSearchParams()
++    if (opts.team_id) q.set('team_id', opts.team_id)
++    if (opts.include_archived) q.set('include_archived', '1')
++    const s = q.toString()
++    return get<{ items: Issue[] }>(`/issues${s ? `?${s}` : ''}`)
++  },
++  issue: (idOrIdentifier: string) => get<IssueDetail>(`/issues/${enc(idOrIdentifier)}`),
++  createIssue: (input: IssueCreate) => post<Issue>('/issues', input),
++  updateIssue: (id: ID, input: IssuePatch) => patch<Issue>(`/issues/${enc(id)}`, input),
++  batchUpdate: (ids: ID[], input: IssuePatch) => post<{ items: Issue[] }>('/issues/batch', { ids, patch: input }),
++  deleteIssue: (id: ID) => del(`/issues/${enc(id)}`),
++
++  addComment: (issueId: ID, body: string, parentId?: ID | null) =>
++    post<Comment>(`/issues/${enc(issueId)}/comments`, { body, parent_id: parentId ?? null }),
++  updateComment: (id: ID, input: { body?: string; resolved?: boolean }) => patch<Comment>(`/comments/${enc(id)}`, input),
++  deleteComment: (id: ID) => del(`/comments/${enc(id)}`),
++  toggleReaction: (commentId: ID, emoji: string) => post<Comment>(`/comments/${enc(commentId)}/reactions`, { emoji }),
++
++  addRelation: (issueId: ID, type: RelationType, relatedIssueId: ID) =>
++    post<Relation>(`/issues/${enc(issueId)}/relations`, { type, related_issue_id: relatedIssueId }),
++  deleteRelation: (id: ID) => del(`/relations/${enc(id)}`),
++  addLink: (issueId: ID, url: string, title?: string) => post<Link>(`/issues/${enc(issueId)}/links`, { url, title }),
++  deleteLink: (id: ID) => del(`/links/${enc(id)}`),
++  subscribe: (issueId: ID, subscribed: boolean) =>
++    post<{ subscribed: boolean }>(`/issues/${enc(issueId)}/subscribe`, { subscribed }),
++
++  delegate: (issueId: ID, input: DelegateInput) => post<IssueDetail>(`/issues/${enc(issueId)}/delegate`, input),
++  laneAction: (issueId: ID, action: LaneAction, opts: { text?: string; force?: boolean } = {}) =>
++    post<IssueDetail>(`/issues/${enc(issueId)}/lane-action`, { action, ...opts }),
++
++  projects: () => get<{ items: Project[] }>('/projects'),
++  project: (id: ID) => get<ProjectDetail>(`/projects/${enc(id)}`),
++  createProject: (input: Partial<Project> & { name: string }) => post<Project>('/projects', input),
++  updateProject: (id: ID, input: Partial<Project>) => patch<Project>(`/projects/${enc(id)}`, input),
++  deleteProject: (id: ID) => del(`/projects/${enc(id)}`),
++  addProjectUpdate: (projectId: ID, input: { health: ProjectUpdate['health']; body: string }) =>
++    post<ProjectUpdate>(`/projects/${enc(projectId)}/updates`, input),
++  updateProjectUpdate: (id: ID, input: Partial<Pick<ProjectUpdate, 'health' | 'body'>>) =>
++    patch<ProjectUpdate>(`/project-updates/${enc(id)}`, input),
++  deleteProjectUpdate: (id: ID) => del(`/project-updates/${enc(id)}`),
++  addMilestone: (projectId: ID, input: { name: string; target_date?: string | null }) =>
++    post<Milestone>(`/projects/${enc(projectId)}/milestones`, input),
++  updateMilestone: (id: ID, input: Partial<Milestone>) => patch<Milestone>(`/milestones/${enc(id)}`, input),
++  deleteMilestone: (id: ID) => del(`/milestones/${enc(id)}`),
++
++  createCycle: (input: { team_id: ID; starts_at: string; ends_at: string; name?: string | null }) =>
++    post<Cycle>('/cycles', input),
++  updateCycle: (id: ID, input: Partial<Cycle>) => patch<Cycle>(`/cycles/${enc(id)}`, input),
++  deleteCycle: (id: ID) => del(`/cycles/${enc(id)}`),
++
++  createLabel: (input: { name: string; color: string; team_id?: ID | null; parent_id?: ID | null }) =>
++    post<Label>('/labels', input),
++  updateLabel: (id: ID, input: Partial<Label>) => patch<Label>(`/labels/${enc(id)}`, input),
++  deleteLabel: (id: ID) => del(`/labels/${enc(id)}`),
++
++  createTeam: (input: { key: string; name: string; icon?: string; color?: string }) => post<Team>('/teams', input),
++  updateTeam: (id: ID, input: Partial<Team>) => patch<Team>(`/teams/${enc(id)}`, input),
++  createState: (
++    input: Omit<WorkflowState, 'id' | 'lane_status' | 'session_state' | 'description' | 'position'> & { position?: number },
++  ) =>
++    post<WorkflowState>('/states', input),
++  updateState: (id: ID, input: Partial<WorkflowState>) => patch<WorkflowState>(`/states/${enc(id)}`, input),
++  deleteState: (id: ID) => del(`/states/${enc(id)}`),
++
++  createUser: (input: { name: string; display_name?: string; email?: string; avatar_color?: string }) =>
++    post<User>('/users', input),
++  updateUser: (id: ID, input: Partial<User>) => patch<User>(`/users/${enc(id)}`, input),
++
++  createView: (input: Omit<View, 'id' | 'owner_id' | 'created_at' | 'updated_at' | 'shared' | 'description' | 'icon' | 'color'> &
++    Partial<Pick<View, 'description' | 'icon' | 'color' | 'shared'>>) => post<View>('/views', input),
++  updateView: (id: ID, input: Partial<View>) => patch<View>(`/views/${enc(id)}`, input),
++  deleteView: (id: ID) => del(`/views/${enc(id)}`),
++
++  toggleFavorite: (kind: FavoriteKind, targetId: ID) =>
++    post<{ favorited: boolean; favorite: Favorite | null }>('/favorites', { kind, target_id: targetId }),
++
++  notifications: () => get<{ items: Notification[] }>('/notifications'),
++  updateNotification: (id: ID, input: { read?: boolean; snoozed_until?: string | null; archived?: boolean }) =>
++    patch<Notification>(`/notifications/${enc(id)}`, input),
++  readAllNotifications: () => post<{ updated: number }>('/notifications/read-all'),
++
++  search: (q: string) => get<{ issues: Issue[]; projects: Project[] }>(`/search?q=${enc(q)}`),
++
++  sessions: {
++    list: (opts: { refresh?: boolean } = {}) => get<SessionsOverview>(opts.refresh ? '/sessions?refresh=1' : '/sessions'),
++    send: (machine: string, sessionId: string, text: string) =>
++      post<SessionActionResult>(`/sessions/${enc(machine)}/${enc(sessionId)}/send`, { text }),
++    interrupt: (machine: string, sessionId: string) =>
++      post<SessionActionResult>(`/sessions/${enc(machine)}/${enc(sessionId)}/interrupt`),
++    answer: (machine: string, sessionId: string, text: string, request?: string) =>
++      post<SessionActionResult>(`/sessions/${enc(machine)}/${enc(sessionId)}/answer`, request ? { text, request } : { text }),
++  },
++}
+diff --git a/web/src/tracker/format.ts b/web/src/tracker/format.ts
+new file mode 100644
+index 0000000..197ada8
+--- /dev/null
++++ b/web/src/tracker/format.ts
+@@ -0,0 +1,163 @@
++import type { Cycle, Issue, Priority, StateType, User, WorkflowState } from './types'
++import { PRIORITY_LABELS } from './types'
++
++const DAY = 86_400_000
++
++function startOfDay(date: Date): Date {
++  const copy = new Date(date)
++  copy.setHours(0, 0, 0, 0)
++  return copy
++}
++
++export function parseDateOnly(value: string): Date {
++  const [y, m, d] = value.split('-').map(Number)
++  return new Date(y, (m ?? 1) - 1, d ?? 1)
++}
++
++export function toDateOnly(date: Date): string {
++  const y = date.getFullYear()
++  const m = String(date.getMonth() + 1).padStart(2, '0')
++  const d = String(date.getDate()).padStart(2, '0')
++  return `${y}-${m}-${d}`
++}
++
++export function shortDate(value: string | null | undefined): string {
++  if (!value) return ''
++  const date = value.length === 10 ? parseDateOnly(value) : new Date(value)
++  const now = new Date()
++  const opts: Intl.DateTimeFormatOptions =
++    date.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }
++  return date.toLocaleDateString('en-US', opts)
++}
++
++export function fullDate(value: string | null | undefined): string {
++  if (!value) return ''
++  const date = new Date(value)
++  return date.toLocaleString('en-US', {
++    month: 'short',
++    day: 'numeric',
++    year: 'numeric',
++    hour: 'numeric',
++    minute: '2-digit',
++  })
++}
++
++export function relativeTime(value: string | null | undefined, now = Date.now()): string {
++  if (!value) return ''
++  const diff = now - new Date(value).getTime()
++  const abs = Math.abs(diff)
++  const suffix = diff >= 0 ? 'ago' : 'from now'
++  if (abs < 60_000) return 'just now'
++  if (abs < 3_600_000) return `${Math.round(abs / 60_000)} min ${suffix}`
++  if (abs < DAY) {
++    const h = Math.round(abs / 3_600_000)
++    return `${h} ${h === 1 ? 'hour' : 'hours'} ${suffix}`
++  }
++  if (abs < 30 * DAY) {
++    const d = Math.round(abs / DAY)
++    return `${d} ${d === 1 ? 'day' : 'days'} ${suffix}`
++  }
++  if (abs < 365 * DAY) {
++    const mo = Math.round(abs / (30 * DAY))
++    return `${mo} ${mo === 1 ? 'month' : 'months'} ${suffix}`
++  }
++  const y = Math.round(abs / (365 * DAY))
++  return `${y} ${y === 1 ? 'year' : 'years'} ${suffix}`
++}
++
++export function compactRelative(value: string | null | undefined, now = Date.now()): string {
++  if (!value) return ''
++  const abs = Math.abs(now - new Date(value).getTime())
++  if (abs < 3_600_000) return `${Math.max(1, Math.round(abs / 60_000))}m`
++  if (abs < DAY) return `${Math.round(abs / 3_600_000)}h`
++  if (abs < 30 * DAY) return `${Math.round(abs / DAY)}d`
++  if (abs < 365 * DAY) return `${Math.round(abs / (30 * DAY))}mo`
++  return `${Math.round(abs / (365 * DAY))}y`
++}
++
++export type DueState = 'overdue' | 'soon' | 'later' | null
++
++export function dueState(due: string | null, completed: boolean): DueState {
++  if (!due || completed) return null
++  const today = startOfDay(new Date()).getTime()
++  const target = parseDateOnly(due).getTime()
++  if (target < today) return 'overdue'
++  if (target - today <= 2 * DAY) return 'soon'
++  return 'later'
++}
++
++export function dueShortcuts(now = new Date()): { id: string; label: string; date: string }[] {
++  const today = startOfDay(now)
++  const add = (days: number) => toDateOnly(new Date(today.getTime() + days * DAY))
++  const endOfWeek = 5 - today.getDay()
++  return [
++    { id: 'today', label: 'Today', date: add(0) },
++    { id: 'tomorrow', label: 'Tomorrow', date: add(1) },
++    { id: 'eow', label: 'End of this week', date: add(endOfWeek >= 0 ? endOfWeek : endOfWeek + 7) },
++    { id: 'week', label: 'In one week', date: add(7) },
++    { id: 'two-weeks', label: 'In two weeks', date: add(14) },
++    { id: 'month', label: 'In one month', date: add(30) },
++  ]
++}
++
++export function priorityLabel(priority: Priority): string {
++  return PRIORITY_LABELS[priority]
++}
++
++export function stateProgress(state: WorkflowState, teamStates: WorkflowState[]): number {
++  if (state.type === 'completed') return 1
++  if (state.type !== 'started') return 0
++  const started = teamStates.filter((s) => s.type === 'started').sort((a, b) => a.position - b.position)
++  const index = started.findIndex((s) => s.id === state.id)
++  return started.length === 0 ? 0.5 : (index + 1) / (started.length + 1)
++}
++
++export function isClosedType(type: StateType): boolean {
++  return type === 'completed' || type === 'canceled'
++}
++
++export function branchName(issue: Issue, me: User | null): string {
++  const slug = issue.title
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, '-')
++    .replace(/^-+|-+$/g, '')
++    .slice(0, 48)
++  const owner = (me?.display_name || me?.name || 'me').toLowerCase().replace(/[^a-z0-9]+/g, '')
++  return `${owner}/${issue.identifier.toLowerCase()}-${slug}`
++}
++
++export function cycleLabel(cycle: Cycle): string {
++  return cycle.name?.trim() ? cycle.name : `Cycle ${cycle.number}`
++}
++
++export function cycleStatus(cycle: Cycle, now = Date.now()): 'past' | 'current' | 'upcoming' {
++  if (cycle.completed_at || new Date(cycle.ends_at).getTime() < now) return 'past'
++  if (new Date(cycle.starts_at).getTime() <= now) return 'current'
++  return 'upcoming'
++}
++
++export function cycleProgressRatio(cycle: Cycle, now = Date.now()): number {
++  const start = new Date(cycle.starts_at).getTime()
++  const end = new Date(cycle.ends_at).getTime()
++  if (end <= start) return 0
++  return Math.min(1, Math.max(0, (now - start) / (end - start)))
++}
++
++export function initials(name: string): string {
++  const parts = name.trim().split(/\s+/).filter(Boolean)
++  if (parts.length === 0) return '?'
++  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
++  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
++}
++
++export function pluralize(count: number, singular: string, plural = `${singular}s`): string {
++  return `${count} ${count === 1 ? singular : plural}`
++}
++
++export function isMac(): boolean {
++  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent)
++}
++
++export function modKey(): string {
++  return isMac() ? '⌘' : 'Ctrl'
++}
+diff --git a/web/src/tracker/hotkeys.ts b/web/src/tracker/hotkeys.ts
+new file mode 100644
+index 0000000..ff404df
+--- /dev/null
++++ b/web/src/tracker/hotkeys.ts
+@@ -0,0 +1,170 @@
++import { useEffect, useRef } from 'react'
++
++export interface HotkeyOptions {
++  enabled?: boolean
++  allowInInputs?: boolean
++  preventDefault?: boolean
++  scope?: string
++}
++
++interface Binding {
++  combo: ParsedCombo
++  handler: (event: KeyboardEvent) => void
++  opts: HotkeyOptions
++  order: number
++}
++
++interface ParsedCombo {
++  key: string
++  mod: boolean
++  shift: boolean
++  alt: boolean
++}
++
++const bindings = new Set<Binding>()
++const sequences = new Set<{ keys: string[]; handler: () => void; opts: HotkeyOptions; order: number }>()
++let installed = false
++let counter = 0
++let buffer: string[] = []
++let bufferTimer: number | undefined
++const scopeStack: string[] = []
++
++export function pushHotkeyScope(scope: string): () => void {
++  scopeStack.push(scope)
++  return () => {
++    const index = scopeStack.lastIndexOf(scope)
++    if (index >= 0) scopeStack.splice(index, 1)
++  }
++}
++
++export function activeHotkeyScope(): string | null {
++  return scopeStack.length ? scopeStack[scopeStack.length - 1] : null
++}
++
++function parseCombo(combo: string): ParsedCombo {
++  const parts = combo.toLowerCase().split('+').map((p) => p.trim())
++  const key = parts[parts.length - 1]
++  return {
++    key: key === 'space' ? ' ' : key,
++    mod: parts.includes('mod') || parts.includes('cmd') || parts.includes('ctrl'),
++    shift: parts.includes('shift'),
++    alt: parts.includes('alt') || parts.includes('option'),
++  }
++}
++
++function eventKey(event: KeyboardEvent): string {
++  if (event.key === ' ' || event.code === 'Space') return ' '
++  if (event.code?.startsWith('Key') && event.code.length === 4) return event.code.slice(3).toLowerCase()
++  if (event.code?.startsWith('Digit')) return event.code.slice(5)
++  return event.key.toLowerCase()
++}
++
++export function isEditableTarget(target: EventTarget | null): boolean {
++  if (!(target instanceof HTMLElement)) return false
++  if (target.isContentEditable) return true
++  const tag = target.tagName
++  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
++}
++
++function matches(combo: ParsedCombo, event: KeyboardEvent): boolean {
++  const key = eventKey(event)
++  const mod = event.metaKey || event.ctrlKey
++  if (combo.key === '?') {
++    return event.key === '?' && mod === combo.mod
++  }
++  return key === combo.key && mod === combo.mod && event.shiftKey === combo.shift && event.altKey === combo.alt
++}
++
++function scopeAllows(opts: HotkeyOptions): boolean {
++  const active = activeHotkeyScope()
++  if (!active) return !opts.scope || opts.scope === 'global'
++  return opts.scope === active
++}
++
++function onKeyDown(event: KeyboardEvent) {
++  if (event.defaultPrevented) return
++  const editable = isEditableTarget(event.target)
++  const ordered = [...bindings].sort((a, b) => b.order - a.order)
++  for (const binding of ordered) {
++    if (binding.opts.enabled === false) continue
++    if (editable && !binding.opts.allowInInputs) continue
++    if (!scopeAllows(binding.opts)) continue
++    if (matches(binding.combo, event)) {
++      if (binding.opts.preventDefault !== false) event.preventDefault()
++      binding.handler(event)
++      buffer = []
++      return
++    }
++  }
++  if (editable || event.metaKey || event.ctrlKey || event.altKey) return
++  const key = eventKey(event)
++  if (key.length !== 1) return
++  buffer.push(key)
++  window.clearTimeout(bufferTimer)
++  bufferTimer = window.setTimeout(() => {
++    buffer = []
++  }, 900)
++  const orderedSeq = [...sequences].sort((a, b) => b.order - a.order)
++  for (const seq of orderedSeq) {
++    if (seq.opts.enabled === false || !scopeAllows(seq.opts)) continue
++    const tail = buffer.slice(-seq.keys.length)
++    if (tail.length === seq.keys.length && tail.every((k, i) => k === seq.keys[i])) {
++      event.preventDefault()
++      buffer = []
++      seq.handler()
++      return
++    }
++  }
++}
++
++function install() {
++  if (installed) return
++  installed = true
++  window.addEventListener('keydown', onKeyDown)
++}
++
++export function useHotkey(combo: string | string[], handler: (event: KeyboardEvent) => void, opts: HotkeyOptions = {}) {
++  const handlerRef = useRef(handler)
++  handlerRef.current = handler
++  const combos = Array.isArray(combo) ? combo : [combo]
++  const key = combos.join('|')
++  const { enabled, allowInInputs, preventDefault, scope } = opts
++  useEffect(() => {
++    install()
++    const created = key.split('|').map((c) => ({
++      combo: parseCombo(c),
++      handler: (event: KeyboardEvent) => handlerRef.current(event),
++      opts: { enabled, allowInInputs, preventDefault, scope },
++      order: ++counter,
++    }))
++    created.forEach((b) => bindings.add(b))
++    return () => created.forEach((b) => bindings.delete(b))
++  }, [key, enabled, allowInInputs, preventDefault, scope])
++}
++
++export function useSequence(keys: string[], handler: () => void, opts: HotkeyOptions = {}) {
++  const handlerRef = useRef(handler)
++  handlerRef.current = handler
++  const signature = keys.join(' ')
++  const { enabled, scope } = opts
++  useEffect(() => {
++    install()
++    const entry = {
++      keys: signature.split(' '),
++      handler: () => handlerRef.current(),
++      opts: { enabled, scope },
++      order: ++counter,
++    }
++    sequences.add(entry)
++    return () => {
++      sequences.delete(entry)
++    }
++  }, [signature, enabled, scope])
++}
++
++export function useHotkeyScope(scope: string, active: boolean) {
++  useEffect(() => {
++    if (!active) return
++    return pushHotkeyScope(scope)
++  }, [scope, active])
++}
+diff --git a/web/src/tracker/linear.css b/web/src/tracker/linear.css
+new file mode 100644
+index 0000000..60b6051
+--- /dev/null
++++ b/web/src/tracker/linear.css
+@@ -0,0 +1,280 @@
++@import '@fontsource-variable/inter';
++
++.lin {
++  --font-sans: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
++  --font-mono: 'Berkeley Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
++  --ease: cubic-bezier(0.2, 0, 0, 1);
++  --dur: 140ms;
++  --radius-chip: 4px;
++  --radius-ctl: 6px;
++  --radius-pop: 8px;
++  --radius-dialog: 12px;
++  --accent: #5e6ad2;
++  --accent-hi: #7170ff;
++  --accent-hover: #828fff;
++  --danger: #eb5757;
++  --warn: #f2c94c;
++  --ok: #4cb782;
++  --urgent: #fc7840;
++  --sidebar-w: 244px;
++  --header-h: 44px;
++  --row-h: 36px;
++
++  position: fixed;
++  inset: 0;
++  z-index: 50;
++  display: flex;
++  font-family: var(--font-sans);
++  font-size: 13px;
++  line-height: 1.5;
++  font-weight: 400;
++  font-feature-settings: 'cv01', 'ss03';
++  -webkit-font-smoothing: antialiased;
++  -moz-osx-font-smoothing: grayscale;
++  background: var(--sidebar);
++  color: var(--text-1);
++  color-scheme: dark;
++  text-rendering: optimizeLegibility;
++}
++
++.lin[data-theme='dark'] {
++  --sidebar: #090a0b;
++  --panel: #0f1011;
++  --card: #141516;
++  --input: #141516;
++  --bg-hover: rgba(255, 255, 255, 0.04);
++  --bg-active: rgba(255, 255, 255, 0.07);
++  --bg-selected: rgba(94, 106, 210, 0.16);
++  --bg-selected-hover: rgba(94, 106, 210, 0.22);
++  --bg-group: rgba(255, 255, 255, 0.02);
++  --bg-subtle: rgba(255, 255, 255, 0.03);
++  --border: rgba(255, 255, 255, 0.06);
++  --border-strong: rgba(255, 255, 255, 0.1);
++  --text-1: #f7f8f8;
++  --text-2: #d0d6e0;
++  --text-3: #8a8f98;
++  --text-4: #62666d;
++  --popover: #1c1d1f;
++  --overlay: rgba(0, 0, 0, 0.65);
++  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 8px 24px rgba(0, 0, 0, 0.5);
++  --shadow-dialog: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 24px 64px rgba(0, 0, 0, 0.6);
++  --scrollbar: rgba(255, 255, 255, 0.1);
++  color-scheme: dark;
++}
++
++.lin[data-theme='light'] {
++  --sidebar: #f4f5f8;
++  --panel: #ffffff;
++  --card: #ffffff;
++  --input: #ffffff;
++  --bg-hover: rgba(0, 0, 0, 0.035);
++  --bg-active: rgba(0, 0, 0, 0.06);
++  --bg-selected: rgba(94, 106, 210, 0.12);
++  --bg-selected-hover: rgba(94, 106, 210, 0.18);
++  --bg-group: rgba(0, 0, 0, 0.02);
++  --bg-subtle: rgba(0, 0, 0, 0.025);
++  --border: rgba(0, 0, 0, 0.08);
++  --border-strong: rgba(0, 0, 0, 0.14);
++  --text-1: #1b1c1f;
++  --text-2: #3c3f44;
++  --text-3: #6b6f76;
++  --text-4: #9a9da3;
++  --popover: #ffffff;
++  --overlay: rgba(0, 0, 0, 0.4);
++  --shadow-pop: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.12);
++  --shadow-dialog: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 24px 64px rgba(0, 0, 0, 0.18);
++  --scrollbar: rgba(0, 0, 0, 0.15);
++  color-scheme: light;
++}
++
++.lin *,
++.lin *::before,
++.lin *::after {
++  box-sizing: border-box;
++  border-color: var(--border);
++}
++
++:where(.lin) button {
++  font: inherit;
++  color: inherit;
++  background: none;
++  border: 0 solid var(--border);
++  padding: 0;
++  cursor: default;
++}
++
++.lin input,
++.lin textarea {
++  font: inherit;
++  color: inherit;
++}
++
++.lin a {
++  color: inherit;
++  text-decoration: none;
++}
++
++.lin ::selection {
++  background: rgba(113, 112, 255, 0.35);
++}
++
++.lin :focus {
++  outline: none;
++}
++
++.lin :focus-visible {
++  box-shadow: 0 0 0 2px var(--accent-hi);
++  border-radius: var(--radius-ctl);
++}
++
++.lin ::-webkit-scrollbar {
++  width: 10px;
++  height: 10px;
++}
++
++.lin ::-webkit-scrollbar-thumb {
++  background: var(--scrollbar);
++  border-radius: 10px;
++  border: 3px solid transparent;
++  background-clip: content-box;
++}
++
++.lin ::-webkit-scrollbar-track {
++  background: transparent;
++}
++
++.lin .t-1 { color: var(--text-1); }
++.lin .t-2 { color: var(--text-2); }
++.lin .t-3 { color: var(--text-3); }
++.lin .t-4 { color: var(--text-4); }
++.lin .w-510 { font-weight: 510; }
++.lin .w-590 { font-weight: 590; }
++.lin .mono { font-family: var(--font-mono); }
++.lin .tabular { font-variant-numeric: tabular-nums; }
++
++.lin .lin-panel {
++  background: var(--panel);
++  border: 1px solid var(--border);
++  border-radius: 8px;
++}
++
++.lin .lin-hover:hover {
++  background: var(--bg-hover);
++}
++
++.lin .lin-pop {
++  background: var(--popover);
++  border-radius: var(--radius-pop);
++  box-shadow: var(--shadow-pop);
++}
++
++@keyframes lin-pop-in {
++  from {
++    opacity: 0;
++    transform: scale(0.97) translateY(-2px);
++  }
++  to {
++    opacity: 1;
++    transform: none;
++  }
++}
++
++@keyframes lin-fade-in {
++  from {
++    opacity: 0;
++  }
++  to {
++    opacity: 1;
++  }
++}
++
++@keyframes lin-slide-in-right {
++  from {
++    opacity: 0;
++    transform: translateX(16px);
++  }
++  to {
++    opacity: 1;
++    transform: none;
++  }
++}
++
++@keyframes lin-slide-in-left {
++  from {
++    transform: translateX(-100%);
++  }
++  to {
++    transform: none;
++  }
++}
++
++@keyframes lin-toast-in {
++  from {
++    opacity: 0;
++    transform: translateY(8px);
++  }
++  to {
++    opacity: 1;
++    transform: none;
++  }
++}
++
++.lin .anim-pop {
++  animation: lin-pop-in var(--dur) var(--ease);
++  transform-origin: top;
++}
++
++.lin .anim-fade {
++  animation: lin-fade-in var(--dur) var(--ease);
++}
++
++.lin .anim-slide-right {
++  animation: lin-slide-in-right 180ms var(--ease);
++}
++
++.lin .anim-slide-left {
++  animation: lin-slide-in-left 200ms var(--ease);
++}
++
++.lin .anim-toast {
++  animation: lin-toast-in 180ms var(--ease);
++}
++
++@media (prefers-reduced-motion: reduce) {
++  .lin *,
++  .lin *::before,
++  .lin *::after {
++    animation-duration: 0.01ms !important;
++    transition-duration: 0.01ms !important;
++  }
++}
++
++.lin .lin-markdown {
++  color: var(--text-2);
++  font-size: 15px;
++  line-height: 1.6;
++}
++
++.lin .lin-markdown p { margin: 0 0 0.75em; }
++.lin .lin-markdown h1 { font-size: 22px; font-weight: 590; color: var(--text-1); margin: 1.2em 0 0.5em; letter-spacing: -0.3px; }
++.lin .lin-markdown h2 { font-size: 18px; font-weight: 590; color: var(--text-1); margin: 1.1em 0 0.45em; }
++.lin .lin-markdown h3 { font-size: 15px; font-weight: 590; color: var(--text-1); margin: 1em 0 0.4em; }
++.lin .lin-markdown ul, .lin .lin-markdown ol { padding-left: 1.4em; margin: 0 0 0.75em; }
++.lin .lin-markdown li { margin: 0.2em 0; }
++.lin .lin-markdown a { color: var(--accent-hi); }
++.lin .lin-markdown a:hover { color: var(--accent-hover); text-decoration: underline; }
++.lin .lin-markdown code { font-family: var(--font-mono); font-size: 0.86em; background: var(--bg-active); padding: 1px 5px; border-radius: 4px; }
++.lin .lin-markdown pre { background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; overflow-x: auto; font-size: 12.5px; }
++.lin .lin-markdown pre code { background: none; padding: 0; }
++.lin .lin-markdown blockquote { border-left: 2px solid var(--border-strong); margin: 0 0 0.75em; padding-left: 12px; color: var(--text-3); }
++.lin .lin-markdown hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
++.lin .lin-markdown table { border-collapse: collapse; margin: 0 0 0.75em; font-size: 13px; }
++.lin .lin-markdown th, .lin .lin-markdown td { border: 1px solid var(--border); padding: 4px 8px; }
++.lin .lin-markdown input[type='checkbox'] { margin-right: 6px; }
++
++@media (max-width: 767px) {
++  .lin {
++    --row-h: 44px;
++    font-size: 14px;
++  }
++}
+diff --git a/web/src/tracker/router.ts b/web/src/tracker/router.ts
+new file mode 100644
+index 0000000..d627236
+--- /dev/null
++++ b/web/src/tracker/router.ts
+@@ -0,0 +1,143 @@
++import { useEffect, useState } from 'react'
++
++export type IssueTab = 'all' | 'active' | 'backlog' | 'triage'
++export type MyIssuesTab = 'assigned' | 'created' | 'subscribed' | 'activity'
++export type ProjectTab = 'overview' | 'issues' | 'updates'
++export type SettingsSection =
++  | 'account'
++  | 'preferences'
++  | 'teams'
++  | 'team'
++  | 'labels'
++  | 'members'
++  | 'workflow'
++
++export type Route =
++  | { name: 'inbox'; notificationId: string | null }
++  | { name: 'my-issues'; tab: MyIssuesTab }
++  | { name: 'team-issues'; teamKey: string; tab: IssueTab }
++  | { name: 'team-cycles'; teamKey: string }
++  | { name: 'cycle'; cycleId: string }
++  | { name: 'projects' }
++  | { name: 'project'; projectId: string; tab: ProjectTab }
++  | { name: 'views' }
++  | { name: 'view'; viewId: string }
++  | { name: 'issue'; identifier: string }
++  | { name: 'search'; q: string }
++  | { name: 'settings'; section: SettingsSection; teamKey: string | null }
++  | { name: 'home' }
++
++const PREFIX = '#/tracker'
++
++export function currentPath(): string {
++  const hash = window.location.hash
++  if (!hash.startsWith(PREFIX)) return '/'
++  const rest = hash.slice(PREFIX.length)
++  return rest === '' ? '/' : rest
++}
++
++export function parseRoute(path: string): Route {
++  const [pathname, query = ''] = path.split('?')
++  const params = new URLSearchParams(query)
++  const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent)
++  const [head, a, b] = parts
++  switch (head) {
++    case 'inbox':
++      return { name: 'inbox', notificationId: a ?? null }
++    case 'my-issues': {
++      const tab = (['assigned', 'created', 'subscribed', 'activity'] as const).find((t) => t === a) ?? 'assigned'
++      return { name: 'my-issues', tab }
++    }
++    case 'team': {
++      if (!a) return { name: 'home' }
++      if (b === 'cycles') return { name: 'team-cycles', teamKey: a }
++      const tab = (['all', 'active', 'backlog', 'triage'] as const).find((t) => t === b) ?? 'all'
++      return { name: 'team-issues', teamKey: a, tab }
++    }
++    case 'cycle':
++      return a ? { name: 'cycle', cycleId: a } : { name: 'home' }
++    case 'projects':
++      return { name: 'projects' }
++    case 'project': {
++      if (!a) return { name: 'projects' }
++      const tab = (['overview', 'issues', 'updates'] as const).find((t) => t === b) ?? 'overview'
++      return { name: 'project', projectId: a, tab }
++    }
++    case 'views':
++      return { name: 'views' }
++    case 'view':
++      return a ? { name: 'view', viewId: a } : { name: 'views' }
++    case 'issue':
++      return a ? { name: 'issue', identifier: a } : { name: 'home' }
++    case 'search':
++      return { name: 'search', q: params.get('q') ?? '' }
++    case 'settings': {
++      const sections: SettingsSection[] = ['account', 'preferences', 'teams', 'team', 'labels', 'members', 'workflow']
++      const section = sections.find((s) => s === a) ?? 'preferences'
++      return { name: 'settings', section, teamKey: b ?? null }
++    }
++    default:
++      return { name: 'home' }
++  }
++}
++
++export function routePath(route: Route): string {
++  switch (route.name) {
++    case 'inbox':
++      return route.notificationId ? `/inbox/${route.notificationId}` : '/inbox'
++    case 'my-issues':
++      return `/my-issues/${route.tab}`
++    case 'team-issues':
++      return `/team/${route.teamKey}/${route.tab}`
++    case 'team-cycles':
++      return `/team/${route.teamKey}/cycles`
++    case 'cycle':
++      return `/cycle/${route.cycleId}`
++    case 'projects':
++      return '/projects'
++    case 'project':
++      return `/project/${route.projectId}/${route.tab}`
++    case 'views':
++      return '/views'
++    case 'view':
++      return `/view/${route.viewId}`
++    case 'issue':
++      return `/issue/${route.identifier}`
++    case 'search':
++      return route.q ? `/search?q=${encodeURIComponent(route.q)}` : '/search'
++    case 'settings':
++      return route.teamKey ? `/settings/${route.section}/${route.teamKey}` : `/settings/${route.section}`
++    case 'home':
++      return '/'
++  }
++}
++
++export function navigate(target: string | Route, opts: { replace?: boolean } = {}) {
++  const path = typeof target === 'string' ? target : routePath(target)
++  const hash = `${PREFIX}${path.startsWith('/') ? path : `/${path}`}`
++  if (opts.replace) {
++    window.history.replaceState(null, '', hash)
++    window.dispatchEvent(new HashChangeEvent('hashchange'))
++  } else {
++    window.location.hash = hash
++  }
++}
++
++export function hrefFor(target: string | Route): string {
++  const path = typeof target === 'string' ? target : routePath(target)
++  return `${PREFIX}${path}`
++}
++
++export function useRoute(): Route {
++  const [route, setRoute] = useState<Route>(() => parseRoute(currentPath()))
++  useEffect(() => {
++    const onChange = () => setRoute(parseRoute(currentPath()))
++    window.addEventListener('hashchange', onChange)
++    return () => window.removeEventListener('hashchange', onChange)
++  }, [])
++  return route
++}
++
++export function isTrackerHash(hash = window.location.hash): boolean {
++  return hash.startsWith(PREFIX)
++}
+diff --git a/web/src/tracker/shell/CommandPalette.tsx b/web/src/tracker/shell/CommandPalette.tsx
+new file mode 100644
+index 0000000..bb286d4
+--- /dev/null
++++ b/web/src/tracker/shell/CommandPalette.tsx
+@@ -0,0 +1,536 @@
++import React, { useEffect, useMemo, useRef, useState } from 'react'
++import {
++  ArrowRight,
++  Box,
++  CircleDot,
++  CircleUser,
++  Copy,
++  Inbox,
++  Keyboard,
++  Layers,
++  Moon,
++  PanelLeft,
++  RefreshCw,
++  Search,
++  Settings,
++  SquarePen,
++  Sun,
++  Tag,
++  Trash2,
++  User as UserIcon,
++  Archive,
++} from 'lucide-react'
++import { navigate, useRoute, type Route } from '../router'
++import { useTracker, type TrackerState } from '../store'
++import type { ID, Issue, Priority } from '../types'
++import { PRIORITY_LABELS } from '../types'
++import { branchName, stateProgress } from '../format'
++import { Avatar, Kbd, LabelDot, PriorityIcon, ProjectIcon, StatusIcon, toast } from '../ui'
++
++export interface PaletteCommand {
++  id: string
++  label: string
++  group: string
++  icon?: React.ReactNode
++  keywords?: string
++  kbd?: string[]
++  run?: () => void | Promise<void>
++  page?: string
++  checked?: boolean
++}
++
++export function fuzzyScore(query: string, text: string): number {
++  if (!query) return 1
++  const q = query.toLowerCase()
++  const s = text.toLowerCase()
++  const direct = s.indexOf(q)
++  if (direct >= 0) return 1000 - direct * 2 - (s.length - q.length) * 0.1 + (direct === 0 || s[direct - 1] === ' ' ? 200 : 0)
++  let score = 0
++  let qi = 0
++  let last = -2
++  for (let i = 0; i < s.length && qi < q.length; i += 1) {
++    if (s[i] === q[qi]) {
++      score += i === last + 1 ? 6 : 1
++      if (i === 0 || s[i - 1] === ' ') score += 8
++      last = i
++      qi += 1
++    }
++  }
++  return qi === q.length ? score : -1
++}
++
++export function targetIssueIds(t: TrackerState, route: Route): ID[] {
++  if (t.selection.size > 0) return [...t.selection]
++  if (t.peekIssueId) return [t.peekIssueId]
++  if (route.name === 'issue') {
++    const issue = t.issuesByIdentifier.get(route.identifier) ?? t.issuesById.get(route.identifier)
++    if (issue) return [issue.id]
++  }
++  if (t.focusedIssueId) return [t.focusedIssueId]
++  return []
++}
++
++function currentTeamId(t: TrackerState, route: Route): ID | undefined {
++  if (route.name === 'team-issues' || route.name === 'team-cycles') return t.teamsByKey.get(route.teamKey)?.id
++  return undefined
++}
++
++async function copyText(text: string, message: string) {
++  try {
++    await navigator.clipboard.writeText(text)
++    toast(message)
++  } catch {
++    toast('Could not copy to clipboard')
++  }
++}
++
++function buildCommands(t: TrackerState, route: Route, page: string | null): PaletteCommand[] {
++  const ids = targetIssueIds(t, route)
++  const issues = ids.map((id) => t.issuesById.get(id)).filter((i): i is Issue => Boolean(i))
++  const one = issues.length === 1 ? issues[0] : null
++  const apply = (patch: Parameters<TrackerState['updateIssues']>[1], message: string) => async () => {
++    try {
++      await t.updateIssues(ids, patch)
++      toast(message)
++    } catch {
++      // updateIssues already rolled back and reported the error to the store.
++    }
++  }
++
++  if (page === 'status') {
++    const teamIds = Array.from(new Set(issues.map((i) => i.team_id)))
++    const teamId = teamIds.length === 1 ? teamIds[0] : undefined
++    const states = teamId ? t.teamStates(teamId) : []
++    return states.map((state) => ({
++      id: `status:${state.id}`,
++      group: 'Change status',
++      label: state.name,
++      icon: <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, states)} size={14} />,
++      checked: issues.every((i) => i.state_id === state.id),
++      run: apply({ state_id: state.id }, `Status changed to ${state.name}`),
++    }))
++  }
++  if (page === 'priority') {
++    return ([0, 1, 2, 3, 4] as Priority[]).map((p, index) => ({
++      id: `priority:${p}`,
++      group: 'Change priority',
++      label: PRIORITY_LABELS[p],
++      icon: <PriorityIcon priority={p} size={14} />,
++      kbd: [String(index)],
++      checked: issues.every((i) => i.priority === p),
++      run: apply({ priority: p }, `Priority set to ${PRIORITY_LABELS[p]}`),
++    }))
++  }
++  if (page === 'assignee') {
++    return [
++      {
++        id: 'assignee:none',
++        group: 'Assign to',
++        label: 'No assignee',
++        icon: <Avatar user={null} size={16} />,
++        checked: issues.every((i) => i.assignee_id === null),
++        run: apply({ assignee_id: null }, 'Unassigned'),
++      },
++      ...t.users.map((user) => ({
++        id: `assignee:${user.id}`,
++        group: 'Assign to',
++        label: user.is_me ? `${user.name} (you)` : user.name,
++        keywords: `${user.display_name} ${user.email ?? ''} ${user.model ?? ''}`,
++        icon: <Avatar user={user} size={16} />,
++        checked: issues.every((i) => i.assignee_id === user.id),
++        run: apply({ assignee_id: user.id }, `Assigned to ${user.name}`),
++      })),
++    ]
++  }
++  if (page === 'label') {
++    return t.labels.map((label) => {
++      const all = issues.every((i) => i.label_ids.includes(label.id))
++      return {
++        id: `label:${label.id}`,
++        group: 'Labels',
++        label: label.name,
++        icon: <LabelDot color={label.color} />,
++        checked: all,
++        run: apply(all ? { remove_label_ids: [label.id] } : { add_label_ids: [label.id] }, all ? `Removed ${label.name}` : `Added ${label.name}`),
++      }
++    })
++  }
++  if (page === 'project') {
++    return [
++      { id: 'project:none', group: 'Move to project', label: 'No project', icon: <Box size={14} />, run: apply({ project_id: null }, 'Removed from project') },
++      ...t.projects
++        .filter((p) => !p.archived_at)
++        .map((project) => ({
++          id: `project:${project.id}`,
++          group: 'Move to project',
++          label: project.name,
++          icon: <ProjectIcon icon={project.icon} color={project.color} />,
++          checked: issues.every((i) => i.project_id === project.id),
++          run: apply({ project_id: project.id }, `Moved to ${project.name}`),
++        })),
++    ]
++  }
++
++  const list: PaletteCommand[] = []
++  const teamId = currentTeamId(t, route) ?? t.teams.find((team) => !team.system)?.id
++
++  if (issues.length > 0) {
++    const scope = one ? one.identifier : `${issues.length} issues`
++    list.push(
++      { id: 'issue:status', group: scope, label: 'Change status…', icon: <CircleDot size={14} />, kbd: ['S'], page: 'status' },
++      { id: 'issue:priority', group: scope, label: 'Change priority…', icon: <PriorityIcon priority={2} size={14} />, kbd: ['P'], page: 'priority' },
++      { id: 'issue:assignee', group: scope, label: 'Assign to…', icon: <UserIcon size={14} />, kbd: ['A'], page: 'assignee' },
++      {
++        id: 'issue:assign-me',
++        group: scope,
++        label: 'Assign to me',
++        icon: <CircleUser size={14} />,
++        kbd: ['I'],
++        run: t.me ? apply({ assignee_id: t.me.id }, 'Assigned to you') : undefined,
++      },
++      { id: 'issue:labels', group: scope, label: 'Change labels…', icon: <Tag size={14} />, kbd: ['L'], page: 'label' },
++      { id: 'issue:project', group: scope, label: 'Move to project…', icon: <Box size={14} />, kbd: ['⇧', 'P'], page: 'project' },
++    )
++    if (one) {
++      list.push(
++        { id: 'issue:open', group: scope, label: 'Open issue', icon: <ArrowRight size={14} />, kbd: ['O'], run: () => navigate(`/issue/${one.identifier}`) },
++        { id: 'issue:copy-id', group: scope, label: 'Copy issue ID', icon: <Copy size={14} />, kbd: ['⌘', '.'], run: () => copyText(one.identifier, `Copied ${one.identifier}`) },
++        {
++          id: 'issue:copy-url',
++          group: scope,
++          label: 'Copy issue URL',
++          icon: <Copy size={14} />,
++          run: () => copyText(`${window.location.origin}${window.location.pathname}#/tracker/issue/${one.identifier}`, 'Copied issue URL'),
++        },
++        {
++          id: 'issue:copy-branch',
++          group: scope,
++          label: 'Copy git branch name',
++          icon: <Copy size={14} />,
++          kbd: ['⌘', '⇧', ','],
++          run: () => copyText(branchName(one, t.me), 'Copied branch name'),
++        },
++        {
++          id: 'issue:sub',
++          group: scope,
++          label: 'Create sub-issue',
++          icon: <SquarePen size={14} />,
++          run: () => t.openCreate({ team_id: one.team_id, parent_id: one.id }),
++        },
++        {
++          id: 'issue:favorite',
++          group: scope,
++          label: t.isFavorite('issue', one.id) ? 'Remove from favorites' : 'Add to favorites',
++          icon: <Layers size={14} />,
++          run: () => t.toggleFavorite('issue', one.id).catch(t.reportError),
++        },
++      )
++    }
++    list.push({
++      id: 'issue:archive',
++      group: scope,
++      label: issues.every((i) => i.archived_at) ? 'Unarchive' : 'Archive',
++      icon: <Archive size={14} />,
++      kbd: ['⌘', '⇧', 'A'],
++      run: apply({ archived: !issues.every((i) => i.archived_at) }, issues.every((i) => i.archived_at) ? 'Unarchived' : 'Archived'),
++    })
++    if (one && !one.lane_key) {
++      list.push({
++        id: 'issue:delete',
++        group: scope,
++        label: 'Delete issue',
++        icon: <Trash2 size={14} />,
++        kbd: ['⌘', '⌫'],
++        run: async () => {
++          if (!window.confirm(`Delete ${one.identifier}? This cannot be undone.`)) return
++          try {
++            await t.deleteIssue(one.id)
++            if (t.peekIssueId === one.id) t.setPeekIssueId(null)
++            toast(`Deleted ${one.identifier}`)
++          } catch (err) {
++            t.reportError(err)
++          }
++        },
++      })
++    }
++  }
++
++  list.push({
++    id: 'create:issue',
++    group: 'Issues',
++    label: 'Create new issue',
++    icon: <SquarePen size={14} />,
++    kbd: ['C'],
++    run: () => t.openCreate(teamId ? { team_id: teamId } : undefined),
++  })
++
++  const go = (id: string, label: string, path: string, icon: React.ReactNode, kbd?: string[], keywords?: string): PaletteCommand => ({
++    id: `go:${id}`,
++    group: 'Navigation',
++    label,
++    icon,
++    kbd,
++    keywords,
++    run: () => navigate(path),
++  })
++  const firstTeam = t.teams.find((team) => !team.system) ?? t.teams[0]
++  const navTeam = (route.name === 'team-issues' || route.name === 'team-cycles') ? t.teamsByKey.get(route.teamKey) ?? firstTeam : firstTeam
++  list.push(
++    go('inbox', 'Go to Inbox', '/inbox', <Inbox size={14} />, ['G', 'I']),
++    go('my-issues', 'Go to My issues', '/my-issues/assigned', <CircleUser size={14} />, ['G', 'M']),
++    go('projects', 'Go to Projects', '/projects', <Box size={14} />, ['G', 'P']),
++    go('views', 'Go to Views', '/views', <Layers size={14} />),
++    go('search', 'Go to Search', '/search', <Search size={14} />, ['/']),
++    go('settings', 'Go to Settings', '/settings/preferences', <Settings size={14} />, ['G', 'S']),
++  )
++  if (navTeam) {
++    list.push(
++      go('active', `Go to ${navTeam.name} active issues`, `/team/${navTeam.key}/active`, <CircleDot size={14} />, ['G', 'A']),
++      go('backlog', `Go to ${navTeam.name} backlog`, `/team/${navTeam.key}/backlog`, <CircleDot size={14} />, ['G', 'B']),
++      go('cycles', `Go to ${navTeam.name} cycles`, `/team/${navTeam.key}/cycles`, <RefreshCw size={14} />, ['G', 'V']),
++    )
++  }
++  for (const team of t.teams) {
++    list.push(go(`team:${team.key}`, `Go to team ${team.name}`, `/team/${team.key}/all`, <CircleDot size={14} />, undefined, team.key))
++  }
++  for (const view of t.views) list.push(go(`view:${view.id}`, `Open view: ${view.name}`, `/view/${view.id}`, <Layers size={14} />))
++  for (const project of t.projects.filter((p) => !p.archived_at)) {
++    list.push(go(`project:${project.id}`, `Open project: ${project.name}`, `/project/${project.id}/overview`, <ProjectIcon icon={project.icon} color={project.color} />))
++  }
++
++  list.push(
++    {
++      id: 'pref:theme',
++      group: 'Preferences',
++      label: t.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme',
++      keywords: 'theme appearance dark light mode',
++      icon: t.theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />,
++      kbd: ['⌘', '⇧', 'L'],
++      run: () => t.setTheme(t.theme === 'dark' ? 'light' : 'dark'),
++    },
++    {
++      id: 'pref:sidebar',
++      group: 'Preferences',
++      label: t.sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar',
++      icon: <PanelLeft size={14} />,
++      kbd: ['['],
++      run: () => t.setSidebarCollapsed(!t.sidebarCollapsed),
++    },
++    {
++      id: 'help:shortcuts',
++      group: 'Help',
++      label: 'Keyboard shortcuts',
++      icon: <Keyboard size={14} />,
++      kbd: ['?'],
++      run: () => t.setShortcutsOpen(true),
++    },
++    {
++      id: 'app:refresh',
++      group: 'Help',
++      label: 'Reload data',
++      icon: <RefreshCw size={14} />,
++      run: () => t.refresh(),
++    },
++  )
++
++  return list
++}
++
++function issueSearchCommands(t: TrackerState, query: string): PaletteCommand[] {
++  if (query.trim().length < 2) return []
++  return t.issues
++    .filter((i) => !i.archived_at)
++    .map((issue) => ({ issue, score: fuzzyScore(query, `${issue.identifier} ${issue.title}`) }))
++    .filter((x) => x.score > 0)
++    .sort((a, b) => b.score - a.score)
++    .slice(0, 8)
++    .map(({ issue }) => {
++      const state = t.statesById.get(issue.state_id)
++      return {
++        id: `open:${issue.id}`,
++        group: 'Issues',
++        label: `${issue.identifier} ${issue.title}`,
++        icon: state ? <StatusIcon type={state.type} color={state.color} size={14} /> : <CircleDot size={14} />,
++        run: () => navigate(`/issue/${issue.identifier}`),
++      }
++    })
++}
++
++const PAGE_PLACEHOLDER: Record<string, string> = {
++  status: 'Change status to…',
++  priority: 'Set priority to…',
++  assignee: 'Assign to…',
++  label: 'Add or remove labels…',
++  project: 'Move to project…',
++}
++
++export function CommandPalette() {
++  const t = useTracker()
++  const route = useRoute()
++  const { paletteOpen, setPaletteOpen } = t
++  const [query, setQuery] = useState('')
++  const [page, setPage] = useState<string | null>(null)
++  const [active, setActive] = useState(0)
++  const inputRef = useRef<HTMLInputElement>(null)
++  const listRef = useRef<HTMLDivElement>(null)
++  const restoreFocus = useRef<HTMLElement | null>(null)
++
++  useEffect(() => {
++    if (paletteOpen) {
++      restoreFocus.current = document.activeElement as HTMLElement | null
++      setQuery('')
++      setActive(0)
++      const opener = (window as unknown as { __trackerPalettePage?: string | null }).__trackerPalettePage
++      setPage(opener ?? null)
++      ;(window as unknown as { __trackerPalettePage?: string | null }).__trackerPalettePage = null
++      requestAnimationFrame(() => inputRef.current?.focus())
++    } else {
++      restoreFocus.current?.focus?.()
++    }
++  }, [paletteOpen])
++
++  const close = () => setPaletteOpen(false)
++
++  const items = useMemo(() => {
++    if (!paletteOpen) return []
++    const base = buildCommands(t, route, page)
++    const extra = page ? [] : issueSearchCommands(t, query)
++    if (!query.trim()) return base
++    return [...base, ...extra]
++      .map((cmd) => ({ cmd, score: fuzzyScore(query.trim(), `${cmd.label} ${cmd.keywords ?? ''}`) }))
++      .filter((x) => x.score > 0)
++      .sort((a, b) => b.score - a.score)
++      .map((x) => x.cmd)
++  }, [paletteOpen, t, route, page, query])
++
++  useEffect(() => {
++    setActive((current) => Math.min(current, Math.max(0, items.length - 1)))
++  }, [items.length])
++
++  useEffect(() => {
++    listRef.current?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: 'nearest' })
++  }, [active])
++
++  if (!paletteOpen) return null
++
++  const runItem = (cmd: PaletteCommand | undefined) => {
++    if (!cmd) return
++    if (cmd.page) {
++      setPage(cmd.page)
++      setQuery('')
++      setActive(0)
++      return
++    }
++    close()
++    void cmd.run?.()
++  }
++
++  const onKeyDown = (event: React.KeyboardEvent) => {
++    switch (event.key) {
++      case 'ArrowDown':
++        event.preventDefault()
++        setActive((i) => (items.length ? (i + 1) % items.length : 0))
++        break
++      case 'ArrowUp':
++        event.preventDefault()
++        setActive((i) => (items.length ? (i - 1 + items.length) % items.length : 0))
++        break
++      case 'Enter':
++        event.preventDefault()
++        runItem(items[active])
++        break
++      case 'Escape':
++        event.preventDefault()
++        event.stopPropagation()
++        if (page) {
++          setPage(null)
++          setQuery('')
++        } else close()
++        break
++      case 'Backspace':
++        if (!query && page) {
++          event.preventDefault()
++          setPage(null)
++        }
++        break
++      default:
++        if (page && !query && /^[0-9]$/.test(event.key)) {
++          const index = Number(event.key)
++          if (items[index]) {
++            event.preventDefault()
++            runItem(items[index])
++          }
++        }
++    }
++  }
++
++  const ids = targetIssueIds(t, route)
++  const contextIssues = ids.map((id) => t.issuesById.get(id)).filter((i): i is Issue => Boolean(i))
++
++  let lastGroup = ''
++  return (
++    <div className="ls-palette-overlay" onMouseDown={(e) => e.target === e.currentTarget && close()}>
++      <div className="ls-palette" role="dialog" aria-modal="true" aria-label="Command menu" onKeyDown={onKeyDown}>
++        {contextIssues.length > 0 ? (
++          <div className="ls-palette-ctx">
++            {contextIssues.slice(0, 3).map((issue) => (
++              <span key={issue.id} className="ls-palette-chip">
++                <span className="mono">{issue.identifier}</span>
++                <span style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{issue.title}</span>
++              </span>
++            ))}
++            {contextIssues.length > 3 ? <span className="ls-palette-chip">+{contextIssues.length - 3} more</span> : null}
++          </div>
++        ) : null}
++        <input
++          ref={inputRef}
++          className="ls-palette-input"
++          placeholder={page ? PAGE_PLACEHOLDER[page] : 'Type a command or search…'}
++          value={query}
++          onChange={(e) => {
++            setQuery(e.target.value)
++            setActive(0)
++          }}
++          role="combobox"
++          aria-expanded="true"
++          aria-controls="ls-palette-list"
++          aria-activedescendant={items[active] ? `ls-cmd-${active}` : undefined}
++        />
++        <div className="ls-palette-list" id="ls-palette-list" role="listbox" ref={listRef}>
++          {items.length === 0 ? <div className="ls-palette-empty">No results</div> : null}
++          {items.map((cmd, index) => {
++            const header = cmd.group !== lastGroup ? cmd.group : null
++            lastGroup = cmd.group
++            return (
++              <React.Fragment key={cmd.id}>
++                {header ? <div className="ls-palette-group">{header}</div> : null}
++                <button
++                  type="button"
++                  id={`ls-cmd-${index}`}
++                  data-index={index}
++                  role="option"
++                  aria-selected={index === active}
++                  className={`ls-palette-item ${index === active ? 'is-active' : ''}`}
++                  onMouseMove={() => index !== active && setActive(index)}
++                  onClick={() => runItem(cmd)}
++                >
++                  <span className="ls-palette-item-icon">{cmd.icon}</span>
++                  <span className="ls-palette-item-label">{cmd.label}</span>
++                  {cmd.checked ? <span className="t-3" style={{ fontSize: 12 }}>Current</span> : null}
++                  {cmd.kbd ? <Kbd keys={cmd.kbd} /> : null}
++                </button>
++              </React.Fragment>
++            )
++          })}
++        </div>
++      </div>
++    </div>
++  )
++}
++
++export function openPaletteAt(t: Pick<TrackerState, 'setPaletteOpen'>, page: string | null) {
++  ;(window as unknown as { __trackerPalettePage?: string | null }).__trackerPalettePage = page
++  t.setPaletteOpen(true)
++}
++
++export default CommandPalette
+diff --git a/web/src/tracker/shell/GlobalHotkeys.tsx b/web/src/tracker/shell/GlobalHotkeys.tsx
+new file mode 100644
+index 0000000..ee9f329
+--- /dev/null
++++ b/web/src/tracker/shell/GlobalHotkeys.tsx
+@@ -0,0 +1,50 @@
++import { navigate, useRoute } from '../router'
++import { useHotkey, useSequence } from '../hotkeys'
++import { useTracker } from '../store'
++
++export function GlobalHotkeys() {
++  const t = useTracker()
++  const route = useRoute()
++  const overlayOpen = t.paletteOpen || t.shortcutsOpen || t.createDraft !== null
++
++  const routeTeamKey = route.name === 'team-issues' || route.name === 'team-cycles' ? route.teamKey : null
++  const fallbackTeam = t.teams.find((team) => !team.system) ?? t.teams[0]
++  const teamKey = routeTeamKey ?? fallbackTeam?.key ?? null
++  const teamId = routeTeamKey ? t.teamsByKey.get(routeTeamKey)?.id : undefined
++
++  useHotkey('mod+k', () => t.setPaletteOpen(!t.paletteOpen), { allowInInputs: true })
++  useHotkey(
++    'c',
++    () => {
++      if (route.name === 'project') t.openCreate({ ...(teamId ? { team_id: teamId } : {}), project_id: route.projectId })
++      else if (route.name === 'cycle') {
++        const cycle = t.cyclesById.get(route.cycleId)
++        t.openCreate(cycle ? { team_id: cycle.team_id, cycle_id: cycle.id } : undefined)
++      } else t.openCreate(teamId ? { team_id: teamId } : undefined)
++    },
++    { enabled: !overlayOpen },
++  )
++  useHotkey(['?', 'mod+shift+?'], () => t.setShortcutsOpen(!t.shortcutsOpen), { enabled: !t.paletteOpen })
++  useHotkey('/', () => navigate('/search'), { enabled: !overlayOpen })
++  useHotkey('[', () => t.setSidebarCollapsed(!t.sidebarCollapsed), { enabled: !overlayOpen })
++  useHotkey('mod+shift+l', () => t.setTheme(t.theme === 'dark' ? 'light' : 'dark'), { allowInInputs: true })
++
++  const seqOpts = { enabled: !overlayOpen }
++  useSequence(['g', 'i'], () => navigate('/inbox'), seqOpts)
++  useSequence(['g', 'm'], () => navigate('/my-issues/assigned'), seqOpts)
++  useSequence(['g', 'a'], () => teamKey && navigate(`/team/${teamKey}/active`), seqOpts)
++  useSequence(['g', 'b'], () => teamKey && navigate(`/team/${teamKey}/backlog`), seqOpts)
++  useSequence(['g', 'p'], () => navigate('/projects'), seqOpts)
++  useSequence(['g', 'v'], () => teamKey && navigate(`/team/${teamKey}/cycles`), seqOpts)
++  useSequence(['g', 's'], () => navigate('/settings/preferences'), seqOpts)
++  useSequence(['g', 't'], () => {
++    if (route.name === 'issue' || t.teams.length === 0) return
++    const index = routeTeamKey ? t.teams.findIndex((team) => team.key === routeTeamKey) : -1
++    const next = t.teams[(index + 1) % t.teams.length]
++    navigate(`/team/${next.key}/all`)
++  }, seqOpts)
++
++  return null
++}
++
++export default GlobalHotkeys
+diff --git a/web/src/tracker/shell/Header.tsx b/web/src/tracker/shell/Header.tsx
+new file mode 100644
+index 0000000..2f044ef
+--- /dev/null
++++ b/web/src/tracker/shell/Header.tsx
+@@ -0,0 +1,146 @@
++import React, { createContext, useContext, useEffect, useState } from 'react'
++import { ChevronRight, Menu } from 'lucide-react'
++import { hrefFor } from '../router'
++import { useTracker } from '../store'
++
++export interface Crumb {
++  label: React.ReactNode
++  href?: string
++  icon?: React.ReactNode
++  muted?: boolean
++}
++
++export interface HeaderTab {
++  id: string
++  label: React.ReactNode
++  href?: string
++  onClick?: () => void
++  active?: boolean
++  icon?: React.ReactNode
++  count?: number
++}
++
++export interface PageHeaderProps {
++  title?: React.ReactNode
++  icon?: React.ReactNode
++  crumbs?: Crumb[]
++  breadcrumbs?: Crumb[]
++  actions?: React.ReactNode
++  right?: React.ReactNode
++  tabs?: HeaderTab[]
++  activeTab?: string
++  tabsRight?: React.ReactNode
++  children?: React.ReactNode
++}
++
++const MOBILE_QUERY = '(max-width: 767px)'
++
++export function useIsMobile(): boolean {
++  const [mobile, setMobile] = useState(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches)
++  useEffect(() => {
++    const mql = window.matchMedia(MOBILE_QUERY)
++    const onChange = () => setMobile(mql.matches)
++    onChange()
++    mql.addEventListener('change', onChange)
++    return () => mql.removeEventListener('change', onChange)
++  }, [])
++  return mobile
++}
++
++export const HeaderPresenceContext = createContext<((delta: number) => void) | null>(null)
++
++export function NavToggleButton({ className }: { className?: string }) {
++  const { mobileNavOpen, setMobileNavOpen } = useTracker()
++  return (
++    <button
++      type="button"
++      className={`ls-icon-btn ${className ?? ''}`}
++      aria-label="Open navigation"
++      aria-expanded={mobileNavOpen}
++      onClick={() => setMobileNavOpen(!mobileNavOpen)}
++    >
++      <Menu size={16} />
++    </button>
++  )
++}
++
++export function PageHeader(props: PageHeaderProps) {
++  const register = useContext(HeaderPresenceContext)
++  const mobile = useIsMobile()
++  useEffect(() => {
++    if (!register) return
++    register(1)
++    return () => register(-1)
++  }, [register])
++
++  const crumbs = props.crumbs ?? props.breadcrumbs ?? []
++  const actions = props.actions ?? props.right ?? props.children
++
++  return (
++    <>
++      <header className="ls-header">
++        {mobile ? <NavToggleButton /> : null}
++        <nav className="ls-crumbs" aria-label="Breadcrumb">
++          {crumbs.map((crumb, index) => (
++            <React.Fragment key={index}>
++              {index > 0 ? <ChevronRight size={13} className="ls-crumb-sep" /> : null}
++              {crumb.href ? (
++                <a className={`ls-crumb ${crumb.muted ? 'is-muted' : ''}`} href={crumb.href.startsWith('#') ? crumb.href : hrefFor(crumb.href)}>
++                  {crumb.icon}
++                  {crumb.label}
++                </a>
++              ) : (
++                <span className={`ls-crumb ${crumb.muted ? 'is-muted' : ''}`}>
++                  {crumb.icon}
++                  {crumb.label}
++                </span>
++              )}
++            </React.Fragment>
++          ))}
++          {props.title ? (
++            <>
++              {crumbs.length > 0 ? <ChevronRight size={13} className="ls-crumb-sep" /> : null}
++              <span className="ls-crumb">
++                {props.icon}
++                {props.title}
++              </span>
++            </>
++          ) : null}
++        </nav>
++        {actions ? <div className="ls-header-actions">{actions}</div> : null}
++      </header>
++      {props.tabs && props.tabs.length > 0 ? (
++        <div className="ls-tabs" role="tablist">
++          {props.tabs.map((tab) => {
++            const active = tab.active ?? tab.id === props.activeTab
++            const content = (
++              <>
++                {tab.icon}
++                {tab.label}
++                {tab.count !== undefined ? <span className="ls-count">{tab.count}</span> : null}
++              </>
++            )
++            return tab.href ? (
++              <a
++                key={tab.id}
++                role="tab"
++                aria-selected={active}
++                className={`ls-tab ${active ? 'is-active' : ''}`}
++                href={tab.href.startsWith('#') ? tab.href : hrefFor(tab.href)}
++              >
++                {content}
++              </a>
++            ) : (
++              <button key={tab.id} type="button" role="tab" aria-selected={active} className={`ls-tab ${active ? 'is-active' : ''}`} onClick={tab.onClick}>
++                {content}
++              </button>
++            )
++          })}
++          {props.tabsRight ? <div style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>{props.tabsRight}</div> : null}
++        </div>
++      ) : null}
++    </>
++  )
++}
++
++export default PageHeader
+diff --git a/web/src/tracker/shell/ShortcutsDialog.tsx b/web/src/tracker/shell/ShortcutsDialog.tsx
+new file mode 100644
+index 0000000..b28e7ba
+--- /dev/null
++++ b/web/src/tracker/shell/ShortcutsDialog.tsx
+@@ -0,0 +1,105 @@
++import { Dialog, Kbd } from '../ui'
++import { useTracker } from '../store'
++
++interface Shortcut {
++  label: string
++  keys: string[][]
++}
++
++const GROUPS: { title: string; items: Shortcut[] }[] = [
++  {
++    title: 'General',
++    items: [
++      { label: 'Open command menu', keys: [['⌘', 'K']] },
++      { label: 'Create new issue', keys: [['C']] },
++      { label: 'Search', keys: [['/']] },
++      { label: 'Keyboard shortcuts', keys: [['?'], ['⌘', '⇧', '?']] },
++      { label: 'Toggle sidebar', keys: [['[']] },
++      { label: 'Toggle light / dark theme', keys: [['⌘', '⇧', 'L']] },
++    ],
++  },
++  {
++    title: 'Navigation',
++    items: [
++      { label: 'Go to Inbox', keys: [['G', 'I']] },
++      { label: 'Go to My issues', keys: [['G', 'M']] },
++      { label: 'Go to active issues', keys: [['G', 'A']] },
++      { label: 'Go to backlog', keys: [['G', 'B']] },
++      { label: 'Go to Projects', keys: [['G', 'P']] },
++      { label: 'Go to Cycles', keys: [['G', 'V']] },
++      { label: 'Go to Settings', keys: [['G', 'S']] },
++    ],
++  },
++  {
++    title: 'Issue list',
++    items: [
++      { label: 'Move down / up', keys: [['J'], ['K']] },
++      { label: 'Select issue', keys: [['X']] },
++      { label: 'Select range', keys: [['⇧', 'X']] },
++      { label: 'Select all', keys: [['⌘', 'A']] },
++      { label: 'Open issue', keys: [['Enter'], ['O']] },
++      { label: 'Peek issue', keys: [['Space']] },
++      { label: 'Toggle list / board', keys: [['⌘', 'B']] },
++      { label: 'Filter', keys: [['F']] },
++      { label: 'Close / clear selection', keys: [['Esc']] },
++    ],
++  },
++  {
++    title: 'Issue actions',
++    items: [
++      { label: 'Change status', keys: [['S']] },
++      { label: 'Change priority', keys: [['P']] },
++      { label: 'Assign to', keys: [['A']] },
++      { label: 'Assign to me', keys: [['I']] },
++      { label: 'Change labels', keys: [['L']] },
++      { label: 'Move to project', keys: [['⇧', 'P']] },
++      { label: 'Move to cycle', keys: [['⇧', 'C']] },
++      { label: 'Set estimate', keys: [['⇧', 'E']] },
++      { label: 'Set due date', keys: [['⇧', 'D']] },
++      { label: 'Edit title', keys: [['E']] },
++      { label: 'Add comment', keys: [['M']] },
++      { label: 'Copy issue ID', keys: [['⌘', '.']] },
++      { label: 'Copy git branch name', keys: [['⌘', '⇧', ',']] },
++      { label: 'Archive', keys: [['⌘', '⇧', 'A']] },
++      { label: 'Delete', keys: [['⌘', '⌫']] },
++    ],
++  },
++]
++
++export function ShortcutsDialog() {
++  const { shortcutsOpen, setShortcutsOpen } = useTracker()
++  return (
++    <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} title="Keyboard shortcuts" width={560}>
++      <div style={{ maxHeight: '64vh', overflowY: 'auto', paddingRight: 4 }}>
++        {GROUPS.map((group) => (
++          <section key={group.title} className="ls-sc-group">
++            <h3 className="ls-sc-title">{group.title}</h3>
++            {group.items.map((item) => (
++              <div key={item.label} className="ls-sc-row">
++                <span>{item.label}</span>
++                <span className="ls-sc-keys">
++                  {item.keys.map((combo, index) => (
++                    <span key={index} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
++                      {index > 0 ? <span>or</span> : null}
++                      {combo.length === 2 && combo[0] === 'G' ? (
++                        <>
++                          <Kbd keys={[combo[0]]} />
++                          <span>then</span>
++                          <Kbd keys={[combo[1]]} />
++                        </>
++                      ) : (
++                        <Kbd keys={combo} />
++                      )}
++                    </span>
++                  ))}
++                </span>
++              </div>
++            ))}
++          </section>
++        ))}
++      </div>
++    </Dialog>
++  )
++}
++
++export default ShortcutsDialog
+diff --git a/web/src/tracker/shell/Sidebar.tsx b/web/src/tracker/shell/Sidebar.tsx
+new file mode 100644
+index 0000000..ff6876e
+--- /dev/null
++++ b/web/src/tracker/shell/Sidebar.tsx
+@@ -0,0 +1,469 @@
++import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
++import {
++  Box,
++  ChevronDown,
++  CircleDot,
++  Copy,
++  Inbox,
++  Layers,
++  RefreshCw,
++  Search,
++  SquarePen,
++  Target,
++  CircleUser,
++} from 'lucide-react'
++import { hrefFor, navigate, type Route } from '../router'
++import { useTracker } from '../store'
++import type { Favorite, Team } from '../types'
++import { cycleLabel, initials } from '../format'
++import { AgentGlyph, Avatar, Kbd, LabelDot, MenuList, Popover, ProjectIcon, Tooltip } from '../ui'
++
++const WIDTH_KEY = 'tracker.sidebarWidth'
++const OPEN_KEY = 'tracker.sidebarSections'
++export const SIDEBAR_MIN = 220
++export const SIDEBAR_MAX = 330
++export const SIDEBAR_DEFAULT = 244
++
++function readJson<T>(key: string, fallback: T): T {
++  try {
++    const raw = localStorage.getItem(key)
++    return raw ? (JSON.parse(raw) as T) : fallback
++  } catch {
++    return fallback
++  }
++}
++
++function writeJson(key: string, value: unknown) {
++  try {
++    localStorage.setItem(key, JSON.stringify(value))
++  } catch {
++    return
++  }
++}
++
++export function useSidebarWidth(): [number, (w: number) => void] {
++  const [width, setWidth] = useState<number>(() => {
++    const stored = readJson<number>(WIDTH_KEY, SIDEBAR_DEFAULT)
++    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, stored))
++  })
++  const update = useCallback((w: number) => {
++    const clamped = Math.round(Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w)))
++    setWidth(clamped)
++    writeJson(WIDTH_KEY, clamped)
++  }, [])
++  return [width, update]
++}
++
++export function TeamIcon({ team, size = 18 }: { team: Team; size?: number }) {
++  if (team.system) {
++    return (
++      <span className="ls-team-icon" style={{ width: size, height: size, background: 'var(--bg-active)', color: 'var(--text-2)' }}>
++        <AgentGlyph size={Math.round(size * 0.7)} />
++      </span>
++    )
++  }
++  return (
++    <span className="ls-team-icon" style={{ width: size, height: size, background: team.color || 'var(--accent)' }} aria-hidden>
++      {team.key.slice(0, 1)}
++    </span>
++  )
++}
++
++function isRoute(route: Route, path: string): boolean {
++  switch (route.name) {
++    case 'inbox':
++      return path === '/inbox'
++    case 'my-issues':
++      return path === '/my-issues'
++    case 'projects':
++    case 'project':
++      return path === '/projects'
++    case 'views':
++      return path === '/views'
++    case 'view':
++      return path === `/view/${route.viewId}`
++    case 'team-issues':
++      return path === `/team/${route.teamKey}/issues`
++    case 'team-cycles':
++      return path === `/team/${route.teamKey}/cycles`
++    default:
++      return false
++  }
++}
++
++interface ItemProps {
++  href: string
++  icon?: React.ReactNode
++  label: React.ReactNode
++  active?: boolean
++  sub?: boolean
++  trailing?: React.ReactNode
++  onNavigate?: () => void
++  title?: string
++}
++
++function NavItem({ href, icon, label, active, sub, trailing, onNavigate, title }: ItemProps) {
++  return (
++    <a
++      className={`ls-item ${active ? 'is-active' : ''} ${sub ? 'is-sub' : ''}`}
++      href={hrefFor(href)}
++      aria-current={active ? 'page' : undefined}
++      onClick={onNavigate}
++      title={title}
++    >
++      {icon ? <span className="ls-item-icon">{icon}</span> : null}
++      <span className="ls-item-label">{label}</span>
++      {trailing}
++    </a>
++  )
++}
++
++function Section({
++  id,
++  title,
++  open,
++  onToggle,
++  children,
++  action,
++}: {
++  id: string
++  title: React.ReactNode
++  open: boolean
++  onToggle: (id: string) => void
++  children: React.ReactNode
++  action?: React.ReactNode
++}) {
++  return (
++    <div className="ls-section">
++      <div style={{ display: 'flex', alignItems: 'center' }}>
++        <button type="button" className="ls-section-head" aria-expanded={open} onClick={() => onToggle(id)}>
++          <span>{title}</span>
++          <ChevronDown size={12} className={`ls-caret ${open ? '' : 'is-closed'}`} />
++        </button>
++        {action}
++      </div>
++      {open ? <div>{children}</div> : null}
++    </div>
++  )
++}
++
++export function Sidebar({
++  route,
++  width,
++  onResize,
++  onNavigate,
++}: {
++  route: Route
++  width: number
++  onResize?: (w: number) => void
++  onNavigate?: () => void
++}) {
++  const t = useTracker()
++  const [open, setOpen] = useState<Record<string, boolean>>(() => readJson(OPEN_KEY, {}))
++  const [wsMenuAnchor, setWsMenuAnchor] = useState<HTMLElement | null>(null)
++  const [dragging, setDragging] = useState(false)
++  const rootRef = useRef<HTMLElement>(null)
++
++  const isOpen = (id: string, fallback = true) => open[id] ?? fallback
++  const toggle = useCallback((id: string) => {
++    setOpen((current) => {
++      const next = { ...current, [id]: !(current[id] ?? true) }
++      writeJson(OPEN_KEY, next)
++      return next
++    })
++  }, [])
++
++  const currentTeamKey =
++    route.name === 'team-issues' || route.name === 'team-cycles'
++      ? route.teamKey
++      : route.name === 'settings'
++        ? route.teamKey
++        : null
++
++  useEffect(() => {
++    if (!currentTeamKey) return
++    setOpen((current) => {
++      if (current[`team:${currentTeamKey}`] !== false) return current
++      const next = { ...current, [`team:${currentTeamKey}`]: true }
++      writeJson(OPEN_KEY, next)
++      return next
++    })
++  }, [currentTeamKey])
++
++  useEffect(() => {
++    if (!dragging || !onResize) return
++    const onMove = (event: PointerEvent) => {
++      const left = rootRef.current?.getBoundingClientRect().left ?? 0
++      onResize(event.clientX - left)
++    }
++    const onUp = () => setDragging(false)
++    window.addEventListener('pointermove', onMove)
++    window.addEventListener('pointerup', onUp)
++    document.body.style.cursor = 'col-resize'
++    return () => {
++      window.removeEventListener('pointermove', onMove)
++      window.removeEventListener('pointerup', onUp)
++      document.body.style.cursor = ''
++    }
++  }, [dragging, onResize])
++
++  const myIssueCount = useMemo(() => {
++    if (!t.me) return 0
++    return t.issues.filter((issue) => {
++      if (issue.assignee_id !== t.me!.id || issue.archived_at) return false
++      const state = t.statesById.get(issue.state_id)
++      return state ? state.type !== 'completed' && state.type !== 'canceled' : true
++    }).length
++  }, [t.issues, t.me, t.statesById])
++
++  const triageCounts = useMemo(() => {
++    const counts = new Map<string, number>()
++    for (const issue of t.issues) {
++      if (issue.archived_at) continue
++      if (t.statesById.get(issue.state_id)?.type === 'triage') counts.set(issue.team_id, (counts.get(issue.team_id) ?? 0) + 1)
++    }
++    return counts
++  }, [t.issues, t.statesById])
++
++  const favoriteEntry = (fav: Favorite): ItemProps | null => {
++    switch (fav.kind) {
++      case 'issue': {
++        const issue = t.issuesById.get(fav.target_id)
++        return issue
++          ? { href: `/issue/${issue.identifier}`, icon: <CircleDot size={14} />, label: `${issue.identifier} ${issue.title}`, title: issue.title }
++          : null
++      }
++      case 'project': {
++        const project = t.projectsById.get(fav.target_id)
++        return project
++          ? { href: `/project/${project.id}/overview`, icon: <ProjectIcon icon={project.icon} color={project.color} />, label: project.name }
++          : null
++      }
++      case 'view': {
++        const view = t.views.find((v) => v.id === fav.target_id)
++        return view ? { href: `/view/${view.id}`, icon: <Layers size={14} />, label: view.name } : null
++      }
++      case 'cycle': {
++        const cycle = t.cyclesById.get(fav.target_id)
++        return cycle ? { href: `/cycle/${cycle.id}`, icon: <RefreshCw size={14} />, label: cycleLabel(cycle) } : null
++      }
++      case 'team': {
++        const team = t.teamsById.get(fav.target_id)
++        return team ? { href: `/team/${team.key}/all`, icon: <TeamIcon team={team} size={16} />, label: team.name } : null
++      }
++      case 'label': {
++        const label = t.labelsById.get(fav.target_id)
++        return label ? { href: `/search?q=${encodeURIComponent(label.name)}`, icon: <LabelDot color={label.color} />, label: label.name } : null
++      }
++    }
++  }
++
++  const favorites = t.favorites
++    .slice()
++    .sort((a, b) => a.sort_order - b.sort_order)
++    .map((fav) => ({ fav, entry: favoriteEntry(fav) }))
++    .filter((x): x is { fav: Favorite; entry: ItemProps } => x.entry !== null)
++
++  const workspaceName = 'Omon'
++  const wsMenuItems = [
++    { id: 'settings', label: 'Settings', hint: 'G then S' },
++    { id: 'members', label: 'Members' },
++    { id: 'theme', label: t.theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme' },
++    { id: 'shortcuts', label: 'Keyboard shortcuts', hint: '?' },
++    { id: 'dashboard', label: 'Back to dashboard' },
++  ]
++  const onWsSelect = (item: { id: string }) => {
++    setWsMenuAnchor(null)
++    switch (item.id) {
++      case 'settings':
++        navigate('/settings/preferences')
++        break
++      case 'members':
++        navigate('/settings/members')
++        break
++      case 'theme':
++        t.setTheme(t.theme === 'dark' ? 'light' : 'dark')
++        break
++      case 'shortcuts':
++        t.setShortcutsOpen(true)
++        break
++      case 'dashboard':
++        window.location.hash = '#/overview'
++        break
++    }
++    onNavigate?.()
++  }
++
++  const currentTeamId = currentTeamKey ? t.teamsByKey.get(currentTeamKey)?.id : undefined
++
++  return (
++    <aside ref={rootRef} className="ls-sidebar" style={{ width }} aria-label="Sidebar">
++      <div className="ls-sidebar-top">
++        <button
++          type="button"
++          className="ls-ws"
++          aria-haspopup="menu"
++          aria-expanded={Boolean(wsMenuAnchor)}
++          onClick={(event) => setWsMenuAnchor(wsMenuAnchor ? null : event.currentTarget)}
++        >
++          <span className="ls-ws-logo">{initials(workspaceName).slice(0, 1)}</span>
++          <span className="ls-ws-name">{workspaceName}</span>
++          <ChevronDown size={12} className="t-3" />
++        </button>
++        <Tooltip content="Search" kbd={['/']}>
++          <button type="button" className="ls-icon-btn" aria-label="Search" onClick={() => { navigate('/search'); onNavigate?.() }}>
++            <Search size={15} />
++          </button>
++        </Tooltip>
++        <Tooltip content="Create new issue" kbd={['C']}>
++          <button
++            type="button"
++            className="ls-icon-btn is-new"
++            aria-label="Create new issue"
++            onClick={() => {
++              t.openCreate(currentTeamId ? { team_id: currentTeamId } : undefined)
++              onNavigate?.()
++            }}
++          >
++            <SquarePen size={15} />
++          </button>
++        </Tooltip>
++      </div>
++      <Popover open={Boolean(wsMenuAnchor)} onOpenChange={(o: boolean) => !o && setWsMenuAnchor(null)} anchor={wsMenuAnchor} align="start" width={240}>
++        <MenuList items={wsMenuItems} onSelect={onWsSelect} />
++      </Popover>
++
++      <div className="ls-sidebar-scroll">
++        <NavItem
++          href="/inbox"
++          icon={<Inbox size={15} />}
++          label="Inbox"
++          active={isRoute(route, '/inbox')}
++          onNavigate={onNavigate}
++          trailing={t.unreadCount > 0 ? <span className="ls-badge">{t.unreadCount > 99 ? '99+' : t.unreadCount}</span> : null}
++        />
++        <NavItem
++          href="/my-issues/assigned"
++          icon={<CircleUser size={15} />}
++          label="My issues"
++          active={isRoute(route, '/my-issues')}
++          onNavigate={onNavigate}
++          trailing={myIssueCount > 0 ? <span className="ls-count">{myIssueCount}</span> : null}
++        />
++
++        <Section id="workspace" title="Workspace" open={isOpen('workspace')} onToggle={toggle}>
++          <NavItem href="/projects" icon={<Box size={15} />} label="Projects" active={isRoute(route, '/projects')} onNavigate={onNavigate} />
++          <NavItem href="/views" icon={<Layers size={15} />} label="Views" active={isRoute(route, '/views')} onNavigate={onNavigate} />
++          {t.views.slice(0, 12).map((view) => (
++            <NavItem
++              key={view.id}
++              sub
++              href={`/view/${view.id}`}
++              label={view.name}
++              active={isRoute(route, `/view/${view.id}`)}
++              onNavigate={onNavigate}
++            />
++          ))}
++        </Section>
++
++        {favorites.length > 0 ? (
++          <Section id="favorites" title="Favorites" open={isOpen('favorites')} onToggle={toggle}>
++            {favorites.map(({ fav, entry }) => (
++              <NavItem key={fav.id} {...entry} onNavigate={onNavigate} active={false} />
++            ))}
++          </Section>
++        ) : null}
++
++        <Section id="teams" title="Your teams" open={isOpen('teams')} onToggle={toggle}>
++          {t.teams.map((team) => {
++            const teamOpen = isOpen(`team:${team.key}`, true)
++            const triage = triageCounts.get(team.id) ?? 0
++            return (
++              <div key={team.id}>
++                <button
++                  type="button"
++                  className="ls-item"
++                  aria-expanded={teamOpen}
++                  onClick={() => toggle(`team:${team.key}`)}
++                >
++                  <span className="ls-item-icon">
++                    <TeamIcon team={team} />
++                  </span>
++                  <span className="ls-item-label">{team.name}</span>
++                  <ChevronDown size={12} className={`ls-caret t-3 ${teamOpen ? '' : 'is-closed'}`} />
++                </button>
++                {teamOpen ? (
++                  <>
++                    {team.triage_enabled ? (
++                      <NavItem
++                        sub
++                        href={`/team/${team.key}/triage`}
++                        icon={<Copy size={14} />}
++                        label="Triage"
++                        active={route.name === 'team-issues' && route.teamKey === team.key && route.tab === 'triage'}
++                        onNavigate={onNavigate}
++                        trailing={triage > 0 ? <span className="ls-count">{triage}</span> : null}
++                      />
++                    ) : null}
++                    <NavItem
++                      sub
++                      href={`/team/${team.key}/all`}
++                      icon={<CircleDot size={14} />}
++                      label="Issues"
++                      active={route.name === 'team-issues' && route.teamKey === team.key && route.tab !== 'triage'}
++                      onNavigate={onNavigate}
++                    />
++                    {team.cycles_enabled || !team.system ? (
++                      <NavItem
++                        sub
++                        href={`/team/${team.key}/cycles`}
++                        icon={<RefreshCw size={14} />}
++                        label="Cycles"
++                        active={isRoute(route, `/team/${team.key}/cycles`) || (route.name === 'cycle' && t.cyclesById.get(route.cycleId)?.team_id === team.id)}
++                        onNavigate={onNavigate}
++                      />
++                    ) : null}
++                    <NavItem sub href="/projects" icon={<Target size={14} />} label="Projects" onNavigate={onNavigate} />
++                  </>
++                ) : null}
++              </div>
++            )
++          })}
++        </Section>
++      </div>
++
++      <div className="ls-sidebar-foot">
++        <a className="ls-item" href={hrefFor('/settings/account')} onClick={onNavigate} style={{ flex: 1 }}>
++          <span className="ls-item-icon">
++            <Avatar user={t.me} size={16} />
++          </span>
++          <span className="ls-item-label">{t.me?.display_name || t.me?.name || 'Me'}</span>
++        </a>
++        <Tooltip content="Keyboard shortcuts" kbd={['?']}>
++          <button type="button" className="ls-icon-btn ls-hide-mobile" aria-label="Keyboard shortcuts" onClick={() => t.setShortcutsOpen(true)}>
++            <Kbd keys={['?']} />
++          </button>
++        </Tooltip>
++      </div>
++
++      {onResize ? (
++        <div
++          className={`ls-resizer ${dragging ? 'is-dragging' : ''}`}
++          role="separator"
++          aria-orientation="vertical"
++          aria-label="Resize sidebar"
++          aria-valuemin={SIDEBAR_MIN}
++          aria-valuemax={SIDEBAR_MAX}
++          aria-valuenow={width}
++          onPointerDown={(event) => {
++            event.preventDefault()
++            setDragging(true)
++          }}
++          onDoubleClick={() => onResize(SIDEBAR_DEFAULT)}
++        />
++      ) : null}
++    </aside>
++  )
++}
++
++export default Sidebar
+diff --git a/web/src/tracker/shell/shell.css b/web/src/tracker/shell/shell.css
+new file mode 100644
+index 0000000..40635c3
+--- /dev/null
++++ b/web/src/tracker/shell/shell.css
+@@ -0,0 +1,565 @@
++.lin .ls-root {
++  display: flex;
++  width: 100%;
++  height: 100%;
++  min-width: 0;
++}
++
++.lin .ls-sidebar {
++  position: relative;
++  flex: none;
++  display: flex;
++  flex-direction: column;
++  height: 100%;
++  background: var(--sidebar);
++  color: var(--text-2);
++  user-select: none;
++}
++
++.lin .ls-sidebar-scroll {
++  flex: 1;
++  min-height: 0;
++  overflow-y: auto;
++  padding: 0 8px 12px;
++}
++
++.lin .ls-sidebar-top {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  height: 52px;
++  padding: 0 8px 0 8px;
++}
++
++.lin .ls-ws {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  min-width: 0;
++  height: 28px;
++  padding: 0 6px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-1);
++  font-weight: 590;
++  flex: 1;
++}
++.lin .ls-ws:hover { background: var(--bg-hover); }
++.lin .ls-ws-logo {
++  width: 20px;
++  height: 20px;
++  border-radius: 5px;
++  display: grid;
++  place-items: center;
++  background: linear-gradient(135deg, #5e6ad2, #7170ff);
++  color: #fff;
++  font-size: 11px;
++  font-weight: 590;
++  flex: none;
++}
++.lin .ls-ws-name {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.lin .ls-icon-btn {
++  width: 28px;
++  height: 28px;
++  display: grid;
++  place-items: center;
++  border-radius: var(--radius-ctl);
++  color: var(--text-3);
++  flex: none;
++  transition: background var(--dur) var(--ease);
++}
++.lin .ls-icon-btn:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .ls-icon-btn.is-new {
++  background: var(--card);
++  box-shadow: 0 0 0 1px var(--border-strong);
++  color: var(--text-1);
++}
++
++.lin .ls-section {
++  margin-top: 14px;
++}
++.lin .ls-section-head {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  height: 26px;
++  padding: 0 6px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-3);
++  font-size: 12px;
++  font-weight: 510;
++  width: 100%;
++  text-align: left;
++}
++.lin .ls-section-head:hover { color: var(--text-2); background: var(--bg-hover); }
++.lin .ls-caret {
++  transition: transform var(--dur) var(--ease);
++  opacity: 0.7;
++}
++.lin .ls-caret.is-closed { transform: rotate(-90deg); }
++
++.lin .ls-item {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  height: 28px;
++  padding: 0 6px;
++  margin: 1px 0;
++  border-radius: var(--radius-ctl);
++  color: var(--text-2);
++  font-weight: 510;
++  width: 100%;
++  text-align: left;
++  white-space: nowrap;
++  min-width: 0;
++  transition: background var(--dur) var(--ease);
++}
++.lin .ls-item:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .ls-item.is-active { background: var(--bg-active); color: var(--text-1); }
++.lin .ls-item.is-sub { padding-left: 28px; font-weight: 400; }
++.lin .ls-item-icon {
++  width: 16px;
++  height: 16px;
++  display: grid;
++  place-items: center;
++  color: var(--text-3);
++  flex: none;
++}
++.lin .ls-item.is-active .ls-item-icon { color: var(--text-1); }
++.lin .ls-item-label {
++  flex: 1;
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++.lin .ls-count {
++  font-size: 11px;
++  color: var(--text-3);
++  font-variant-numeric: tabular-nums;
++}
++.lin .ls-badge {
++  min-width: 18px;
++  height: 16px;
++  padding: 0 5px;
++  border-radius: 8px;
++  background: var(--accent);
++  color: #fff;
++  font-size: 11px;
++  font-weight: 510;
++  display: inline-grid;
++  place-items: center;
++}
++
++.lin .ls-team-icon {
++  width: 18px;
++  height: 18px;
++  border-radius: 5px;
++  display: grid;
++  place-items: center;
++  color: #fff;
++  font-size: 10px;
++  font-weight: 590;
++  flex: none;
++}
++
++.lin .ls-resizer {
++  position: absolute;
++  top: 0;
++  right: -3px;
++  width: 6px;
++  height: 100%;
++  cursor: col-resize;
++  z-index: 2;
++}
++.lin .ls-resizer:hover,
++.lin .ls-resizer.is-dragging {
++  background: linear-gradient(to right, transparent 2px, var(--border-strong) 2px, var(--border-strong) 4px, transparent 4px);
++}
++
++.lin .ls-sidebar-foot {
++  padding: 8px;
++  display: flex;
++  gap: 4px;
++  align-items: center;
++}
++
++.lin .ls-main {
++  flex: 1;
++  min-width: 0;
++  height: 100%;
++  padding: 8px 8px 8px 0;
++  display: flex;
++}
++.lin .ls-main.is-full { padding-left: 8px; }
++.lin .ls-panel {
++  flex: 1;
++  min-width: 0;
++  display: flex;
++  flex-direction: column;
++  background: var(--panel);
++  border: 1px solid var(--border);
++  border-radius: 8px;
++  overflow: hidden;
++  position: relative;
++}
++.lin .ls-page {
++  flex: 1;
++  min-height: 0;
++  display: flex;
++  flex-direction: column;
++}
++
++.lin .ls-header {
++  flex: none;
++  height: var(--header-h);
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 12px 0 16px;
++  border-bottom: 1px solid var(--border);
++  min-width: 0;
++}
++.lin .ls-crumbs {
++  display: flex;
++  align-items: center;
++  gap: 6px;
++  min-width: 0;
++  flex: 1;
++  color: var(--text-1);
++  font-weight: 510;
++}
++.lin .ls-crumb {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  min-width: 0;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  padding: 2px 4px;
++  border-radius: var(--radius-chip);
++}
++.lin a.ls-crumb:hover { background: var(--bg-hover); }
++.lin .ls-crumb.is-muted { color: var(--text-3); }
++.lin .ls-crumb-sep { color: var(--text-4); flex: none; }
++.lin .ls-header-actions {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  flex: none;
++}
++.lin .ls-tabs {
++  flex: none;
++  height: 40px;
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  padding: 0 12px 0 16px;
++  border-bottom: 1px solid var(--border);
++  overflow-x: auto;
++}
++.lin .ls-tab {
++  height: 26px;
++  padding: 0 10px;
++  border-radius: var(--radius-ctl);
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  color: var(--text-3);
++  font-weight: 510;
++  font-size: 12px;
++  white-space: nowrap;
++  border: 1px solid var(--border);
++}
++.lin .ls-tab:hover { color: var(--text-1); background: var(--bg-hover); }
++.lin .ls-tab.is-active { background: var(--bg-active); color: var(--text-1); border-color: var(--border-strong); }
++
++.lin .ls-scrim {
++  position: fixed;
++  inset: 0;
++  background: var(--overlay);
++  z-index: 60;
++  animation: lin-fade-in var(--dur) var(--ease);
++}
++.lin .ls-drawer {
++  position: fixed;
++  top: 0;
++  bottom: 0;
++  left: 0;
++  width: min(300px, 86vw);
++  z-index: 61;
++  box-shadow: var(--shadow-dialog);
++  animation: lin-slide-in-left 200ms var(--ease);
++}
++.lin .ls-fab-nav {
++  position: fixed;
++  left: 10px;
++  top: 8px;
++  z-index: 55;
++}
++
++@media (max-width: 767px) {
++  .lin .ls-main,
++  .lin .ls-main.is-full { padding: 0; }
++  .lin .ls-panel { border-radius: 0; border: 0; }
++  .lin .ls-header { padding: 0 8px; }
++  .lin .ls-hide-mobile { display: none !important; }
++}
++
++.lin .ls-palette-overlay {
++  position: fixed;
++  inset: 0;
++  z-index: 80;
++  background: var(--overlay);
++  display: flex;
++  justify-content: center;
++  align-items: flex-start;
++  padding-top: 12vh;
++  animation: lin-fade-in var(--dur) var(--ease);
++}
++.lin .ls-palette {
++  width: min(640px, calc(100vw - 24px));
++  max-height: min(520px, 76vh);
++  display: flex;
++  flex-direction: column;
++  background: var(--popover);
++  border-radius: var(--radius-dialog);
++  box-shadow: var(--shadow-dialog);
++  overflow: hidden;
++  animation: lin-pop-in var(--dur) var(--ease);
++}
++.lin .ls-palette-ctx {
++  display: flex;
++  gap: 6px;
++  flex-wrap: wrap;
++  padding: 12px 16px 0;
++}
++.lin .ls-palette-chip {
++  height: 22px;
++  padding: 0 8px;
++  border-radius: var(--radius-chip);
++  background: var(--bg-active);
++  color: var(--text-2);
++  font-size: 12px;
++  display: inline-flex;
++  align-items: center;
++  gap: 4px;
++}
++.lin .ls-palette-input {
++  height: 52px;
++  padding: 0 16px;
++  font-size: 15px;
++  border: 0;
++  border-bottom: 1px solid var(--border);
++  background: transparent;
++  width: 100%;
++}
++.lin .ls-palette-input::placeholder { color: var(--text-4); }
++.lin .ls-palette-list {
++  overflow-y: auto;
++  padding: 6px;
++}
++.lin .ls-palette-group {
++  padding: 8px 10px 4px;
++  font-size: 12px;
++  color: var(--text-3);
++  font-weight: 510;
++}
++.lin .ls-palette-item {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  height: 40px;
++  padding: 0 10px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-2);
++  width: 100%;
++  text-align: left;
++}
++.lin .ls-palette-item.is-active { background: var(--bg-active); color: var(--text-1); }
++.lin .ls-palette-item-icon {
++  width: 16px;
++  height: 16px;
++  display: grid;
++  place-items: center;
++  color: var(--text-3);
++  flex: none;
++}
++.lin .ls-palette-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.lin .ls-palette-empty { padding: 24px; text-align: center; color: var(--text-3); }
++
++.lin .ls-scroll { flex: 1; min-height: 0; overflow-y: auto; }
++.lin .ls-settings {
++  flex: 1;
++  min-height: 0;
++  display: flex;
++}
++.lin .ls-settings-nav {
++  width: 220px;
++  flex: none;
++  padding: 16px 8px;
++  border-right: 1px solid var(--border);
++  overflow-y: auto;
++}
++.lin .ls-settings-body {
++  flex: 1;
++  min-width: 0;
++  overflow-y: auto;
++  padding: 48px 32px 64px;
++}
++.lin .ls-settings-inner { max-width: 680px; margin: 0 auto; }
++.lin .ls-h1 { font-size: 24px; font-weight: 590; color: var(--text-1); letter-spacing: -0.3px; margin: 0 0 4px; }
++.lin .ls-sub { color: var(--text-3); margin: 0 0 28px; }
++.lin .ls-h2 { font-size: 14px; font-weight: 590; color: var(--text-1); margin: 28px 0 10px; }
++.lin .ls-card {
++  border: 1px solid var(--border);
++  border-radius: 8px;
++  background: var(--card);
++}
++.lin .ls-row {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  min-height: 52px;
++  padding: 10px 16px;
++  border-top: 1px solid var(--border);
++}
++.lin .ls-row:first-child { border-top: 0; }
++.lin .ls-row-main { flex: 1; min-width: 0; }
++.lin .ls-row-title { color: var(--text-1); font-weight: 510; }
++.lin .ls-row-desc { color: var(--text-3); font-size: 12px; }
++.lin .ls-input {
++  height: 32px;
++  padding: 0 10px;
++  border-radius: var(--radius-ctl);
++  border: 1px solid var(--border-strong);
++  background: var(--input);
++  min-width: 0;
++}
++.lin .ls-input:focus-visible { box-shadow: 0 0 0 2px var(--accent-hi); }
++.lin .ls-select {
++  height: 30px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  border: 1px solid var(--border-strong);
++  background: var(--input);
++}
++.lin .ls-color {
++  width: 26px;
++  height: 26px;
++  padding: 0;
++  border: 1px solid var(--border-strong);
++  border-radius: 6px;
++  background: none;
++}
++.lin .ls-switch {
++  position: relative;
++  width: 30px;
++  height: 18px;
++  border-radius: 9px;
++  background: var(--bg-active);
++  box-shadow: inset 0 0 0 1px var(--border-strong);
++  flex: none;
++  transition: background var(--dur) var(--ease);
++}
++.lin .ls-switch::after {
++  content: '';
++  position: absolute;
++  top: 2px;
++  left: 2px;
++  width: 14px;
++  height: 14px;
++  border-radius: 50%;
++  background: #fff;
++  transition: transform var(--dur) var(--ease);
++}
++.lin .ls-switch.is-on { background: var(--accent); }
++.lin .ls-switch.is-on::after { transform: translateX(12px); }
++.lin .ls-seg {
++  display: inline-flex;
++  padding: 2px;
++  border-radius: var(--radius-ctl);
++  background: var(--bg-active);
++  gap: 2px;
++}
++.lin .ls-seg button {
++  height: 26px;
++  padding: 0 10px;
++  border-radius: 5px;
++  color: var(--text-3);
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++}
++.lin .ls-seg button.is-on { background: var(--panel); color: var(--text-1); box-shadow: 0 0 0 1px var(--border-strong); }
++
++.lin .ls-search-bar {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  padding: 0 20px;
++  height: 56px;
++  border-bottom: 1px solid var(--border);
++  flex: none;
++}
++.lin .ls-search-bar input {
++  flex: 1;
++  border: 0;
++  background: transparent;
++  font-size: 16px;
++  height: 100%;
++}
++.lin .ls-result {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  height: var(--row-h);
++  padding: 0 20px;
++  color: var(--text-2);
++  border-bottom: 1px solid var(--border);
++  width: 100%;
++  text-align: left;
++}
++.lin .ls-result:hover,
++.lin .ls-result.is-active { background: var(--bg-hover); color: var(--text-1); }
++.lin .ls-result-id { width: 64px; flex: none; color: var(--text-3); font-size: 12px; }
++.lin .ls-result-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 510; color: var(--text-1); }
++.lin .ls-result-meta { color: var(--text-3); font-size: 12px; flex: none; }
++.lin .ls-empty {
++  flex: 1;
++  display: grid;
++  place-items: center;
++  text-align: center;
++  color: var(--text-3);
++  padding: 48px 24px;
++}
++.lin .ls-mark { background: rgba(113, 112, 255, 0.25); color: inherit; border-radius: 2px; }
++
++.lin .ls-sc-group { margin-bottom: 16px; }
++.lin .ls-sc-title { font-size: 12px; color: var(--text-3); font-weight: 510; margin: 0 0 6px; }
++.lin .ls-sc-row {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 12px;
++  height: 32px;
++  border-bottom: 1px solid var(--border);
++  color: var(--text-2);
++}
++.lin .ls-sc-keys { display: inline-flex; align-items: center; gap: 4px; color: var(--text-4); font-size: 11px; }
++
++.lin .ls-loading {
++  flex: 1;
++  display: grid;
++  place-items: center;
++  color: var(--text-3);
++}
++.lin .ls-skel {
++  height: 12px;
++  border-radius: 4px;
++  background: var(--bg-active);
++}
+diff --git a/web/src/tracker/store.tsx b/web/src/tracker/store.tsx
+new file mode 100644
+index 0000000..3d0c4a7
+--- /dev/null
++++ b/web/src/tracker/store.tsx
+@@ -0,0 +1,669 @@
++import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
++import { TrackerApiError, trackerApi } from './api'
++import { cycleStatus, dueState, isClosedType, parseDateOnly, toDateOnly } from './format'
++import type {
++  Bootstrap,
++  Cycle,
++  Favorite,
++  FavoriteKind,
++  Grouping,
++  ID,
++  Issue,
++  IssueCreate,
++  IssuePatch,
++  Label,
++  Milestone,
++  Notification,
++  Ordering,
++  Priority,
++  Project,
++  Team,
++  User,
++  View,
++  ViewDisplay,
++  ViewFilters,
++  WorkflowState,
++} from './types'
++import { DEFAULT_DISPLAY, PRIORITY_LABELS, STATE_TYPE_ORDER } from './types'
++
++export type Theme = 'dark' | 'light'
++
++export interface CreateDraft extends Partial<IssueCreate> {
++  team_id?: ID
++}
++
++export interface TrackerState {
++  ready: boolean
++  error: string | null
++  me: User | null
++  users: User[]
++  teams: Team[]
++  states: WorkflowState[]
++  labels: Label[]
++  projects: Project[]
++  cycles: Cycle[]
++  milestones: Milestone[]
++  views: View[]
++  favorites: Favorite[]
++  issues: Issue[]
++  notifications: Notification[]
++  unreadCount: number
++
++  usersById: Map<ID, User>
++  teamsById: Map<ID, Team>
++  teamsByKey: Map<string, Team>
++  statesById: Map<ID, WorkflowState>
++  labelsById: Map<ID, Label>
++  projectsById: Map<ID, Project>
++  cyclesById: Map<ID, Cycle>
++  issuesById: Map<ID, Issue>
++  issuesByIdentifier: Map<string, Issue>
++  teamStates: (teamId: ID) => WorkflowState[]
++
++  theme: Theme
++  setTheme: (theme: Theme) => void
++  sidebarCollapsed: boolean
++  setSidebarCollapsed: (value: boolean) => void
++  mobileNavOpen: boolean
++  setMobileNavOpen: (value: boolean) => void
++
++  peekIssueId: ID | null
++  setPeekIssueId: (id: ID | null) => void
++  createDraft: CreateDraft | null
++  openCreate: (draft?: CreateDraft) => void
++  closeCreate: () => void
++  paletteOpen: boolean
++  setPaletteOpen: (value: boolean) => void
++  shortcutsOpen: boolean
++  setShortcutsOpen: (value: boolean) => void
++
++  selection: Set<ID>
++  setSelection: (ids: Set<ID>) => void
++  focusedIssueId: ID | null
++  setFocusedIssueId: (id: ID | null) => void
++
++  displayFor: (viewKey: string, fallback?: Partial<ViewDisplay>) => ViewDisplay
++  setDisplayFor: (viewKey: string, display: ViewDisplay) => void
++  filtersFor: (viewKey: string) => ViewFilters
++  setFiltersFor: (viewKey: string, filters: ViewFilters) => void
++
++  refresh: () => Promise<void>
++  refreshIssues: () => Promise<void>
++  refreshNotifications: () => Promise<void>
++  createIssue: (input: IssueCreate) => Promise<Issue>
++  updateIssues: (ids: ID[], patch: IssuePatch) => Promise<Issue[]>
++  deleteIssue: (id: ID) => Promise<void>
++  toggleFavorite: (kind: FavoriteKind, targetId: ID) => Promise<void>
++  isFavorite: (kind: FavoriteKind, targetId: ID) => boolean
++  upsertIssue: (issue: Issue) => void
++  upsertProject: (project: Project) => void
++  removeProject: (id: ID) => void
++  upsertView: (view: View) => void
++  removeView: (id: ID) => void
++  upsertCycle: (cycle: Cycle) => void
++  removeCycle: (id: ID) => void
++  upsertLabel: (label: Label) => void
++  removeLabel: (id: ID) => void
++  upsertTeam: (team: Team) => void
++  upsertState: (state: WorkflowState) => void
++  removeState: (id: ID) => void
++  upsertUser: (user: User) => void
++  upsertNotification: (notification: Notification) => void
++  reportError: (error: unknown) => void
++  lastError: { message: string; at: number } | null
++}
++
++const TrackerContext = createContext<TrackerState | null>(null)
++
++function indexBy<T, K>(items: T[], key: (item: T) => K): Map<K, T> {
++  const map = new Map<K, T>()
++  for (const item of items) map.set(key(item), item)
++  return map
++}
++
++function upsert<T extends { id: ID }>(items: T[], next: T): T[] {
++  const index = items.findIndex((item) => item.id === next.id)
++  if (index < 0) return [...items, next]
++  const copy = items.slice()
++  copy[index] = next
++  return copy
++}
++
++function readStorage<T>(key: string, fallback: T): T {
++  try {
++    const raw = localStorage.getItem(key)
++    return raw ? (JSON.parse(raw) as T) : fallback
++  } catch {
++    return fallback
++  }
++}
++
++function writeStorage(key: string, value: unknown) {
++  try {
++    localStorage.setItem(key, JSON.stringify(value))
++  } catch {
++    // Storage may be unavailable (private mode); preferences then last for the session only.
++  }
++}
++
++function optimisticPatch(issue: Issue, patch: IssuePatch): Issue {
++  const next: Issue = { ...issue }
++  const keys: (keyof IssuePatch & keyof Issue)[] = [
++    'title',
++    'description',
++    'team_id',
++    'state_id',
++    'priority',
++    'estimate',
++    'assignee_id',
++    'project_id',
++    'milestone_id',
++    'cycle_id',
++    'parent_id',
++    'due_date',
++    'sort_order',
++    'snoozed_until',
++  ]
++  for (const key of keys) {
++    if (patch[key] !== undefined) (next as unknown as Record<string, unknown>)[key] = patch[key]
++  }
++  if (patch.label_ids) next.label_ids = patch.label_ids
++  if (patch.add_label_ids) next.label_ids = Array.from(new Set([...next.label_ids, ...patch.add_label_ids]))
++  if (patch.remove_label_ids) next.label_ids = next.label_ids.filter((id) => !patch.remove_label_ids!.includes(id))
++  if (patch.archived !== undefined) next.archived_at = patch.archived ? new Date().toISOString() : null
++  next.updated_at = new Date().toISOString()
++  return next
++}
++
++export function TrackerProvider({ children }: { children: React.ReactNode }) {
++  const [data, setData] = useState<Bootstrap | null>(null)
++  const [issues, setIssues] = useState<Issue[]>([])
++  const [notifications, setNotifications] = useState<Notification[]>([])
++  const [error, setError] = useState<string | null>(null)
++  const [lastError, setLastError] = useState<{ message: string; at: number } | null>(null)
++  const [theme, setThemeState] = useState<Theme>(() => readStorage<Theme>('tracker.theme', 'dark'))
++  const [sidebarCollapsed, setSidebarCollapsedState] = useState<boolean>(() => readStorage('tracker.sidebarCollapsed', false))
++  const [mobileNavOpen, setMobileNavOpen] = useState(false)
++  const [peekIssueId, setPeekIssueId] = useState<ID | null>(null)
++  const [createDraft, setCreateDraft] = useState<CreateDraft | null>(null)
++  const [paletteOpen, setPaletteOpen] = useState(false)
++  const [shortcutsOpen, setShortcutsOpen] = useState(false)
++  const [selection, setSelection] = useState<Set<ID>>(new Set())
++  const [focusedIssueId, setFocusedIssueId] = useState<ID | null>(null)
++  const [displays, setDisplays] = useState<Record<string, ViewDisplay>>(() => readStorage('tracker.displays', {}))
++  const [filters, setFilters] = useState<Record<string, ViewFilters>>(() => readStorage('tracker.filters', {}))
++  const loading = useRef(false)
++
++  const reportError = useCallback((err: unknown) => {
++    const message = err instanceof TrackerApiError || err instanceof Error ? err.message : String(err)
++    setLastError({ message, at: Date.now() })
++  }, [])
++
++  const refreshIssues = useCallback(async () => {
++    const result = await trackerApi.issues({ include_archived: true })
++    setIssues(result.items)
++  }, [])
++
++  const refreshNotifications = useCallback(async () => {
++    const result = await trackerApi.notifications()
++    setNotifications(result.items)
++  }, [])
++
++  const refresh = useCallback(async () => {
++    if (loading.current) return
++    loading.current = true
++    try {
++      const [boot, list, notes] = await Promise.all([
++        trackerApi.bootstrap(),
++        trackerApi.issues({ include_archived: true }),
++        trackerApi.notifications(),
++      ])
++      setData(boot)
++      setIssues(list.items)
++      setNotifications(notes.items)
++      setError(null)
++    } catch (err) {
++      setError(err instanceof Error ? err.message : String(err))
++    } finally {
++      loading.current = false
++    }
++  }, [])
++
++  useEffect(() => {
++    void refresh()
++    const interval = window.setInterval(() => {
++      if (document.visibilityState === 'visible') void refresh()
++    }, 10_000)
++    return () => window.clearInterval(interval)
++  }, [refresh])
++
++  const setTheme = useCallback((next: Theme) => {
++    setThemeState(next)
++    writeStorage('tracker.theme', next)
++  }, [])
++
++  const setSidebarCollapsed = useCallback((value: boolean) => {
++    setSidebarCollapsedState(value)
++    writeStorage('tracker.sidebarCollapsed', value)
++  }, [])
++
++  const users = data?.users ?? []
++  const teams = useMemo(() => (data?.teams ?? []).slice().sort((a, b) => a.sort_order - b.sort_order), [data?.teams])
++  const states = useMemo(() => (data?.states ?? []).slice().sort((a, b) => a.position - b.position), [data?.states])
++  const labels = data?.labels ?? []
++  const projects = data?.projects ?? []
++  const cycles = data?.cycles ?? []
++  const views = data?.views ?? []
++  const favorites = data?.favorites ?? []
++
++  const usersById = useMemo(() => indexBy(users, (u) => u.id), [users])
++  const teamsById = useMemo(() => indexBy(teams, (t) => t.id), [teams])
++  const teamsByKey = useMemo(() => indexBy(teams, (t) => t.key), [teams])
++  const statesById = useMemo(() => indexBy(states, (s) => s.id), [states])
++  const labelsById = useMemo(() => indexBy(labels, (l) => l.id), [labels])
++  const projectsById = useMemo(() => indexBy(projects, (p) => p.id), [projects])
++  const cyclesById = useMemo(() => indexBy(cycles, (c) => c.id), [cycles])
++  const issuesById = useMemo(() => indexBy(issues, (i) => i.id), [issues])
++  const issuesByIdentifier = useMemo(() => indexBy(issues, (i) => i.identifier), [issues])
++  const teamStates = useCallback(
++    (teamId: ID) =>
++      states
++        .filter((s) => s.team_id === teamId)
++        .sort((a, b) => STATE_TYPE_ORDER.indexOf(a.type) - STATE_TYPE_ORDER.indexOf(b.type) || a.position - b.position),
++    [states],
++  )
++
++  const patchData = useCallback((fn: (current: Bootstrap) => Bootstrap) => {
++    setData((current) => (current ? fn(current) : current))
++  }, [])
++
++  const upsertIssue = useCallback((issue: Issue) => setIssues((current) => upsert(current, issue)), [])
++
++  const createIssue = useCallback(
++    async (input: IssueCreate) => {
++      const issue = await trackerApi.createIssue(input)
++      setIssues((current) => upsert(current, issue))
++      patchData((d) => ({
++        ...d,
++        teams: d.teams.map((t) => (t.id === issue.team_id ? { ...t, issue_seq: Math.max(t.issue_seq, issue.number) } : t)),
++      }))
++      return issue
++    },
++    [patchData],
++  )
++
++  const updateIssues = useCallback(
++    async (ids: ID[], patch: IssuePatch) => {
++      if (ids.length === 0) return []
++      const previous = new Map<ID, Issue>()
++      setIssues((current) =>
++        current.map((issue) => {
++          if (!ids.includes(issue.id)) return issue
++          previous.set(issue.id, issue)
++          return optimisticPatch(issue, patch)
++        }),
++      )
++      try {
++        const updated = ids.length === 1 ? [await trackerApi.updateIssue(ids[0], patch)] : (await trackerApi.batchUpdate(ids, patch)).items
++        setIssues((current) => updated.reduce((acc, issue) => upsert(acc, issue), current))
++        return updated
++      } catch (err) {
++        setIssues((current) => current.map((issue) => previous.get(issue.id) ?? issue))
++        reportError(err)
++        throw err
++      }
++    },
++    [reportError],
++  )
++
++  const deleteIssue = useCallback(
++    async (id: ID) => {
++      await trackerApi.deleteIssue(id)
++      setIssues((current) => current.filter((issue) => issue.id !== id))
++    },
++    [],
++  )
++
++  const toggleFavorite = useCallback(
++    async (kind: FavoriteKind, targetId: ID) => {
++      const result = await trackerApi.toggleFavorite(kind, targetId)
++      patchData((d) => ({
++        ...d,
++        favorites: result.favorited && result.favorite
++          ? upsert(d.favorites, result.favorite)
++          : d.favorites.filter((f) => !(f.kind === kind && f.target_id === targetId)),
++      }))
++    },
++    [patchData],
++  )
++
++  const isFavorite = useCallback(
++    (kind: FavoriteKind, targetId: ID) => favorites.some((f) => f.kind === kind && f.target_id === targetId),
++    [favorites],
++  )
++
++  const displayFor = useCallback(
++    (viewKey: string, fallback?: Partial<ViewDisplay>) => displays[viewKey] ?? { ...DEFAULT_DISPLAY, ...fallback },
++    [displays],
++  )
++  const setDisplayFor = useCallback((viewKey: string, display: ViewDisplay) => {
++    setDisplays((current) => {
++      const next = { ...current, [viewKey]: display }
++      writeStorage('tracker.displays', next)
++      return next
++    })
++  }, [])
++  const filtersFor = useCallback((viewKey: string) => filters[viewKey] ?? {}, [filters])
++  const setFiltersFor = useCallback((viewKey: string, value: ViewFilters) => {
++    setFilters((current) => {
++      const next = { ...current, [viewKey]: value }
++      writeStorage('tracker.filters', next)
++      return next
++    })
++  }, [])
++
++  const state: TrackerState = {
++    ready: data !== null,
++    error,
++    me: data?.me ?? null,
++    users,
++    teams,
++    states,
++    labels,
++    projects,
++    cycles,
++    milestones: data?.milestones ?? [],
++    views,
++    favorites,
++    issues,
++    notifications,
++    unreadCount: notifications.filter((n) => !n.read_at && !n.archived_at).length,
++    usersById,
++    teamsById,
++    teamsByKey,
++    statesById,
++    labelsById,
++    projectsById,
++    cyclesById,
++    issuesById,
++    issuesByIdentifier,
++    teamStates,
++    theme,
++    setTheme,
++    sidebarCollapsed,
++    setSidebarCollapsed,
++    mobileNavOpen,
++    setMobileNavOpen,
++    peekIssueId,
++    setPeekIssueId,
++    createDraft,
++    openCreate: (draft) => setCreateDraft(draft ?? {}),
++    closeCreate: () => setCreateDraft(null),
++    paletteOpen,
++    setPaletteOpen,
++    shortcutsOpen,
++    setShortcutsOpen,
++    selection,
++    setSelection,
++    focusedIssueId,
++    setFocusedIssueId,
++    displayFor,
++    setDisplayFor,
++    filtersFor,
++    setFiltersFor,
++    refresh,
++    refreshIssues,
++    refreshNotifications,
++    createIssue,
++    updateIssues,
++    deleteIssue,
++    toggleFavorite,
++    isFavorite,
++    upsertIssue,
++    upsertProject: (project) => patchData((d) => ({ ...d, projects: upsert(d.projects, project) })),
++    removeProject: (id) => patchData((d) => ({ ...d, projects: d.projects.filter((p) => p.id !== id) })),
++    upsertView: (view) => patchData((d) => ({ ...d, views: upsert(d.views, view) })),
++    removeView: (id) => patchData((d) => ({ ...d, views: d.views.filter((v) => v.id !== id) })),
++    upsertCycle: (cycle) => patchData((d) => ({ ...d, cycles: upsert(d.cycles, cycle) })),
++    removeCycle: (id) => patchData((d) => ({ ...d, cycles: d.cycles.filter((c) => c.id !== id) })),
++    upsertLabel: (label) => patchData((d) => ({ ...d, labels: upsert(d.labels, label) })),
++    removeLabel: (id) => patchData((d) => ({ ...d, labels: d.labels.filter((l) => l.id !== id) })),
++    upsertTeam: (team) => patchData((d) => ({ ...d, teams: upsert(d.teams, team) })),
++    upsertState: (s) => patchData((d) => ({ ...d, states: upsert(d.states, s) })),
++    removeState: (id) => patchData((d) => ({ ...d, states: d.states.filter((s) => s.id !== id) })),
++    upsertUser: (user) => patchData((d) => ({ ...d, users: upsert(d.users, user) })),
++    upsertNotification: (n) => setNotifications((current) => upsert(current, n)),
++    reportError,
++    lastError,
++  }
++
++  return <TrackerContext.Provider value={state}>{children}</TrackerContext.Provider>
++}
++
++export function useTracker(): TrackerState {
++  const value = useContext(TrackerContext)
++  if (!value) throw new Error('useTracker must be used inside TrackerProvider')
++  return value
++}
++
++export function applyFilters(issues: Issue[], filters: ViewFilters, t: Pick<TrackerState, 'statesById' | 'me' | 'cyclesById'>): Issue[] {
++  const today = toDateOnly(new Date())
++  const weekAhead = toDateOnly(new Date(Date.now() + 7 * 86_400_000))
++  const text = filters.text?.trim().toLowerCase()
++  return issues.filter((issue) => {
++    const state = t.statesById.get(issue.state_id)
++    if (filters.state_ids?.length && !filters.state_ids.includes(issue.state_id)) return false
++    if (filters.state_types?.length && (!state || !filters.state_types.includes(state.type))) return false
++    if (filters.priorities?.length && !filters.priorities.includes(issue.priority)) return false
++    if (filters.assignee_ids?.length) {
++      const ok = filters.assignee_ids.some((a) =>
++        a === 'none' ? issue.assignee_id === null : a === 'me' ? issue.assignee_id === t.me?.id : issue.assignee_id === a,
++      )
++      if (!ok) return false
++    }
++    if (filters.creator_ids?.length && !filters.creator_ids.includes(issue.creator_id)) return false
++    if (filters.label_ids?.length && !filters.label_ids.some((l) => issue.label_ids.includes(l))) return false
++    if (filters.project_ids?.length) {
++      const ok = filters.project_ids.some((p) => (p === 'none' ? issue.project_id === null : issue.project_id === p))
++      if (!ok) return false
++    }
++    if (filters.cycle_ids?.length) {
++      const ok = filters.cycle_ids.some((c) => {
++        if (c === 'none') return issue.cycle_id === null
++        if (c === 'current') {
++          const cycle = issue.cycle_id ? t.cyclesById.get(issue.cycle_id) : undefined
++          return cycle ? cycleStatus(cycle) === 'current' : false
++        }
++        return issue.cycle_id === c
++      })
++      if (!ok) return false
++    }
++    if (filters.team_ids?.length && !filters.team_ids.includes(issue.team_id)) return false
++    if (filters.has_lane !== undefined && (issue.lane_key !== null) !== filters.has_lane) return false
++    if (filters.lane_statuses?.length && (!issue.lane || !filters.lane_statuses.includes(issue.lane.status))) return false
++    if (filters.due) {
++      const due = issue.due_date
++      if (filters.due === 'none' && due) return false
++      if (filters.due === 'overdue' && !(due && dueState(due, state ? isClosedType(state.type) : false) === 'overdue')) return false
++      if (filters.due === 'today' && due !== today) return false
++      if (filters.due === 'week' && !(due && due >= today && due <= weekAhead)) return false
++    }
++    if (text && !`${issue.identifier} ${issue.title}`.toLowerCase().includes(text)) return false
++    return true
++  })
++}
++
++export function filterCount(filters: ViewFilters): number {
++  return Object.entries(filters).filter(([key, value]) => {
++    if (key === 'text') return Boolean(value)
++    if (Array.isArray(value)) return value.length > 0
++    return value !== undefined && value !== null
++  }).length
++}
++
++export function applyCompletedWindow(issues: Issue[], display: ViewDisplay, statesById: Map<ID, WorkflowState>): Issue[] {
++  if (display.show_completed === 'all') return issues
++  const limit =
++    display.show_completed === 'week' ? Date.now() - 7 * 86_400_000 : display.show_completed === 'month' ? Date.now() - 30 * 86_400_000 : Infinity
++  return issues.filter((issue) => {
++    const state = statesById.get(issue.state_id)
++    if (!state || !isClosedType(state.type)) return true
++    if (display.show_completed === 'none') return false
++    const closedAt = issue.completed_at ?? issue.canceled_at ?? issue.updated_at
++    return new Date(closedAt).getTime() >= limit
++  })
++}
++
++export function sortIssues(issues: Issue[], ordering: Ordering, statesById: Map<ID, WorkflowState>): Issue[] {
++  const copy = issues.slice()
++  const priorityRank = (p: Priority) => (p === 0 ? 5 : p)
++  const stateRank = (issue: Issue) => {
++    const state = statesById.get(issue.state_id)
++    return state ? STATE_TYPE_ORDER.indexOf(state.type) * 1000 + state.position : 99999
++  }
++  copy.sort((a, b) => {
++    switch (ordering) {
++      case 'manual':
++        return a.sort_order - b.sort_order
++      case 'priority':
++        return priorityRank(a.priority) - priorityRank(b.priority) || b.updated_at.localeCompare(a.updated_at)
++      case 'updated':
++        return b.updated_at.localeCompare(a.updated_at)
++      case 'created':
++        return b.created_at.localeCompare(a.created_at)
++      case 'due':
++        return (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999')
++      case 'title':
++        return a.title.localeCompare(b.title)
++      case 'status':
++        return stateRank(a) - stateRank(b)
++    }
++  })
++  return copy
++}
++
++export interface IssueGroup {
++  key: string
++  label: string
++  grouping: Grouping
++  value: ID | Priority | null
++  issues: Issue[]
++}
++
++export function groupIssues(
++  issues: Issue[],
++  grouping: Grouping,
++  t: Pick<TrackerState, 'statesById' | 'usersById' | 'projectsById' | 'cyclesById' | 'labelsById' | 'teamsById' | 'teamStates'>,
++  opts: { teamId?: ID | null; showEmpty?: boolean } = {},
++): IssueGroup[] {
++  if (grouping === 'none') return [{ key: 'all', label: 'All issues', grouping, value: null, issues }]
++  const buckets = new Map<string, IssueGroup>()
++  const ensure = (key: string, label: string, value: IssueGroup['value']) => {
++    let group = buckets.get(key)
++    if (!group) {
++      group = { key, label, grouping, value, issues: [] }
++      buckets.set(key, group)
++    }
++    return group
++  }
++  if (grouping === 'status' && opts.teamId && opts.showEmpty) {
++    for (const state of t.teamStates(opts.teamId)) ensure(state.id, state.name, state.id)
++  }
++  if (grouping === 'priority' && opts.showEmpty) {
++    for (const p of [1, 2, 3, 4, 0] as Priority[]) ensure(`p${p}`, PRIORITY_LABELS[p], p)
++  }
++  for (const issue of issues) {
++    switch (grouping) {
++      case 'status': {
++        const state = t.statesById.get(issue.state_id)
++        ensure(issue.state_id, state?.name ?? 'Unknown', issue.state_id).issues.push(issue)
++        break
++      }
++      case 'assignee': {
++        const user = issue.assignee_id ? t.usersById.get(issue.assignee_id) : undefined
++        ensure(issue.assignee_id ?? 'none', user?.name ?? 'No assignee', issue.assignee_id).issues.push(issue)
++        break
++      }
++      case 'project': {
++        const project = issue.project_id ? t.projectsById.get(issue.project_id) : undefined
++        ensure(issue.project_id ?? 'none', project?.name ?? 'No project', issue.project_id).issues.push(issue)
++        break
++      }
++      case 'priority':
++        ensure(`p${issue.priority}`, PRIORITY_LABELS[issue.priority], issue.priority).issues.push(issue)
++        break
++      case 'cycle': {
++        const cycle = issue.cycle_id ? t.cyclesById.get(issue.cycle_id) : undefined
++        ensure(issue.cycle_id ?? 'none', cycle ? cycle.name || `Cycle ${cycle.number}` : 'No cycle', issue.cycle_id).issues.push(issue)
++        break
++      }
++      case 'label': {
++        if (issue.label_ids.length === 0) ensure('none', 'No labels', null).issues.push(issue)
++        for (const id of issue.label_ids) ensure(id, t.labelsById.get(id)?.name ?? 'Label', id).issues.push(issue)
++        break
++      }
++      case 'team': {
++        const team = t.teamsById.get(issue.team_id)
++        ensure(issue.team_id, team?.name ?? 'Team', issue.team_id).issues.push(issue)
++        break
++      }
++    }
++  }
++  const groups = [...buckets.values()]
++  const order = (g: IssueGroup): number => {
++    switch (grouping) {
++      case 'status': {
++        const s = typeof g.value === 'string' ? t.statesById.get(g.value) : undefined
++        return s ? STATE_TYPE_ORDER.indexOf(s.type) * 1000 + s.position : 99999
++      }
++      case 'priority':
++        return g.value === 0 ? 5 : Number(g.value)
++      case 'cycle': {
++        const c = typeof g.value === 'string' ? t.cyclesById.get(g.value) : undefined
++        return c ? -c.number : 99999
++      }
++      default:
++        return g.value === null ? 99999 : 0
++    }
++  }
++  groups.sort((a, b) => order(a) - order(b) || a.label.localeCompare(b.label))
++  return opts.showEmpty ? groups : groups.filter((g) => g.issues.length > 0)
++}
++
++export function patchForGroup(group: IssueGroup): IssuePatch | null {
++  switch (group.grouping) {
++    case 'status':
++      return typeof group.value === 'string' ? { state_id: group.value } : null
++    case 'assignee':
++      return { assignee_id: (group.value as ID | null) ?? null }
++    case 'project':
++      return { project_id: (group.value as ID | null) ?? null }
++    case 'priority':
++      return { priority: (group.value as Priority) ?? 0 }
++    case 'cycle':
++      return { cycle_id: (group.value as ID | null) ?? null }
++    case 'label':
++      return group.value ? { add_label_ids: [group.value as ID] } : null
++    default:
++      return null
++  }
++}
++
++export function sortOrderBetween(before: number | null, after: number | null): number {
++  if (before === null && after === null) return Date.now()
++  if (before === null) return (after as number) - 1024
++  if (after === null) return before + 1024
++  return (before + after) / 2
++}
++
++export function teamDefaultState(teamId: ID, teamStates: (teamId: ID) => WorkflowState[], prefer: 'backlog' | 'unstarted' | 'triage' = 'unstarted'): WorkflowState | undefined {
++  const states = teamStates(teamId)
++  return states.find((s) => s.type === prefer) ?? states.find((s) => s.type === 'backlog') ?? states[0]
++}
++
++export function issueIsOverdue(issue: Issue, statesById: Map<ID, WorkflowState>): boolean {
++  const state = statesById.get(issue.state_id)
++  return dueState(issue.due_date, state ? isClosedType(state.type) : false) === 'overdue'
++}
++
++export { parseDateOnly }
+diff --git a/web/src/tracker/types.ts b/web/src/tracker/types.ts
+new file mode 100644
+index 0000000..6cf1f42
+--- /dev/null
++++ b/web/src/tracker/types.ts
+@@ -0,0 +1,524 @@
++export type ID = string
++
++export type StateType = 'triage' | 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled'
++export type Priority = 0 | 1 | 2 | 3 | 4
++export type LaneStatus =
++  | 'queued'
++  | 'working'
++  | 'blocked'
++  | 'done_claimed'
++  | 'not_done'
++  | 'verified_done'
++  | 'closed'
++  | 'failed'
++
++export interface User {
++  id: ID
++  name: string
++  display_name: string
++  email: string | null
++  avatar_color: string
++  kind: 'human' | 'agent'
++  model: string | null
++  is_me: boolean
++  created_at: string
++}
++
++export interface Team {
++  id: ID
++  key: string
++  name: string
++  icon: string
++  color: string
++  issue_seq: number
++  system: boolean
++  cycles_enabled: boolean
++  cycle_weeks: number
++  triage_enabled: boolean
++  sort_order: number
++  created_at: string
++}
++
++export interface WorkflowState {
++  id: ID
++  team_id: ID
++  name: string
++  type: StateType
++  color: string
++  position: number
++  lane_status: LaneStatus | null
++  /** Set on SES team states: the omo session state this column mirrors. */
++  session_state: string | null
++  description: string | null
++}
++
++export interface Label {
++  id: ID
++  team_id: ID | null
++  name: string
++  color: string
++  parent_id: ID | null
++  description: string | null
++  created_at: string
++}
++
++export type ProjectStatus = 'backlog' | 'planned' | 'started' | 'paused' | 'completed' | 'canceled'
++
++export interface Project {
++  id: ID
++  name: string
++  description: string
++  summary: string
++  icon: string
++  color: string
++  status: ProjectStatus
++  priority: Priority
++  lead_id: ID | null
++  start_date: string | null
++  target_date: string | null
++  sort_order: number
++  created_at: string
++  updated_at: string
++  archived_at: string | null
++  team_ids: ID[]
++  member_ids: ID[]
++  issue_count: number
++  completed_issue_count: number
++  latest_health: ProjectHealth | null
++}
++
++export type ProjectHealth = 'on_track' | 'at_risk' | 'off_track'
++
++export interface ProjectUpdate {
++  id: ID
++  project_id: ID
++  user_id: ID
++  health: ProjectHealth
++  body: string
++  created_at: string
++  updated_at: string
++}
++
++export interface Milestone {
++  id: ID
++  project_id: ID
++  name: string
++  target_date: string | null
++  sort_order: number
++}
++
++export interface Cycle {
++  id: ID
++  team_id: ID
++  number: number
++  name: string | null
++  description: string | null
++  starts_at: string
++  ends_at: string
++  completed_at: string | null
++}
++
++export interface LaneSummary {
++  key: string
++  status: LaneStatus
++  model: string | null
++  turns_run: number
++  last_activity_at: string
++  thread_channel_id: string | null
++}
++
++export interface Issue {
++  id: ID
++  team_id: ID
++  number: number
++  identifier: string
++  title: string
++  description: string
++  state_id: ID
++  priority: Priority
++  estimate: number | null
++  assignee_id: ID | null
++  creator_id: ID
++  project_id: ID | null
++  milestone_id: ID | null
++  cycle_id: ID | null
++  parent_id: ID | null
++  due_date: string | null
++  sort_order: number
++  lane_key: string | null
++  created_at: string
++  updated_at: string
++  started_at: string | null
++  completed_at: string | null
++  canceled_at: string | null
++  archived_at: string | null
++  snoozed_until: string | null
++  label_ids: ID[]
++  sub_issue_count: number
++  sub_issue_completed: number
++  comment_count: number
++  lane: LaneSummary | null
++  /** "<machine>:<session_id>" for issues mirrored from an omo session. */
++  session_ref: string | null
++  session: SessionSummary | null
++}
++
++export interface IssueCreate {
++  team_id: ID
++  title: string
++  description?: string
++  state_id?: ID
++  priority?: Priority
++  estimate?: number | null
++  assignee_id?: ID | null
++  project_id?: ID | null
++  milestone_id?: ID | null
++  cycle_id?: ID | null
++  parent_id?: ID | null
++  due_date?: string | null
++  label_ids?: ID[]
++}
++
++export interface IssuePatch {
++  title?: string
++  description?: string
++  team_id?: ID
++  state_id?: ID
++  priority?: Priority
++  estimate?: number | null
++  assignee_id?: ID | null
++  project_id?: ID | null
++  milestone_id?: ID | null
++  cycle_id?: ID | null
++  parent_id?: ID | null
++  due_date?: string | null
++  sort_order?: number
++  label_ids?: ID[]
++  add_label_ids?: ID[]
++  remove_label_ids?: ID[]
++  archived?: boolean
++  snoozed_until?: string | null
++  /** Required to force-close a lane-linked issue that the gateway has not verified. */
++  force_note?: string
++}
++
++export interface Reaction {
++  emoji: string
++  user_ids: ID[]
++}
++
++export interface Comment {
++  id: ID
++  issue_id: ID
++  user_id: ID
++  body: string
++  parent_id: ID | null
++  created_at: string
++  updated_at: string
++  edited: boolean
++  resolved_at: string | null
++  reactions: Reaction[]
++}
++
++export type RelationType = 'blocks' | 'related' | 'duplicate'
++
++export interface Relation {
++  id: ID
++  issue_id: ID
++  related_issue_id: ID
++  type: RelationType
++  created_at: string
++  /** The other side of the relation, from the perspective of the requested issue. */
++  issue: Issue
++  direction: 'blocks' | 'blocked_by' | 'related' | 'duplicate' | 'duplicated_by'
++}
++
++export interface Link {
++  id: ID
++  issue_id: ID
++  url: string
++  title: string
++  created_at: string
++}
++
++export interface Activity {
++  id: number
++  issue_id: ID
++  actor_id: ID | null
++  kind: string
++  from_value: string | null
++  to_value: string | null
++  created_at: string
++}
++
++export interface LaneDetail {
++  lane: Record<string, unknown> & {
++    key: string
++    title: string
++    status: LaneStatus
++    cwd: string
++    brief_path: string
++    model: string | null
++    done_signals: string
++    claim_evidence: string | null
++    objection: string | null
++    turns_run: number
++    last_turn_outcome: string | null
++    last_report: string | null
++    last_activity_at: string
++    thread_channel_id: string | null
++    created_at: string | null
++  }
++  history: { id: number; at: string; from_status: string | null; to_status: string; reason: string | null }[]
++  transcript: { id: number; at: string; role: string; text: string }[]
++  events: { id: number; kind: string; body: string; created_at: string }[]
++}
++
++export interface IssueDetail {
++  issue: Issue
++  children: Issue[]
++  parent: Issue | null
++  relations: Relation[]
++  comments: Comment[]
++  activity: Activity[]
++  links: Link[]
++  subscriber_ids: ID[]
++  lane_detail: LaneDetail | null
++  session_detail: SessionDetail | null
++}
++
++export interface ViewFilters {
++  /** Every key is AND-ed; values inside one key are OR-ed. Empty/absent = no constraint. */
++  state_ids?: ID[]
++  state_types?: StateType[]
++  priorities?: Priority[]
++  assignee_ids?: (ID | 'none' | 'me')[]
++  creator_ids?: ID[]
++  label_ids?: ID[]
++  project_ids?: (ID | 'none')[]
++  cycle_ids?: (ID | 'none' | 'current')[]
++  team_ids?: ID[]
++  has_lane?: boolean
++  lane_statuses?: LaneStatus[]
++  due?: 'overdue' | 'today' | 'week' | 'none'
++  text?: string
++}
++
++export type Grouping = 'status' | 'assignee' | 'project' | 'priority' | 'cycle' | 'label' | 'team' | 'none'
++export type Ordering = 'manual' | 'priority' | 'updated' | 'created' | 'due' | 'title' | 'status'
++export type DisplayProperty =
++  | 'priority'
++  | 'id'
++  | 'status'
++  | 'labels'
++  | 'project'
++  | 'cycle'
++  | 'estimate'
++  | 'due'
++  | 'created'
++  | 'updated'
++  | 'assignee'
++  | 'lane'
++  | 'sub_issues'
++
++export interface ViewDisplay {
++  layout: 'list' | 'board'
++  grouping: Grouping
++  sub_grouping: Grouping
++  ordering: Ordering
++  show_completed: 'all' | 'week' | 'month' | 'none'
++  show_sub_issues: boolean
++  show_empty_groups: boolean
++  properties: DisplayProperty[]
++}
++
++export interface View {
++  id: ID
++  name: string
++  description: string | null
++  icon: string
++  color: string | null
++  owner_id: ID
++  team_id: ID | null
++  filters: ViewFilters
++  display: ViewDisplay
++  shared: boolean
++  created_at: string
++  updated_at: string
++}
++
++export type FavoriteKind = 'issue' | 'project' | 'view' | 'cycle' | 'team' | 'label'
++
++export interface Favorite {
++  id: ID
++  user_id: ID
++  kind: FavoriteKind
++  target_id: ID
++  sort_order: number
++}
++
++export interface Notification {
++  id: ID
++  user_id: ID
++  issue_id: ID | null
++  project_id: ID | null
++  kind: string
++  actor_id: ID | null
++  body: string
++  created_at: string
++  read_at: string | null
++  snoozed_until: string | null
++  archived_at: string | null
++}
++
++export interface Bootstrap {
++  me: User
++  users: User[]
++  teams: Team[]
++  states: WorkflowState[]
++  labels: Label[]
++  projects: Project[]
++  cycles: Cycle[]
++  milestones: Milestone[]
++  views: View[]
++  favorites: Favorite[]
++  unread_count: number
++}
++
++export interface ProjectDetail {
++  project: Project
++  updates: ProjectUpdate[]
++  milestones: Milestone[]
++}
++
++export interface DelegateInput {
++  cwd: string
++  done: string
++  model?: 'auto' | 'small' | 'large'
++  thread?: string
++}
++
++export type LaneAction = 'send' | 'object' | 'close' | 'reopen'
++
++export const DEFAULT_DISPLAY: ViewDisplay = {
++  layout: 'list',
++  grouping: 'status',
++  sub_grouping: 'none',
++  ordering: 'priority',
++  show_completed: 'all',
++  show_sub_issues: true,
++  show_empty_groups: false,
++  properties: ['priority', 'id', 'status', 'labels', 'project', 'due', 'created', 'assignee', 'lane'],
++}
++
++export const PRIORITY_LABELS: Record<Priority, string> = {
++  0: 'No priority',
++  1: 'Urgent',
++  2: 'High',
++  3: 'Medium',
++  4: 'Low',
++}
++
++export const STATE_TYPE_ORDER: StateType[] = ['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled']
++
++export const ESTIMATE_POINTS = [0, 1, 2, 3, 5, 8] as const
++
++export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
++  backlog: 'Backlog',
++  planned: 'Planned',
++  started: 'In Progress',
++  paused: 'Paused',
++  completed: 'Completed',
++  canceled: 'Canceled',
++}
++
++export const HEALTH_LABELS: Record<ProjectHealth, string> = {
++  on_track: 'On track',
++  at_risk: 'At risk',
++  off_track: 'Off track',
++}
++
++export const LANE_STATUS_LABELS: Record<LaneStatus, string> = {
++  queued: 'Queued',
++  working: 'Working',
++  blocked: 'Blocked',
++  done_claimed: 'Claims done',
++  not_done: 'Changes requested',
++  verified_done: 'Verified',
++  closed: 'Closed',
++  failed: 'Failed',
++}
++
++export type SessionState = 'working' | 'question' | 'blocked' | 'idle' | 'ended'
++
++export interface SessionQuestionItem {
++  id: string
++  header: string | null
++  question: string | null
++  options: string[]
++}
++
++export interface SessionQuestion {
++  request_id: string
++  questions: SessionQuestionItem[]
++}
++
++export interface OmoSession {
++  machine: string
++  session_id: string
++  name: string | null
++  cwd: string | null
++  state: SessionState
++  streaming: boolean
++  compacting: boolean
++  message_count: number
++  pending_messages: number
++  last_user: string
++  last_assistant: string
++  questions: SessionQuestion[]
++  updated_at: string | null
++}
++
++export interface SessionSummary {
++  machine: string
++  session_id: string
++  state: SessionState
++  streaming: boolean
++  message_count: number
++  pending_messages: number
++  cwd: string | null
++  updated_at: string | null
++  questions: SessionQuestion[]
++}
++
++export interface SessionDetail extends SessionSummary {
++  last_user: string
++  last_assistant: string
++}
++
++export interface SessionMachine {
++  machine: string
++  ok: boolean
++  error: string | null
++  session_count: number
++}
++
++export interface SessionCounts {
++  working: number
++  question: number
++  blocked: number
++  idle: number
++  total: number
++}
++
++export interface SessionsOverview {
++  collected_at: string
++  machines: SessionMachine[]
++  sessions: OmoSession[]
++  counts: SessionCounts
++}
++
++export interface SessionActionResult {
++  ok: boolean
++  result: unknown
++}

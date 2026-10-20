@@ -96,7 +96,9 @@ pub async fn read_brief_content(brief_path: &str) -> String {
     }
 }
 
-pub async fn sync(pool: &SqlitePool) -> Result<()> {
+static SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn sync_inner(pool: &SqlitePool) -> Result<()> {
     let lanes = sqlx::query(
         "SELECT key, title, cwd, brief_path, model, status FROM lanes ORDER BY created_at ASC",
     )
@@ -399,6 +401,11 @@ pub async fn sync(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+pub async fn sync(pool: &SqlitePool) -> Result<()> {
+    let _guard = SYNC_LOCK.lock().await;
+    sync_inner(pool).await
+}
+
 pub enum LaneTransitionError {
     LaneNotVerified,
     IllegalLaneTransition(String),
@@ -546,6 +553,7 @@ pub async fn delegate_issue(pool: &SqlitePool, issue_id: &str, input: DelegateIn
     };
 
     let judge = production_judge(pool.clone());
+    let guard = SYNC_LOCK.lock().await;
     let (code, output) = execute(pool, LaneCommand::Start(start_args), &judge).await?;
 
     if code == 0 || code == 4 {
@@ -573,9 +581,12 @@ pub async fn delegate_issue(pool: &SqlitePool, issue_id: &str, input: DelegateIn
         .execute(pool)
         .await?;
 
+        drop(guard);
+
         sync(pool).await?;
         Ok(())
     } else {
+        drop(guard);
         Err(invalid(format!("lane start failed: {output}")))
     }
 }
@@ -793,4 +804,75 @@ pub async fn load_lane_detail(pool: &SqlitePool, lane_key: &str) -> Result<Optio
         transcript,
         events,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{insert_lane, Database, Lane};
+    use crate::tracker::seed::ensure_seeded;
+
+    #[tokio::test]
+    async fn concurrent_sync_after_lane_status_change_creates_single_notification() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool();
+        ensure_seeded(pool).await.unwrap();
+
+        let mut lane = Lane::new(
+            "test-lane-sync-race",
+            "Test Lane Sync Race",
+            "lead",
+            "/tmp",
+            "/tmp/brief.md",
+            "session-1",
+            "file done.txt",
+        );
+        lane.status = "working".to_string();
+        insert_lane(pool, &lane).await.unwrap();
+
+        // Initial sync creates the AGT issue while lane is in "working" status
+        sync(pool).await.unwrap();
+
+        let initial_notifs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM tracker_notifications WHERE kind LIKE 'lane_%'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(initial_notifs, 0);
+
+        // Update lane status to "blocked", which triggers a notification on next sync
+        sqlx::query("UPDATE lanes SET status = 'blocked' WHERE key = 'test-lane-sync-race'")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        // Run two sync calls concurrently
+        let (res1, res2) = tokio::join!(sync(pool), sync(pool));
+        res1.unwrap();
+        res2.unwrap();
+
+        // Exactly one new lane_status notification row must be inserted
+        let notif_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM tracker_notifications WHERE kind = 'lane_blocked'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            notif_count, 1,
+            "expected exactly one lane_status notification row"
+        );
+
+        let total_lane_notifs: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM tracker_notifications WHERE kind LIKE 'lane_%'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            total_lane_notifs, 1,
+            "expected exactly one total lane notification row"
+        );
+    }
 }

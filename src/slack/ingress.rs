@@ -229,6 +229,9 @@ impl SlackIngress {
             .await
             .map_err(|error| OmonError::Multiplexer(error.to_string()))?;
             tracing::info!(session = %inbound.session, interrupted, "processed Slack text stop command");
+            // The cancelled batch is older than this stop: move the cursor past it so the
+            // periodic reconcile never replays the request the owner just cancelled.
+            advance_cursor(&s.pool, &inbound).await;
             return Ok(());
         }
 
@@ -575,6 +578,13 @@ impl SlackIngress {
             .bind(&platform_message_id)
             .execute(&s.pool)
             .await;
+            // The turn ran and ended (stopped by the owner, or failed after reporting it):
+            // a later reconcile pass must not run it again. Only a turn the gateway never
+            // admitted (draining for a restart) holds the cursor for a retry.
+            if !error.to_string().contains("gateway admission closed") {
+                tracing::warn!(%error, session = %session_key, "Slack replayed turn ended without a reply; not retrying");
+                return Ok(true);
+            }
             return Err(error);
         }
         Ok(true)
@@ -762,6 +772,11 @@ impl SlackIngress {
         {
             return Ok(false);
         }
+        // The lane consumed this reply live: move the cursor past it so the periodic reconcile
+        // pass never replays it as an ordinary agent turn in the lane thread.
+        if let Err(error) = write_cursor(&s.pool, &s.bot_user_id, channel, thread_ts, ts).await {
+            tracing::warn!(%error, channel, thread_ts, "failed to advance cursor after lane reply");
+        }
         if let Err(error) = crate::lanes::runner::wake(&s.pool).await {
             tracing::warn!(%error, channel, thread_ts, "lane wake after Slack owner reply failed");
         }
@@ -774,16 +789,21 @@ async fn advance_cursor(pool: &SqlitePool, event: &InboundEvent) {
         return;
     };
     let thread = event.session.thread_id.as_deref().unwrap_or_default();
-    if let Err(error) = write_cursor(
-        pool,
-        bot_id,
-        &event.session.channel_id,
-        thread,
-        &event.platform_message_id,
-    )
-    .await
-    {
-        tracing::debug!(%error, channel = %event.session.channel_id, "failed to advance Slack cursor");
+    // A top-level message that roots its own auto-thread is read back from the channel
+    // history by reconcile, not from that thread: advance the channel cursor too.
+    let roots_own_thread = !thread.is_empty() && thread == event.platform_message_id;
+    for thread in std::iter::once(thread).chain(roots_own_thread.then_some("")) {
+        if let Err(error) = write_cursor(
+            pool,
+            bot_id,
+            &event.session.channel_id,
+            thread,
+            &event.platform_message_id,
+        )
+        .await
+        {
+            tracing::debug!(%error, channel = %event.session.channel_id, "failed to advance Slack cursor");
+        }
     }
 }
 
@@ -857,6 +877,12 @@ fn thread_candidate(bot_user_id: &str, team_id: &str, event: &Value) -> Option<S
 impl SlackIngress {
     pub(crate) async fn is_known_thread(&self, event: &Value) -> Result<bool> {
         self.known_thread(event).await
+    }
+
+    /// Backfill entry to the live lane-reply interception, so a missed owner reply in a lane
+    /// thread reopens or closes the lane instead of becoming an agent turn.
+    pub(crate) async fn intercept_replayed_lane_reply(&self, event: &Value) -> Result<bool> {
+        self.intercept_lane_reply(event).await
     }
 }
 
@@ -1780,6 +1806,14 @@ mod tests {
         );
         h.ingress.flush().await;
         assert!(h.rx.try_recv().is_err());
+        assert_eq!(
+            read_cursor(&h.pool, BOT, "C1", "1700000000.000001")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("1700000000.000200"),
+            "a lane reply consumed live must advance the cursor so reconcile never replays it"
+        );
     }
 
     struct LookupActions;

@@ -1,0 +1,128 @@
+[
+  {
+    "id": "G-Sequence: g i -> Inbox",
+    "status": "PASS",
+    "detail": "hash=#/tracker/inbox",
+    "shot": "seq-g-i-inbox.png"
+  },
+  {
+    "id": "G-Sequence: g m -> My Issues",
+    "status": "PASS",
+    "detail": "hash=#/tracker/my-issues/assigned",
+    "shot": "seq-g-m-my-issues.png"
+  },
+  {
+    "id": "G-Sequence: g p -> Projects",
+    "status": "PASS",
+    "detail": "hash=#/tracker/projects",
+    "shot": "seq-g-p-projects.png"
+  },
+  {
+    "id": "G-Sequence: g s -> Settings",
+    "status": "PASS",
+    "detail": "hash=#/tracker/settings/preferences",
+    "shot": "seq-g-s-settings.png"
+  },
+  {
+    "id": "Inbox: j key navigates to first notification",
+    "status": "PASS",
+    "detail": "hash=#/tracker/inbox/n-3",
+    "shot": "inbox-j-first-selected.png"
+  },
+  {
+    "id": "Inbox: j key steps to next notification",
+    "status": "PASS",
+    "detail": "hash=#/tracker/inbox/n-2",
+    "shot": "inbox-j-second-selected.png"
+  },
+  {
+    "id": "Inbox: k key steps back to previous notification",
+    "status": "PASS",
+    "detail": "hash=#/tracker/inbox/n-3",
+    "shot": "inbox-k-step-back.png"
+  },
+  {
+    "id": "Inbox: e key marks notification as read",
+    "status": "PASS",
+    "detail": "n-3 marked read",
+    "shot": "inbox-e-mark-read.png"
+  },
+  {
+    "id": "Inbox: Escape returns to notification list",
+    "status": "PASS",
+    "detail": "hash=#/tracker/inbox",
+    "shot": "inbox-escape-to-list.png"
+  },
+  {
+    "id": "Inbox: Snoozed notification excluded from unread badge",
+    "status": "PASS",
+    "detail": "badgeCount=1 (expected 1)",
+    "shot": "inbox-snoozed-unread-badge.png"
+  },
+  {
+    "id": "Saved View: Dirty state shows Reset and Save changes",
+    "status": "PASS",
+    "detail": "Reset & Save changes buttons visible",
+    "shot": "view-dirty-controls.png"
+  },
+  {
+    "id": "Saved View: Reset clears dirty state",
+    "status": "PASS",
+    "detail": "Reset restored view clean state",
+    "shot": "view-after-reset.png"
+  },
+  {
+    "id": "Saved View: Save changes persists display/filter update",
+    "status": "PASS",
+    "detail": "Save changes persisted to DB",
+    "shot": "view-after-save.png"
+  },
+  {
+    "id": "Saved View: priorities then assignee filters save cleanly",
+    "status": "PASS",
+    "detail": "Both filters persisted and dirty controls removed",
+    "shot": "view-filter-key-order.png"
+  },
+  {
+    "id": "Description: Unmount autosaves pending changes",
+    "status": "PASS",
+    "detail": "Description persisted on unmount before blur",
+    "shot": "description-unmount-autosaved.png"
+  },
+  {
+    "id": "Milestone: Retained after reselecting the same project",
+    "status": "PASS",
+    "detail": "milestone_id=ad78463e-afc0-4bc9-8e20-85e296cd0274",
+    "shot": "milestone-retention.png"
+  },
+  {
+    "id": "Board: Drag issue card to In Progress column",
+    "status": "PASS",
+    "detail": "Issue moved to In Progress and persisted",
+    "shot": "board-drag-completed.png"
+  },
+  {
+    "id": "Board: Same-column manual downward reorder persists",
+    "status": "PASS",
+    "detail": "first card order must exceed second card order",
+    "shot": "board-manual-reorder.png"
+  },
+  {
+    "id": "Board: Multi-label drag removes the actual source label",
+    "status": "PASS",
+    "detail": "UI removed and API retained",
+    "shot": "board-multilabel-drag.png"
+  },
+  {
+    "id": "Mobile: No horizontal page overflow on iPhone 14",
+    "status": "PASS",
+    "detail": "scrollWidth=390",
+    "shot": "mobile-team-dark.png"
+  },
+  {
+    "id": "Mobile: Drawer navigation toggle opens sidebar menu",
+    "status": "PASS",
+    "detail": "Sidebar drawer opened",
+    "shot": "mobile-drawer-open.png"
+  }
+]

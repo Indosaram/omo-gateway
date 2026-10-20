@@ -293,7 +293,7 @@ export function ProjectPicker({ issueIds, anchor, open, onOpenChange }: PickerPr
       placeholder="Add to project…"
       width={260}
       selectedIds={current === undefined ? [] : [current ?? 'none']}
-      onSelect={(item) => apply({ project_id: item.id === 'none' ? null : item.id, milestone_id: null })}
+      onSelect={(item) => apply({ project_id: item.id === 'none' ? null : item.id })}
     />
   )
 }

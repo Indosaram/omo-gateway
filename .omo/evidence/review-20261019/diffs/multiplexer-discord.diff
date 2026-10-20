@@ -1,0 +1,2444 @@
+diff --git a/src/discord/adapter.rs b/src/discord/adapter.rs
+index 0275abe..6841cb5 100644
+--- a/src/discord/adapter.rs
++++ b/src/discord/adapter.rs
+@@ -45,7 +45,7 @@ const MEDIA_DENIED_EXTENSIONS: &[&str] =
+     &["db", "sqlite", "sqlite3", "db-wal", "db-shm", "pem", "key"];
+ 
+ /// Secret-bearing files that must never be uploaded even from an authorized root.
+-fn media_path_is_denied(canonical: &Path) -> bool {
++pub fn media_path_is_denied(canonical: &Path) -> bool {
+     if canonical
+         .components()
+         .any(|component| matches!(component.as_os_str().to_str(), Some(".ssh" | ".gnupg")))
+@@ -117,7 +117,7 @@ pub fn validate_media_path_in(raw_path: &str, extra_roots: &[PathBuf]) -> Result
+ 
+ /// Appends a short visible note for media directives that could not be uploaded, so a failed
+ /// attachment never silently disappears nor aborts delivery of the reply text.
+-fn append_media_failure_note(text: &mut String, failed: &[String]) {
++pub fn append_media_failure_note(text: &mut String, failed: &[String]) {
+     if failed.is_empty() {
+         return;
+     }
+@@ -1383,14 +1383,18 @@ pub async fn handle_event(
+                     .unwrap_or_default();
+                 let user_id = component.user.id.get();
+                 let is_paired = data.pairing_store.is_user_paired_sync(user_id);
+-                if !is_paired
+-                    && !is_user_authorized(
+-                        user_id,
+-                        &component_roles,
+-                        &data.allowed_users,
+-                        &data.allowed_roles,
+-                        data.allow_all_users,
+-                    )
++                let ledger_owner_required =
++                    crate::agent::agent_workspace::approval_ledger_enabled();
++                let is_discord_owner = user_id.to_string() == crate::inbox::proposals::OWNER_ID;
++                if (ledger_owner_required && !is_discord_owner)
++                    || (!is_paired
++                        && !is_user_authorized(
++                            user_id,
++                            &component_roles,
++                            &data.allowed_users,
++                            &data.allowed_roles,
++                            data.allow_all_users,
++                        ))
+                 {
+                     let refusal = CreateInteractionResponse::Message(
+                         CreateInteractionResponseMessage::new()
+@@ -1611,7 +1615,18 @@ pub async fn steer_claimed_event(data: &PoiseData, event: &InboundEvent) -> Resu
+         return Ok(true);
+     }
+ 
+-    match data.multiplexer.steer(&event.session, &event.content).await {
++    let answered = event.author_id.as_deref() == Some(crate::inbox::proposals::OWNER_ID)
++        && data
++            .multiplexer
++            .resolve_owner_reply(&event.session, &event.content)
++            .await
++            .unwrap_or(false);
++    let steered = if answered {
++        Ok(true)
++    } else {
++        data.multiplexer.steer(&event.session, &event.content).await
++    };
++    match steered {
+         Ok(true) => {
+             // The steer already landed: a ledger failure must not surface as an error, or the
+             // caller re-enqueues the message and it is processed twice.
+@@ -3390,7 +3405,13 @@ impl DiscordEgress {
+             self.keep_typing(&session).await;
+             return Ok(());
+         };
+-        let filtered_content = filter_reasoning(content);
++        let (claim_stripped, _extracted_claims) = if crate::report::claims::report_claims_enabled()
++        {
++            crate::report::claims::strip_and_extract_claims(content)
++        } else {
++            (content.to_string(), Vec::new())
++        };
++        let filtered_content = filter_reasoning(&claim_stripped);
+         let identity = self.identity(&session).to_owned();
+         let key = (identity.clone(), chunk.stream_id);
+         let channel = Self::target(&session)?;
+@@ -3542,6 +3563,37 @@ impl OutboundDispatcher for DiscordEgress {
+         .unwrap_or(false)
+     }
+ 
++    async fn post_status(
++        &self,
++        session: &SessionKey,
++        content: String,
++        _reply_to: Option<String>,
++    ) -> Result<Option<String>> {
++        let bot_id = self.identity(session).to_owned();
++        let http = self.http_for(session)?;
++        let channel = Self::target(session)?;
++        if self.dead_targets.is_dead_for_bot(&bot_id, channel.get()) {
++            return Err(OmonError::Multiplexer(format!(
++                "dead target short-circuited: bot={bot_id}, channel={}",
++                channel.get()
++            )));
++        }
++        let message_id = if let Some(transport) = &self.message_transport {
++            transport.send_message(channel, content).await?
++        } else {
++            channel
++                .send_message(
++                    &http,
++                    CreateMessage::new()
++                        .content(content)
++                        .allowed_mentions(safe_allowed_mentions()),
++                )
++                .await?
++                .id
++        };
++        Ok(Some(message_id.to_string()))
++    }
++
+     async fn dispatch_direct_reply(&self, session: SessionKey, content: String) -> Result<()> {
+         let http = self.http_for(&session)?;
+         let channel = Self::target(&session)?;
+diff --git a/src/discord/approval.rs b/src/discord/approval.rs
+index f92b606..66b5666 100644
+--- a/src/discord/approval.rs
++++ b/src/discord/approval.rs
+@@ -119,6 +119,7 @@ impl ApprovalPrompt {
+ #[derive(Debug)]
+ struct PendingApprovalEntry {
+     session: Option<SessionKey>,
++    proposal_id: Option<i64>,
+     sender: oneshot::Sender<ApprovalDecision>,
+     created_at: std::time::Instant,
+ }
+@@ -411,6 +412,93 @@ impl DiscordApprovalRequester {
+         }
+         result
+     }
++
++    pub async fn request_for_proposal(
++        &self,
++        session: &SessionKey,
++        proposal_id: i64,
++        command: &str,
++        reason: &str,
++    ) -> Result<(Uuid, ApprovalDecision), ApprovalError> {
++        let dispatcher = self
++            .dispatcher
++            .read()
++            .await
++            .clone()
++            .ok_or(ApprovalError::Cancelled)?;
++        let (display_command, display_reason) = match (
++            crate::security::redact_approval_display(command),
++            crate::security::redact_approval_display(reason),
++        ) {
++            (Ok(command), Ok(reason)) => (command, reason),
++            (Err(error), _) | (_, Err(error)) => {
++                tracing::warn!(%error, "approval display preparation failed");
++                return Err(ApprovalError::Cancelled);
++            }
++        };
++        let prompt = self
++            .guard
++            .request_with_session_and_proposal(Some(session.clone()), Some(proposal_id))
++            .await;
++        let request_id = prompt.request_id;
++        if let Some(pool) = self.guard.pool.read().await.clone() {
++            let _ = crate::autonomy::set_proposal_message_id(
++                &pool,
++                proposal_id,
++                &request_id.to_string(),
++            )
++            .await;
++        }
++        let (terminal, ended) = oneshot::channel::<()>();
++        let (sent, delivered) = oneshot::channel();
++        let action = OutboundAction::ApprovalRequest {
++            session: session.clone(),
++            request_id,
++            command: display_command,
++            reason: display_reason,
++        };
++        let delivery = tokio::spawn(async move {
++            let result =
++                tokio::time::timeout(Duration::from_secs(10), dispatcher.dispatch(action)).await;
++            let success = matches!(result, Ok(Ok(())));
++            if let Ok(Err(error)) = &result {
++                tracing::warn!(%error, %request_id, "approval delivery failed");
++            }
++            let _ = sent.send(success);
++            let _ = ended.await;
++            let _ = tokio::time::timeout(
++                Duration::from_secs(10),
++                dispatcher.dispatch(OutboundAction::ExpireApproval { request_id }),
++            )
++            .await;
++        });
++        if delivered.await != Ok(true) {
++            drop(prompt);
++            drop(terminal);
++            let _ = delivery.await;
++            return Err(ApprovalError::Cancelled);
++        }
++        let heartbeat = self.heartbeat.read().await.clone();
++        let heartbeat_interval = self.heartbeat_interval;
++        let result = match heartbeat {
++            Some(hb) => {
++                let session_clone = session.clone();
++                prompt
++                    .wait_with_heartbeat(self.timeout, heartbeat_interval, move || {
++                        hb(&session_clone);
++                    })
++                    .await
++            }
++            None => prompt.wait(self.timeout).await,
++        };
++        let result = result.map(|decision| match decision {
++            ApprovalDecision::Session => ApprovalDecision::Once,
++            other => other,
++        });
++        drop(terminal);
++        let _ = tokio::time::timeout(Duration::from_secs(2), delivery).await;
++        result.map(|d| (request_id, d))
++    }
+ }
+ impl SmartApprovalGuard {
+     pub fn new() -> Self {
+@@ -431,9 +519,11 @@ impl SmartApprovalGuard {
+         let Some(pool) = pool else {
+             return Ok(0);
+         };
+-        let rows: Vec<(String,)> = sqlx::query_as("SELECT pattern_key FROM approval_allowlist")
+-            .fetch_all(&pool)
+-            .await?;
++        let rows: Vec<(String,)> = sqlx::query_as(
++            "SELECT signature FROM action_precedents WHERE decision = 'allow' AND scope = 'exact' AND revoked_at IS NULL",
++        )
++        .fetch_all(&pool)
++        .await?;
+         let mut always = self.always_cache.write().await;
+         let count = rows.len();
+         for (pattern,) in rows {
+@@ -466,7 +556,13 @@ impl SmartApprovalGuard {
+ 
+     pub async fn is_approved(&self, session: &SessionKey, pattern_key: &str) -> bool {
+         if self.always_cache.read().await.contains(pattern_key) {
+-            return true;
++            // `autonomy revoke` runs in another process, so the durable row is the truth: a
++            // revoked or deny precedent drops the cached grant.
++            if self.durable_allow_withdrawn(pattern_key).await {
++                self.always_cache.write().await.remove(pattern_key);
++            } else {
++                return true;
++            }
+         }
+         if let Some(session_patterns) = self.session_cache.read().await.get(session) {
+             return session_patterns.contains(pattern_key);
+@@ -474,6 +570,29 @@ impl SmartApprovalGuard {
+         false
+     }
+ 
++    /// True when an exact precedent row exists for the pattern but is revoked or denies it.
++    /// Grants with no row (e.g. `load_permanent`) stay valid; a DB error keeps the grant as-is.
++    async fn durable_allow_withdrawn(&self, pattern_key: &str) -> bool {
++        let pool = self.pool.read().await.clone();
++        let Some(pool) = pool else {
++            return false;
++        };
++        let row: Result<Option<(String, Option<String>)>, sqlx::Error> = sqlx::query_as(
++            "SELECT decision, revoked_at FROM action_precedents WHERE signature = ? AND scope = 'exact'",
++        )
++        .bind(pattern_key)
++        .fetch_optional(&pool)
++        .await;
++        match row {
++            Ok(Some((decision, revoked_at))) => decision != "allow" || revoked_at.is_some(),
++            Ok(None) => false,
++            Err(error) => {
++                tracing::warn!(%error, pattern_key, "precedent re-check failed; keeping cached grant");
++                false
++            }
++        }
++    }
++
+     /// Upper bounds for the in-memory approval caches. A long-running
+     /// gateway must not grow these without limit: keys embed the full
+     /// command + reason text, and every distinct (session, command) pair
+@@ -512,17 +631,33 @@ impl SmartApprovalGuard {
+     /// in-memory grant is published: persisting after would let a failed
+     /// INSERT leave an active grant the user believes is permanent but that
+     /// vanishes on restart. Returns Err only when persistence failed and no
+-    /// grant was published.
++    /// grant was published. An active owner `deny` precedent for the same
++    /// signature is kept; the grant is then not published.
+     pub async fn approve_always(&self, pattern_key: &str) -> Result<(), sqlx::Error> {
+         let pool = self.pool.read().await.clone();
+         if let Some(pool) = pool {
+             let pattern = pattern_key.to_string();
+-            sqlx::query(
+-                "INSERT INTO approval_allowlist (pattern_key) VALUES (?) ON CONFLICT(pattern_key) DO NOTHING",
++            let res = sqlx::query(
++                "INSERT INTO action_precedents
++                    (signature, effect, target_scope, decision, scope, approvals, declines, origin, revoked_at)
++                 VALUES (?, 'unknown', '', 'allow', 'exact', 1, 0, 'tool_approval', NULL)
++                 ON CONFLICT(signature, scope) DO UPDATE SET
++                    decision = 'allow',
++                    approvals = action_precedents.approvals + 1,
++                    revoked_at = NULL,
++                    updated_at = CURRENT_TIMESTAMP
++                 WHERE NOT (action_precedents.decision = 'deny' AND action_precedents.revoked_at IS NULL)",
+             )
+             .bind(&pattern)
+             .execute(&pool)
+             .await?;
++            if res.rows_affected() == 0 {
++                tracing::warn!(
++                    pattern_key,
++                    "approve_always kept an existing deny precedent"
++                );
++                return Ok(());
++            }
+         }
+         self.always_cache
+             .write()
+@@ -575,12 +710,21 @@ impl SmartApprovalGuard {
+     }
+ 
+     pub async fn request_with_session(&self, session: Option<SessionKey>) -> ApprovalPrompt {
++        self.request_with_session_and_proposal(session, None).await
++    }
++
++    pub async fn request_with_session_and_proposal(
++        &self,
++        session: Option<SessionKey>,
++        proposal_id: Option<i64>,
++    ) -> ApprovalPrompt {
+         let request_id = Uuid::new_v4();
+         let (sender, receiver) = oneshot::channel();
+         self.pending.lock().insert(
+             request_id,
+             PendingApprovalEntry {
+                 session,
++                proposal_id,
+                 sender,
+                 created_at: std::time::Instant::now(),
+             },
+@@ -596,6 +740,61 @@ impl SmartApprovalGuard {
+         }
+     }
+ 
++    pub fn pending_for_session(&self, session: &SessionKey) -> Vec<Uuid> {
++        let storage_key = session.storage_key();
++        self.pending
++            .lock()
++            .iter()
++            .filter(|(_, entry)| {
++                entry
++                    .session
++                    .as_ref()
++                    .is_some_and(|s| s == session || s.storage_key() == storage_key)
++            })
++            .map(|(id, _)| *id)
++            .collect()
++    }
++
++    pub fn resolve_single_session_decision(
++        &self,
++        session: &SessionKey,
++        decision: ApprovalDecision,
++    ) -> bool {
++        let storage_key = session.storage_key();
++        let mut lock = self.pending.lock();
++        let matching: Vec<Uuid> = lock
++            .iter()
++            .filter(|(_, entry)| {
++                entry
++                    .session
++                    .as_ref()
++                    .is_some_and(|s| s == session || s.storage_key() == storage_key)
++            })
++            .map(|(id, _)| *id)
++            .collect();
++        if matching.len() != 1 {
++            return false;
++        }
++        if let Some(entry) = lock.remove(&matching[0]) {
++            return entry.sender.send(decision).is_ok();
++        }
++        false
++    }
++
++    pub fn resolve_proposal_id(&self, proposal_id: i64, decision: ApprovalDecision) -> bool {
++        let mut lock = self.pending.lock();
++        let found = lock
++            .iter()
++            .find(|(_, entry)| entry.proposal_id == Some(proposal_id))
++            .map(|(id, _)| *id);
++        if let Some(request_id) = found {
++            if let Some(entry) = lock.remove(&request_id) {
++                return entry.sender.send(decision).is_ok();
++            }
++        }
++        false
++    }
++
+     pub async fn resolve_custom_id(&self, custom_id: &str) -> bool {
+         let Some((request_id, decision)) = parse_custom_id(custom_id) else {
+             return false;
+@@ -1185,10 +1384,12 @@ mod tests {
+         assert!(guard_1.is_approved(&session, &pattern_key).await);
+ 
+         // 2. Verify row exists in DB
+-        let db_rows: Vec<(String,)> = sqlx::query_as("SELECT pattern_key FROM approval_allowlist")
+-            .fetch_all(db.pool())
+-            .await
+-            .unwrap();
++        let db_rows: Vec<(String,)> =
++            sqlx::query_as("SELECT signature FROM action_precedents WHERE signature = ?")
++                .bind(&pattern_key)
++                .fetch_all(db.pool())
++                .await
++                .unwrap();
+         assert_eq!(db_rows.len(), 1);
+         assert_eq!(db_rows[0].0, pattern_key);
+ 
+@@ -1298,7 +1499,7 @@ mod tests {
+         store.approve_always(pattern).await.unwrap();
+         assert!(store.always_cache.read().await.contains(pattern));
+         let persisted: Option<(String,)> =
+-            sqlx::query_as("SELECT pattern_key FROM approval_allowlist WHERE pattern_key = ?")
++            sqlx::query_as("SELECT signature FROM action_precedents WHERE signature = ?")
+                 .bind(pattern)
+                 .fetch_optional(&pool)
+                 .await
+@@ -1317,6 +1518,48 @@ mod tests {
+         );
+     }
+ 
++    #[tokio::test]
++    async fn revoked_precedent_drops_cached_grant_and_deny_is_not_overwritten() {
++        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
++        let guard = SmartApprovalGuard::new().with_pool(pool.clone());
++        let session = SessionKey::new("discord", None::<String>, "42", None::<String>, "7");
++
++        let pattern = "terminal:git:push";
++        guard.approve_always(pattern).await.unwrap();
++        assert!(guard.is_approved(&session, pattern).await);
++        sqlx::query(
++            "UPDATE action_precedents SET revoked_at = CURRENT_TIMESTAMP WHERE signature = ?",
++        )
++        .bind(pattern)
++        .execute(&pool)
++        .await
++        .unwrap();
++        assert!(
++            !guard.is_approved(&session, pattern).await,
++            "a revoke from another process must invalidate the cached grant"
++        );
++        assert!(!guard.always_cache.read().await.contains(pattern));
++
++        let denied = "terminal:rm:rf";
++        sqlx::query(
++            "INSERT INTO action_precedents (signature, effect, target_scope, decision, scope, approvals, declines, origin)
++             VALUES (?, 'delete', '/repo', 'deny', 'exact', 0, 1, 'owner_decide')",
++        )
++        .bind(denied)
++        .execute(&pool)
++        .await
++        .unwrap();
++        guard.approve_always(denied).await.unwrap();
++        let decision: String =
++            sqlx::query_scalar("SELECT decision FROM action_precedents WHERE signature = ?")
++                .bind(denied)
++                .fetch_one(&pool)
++                .await
++                .unwrap();
++        assert_eq!(decision, "deny", "approve_always must keep an active deny");
++        assert!(!guard.is_approved(&session, denied).await);
++    }
++
+     #[tokio::test]
+     async fn approval_caches_are_bounded() {
+         let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+diff --git a/src/discord/buttons.rs b/src/discord/buttons.rs
+index 3e63759..256135f 100644
+--- a/src/discord/buttons.rs
++++ b/src/discord/buttons.rs
+@@ -62,6 +62,9 @@ pub struct ButtonClick {
+     pub namespace: String,
+     pub action: String,
+     pub arg: String,
++    /// Optional fifth segment, passed to the command as one more argv element. content-intel
++    /// binds the publish button to the reviewed snapshot this way (`<id>.<sha256>.<revision>`).
++    pub token: Option<String>,
+ }
+ 
+ #[derive(Clone, Debug, Deserialize)]
+@@ -100,17 +103,33 @@ fn is_arg(segment: &str) -> bool {
+             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+ }
+ 
+-/// The arg becomes an argv element of the configured command, so it may never start with `-`.
++fn is_token(segment: &str) -> bool {
++    (1..=128).contains(&segment.len())
++        && segment.starts_with(|c: char| c.is_ascii_alphanumeric())
++        && segment
++            .bytes()
++            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
++}
++
++/// The arg and token become argv elements of the configured command, so they may never start
++/// with `-`.
+ pub fn parse_button_custom_id(custom_id: &str) -> Option<ButtonClick> {
+     let mut parts = custom_id.strip_prefix(BUTTON_PREFIX)?.split(':');
+     let (namespace, action, arg) = (parts.next()?, parts.next()?, parts.next()?);
+-    if parts.next().is_some() || !is_name(namespace) || !is_name(action) || !is_arg(arg) {
++    let token = parts.next();
++    if parts.next().is_some()
++        || !is_name(namespace)
++        || !is_name(action)
++        || !is_arg(arg)
++        || token.is_some_and(|token| !is_token(token))
++    {
+         return None;
+     }
+     Some(ButtonClick {
+         namespace: namespace.to_string(),
+         action: action.to_string(),
+         arg: arg.to_string(),
++        token: token.map(str::to_string),
+     })
+ }
+ 
+@@ -163,6 +182,7 @@ pub async fn run_button_action(
+         .args(base_args)
+         .arg(&click.action)
+         .arg(&click.arg)
++        .args(&click.token)
+         .env_clear()
+         .stdin(Stdio::null())
+         .stdout(Stdio::piped())
+@@ -460,6 +480,7 @@ mod tests {
+ 
+     fn click(action: &str, arg: &str) -> ButtonClick {
+         ButtonClick {
++            token: None,
+             namespace: "content-intel".into(),
+             action: action.into(),
+             arg: arg.into(),
+@@ -488,6 +509,16 @@ mod tests {
+             parse_button_custom_id("omon:btn:content-intel:skip:86"),
+             Some(click("skip", "86"))
+         );
++        let token = format!("4.{}.2", "a".repeat(64));
++        assert_eq!(
++            parse_button_custom_id(&format!(
++                "omon:btn:content-intel:publish:96-417-435:{token}"
++            )),
++            Some(ButtonClick {
++                token: Some(token),
++                ..click("publish", "96-417-435")
++            })
++        );
+     }
+ 
+     #[test]
+@@ -495,7 +526,10 @@ mod tests {
+         for custom_id in [
+             "omon:approval:6d1f:once",
+             "omon:btn:content-intel:publish",
+-            "omon:btn:content-intel:publish:86:extra",
++            "omon:btn:content-intel:publish:86:extra:more",
++            "omon:btn:content-intel:publish:86:-x",
++            "omon:btn:content-intel:publish:86:a;b",
++            "omon:btn:content-intel:publish:86:",
+             "omon:btn:Content:publish:86",
+             "omon:btn:content-intel:publish:--all-channels",
+             "omon:btn:content-intel:publish:86;rm",
+diff --git a/src/discord/commands.rs b/src/discord/commands.rs
+index 40ee540..5e42040 100644
+--- a/src/discord/commands.rs
++++ b/src/discord/commands.rs
+@@ -195,6 +195,7 @@ pub fn all() -> Vec<poise::Command<PoiseData, CommandError>> {
+         deny(),
+         yolo(),
+         pair(),
++        super::session_commands::sessions(),
+     ]
+ }
+ 
+@@ -1819,11 +1820,12 @@ mod tests {
+     #[test]
+     fn test_all_commands_count() {
+         let commands = all();
+-        assert_eq!(commands.len(), 18);
++        assert_eq!(commands.len(), 19);
+         let names: HashSet<&str> = commands.iter().map(|c| c.name.as_str()).collect();
+         for expected in &[
+             "model", "reset", "stop", "status", "tools", "skill", "skills", "memory", "cron",
+             "steer", "undo", "retry", "compress", "title", "thread", "deny", "yolo", "pair",
++            "sessions",
+         ] {
+             assert!(names.contains(expected), "missing command {expected}");
+         }
+diff --git a/src/discord/mod.rs b/src/discord/mod.rs
+index ffdbf14..92bcad3 100644
+--- a/src/discord/mod.rs
++++ b/src/discord/mod.rs
+@@ -4,6 +4,7 @@ pub mod attachments;
+ pub mod buttons;
+ pub mod commands;
+ pub mod pairing;
++pub mod session_commands;
+ pub mod table_render;
+ pub mod throttler;
+ 
+diff --git a/src/discord/pairing.rs b/src/discord/pairing.rs
+index 4a1b80a..a08506a 100644
+--- a/src/discord/pairing.rs
++++ b/src/discord/pairing.rs
+@@ -129,12 +129,13 @@ impl PairingStore {
+     /// Checks whether the platform is currently locked out at the given timestamp within a transaction.
+     async fn is_platform_locked_tx(
+         tx: &mut Transaction<'_, Sqlite>,
++        platform_key: &str,
+         now: DateTime<Utc>,
+     ) -> Result<bool> {
+         let row: Option<(DateTime<Utc>, i64)> = sqlx::query_as(
+             "SELECT locked_until, failed_attempts FROM pairing_platform_lockout WHERE platform_key = ?",
+         )
+-        .bind(DEFAULT_PLATFORM_KEY)
++        .bind(platform_key)
+         .fetch_optional(&mut **tx)
+         .await?;
+ 
+@@ -172,6 +173,7 @@ impl PairingStore {
+     /// Uses an atomic conditional UPSERT to eliminate lost increments and unique constraint races.
+     async fn record_failed_attempt_tx(
+         tx: &mut Transaction<'_, Sqlite>,
++        platform_key: &str,
+         now: DateTime<Utc>,
+     ) -> Result<()> {
+         let deadline = now + chrono::Duration::seconds(LOCKOUT_DURATION_SECONDS);
+@@ -190,7 +192,7 @@ impl PairingStore {
+                  END
+              WHERE platform_key = ?",
+         )
+-        .bind(DEFAULT_PLATFORM_KEY)
++        .bind(platform_key)
+         .bind(now)
+         .bind(now)
+         .bind(MAX_FAILED_ATTEMPTS)
+@@ -199,7 +201,62 @@ impl PairingStore {
+         .bind(now)
+         .bind(MAX_FAILED_ATTEMPTS)
+         .bind(deadline)
+-        .bind(DEFAULT_PLATFORM_KEY)
++        .bind(platform_key)
++        .execute(&mut **tx)
++        .await?;
++        Ok(())
++    }
++
++    async fn reset_failed_attempts_tx(
++        tx: &mut Transaction<'_, Sqlite>,
++        platform_key: &str,
++        now: DateTime<Utc>,
++    ) -> Result<()> {
++        sqlx::query(
++            "INSERT INTO pairing_platform_lockout (platform_key, locked_until, failed_attempts) VALUES (?, ?, 0)
++             ON CONFLICT(platform_key) DO UPDATE SET failed_attempts = 0, locked_until = excluded.locked_until",
++        )
++        .bind(platform_key)
++        .bind(now)
++        .execute(&mut **tx)
++        .await?;
++        Ok(())
++    }
++
++    /// Claims the notification slot unless `user_key` was notified within the rate-limit window.
++    async fn claim_notification_tx(
++        tx: &mut Transaction<'_, Sqlite>,
++        user_key: &str,
++        now: DateTime<Utc>,
++    ) -> Result<bool> {
++        let claim_res = sqlx::query(
++            "INSERT INTO pairing_notifications (user_id, last_notified_at)
++             VALUES (?, ?)
++             ON CONFLICT(user_id) DO UPDATE SET last_notified_at = excluded.last_notified_at
++             WHERE (strftime('%s', ?) - strftime('%s', pairing_notifications.last_notified_at)) >= ?",
++        )
++        .bind(user_key)
++        .bind(now)
++        .bind(now)
++        .bind(RATE_LIMIT_SECONDS)
++        .execute(&mut **tx)
++        .await?;
++        Ok(claim_res.rows_affected() > 0)
++    }
++
++    /// The notification table exists only to rate-limit; a row older than
++    /// the window can never throttle again, so drop it instead of letting
++    /// an unauthenticated population grow the table without bound.
++    async fn prune_notifications_tx(
++        tx: &mut Transaction<'_, Sqlite>,
++        now: DateTime<Utc>,
++    ) -> Result<()> {
++        sqlx::query(
++            "DELETE FROM pairing_notifications
++             WHERE (strftime('%s', ?) - strftime('%s', last_notified_at)) > ?",
++        )
++        .bind(now)
++        .bind(RATE_LIMIT_SECONDS)
+         .execute(&mut **tx)
+         .await?;
+         Ok(())
+@@ -208,7 +265,7 @@ impl PairingStore {
+     /// Records a failed approval attempt and triggers platform lockout if MAX_FAILED_ATTEMPTS reached.
+     pub async fn record_failed_attempt_at(&self, now: DateTime<Utc>) -> Result<()> {
+         let mut tx = self.pool.begin().await?;
+-        Self::record_failed_attempt_tx(&mut tx, now).await?;
++        Self::record_failed_attempt_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await?;
+         tx.commit().await?;
+         Ok(())
+     }
+@@ -242,17 +299,16 @@ impl PairingStore {
+     /// Runs all operations within the provided transaction to prevent pool re-entrancy and races.
+     async fn request_pairing_code_tx(
+         tx: &mut Transaction<'_, Sqlite>,
+-        user_id: u64,
++        platform_key: &str,
++        user_id_str: &str,
+         now: DateTime<Utc>,
+     ) -> Result<String> {
+-        if Self::is_platform_locked_tx(tx, now).await? {
++        if Self::is_platform_locked_tx(tx, platform_key, now).await? {
+             return Err(OmonError::Approval(
+                 "Pairing is locked out due to too many failed attempts".into(),
+             ));
+         }
+ 
+-        let user_id_str = user_id.to_string();
+-
+         // 1. Cleanup expired codes globally, propagating DB errors
+         Self::cleanup_expired_codes_tx(tx, now).await?;
+ 
+@@ -260,7 +316,7 @@ impl PairingStore {
+         let existing: Option<(String, DateTime<Utc>, DateTime<Utc>, i64)> = sqlx::query_as(
+             "SELECT code, created_at, expires_at, attempts FROM pairing_codes WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
+         )
+-        .bind(&user_id_str)
++        .bind(user_id_str)
+         .fetch_optional(&mut **tx)
+         .await?;
+ 
+@@ -268,7 +324,7 @@ impl PairingStore {
+             if attempts >= MAX_FAILED_ATTEMPTS {
+                 // If platform lockout has passed, this code row is expired/locked; delete it and allow new code issuance.
+                 sqlx::query("DELETE FROM pairing_codes WHERE user_id = ?")
+-                    .bind(&user_id_str)
++                    .bind(user_id_str)
+                     .execute(&mut **tx)
+                     .await?;
+             } else if expires_at > now {
+@@ -278,7 +334,7 @@ impl PairingStore {
+ 
+         // Delete any previous code for this user before enforcing capacity and inserting a new code
+         sqlx::query("DELETE FROM pairing_codes WHERE user_id = ?")
+-            .bind(&user_id_str)
++            .bind(user_id_str)
+             .execute(&mut **tx)
+             .await?;
+ 
+@@ -309,7 +365,7 @@ impl PairingStore {
+             "INSERT INTO pairing_codes (code, user_id, created_at, expires_at, attempts) VALUES (?, ?, ?, ?, 0)",
+         )
+         .bind(&raw_code)
+-        .bind(&user_id_str)
++        .bind(user_id_str)
+         .bind(now)
+         .bind(expires_at)
+         .execute(&mut **tx)
+@@ -327,7 +383,9 @@ impl PairingStore {
+         now: DateTime<Utc>,
+     ) -> Result<String> {
+         let mut tx = self.pool.begin().await?;
+-        let code = Self::request_pairing_code_tx(&mut tx, user_id, now).await?;
++        let code =
++            Self::request_pairing_code_tx(&mut tx, DEFAULT_PLATFORM_KEY, &user_id.to_string(), now)
++                .await?;
+         tx.commit().await?;
+         Ok(code)
+     }
+@@ -352,7 +410,7 @@ impl PairingStore {
+     ) -> Result<Option<String>> {
+         let mut tx = self.pool.begin().await?;
+ 
+-        if Self::is_platform_locked_tx(&mut tx, now).await? {
++        if Self::is_platform_locked_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await? {
+             tx.commit().await?;
+             return Ok(None);
+         }
+@@ -371,40 +429,17 @@ impl PairingStore {
+         }
+ 
+         // Atomically check rate limit and claim notification attempt slot.
+-        // If user was notified within RATE_LIMIT_SECONDS, rows_affected will be 0 (throttled).
+-        let claim_res = sqlx::query(
+-            "INSERT INTO pairing_notifications (user_id, last_notified_at)
+-             VALUES (?, ?)
+-             ON CONFLICT(user_id) DO UPDATE SET last_notified_at = excluded.last_notified_at
+-             WHERE (strftime('%s', ?) - strftime('%s', pairing_notifications.last_notified_at)) >= ?",
+-        )
+-        .bind(&user_id_str)
+-        .bind(now)
+-        .bind(now)
+-        .bind(RATE_LIMIT_SECONDS)
+-        .execute(&mut *tx)
+-        .await?;
+-
+-        if claim_res.rows_affected() == 0 {
++        if !Self::claim_notification_tx(&mut tx, &user_id_str, now).await? {
+             tx.commit().await?;
+             return Ok(None);
+         }
+ 
+         // Notification slot claimed; obtain active/new pairing code within the same transaction.
+         // Propagate any database error instead of swallowing it as throttled success.
+-        let code = Self::request_pairing_code_tx(&mut tx, user_id, now).await?;
++        let code =
++            Self::request_pairing_code_tx(&mut tx, DEFAULT_PLATFORM_KEY, &user_id_str, now).await?;
+ 
+-        // The notification table exists only to rate-limit; a row older than
+-        // the window can never throttle again, so drop it instead of letting
+-        // an unauthenticated population grow the table without bound.
+-        sqlx::query(
+-            "DELETE FROM pairing_notifications
+-             WHERE (strftime('%s', ?) - strftime('%s', last_notified_at)) > ?",
+-        )
+-        .bind(now)
+-        .bind(RATE_LIMIT_SECONDS)
+-        .execute(&mut *tx)
+-        .await?;
++        Self::prune_notifications_tx(&mut tx, now).await?;
+ 
+         tx.commit().await?;
+ 
+@@ -450,7 +485,7 @@ impl PairingStore {
+ 
+         let mut tx = self.pool.begin().await?;
+ 
+-        if Self::is_platform_locked_tx(&mut tx, now).await? {
++        if Self::is_platform_locked_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await? {
+             tx.commit().await?;
+             return Ok(PairingOutcome::LockedOut);
+         }
+@@ -465,7 +500,7 @@ impl PairingStore {
+         let Some(row) = record else {
+             // An unknown code only feeds the platform-wide lockout; it must not
+             // burn attempts on unrelated pending codes.
+-            Self::record_failed_attempt_tx(&mut tx, now).await?;
++            Self::record_failed_attempt_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await?;
+             tx.commit().await?;
+             return Ok(PairingOutcome::InvalidCode);
+         };
+@@ -513,14 +548,7 @@ impl PairingStore {
+         .map_err(|e| OmonError::Database(format!("failed to record paired user: {e}")))?;
+ 
+         // Reset platform failed attempts on successful pairing
+-        sqlx::query(
+-            "INSERT INTO pairing_platform_lockout (platform_key, locked_until, failed_attempts) VALUES (?, ?, 0)
+-             ON CONFLICT(platform_key) DO UPDATE SET failed_attempts = 0, locked_until = excluded.locked_until",
+-        )
+-        .bind(DEFAULT_PLATFORM_KEY)
+-        .bind(now)
+-        .execute(&mut *tx)
+-        .await?;
++        Self::reset_failed_attempts_tx(&mut tx, DEFAULT_PLATFORM_KEY, now).await?;
+ 
+         // Commit transaction before modifying in-memory cache
+         tx.commit().await?;
+@@ -551,6 +579,252 @@ impl PairingStore {
+     }
+ }
+ 
++pub const SLACK_PLATFORM_KEY: &str = "slack";
++/// Prefix for Slack user ids in the shared `pairing_codes`/`pairing_notifications` tables, so
++/// they never collide with Discord snowflakes and Discord `/pair` never accepts them.
++const SLACK_USER_PREFIX: &str = "slack:";
++
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++pub enum SlackPairingOutcome {
++    Success { user_id: String },
++    InvalidCode,
++    Expired,
++    LockedOut,
++}
++
++/// `PairingStore` for Slack string user ids: shares code generation, rate limiting and
++/// lockout rules (under platform key `slack`) and records approvals in `slack_paired_users`.
++#[derive(Clone)]
++pub struct SlackPairingStore {
++    pool: SqlitePool,
++    paired_cache: Arc<RwLock<HashSet<String>>>,
++}
++
++impl SlackPairingStore {
++    pub fn new(pool: SqlitePool) -> Self {
++        Self {
++            pool,
++            paired_cache: Arc::new(RwLock::new(HashSet::new())),
++        }
++    }
++
++    fn code_user_key(user_id: &str) -> String {
++        format!("{SLACK_USER_PREFIX}{user_id}")
++    }
++
++    pub async fn init_cache(&self) -> Result<()> {
++        let rows: Vec<(String,)> = sqlx::query_as("SELECT user_id FROM slack_paired_users")
++            .fetch_all(&self.pool)
++            .await?;
++        let mut set = self
++            .paired_cache
++            .write()
++            .unwrap_or_else(|poisoned| poisoned.into_inner());
++        set.clear();
++        set.extend(rows.into_iter().map(|(user_id,)| user_id));
++        Ok(())
++    }
++
++    pub async fn is_user_paired(&self, user_id: &str) -> bool {
++        self.is_user_paired_sync(user_id)
++    }
++
++    pub fn is_user_paired_sync(&self, user_id: &str) -> bool {
++        self.paired_cache
++            .read()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++            .contains(user_id)
++    }
++
++    pub async fn get_paired_user_ids(&self) -> Vec<String> {
++        self.get_paired_user_ids_sync()
++    }
++
++    pub fn get_paired_user_ids_sync(&self) -> Vec<String> {
++        self.paired_cache
++            .read()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++            .iter()
++            .cloned()
++            .collect()
++    }
++
++    pub async fn is_platform_locked_at(&self, now: DateTime<Utc>) -> Result<bool> {
++        let mut tx = self.pool.begin().await?;
++        let locked = PairingStore::is_platform_locked_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
++        tx.commit().await?;
++        Ok(locked)
++    }
++
++    pub async fn is_platform_locked(&self) -> Result<bool> {
++        self.is_platform_locked_at(Utc::now()).await
++    }
++
++    pub async fn record_failed_attempt_at(&self, now: DateTime<Utc>) -> Result<()> {
++        let mut tx = self.pool.begin().await?;
++        PairingStore::record_failed_attempt_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
++        tx.commit().await?;
++        Ok(())
++    }
++
++    pub async fn request_pairing_code_at(
++        &self,
++        user_id: &str,
++        now: DateTime<Utc>,
++    ) -> Result<String> {
++        let mut tx = self.pool.begin().await?;
++        let code = PairingStore::request_pairing_code_tx(
++            &mut tx,
++            SLACK_PLATFORM_KEY,
++            &Self::code_user_key(user_id),
++            now,
++        )
++        .await?;
++        tx.commit().await?;
++        Ok(code)
++    }
++
++    pub async fn request_pairing_code(&self, user_id: &str) -> Result<String> {
++        self.request_pairing_code_at(user_id, Utc::now()).await
++    }
++
++    /// `Ok(Some(code))` when a pairing prompt should be sent; `None` when paired, throttled or locked out.
++    pub async fn check_and_record_notification_at(
++        &self,
++        user_id: &str,
++        now: DateTime<Utc>,
++    ) -> Result<Option<String>> {
++        let mut tx = self.pool.begin().await?;
++        if PairingStore::is_platform_locked_tx(&mut tx, SLACK_PLATFORM_KEY, now).await? {
++            tx.commit().await?;
++            return Ok(None);
++        }
++        let paired: Option<(String,)> =
++            sqlx::query_as("SELECT user_id FROM slack_paired_users WHERE user_id = ?")
++                .bind(user_id)
++                .fetch_optional(&mut *tx)
++                .await?;
++        let user_key = Self::code_user_key(user_id);
++        if paired.is_some() || !PairingStore::claim_notification_tx(&mut tx, &user_key, now).await?
++        {
++            tx.commit().await?;
++            return Ok(None);
++        }
++        let code =
++            PairingStore::request_pairing_code_tx(&mut tx, SLACK_PLATFORM_KEY, &user_key, now)
++                .await?;
++        PairingStore::prune_notifications_tx(&mut tx, now).await?;
++        tx.commit().await?;
++        Ok(Some(code))
++    }
++
++    pub async fn check_and_record_notification(&self, user_id: &str) -> Result<Option<String>> {
++        self.check_and_record_notification_at(user_id, Utc::now())
++            .await
++    }
++
++    pub async fn record_confirmed_delivery_at(
++        &self,
++        user_id: &str,
++        delivered_at: DateTime<Utc>,
++    ) -> Result<()> {
++        sqlx::query(
++            "INSERT INTO pairing_notifications (user_id, last_notified_at) VALUES (?, ?)
++             ON CONFLICT(user_id) DO UPDATE SET last_notified_at = excluded.last_notified_at",
++        )
++        .bind(Self::code_user_key(user_id))
++        .bind(delivered_at)
++        .execute(&self.pool)
++        .await?;
++        Ok(())
++    }
++
++    pub async fn approve_code_at(
++        &self,
++        input_code: &str,
++        operator_id: &str,
++        now: DateTime<Utc>,
++    ) -> Result<SlackPairingOutcome> {
++        let normalized = PairingStore::normalize_code(input_code);
++        if normalized.is_empty() {
++            return Ok(SlackPairingOutcome::InvalidCode);
++        }
++        let mut tx = self.pool.begin().await?;
++        if PairingStore::is_platform_locked_tx(&mut tx, SLACK_PLATFORM_KEY, now).await? {
++            tx.commit().await?;
++            return Ok(SlackPairingOutcome::LockedOut);
++        }
++        let record: Option<PairingCodeRow> = sqlx::query_as(
++            "SELECT code, user_id, created_at, expires_at, attempts FROM pairing_codes WHERE code = ?",
++        )
++        .bind(&normalized)
++        .fetch_optional(&mut *tx)
++        .await?;
++        let Some((row, user_id)) = record.and_then(|row| {
++            let user_id = row.user_id.strip_prefix(SLACK_USER_PREFIX)?.to_owned();
++            Some((row, user_id))
++        }) else {
++            PairingStore::record_failed_attempt_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
++            tx.commit().await?;
++            return Ok(SlackPairingOutcome::InvalidCode);
++        };
++        if row.attempts >= MAX_FAILED_ATTEMPTS {
++            tx.commit().await?;
++            return Ok(SlackPairingOutcome::LockedOut);
++        }
++        if now > row.expires_at {
++            sqlx::query("DELETE FROM pairing_codes WHERE code = ?")
++                .bind(&row.code)
++                .execute(&mut *tx)
++                .await?;
++            tx.commit().await?;
++            return Ok(SlackPairingOutcome::Expired);
++        }
++        let claimed = sqlx::query("DELETE FROM pairing_codes WHERE code = ?")
++            .bind(&row.code)
++            .execute(&mut *tx)
++            .await?;
++        if claimed.rows_affected() == 0 {
++            tx.commit().await?;
++            return Ok(SlackPairingOutcome::InvalidCode);
++        }
++        sqlx::query(
++            "INSERT INTO slack_paired_users (user_id, paired_at, operator_id) VALUES (?, ?, ?)
++             ON CONFLICT(user_id) DO NOTHING",
++        )
++        .bind(&user_id)
++        .bind(now)
++        .bind(operator_id)
++        .execute(&mut *tx)
++        .await
++        .map_err(|e| OmonError::Database(format!("failed to record paired slack user: {e}")))?;
++        PairingStore::reset_failed_attempts_tx(&mut tx, SLACK_PLATFORM_KEY, now).await?;
++        tx.commit().await?;
++
++        self.paired_cache
++            .write()
++            .unwrap_or_else(|poisoned| poisoned.into_inner())
++            .insert(user_id.clone());
++        if let Err(error) = sqlx::query("DELETE FROM pairing_notifications WHERE user_id = ?")
++            .bind(&row.user_id)
++            .execute(&self.pool)
++            .await
++        {
++            tracing::warn!(%error, %user_id, "failed to prune slack pairing notification row after pairing");
++        }
++        Ok(SlackPairingOutcome::Success { user_id })
++    }
++
++    pub async fn approve_code(
++        &self,
++        input_code: &str,
++        operator_id: &str,
++    ) -> Result<SlackPairingOutcome> {
++        self.approve_code_at(input_code, operator_id, Utc::now())
++            .await
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -1188,4 +1462,112 @@ mod tests {
+             "paired user's notification row must be deleted"
+         );
+     }
++
++    #[tokio::test]
++    async fn slack_store_pairs_string_ids_into_its_own_table() {
++        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
++        let slack = SlackPairingStore::new(pool.clone());
++        let discord = PairingStore::new(pool.clone());
++        slack.init_cache().await.unwrap();
++
++        let code = slack
++            .check_and_record_notification("U0STRANGER")
++            .await
++            .unwrap()
++            .expect("first prompt is sent");
++        assert_eq!(
++            slack
++                .check_and_record_notification("U0STRANGER")
++                .await
++                .unwrap(),
++            None
++        );
++        assert_eq!(
++            slack.request_pairing_code("U0STRANGER").await.unwrap(),
++            code
++        );
++
++        assert_eq!(
++            discord.approve_code(&code, 1).await.unwrap(),
++            PairingOutcome::InvalidCode,
++            "Discord /pair must not consume Slack codes"
++        );
++        assert_eq!(
++            slack.approve_code(&code, "UOWNER").await.unwrap(),
++            SlackPairingOutcome::Success {
++                user_id: "U0STRANGER".into()
++            }
++        );
++        assert!(slack.is_user_paired("U0STRANGER").await);
++        let (operator,): (String,) =
++            sqlx::query_as("SELECT operator_id FROM slack_paired_users WHERE user_id = ?")
++                .bind("U0STRANGER")
++                .fetch_one(&pool)
++                .await
++                .unwrap();
++        assert_eq!(operator, "UOWNER");
++        let discord_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM paired_users")
++            .fetch_one(&pool)
++            .await
++            .unwrap();
++        assert_eq!(discord_rows, 0);
++        assert_eq!(
++            slack
++                .check_and_record_notification("U0STRANGER")
++                .await
++                .unwrap(),
++            None
++        );
++
++        let reloaded = SlackPairingStore::new(pool);
++        reloaded.init_cache().await.unwrap();
++        assert_eq!(
++            reloaded.get_paired_user_ids_sync(),
++            vec!["U0STRANGER".to_owned()]
++        );
++    }
++
++    #[tokio::test]
++    async fn slack_lockout_is_separate_from_discord() {
++        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
++        let slack = SlackPairingStore::new(pool.clone());
++        let discord = PairingStore::new(pool);
++        let now = Utc::now();
++        let code = slack.request_pairing_code_at("U1", now).await.unwrap();
++
++        for _ in 0..MAX_FAILED_ATTEMPTS {
++            assert_eq!(
++                slack
++                    .approve_code_at("ZZZZ-ZZZZ", "UOWNER", now)
++                    .await
++                    .unwrap(),
++                SlackPairingOutcome::InvalidCode
++            );
++        }
++        assert!(slack.is_platform_locked_at(now).await.unwrap());
++        assert!(!discord.is_platform_locked_at(now).await.unwrap());
++        assert_eq!(
++            slack.approve_code_at(&code, "UOWNER", now).await.unwrap(),
++            SlackPairingOutcome::LockedOut
++        );
++        assert!(slack.request_pairing_code_at("U2", now).await.is_err());
++
++        let later = now + chrono::Duration::seconds(LOCKOUT_DURATION_SECONDS + 1);
++        assert!(!slack.is_platform_locked_at(later).await.unwrap());
++        assert_eq!(
++            slack.approve_code_at(&code, "UOWNER", later).await.unwrap(),
++            SlackPairingOutcome::Success {
++                user_id: "U1".into()
++            }
++        );
++        let expired = slack.request_pairing_code_at("U3", later).await.unwrap();
++        let after_ttl = later + chrono::Duration::seconds(CODE_TTL_SECONDS + 1);
++        assert_eq!(
++            slack
++                .approve_code_at(&expired, "UOWNER", after_ttl)
++                .await
++                .unwrap(),
++            SlackPairingOutcome::Expired
++        );
++    }
+ }
+diff --git a/src/discord/session_commands.rs b/src/discord/session_commands.rs
+new file mode 100644
+index 0000000..f5dfab4
+--- /dev/null
++++ b/src/discord/session_commands.rs
+@@ -0,0 +1,482 @@
++use chrono::Utc;
++use poise::CreateReply;
++use serde_json::Value;
++
++use super::commands::{chunk_slash_reply, CommandError, PoiseContext};
++use crate::sessions::control::{SendMode, SessionControl, Target};
++use crate::sessions::overview::{self, format_detail, format_overview, DISCORD_LIMIT};
++use crate::sessions::watch;
++
++pub fn owner_allowed(author_id: u64) -> bool {
++    crate::sessions::status_reply::owner_id() == author_id.to_string()
++}
++
++pub fn reply_ephemeral(guild: bool) -> bool {
++    guild
++}
++
++async fn check_owner_or_reject(ctx: PoiseContext<'_>) -> Result<bool, CommandError> {
++    if !owner_allowed(ctx.author().id.get()) {
++        ctx.send(
++            CreateReply::default()
++                .content("이 명령은 소유자만 사용할 수 있어요.")
++                .ephemeral(true),
++        )
++        .await?;
++        return Ok(false);
++    }
++    Ok(true)
++}
++
++async fn send_reply_chunked(
++    ctx: PoiseContext<'_>,
++    ephemeral: bool,
++    text: &str,
++) -> Result<(), CommandError> {
++    let chunks = chunk_slash_reply(text, DISCORD_LIMIT);
++    if chunks.is_empty() {
++        ctx.send(
++            CreateReply::default()
++                .content("(내용 없음)")
++                .ephemeral(ephemeral),
++        )
++        .await?;
++        return Ok(());
++    }
++
++    for chunk in chunks {
++        ctx.send(CreateReply::default().content(chunk).ephemeral(ephemeral))
++            .await?;
++    }
++    Ok(())
++}
++
++async fn send_error(
++    ctx: PoiseContext<'_>,
++    ephemeral: bool,
++    error: impl std::fmt::Display,
++) -> Result<(), CommandError> {
++    ctx.send(
++        CreateReply::default()
++            .content(format!("⚠️ {error}"))
++            .ephemeral(ephemeral),
++    )
++    .await?;
++    Ok(())
++}
++
++#[poise::command(
++    slash_command,
++    subcommands("overview", "read", "send", "stop", "answer", "watch", "unwatch")
++)]
++pub async fn sessions(_ctx: PoiseContext<'_>) -> Result<(), CommandError> {
++    Ok(())
++}
++
++#[poise::command(slash_command)]
++pub async fn overview(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let overview_data = overview::collect(&control, 100).await;
++    let formatted = format_overview(&overview_data, Utc::now(), DISCORD_LIMIT);
++    send_reply_chunked(ctx, ephemeral, &formatted).await
++}
++
++#[poise::command(slash_command)]
++pub async fn read(
++    ctx: PoiseContext<'_>,
++    #[description = "Target session (<machine>:<session_id or prefix>)"] target: String,
++    #[description = "Max lines or items to fetch (default: 20)"] limit: Option<usize>,
++) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let parsed_target: Target = match target.parse() {
++        Ok(t) => t,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let (resolved_target, session) = match control.resolve(&parsed_target).await {
++        Ok(res) => res,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let limit_val = limit.unwrap_or(20);
++    let transcript_value = match control.read(&resolved_target, limit_val, None).await {
++        Ok(v) => v,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let mut transcript_tail = Vec::new();
++    if let Some(items) = transcript_value.get("items").and_then(Value::as_array) {
++        for item in items {
++            let role = item
++                .get("role")
++                .and_then(Value::as_str)
++                .unwrap_or("unknown");
++            let content = item.get("content").and_then(Value::as_str).unwrap_or("");
++            transcript_tail.push(format!("{role}: {content}"));
++        }
++    }
++
++    let probe = crate::sessions::probe::Probe::new(control.runner());
++    let snapshot = probe.snapshot(resolved_target.machine(), 100).await.ok();
++    let live_session = snapshot
++        .as_ref()
++        .and_then(|snap| {
++            snap.sessions
++                .iter()
++                .find(|s| s.session_id == session.session_id || s.routing_id == session.session_id)
++        })
++        .cloned()
++        .unwrap_or_else(|| crate::sessions::probe::LiveSession {
++            machine: resolved_target.machine().to_string(),
++            session_id: session.session_id.clone(),
++            routing_id: session.session_id.clone(),
++            endpoint_kind: "unknown".to_string(),
++            name: session.name.clone(),
++            cwd: None,
++            streaming: false,
++            compacting: false,
++            blocking_question: false,
++            pending_messages: 0,
++            message_count: 0,
++            last_user: String::new(),
++            last_assistant: String::new(),
++            questions: Vec::new(),
++            messages_error: None,
++            updated_at: None,
++        });
++
++    let detail = format_detail(
++        &resolved_target.to_string(),
++        &live_session,
++        &transcript_tail,
++        DISCORD_LIMIT,
++    );
++    send_reply_chunked(ctx, ephemeral, &detail).await
++}
++
++#[derive(Debug, poise::ChoiceParameter)]
++pub enum SlashSendMode {
++    #[name = "auto"]
++    Auto,
++    #[name = "steer"]
++    Steer,
++    #[name = "follow_up"]
++    FollowUp,
++}
++
++impl From<SlashSendMode> for SendMode {
++    fn from(mode: SlashSendMode) -> Self {
++        match mode {
++            SlashSendMode::Auto => SendMode::Auto,
++            SlashSendMode::Steer => SendMode::Steer,
++            SlashSendMode::FollowUp => SendMode::FollowUp,
++        }
++    }
++}
++
++#[poise::command(slash_command)]
++pub async fn send(
++    ctx: PoiseContext<'_>,
++    #[description = "Target session (<machine>:<session_id or prefix>)"] target: String,
++    #[description = "Instruction text to send"] text: String,
++    #[description = "Send mode (auto, steer, follow_up)"] mode: Option<SlashSendMode>,
++) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let parsed_target: Target = match target.parse() {
++        Ok(t) => t,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let (resolved_target, _) = match control.resolve(&parsed_target).await {
++        Ok(res) => res,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let send_mode = mode.map(SendMode::from).unwrap_or(SendMode::Auto);
++    let key = uuid::Uuid::new_v4();
++
++    if let Err(e) = control.send(&resolved_target, &text, send_mode, key).await {
++        return send_error(ctx, ephemeral, e).await;
++    }
++
++    let pool = &ctx.data().pool;
++    let target_str = resolved_target.to_string();
++    let watched = match watch::watch(pool, &target_str).await {
++        Ok(()) => "감시 목록에 등록했어요".to_owned(),
++        Err(error) => {
++            tracing::warn!(%error, target = %target_str, "auto-watch after send failed");
++            format!("감시 등록은 실패했어요: {error}")
++        }
++    };
++
++    ctx.send(
++        CreateReply::default()
++            .content(format!("✅ `{target_str}`로 지시를 전송했어요. {watched}."))
++            .ephemeral(ephemeral),
++    )
++    .await?;
++    Ok(())
++}
++
++#[poise::command(slash_command)]
++pub async fn stop(
++    ctx: PoiseContext<'_>,
++    #[description = "Target session (<machine>:<session_id or prefix>)"] target: String,
++) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let parsed_target: Target = match target.parse() {
++        Ok(t) => t,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let (resolved_target, _) = match control.resolve(&parsed_target).await {
++        Ok(res) => res,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    if let Err(e) = control.interrupt(&resolved_target).await {
++        return send_error(ctx, ephemeral, e).await;
++    }
++
++    ctx.send(
++        CreateReply::default()
++            .content(format!(
++                "🛑 `{}` 실행을 중단(인터럽트)했어요.",
++                resolved_target
++            ))
++            .ephemeral(ephemeral),
++    )
++    .await?;
++    Ok(())
++}
++
++#[poise::command(slash_command)]
++pub async fn answer(
++    ctx: PoiseContext<'_>,
++    #[description = "Target session (<machine>:<session_id or prefix>)"] target: String,
++    #[description = "Answer text or selected option label"] text: String,
++    #[description = "Request ID of the question (optional if only 1 pending)"] request_id: Option<
++        String,
++    >,
++) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let parsed_target: Target = match target.parse() {
++        Ok(t) => t,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let (resolved_target, _) = match control.resolve(&parsed_target).await {
++        Ok(res) => res,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    if let Err(e) = control
++        .answer(&resolved_target, &text, request_id.as_deref())
++        .await
++    {
++        return send_error(ctx, ephemeral, e).await;
++    }
++
++    ctx.send(
++        CreateReply::default()
++            .content(format!(
++                "💬 `{}` 질문에 답변을 전송했어요.",
++                resolved_target
++            ))
++            .ephemeral(ephemeral),
++    )
++    .await?;
++    Ok(())
++}
++
++#[poise::command(slash_command)]
++pub async fn watch(
++    ctx: PoiseContext<'_>,
++    #[description = "Target session (<machine>:<session_id or prefix>)"] target: String,
++) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let parsed_target: Target = match target.parse() {
++        Ok(t) => t,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let (resolved_target, _) = match control.resolve(&parsed_target).await {
++        Ok(res) => res,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let pool = &ctx.data().pool;
++    let target_str = resolved_target.to_string();
++    if let Err(e) = watch::watch(pool, &target_str).await {
++        return send_error(ctx, ephemeral, e).await;
++    }
++
++    ctx.send(
++        CreateReply::default()
++            .content(format!(
++                "👀 `{}` 세션을 감시 목록에 등록했어요.",
++                target_str
++            ))
++            .ephemeral(ephemeral),
++    )
++    .await?;
++    Ok(())
++}
++
++#[poise::command(slash_command)]
++pub async fn unwatch(
++    ctx: PoiseContext<'_>,
++    #[description = "Target session (<machine>:<session_id or prefix>)"] target: String,
++) -> Result<(), CommandError> {
++    if !check_owner_or_reject(ctx).await? {
++        return Ok(());
++    }
++    let ephemeral = reply_ephemeral(ctx.guild_id().is_some());
++    if ephemeral {
++        ctx.defer_ephemeral().await?;
++    } else {
++        ctx.defer().await?;
++    }
++
++    let parsed_target: Target = match target.parse() {
++        Ok(t) => t,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let control = match SessionControl::from_environment() {
++        Ok(c) => c,
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    };
++
++    let target_str = match control.resolve(&parsed_target).await {
++        Ok((resolved, _)) => resolved.to_string(),
++        Err(_) => parsed_target.to_string(),
++    };
++
++    let pool = &ctx.data().pool;
++    match watch::unwatch(pool, &target_str).await {
++        Ok(true) => {
++            ctx.send(
++                CreateReply::default()
++                    .content(format!("제외: `{}` 세션 감시를 해제했어요.", target_str))
++                    .ephemeral(ephemeral),
++            )
++            .await?;
++        }
++        Ok(false) => {
++            ctx.send(
++                CreateReply::default()
++                    .content(format!("`{}` 세션은 감시 목록에 없었어요.", target_str))
++                    .ephemeral(ephemeral),
++            )
++            .await?;
++        }
++        Err(e) => return send_error(ctx, ephemeral, e).await,
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_owner_allowed() {
++        let owner: u64 = crate::sessions::status_reply::owner_id()
++            .parse()
++            .expect("owner id is numeric");
++        assert!(owner_allowed(owner));
++        assert!(!owner_allowed(owner.wrapping_add(1)));
++        assert!(!owner_allowed(0));
++    }
++
++    #[test]
++    fn test_reply_ephemeral() {
++        assert!(reply_ephemeral(true));
++        assert!(!reply_ephemeral(false));
++    }
++}
+diff --git a/src/multiplexer/actor.rs b/src/multiplexer/actor.rs
+index 4014dd4..68b0b2d 100644
+--- a/src/multiplexer/actor.rs
++++ b/src/multiplexer/actor.rs
+@@ -28,6 +28,10 @@ const MAX_REMEMBERED_COMPLETED_INBOUND: usize = 256;
+ /// would ever see it again. Moving the cursor back to just before it lets the next
+ /// startup backfill fetch and route it.
+ async fn rewind_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
++    if event.session.platform == crate::slack::PLATFORM {
++        rewind_slack_backfill_cursor(pool, event).await;
++        return;
++    }
+     if event.session.platform != "discord" {
+         return;
+     }
+@@ -78,6 +82,70 @@ async fn rewind_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
+     }
+ }
+ 
++/// Slack counterpart of `rewind_backfill_cursor` over `slack_cursors`, keyed by
++/// (bot, channel, thread_ts or ''). Slack ts values are fixed-width `secs.micros`, so they
++/// compare as strings once the earliest dropped message is known.
++async fn rewind_slack_backfill_cursor(pool: &SqlitePool, event: &InboundEvent) {
++    let Some(bot_id) = event.session.bot_id.as_deref() else {
++        return;
++    };
++    let own_ts = event.platform_message_id.trim();
++    if parse_slack_ts(own_ts).is_none() {
++        return;
++    }
++    let constituents: Vec<String> = match event.delivery_id.as_deref() {
++        Some(delivery_id) => sqlx::query_scalar(
++            "SELECT constituent_id FROM delivery_ledger_constituents
++             WHERE parent_delivery_id = ? AND constituent_id LIKE 'slack:%'",
++        )
++        .bind(delivery_id)
++        .fetch_all(pool)
++        .await
++        .unwrap_or_default(),
++        None => Vec::new(),
++    };
++    let earliest = constituents
++        .iter()
++        .filter_map(|id| id.rsplit(':').next())
++        .chain(std::iter::once(own_ts))
++        .filter_map(|ts| parse_slack_ts(ts).map(|parsed| (parsed, ts)))
++        .min()
++        .map(|(parsed, _)| parsed);
++    let Some(before) = earliest.and_then(slack_ts_before) else {
++        return;
++    };
++    let thread_ts = event.session.thread_id.as_deref().unwrap_or("");
++    let result = sqlx::query(
++        "UPDATE slack_cursors SET last_ts = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
++         WHERE bot_id = ? AND channel_id = ? AND thread_ts = ? AND last_ts >= ?",
++    )
++    .bind(&before)
++    .bind(bot_id)
++    .bind(&event.session.channel_id)
++    .bind(thread_ts)
++    .bind(&before)
++    .execute(pool)
++    .await;
++    if let Err(error) = result {
++        tracing::warn!(%error, channel_id = %event.session.channel_id, "failed to rewind Slack backfill cursor for a dropped queued message");
++    }
++}
++
++fn parse_slack_ts(ts: &str) -> Option<(u64, u32)> {
++    let (secs, micros) = ts.split_once('.')?;
++    if micros.len() != 6 {
++        return None;
++    }
++    Some((secs.parse().ok()?, micros.parse().ok()?))
++}
++
++fn slack_ts_before((secs, micros): (u64, u32)) -> Option<String> {
++    match micros {
++        0 => secs.checked_sub(1).map(|secs| format!("{secs}.999999")),
++        micros => Some(format!("{secs}.{:06}", micros - 1)),
++    }
++}
++
+ pub use crate::agent::AgentBackend;
+ pub use crate::agent::AgentBackend as AgentRunner;
+ 
+@@ -97,6 +165,17 @@ pub trait OutboundDispatcher: Send + Sync + 'static {
+         })
+         .await
+     }
++
++    /// Posts one message and returns its platform id, so it can be edited in place later.
++    /// `None` means this transport cannot report message ids.
++    async fn post_status(
++        &self,
++        _session: &SessionKey,
++        _content: String,
++        _reply_to: Option<String>,
++    ) -> Result<Option<String>> {
++        Ok(None)
++    }
+ }
+ 
+ pub(crate) enum ActorCommand {
+@@ -474,6 +553,34 @@ impl SessionActor {
+                         }
+                     }
+ 
++                    let mut status_driver = match &self.dispatcher {
++                        Some(dispatcher)
++                            if crate::report::status::status_message_enabled()
++                                && event.origin == crate::EventOrigin::User
++                                && !turn_context.key.user_id.starts_with("cron:")
++                                && is_owner_lead_session(&turn_context.key, None) =>
++                        {
++                            Some(
++                                crate::report::status::StatusDriver::start(
++                                    self.pool.clone(),
++                                    dispatcher.clone(),
++                                    crate::report::status::TurnStart {
++                                        session: turn_context.key.clone(),
++                                        event_id: event_id.to_string(),
++                                        owner_text: event.content.clone(),
++                                        reply_to: Some(reply_to.clone()),
++                                        owner_message_at: Some(event.received_at),
++                                        started_at: Utc::now(),
++                                    },
++                                )
++                                .await,
++                            )
++                        }
++                        _ => None,
++                    };
++
++                    // One "queued" notice per running turn; a fresh turn starts with it unsent.
++                    let mut queued_notice_sent = false;
+                     let runner = self.runner.clone();
+                     let mut run = Box::pin(runner.run_cancelable(
+                         &mut turn_context,
+@@ -481,6 +588,18 @@ impl SessionActor {
+                         cancellation.clone(),
+                     ));
+                     let outcome = loop {
++                        let status_due = status_driver.as_ref().map(|driver| {
++                            tokio::time::Instant::now()
++                                + (driver.next_due() - Utc::now())
++                                    .to_std()
++                                    .unwrap_or(Duration::ZERO)
++                        });
++                        let status_sleep = async move {
++                            match status_due {
++                                Some(due) => tokio::time::sleep_until(due).await,
++                                None => std::future::pending::<()>().await,
++                            }
++                        };
+                         tokio::select! {
+                             biased;
+                             _ = service_shutdown.cancelled() => {
+@@ -507,8 +626,56 @@ impl SessionActor {
+                                         pending_events.push_back(command);
+                                     }
+                                     Some(ActorCommand::Event(next)) => {
++                                        // A short reply answers a pending approval only when the
++                                        // platform author is the owner; run it off the loop.
++                                        let owner = crate::context::owner_author_for(&self.context.key);
++                                        if next.origin == crate::EventOrigin::User
++                                            && owner.is_some()
++                                            && next.author_id.as_deref() == owner.as_deref()
++                                            && is_owner_lead_session(&self.context.key, None)
++                                            && crate::autonomy::parse_short_owner_reply(
++                                                &next.content,
++                                            )
++                                            .is_some()
++                                        {
++                                            let resolved = tokio::time::timeout(
++                                                Duration::from_secs(5),
++                                                self.runner.resolve_owner_reply(
++                                                    &self.context.key,
++                                                    &next.content,
++                                                ),
++                                            )
++                                            .await;
++                                            if let Ok(Ok(true)) = resolved {
++                                                self.complete_delivery(
++                                                    next.delivery_id.as_deref(),
++                                                    &Ok(()),
++                                                )
++                                                .await;
++                                                continue;
++                                            }
++                                        }
+                                         if pending_events.len() < MAX_PENDING_EVENTS {
++                                            let notify_reply_to = (!queued_notice_sent
++                                                && next.origin == crate::EventOrigin::User
++                                                && owner.is_some()
++                                                && next.author_id.as_deref() == owner.as_deref()
++                                                && !next.platform_message_id.is_empty()
++                                                && !self.context.key.user_id.starts_with("cron:"))
++                                            .then(|| next.platform_message_id.clone());
+                                             pending_events.push_back(ActorCommand::Event(next));
++                                            if let (Some(reply_to), Some(dispatcher)) =
++                                                (notify_reply_to, &self.dispatcher)
++                                            {
++                                                queued_notice_sent = true;
++                                                let _ = dispatcher
++                                                    .dispatch(OutboundAction::SendMessage {
++                                                        session: self.context.key.clone(),
++                                                        content: QUEUED_NOTICE_TEXT.to_string(),
++                                                        reply_to: Some(reply_to),
++                                                    })
++                                                    .await;
++                                            }
+                                         } else {
+                                             tracing::warn!(
+                                                 session = %self.context.key,
+@@ -624,10 +791,36 @@ impl SessionActor {
+                                 }
+                             }
+                             result = &mut run => break TurnOutcome::Completed(result),
++                            _ = status_sleep => {
++                                if let Some(driver) = status_driver.as_mut() {
++                                    driver.tick(Utc::now()).await;
++                                }
++                            }
+                         }
+                     };
+                     drop(run);
+ 
++                    if let Some(driver) = status_driver.take() {
++                        match &outcome {
++                            TurnOutcome::Completed(Ok(())) => {
++                                driver.finish(Utc::now(), Ok(())).await
++                            }
++                            TurnOutcome::Completed(Err(error)) => {
++                                driver.finish(Utc::now(), Err(error.to_string())).await
++                            }
++                            TurnOutcome::Stopped(_) => {
++                                driver
++                                    .finish(Utc::now(), Err("stopped by user".into()))
++                                    .await
++                            }
++                            TurnOutcome::Reset(_) => {
++                                driver.finish(Utc::now(), Err("session reset".into())).await
++                            }
++                            // The restarted turn re-adopts the stored message by event id.
++                            TurnOutcome::Shutdown => driver.abandon(),
++                        }
++                    }
++
+                     // Durable remote binding must never be lost on failure or overwritten by a stale actor copy,
+                     // unless a mid-turn reset deliberately cleared it.
+                     if !self.binding_cleared {
+@@ -715,7 +908,7 @@ impl SessionActor {
+                                     let _ = dispatcher
+                                         .dispatch(OutboundAction::SendMessage {
+                                             session: self.context.key.clone(),
+-                                            content: error.to_string(),
++                                            content: owner_failure_text(&error.to_string()),
+                                             reply_to: Some(reply_to),
+                                         })
+                                         .await;
+@@ -1161,7 +1354,8 @@ impl SessionActor {
+             }
+         }
+         if event.origin == crate::EventOrigin::User
+-            && event.session.platform == "discord"
++            && (event.session.platform == "discord"
++                || event.session.platform == crate::slack::PLATFORM)
+             && !event.platform_message_id.is_empty()
+         {
+             let index = crate::MessageSearchIndex::new(self.pool.clone());
+@@ -1247,7 +1441,39 @@ async fn discard_unfinished_inbound(
+     Ok(())
+ }
+ 
++const QUEUED_NOTICE_TEXT: &str = "앞 작업이 끝나면 바로 이어서 할게요.";
++
++/// Owner-facing Korean line for a failed turn; the raw error stays in the logs.
++fn owner_failure_text(error: &str) -> String {
++    let lower = error.to_ascii_lowercase();
++    let reason = if [
++        "no output within",
++        "turn interrupted",
++        "timeout waiting for turn/start",
++    ]
++    .iter()
++    .any(|needle| lower.contains(needle))
++    {
++        "모델이 응답하지 않았어요"
++    } else if ["quota", "429", "rate limit"]
++        .iter()
++        .any(|needle| lower.contains(needle))
++    {
++        "모델 사용량 한도에 걸렸어요"
++    } else {
++        "처리 중 오류가 났어요"
++    };
++    format!("⚠️ 응답을 만들지 못했어요 ({reason}). 같은 메시지를 다시 보내 주시면 이어서 할게요.")
++}
++
+ fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
++    if key.platform == crate::slack::PLATFORM {
++        return is_slack_owner_lead_session(
++            key,
++            &crate::slack::owner_id(),
++            &crate::slack::home_channels(),
++        );
++    }
+     if key.platform != "discord" {
+         return false;
+     }
+@@ -1323,6 +1549,14 @@ fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
+     false
+ }
+ 
++/// The Slack owner DM, or any conversation in a `SLACK_HOME_CHANNEL` (threads included).
++fn is_slack_owner_lead_session(key: &SessionKey, owner: &str, home_channels: &[String]) -> bool {
++    if key.guild_id.is_none() && key.user_id == owner {
++        return true;
++    }
++    home_channels.iter().any(|home| home == &key.channel_id)
++}
++
+ async fn load_context(
+     pool: &SqlitePool,
+     key: SessionKey,
+@@ -1528,6 +1762,97 @@ mod tests {
+     use crate::Database;
+     use tokio::sync::Barrier;
+ 
++    #[test]
++    fn slack_owner_lead_covers_owner_dm_and_home_channel() {
++        let home = vec!["CHOME".to_owned()];
++        let dm = SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER");
++        assert!(is_slack_owner_lead_session(&dm, "UOWNER", &home));
++        let other_dm = SessionKey::new("slack", None::<String>, "DX", None::<String>, "UX");
++        assert!(!is_slack_owner_lead_session(&other_dm, "UOWNER", &home));
++        let home_thread = SessionKey::new("slack", Some("T1"), "CHOME", Some("1.000001"), "UOWNER");
++        assert!(is_slack_owner_lead_session(&home_thread, "UOWNER", &home));
++        let elsewhere = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
++        assert!(!is_slack_owner_lead_session(&elsewhere, "UOWNER", &home));
++        assert!(!is_slack_owner_lead_session(&home_thread, "UOWNER", &[]));
++    }
++
++    #[test]
++    fn owner_failure_text_maps_known_causes_to_korean_reasons() {
++        let no_response = "⚠️ 응답을 만들지 못했어요 (모델이 응답하지 않았어요). 같은 메시지를 다시 보내 주시면 이어서 할게요.";
++        for error in [
++            "LLM error: turn interrupted: agent produced no output within 45s of starting the prompt",
++            "agent produced no output within 45s",
++            "Turn Interrupted",
++            "timeout waiting for turn/start",
++        ] {
++            assert_eq!(owner_failure_text(error), no_response, "{error}");
++        }
++        let quota = "⚠️ 응답을 만들지 못했어요 (모델 사용량 한도에 걸렸어요). 같은 메시지를 다시 보내 주시면 이어서 할게요.";
++        for error in [
++            "quota exhausted",
++            "HTTP 429 Too Many Requests",
++            "Rate limit reached",
++        ] {
++            assert_eq!(owner_failure_text(error), quota, "{error}");
++        }
++        assert_eq!(
++            owner_failure_text("database is locked"),
++            "⚠️ 응답을 만들지 못했어요 (처리 중 오류가 났어요). 같은 메시지를 다시 보내 주시면 이어서 할게요."
++        );
++    }
++
++    #[test]
++    fn slack_ts_predecessor_is_fixed_width() {
++        assert_eq!(
++            parse_slack_ts("1700000000.000100"),
++            Some((1_700_000_000, 100))
++        );
++        assert_eq!(parse_slack_ts("1700000000.1"), None);
++        assert_eq!(parse_slack_ts("abc"), None);
++        assert_eq!(
++            slack_ts_before((1_700_000_000, 100)).as_deref(),
++            Some("1700000000.000099")
++        );
++        assert_eq!(
++            slack_ts_before((1_700_000_000, 0)).as_deref(),
++            Some("1699999999.999999")
++        );
++        assert_eq!(slack_ts_before((0, 0)), None);
++    }
++
++    #[tokio::test]
++    async fn dropped_slack_message_rewinds_its_cursor_to_the_earliest_constituent() {
++        let db = Database::connect("sqlite::memory:").await.unwrap();
++        let pool = db.pool().clone();
++        sqlx::query(
++            "INSERT INTO slack_cursors (bot_id, channel_id, thread_ts, last_ts, updated_at) VALUES ('UBOT', 'C1', '', '1700000000.000300', CURRENT_TIMESTAMP), ('UBOT', 'C2', '', '1700000000.000300', CURRENT_TIMESTAMP)",
++        )
++        .execute(&pool)
++        .await
++        .unwrap();
++        sqlx::query("INSERT INTO delivery_ledger_constituents (parent_delivery_id, constituent_id) VALUES ('slack:C1:1700000000.000300', 'slack:C1:1700000000.000200')")
++            .execute(&pool)
++            .await
++            .unwrap();
++        let session = SessionKey::new("slack", Some("T1"), "C1", None::<String>, "UOWNER")
++            .with_bot_id("UBOT");
++        let event = InboundEvent::message(session, "1700000000.000300", "hi")
++            .with_delivery_id("slack:C1:1700000000.000300");
++        rewind_backfill_cursor(&pool, &event).await;
++        let cursors: Vec<(String, String)> =
++            sqlx::query_as("SELECT channel_id, last_ts FROM slack_cursors ORDER BY channel_id")
++                .fetch_all(&pool)
++                .await
++                .unwrap();
++        assert_eq!(
++            cursors,
++            [
++                ("C1".to_owned(), "1700000000.000199".to_owned()),
++                ("C2".to_owned(), "1700000000.000300".to_owned()),
++            ]
++        );
++    }
++
+     fn test_session(user: &str) -> SessionKey {
+         SessionKey::new("discord", Some("guild"), "channel", None::<String>, user)
+     }
+diff --git a/src/multiplexer/mod.rs b/src/multiplexer/mod.rs
+index 5c93f9e..fb1b687 100644
+--- a/src/multiplexer/mod.rs
++++ b/src/multiplexer/mod.rs
+@@ -1,11 +1,13 @@
+ mod actor;
+ mod gc;
++pub mod platform_router;
+ pub mod profile_routing;
+ pub mod restart_loop_guard;
+ mod router;
+ 
+ pub use actor::{record_inbound_transcript, AgentRunner, OutboundDispatcher, SessionActor};
+ pub use gc::ScaleToZero;
++pub use platform_router::PlatformRouter;
+ pub use profile_routing::{
+     parse_channel_prompts, parse_profile_routes, try_parse_profile_routes, ChannelPromptConfig,
+     ProfileRoute, ProfileRouter,
+diff --git a/src/multiplexer/platform_router.rs b/src/multiplexer/platform_router.rs
+new file mode 100644
+index 0000000..d5d8847
+--- /dev/null
++++ b/src/multiplexer/platform_router.rs
+@@ -0,0 +1,216 @@
++use std::collections::HashMap;
++use std::sync::Arc;
++
++use async_trait::async_trait;
++
++use super::OutboundDispatcher;
++use crate::{OmonError, OutboundAction, Result, SessionKey};
++
++/// Sends each action to the dispatcher registered for its session's platform. Actions without
++/// a session (approval expiry) go to every platform, since only the owner of the request id
++/// knows the message to update.
++#[derive(Clone, Default)]
++pub struct PlatformRouter {
++    routes: HashMap<String, Arc<dyn OutboundDispatcher>>,
++    fallback: Option<Arc<dyn OutboundDispatcher>>,
++}
++
++impl PlatformRouter {
++    pub fn new(fallback: Arc<dyn OutboundDispatcher>) -> Self {
++        Self {
++            routes: HashMap::new(),
++            fallback: Some(fallback),
++        }
++    }
++
++    /// Router for whichever transports started. Discord stays the fallback when present;
++    /// a Slack-only gateway falls back to Slack so cron and lane traffic still deliver.
++    pub fn for_transports(
++        discord: Option<Arc<dyn OutboundDispatcher>>,
++        slack: Option<Arc<dyn OutboundDispatcher>>,
++    ) -> Option<Self> {
++        let mut router = Self::new(discord.clone().or_else(|| slack.clone())?);
++        if let Some(discord) = discord {
++            router = router.with_platform("discord", discord);
++        }
++        if let Some(slack) = slack {
++            router = router.with_platform(crate::slack::PLATFORM, slack);
++        }
++        Some(router)
++    }
++
++    pub fn with_platform(
++        mut self,
++        platform: &str,
++        dispatcher: Arc<dyn OutboundDispatcher>,
++    ) -> Self {
++        self.routes
++            .insert(platform.to_ascii_lowercase(), dispatcher);
++        self
++    }
++
++    fn for_session(&self, session: &SessionKey) -> Result<&Arc<dyn OutboundDispatcher>> {
++        self.routes
++            .get(&session.platform.to_ascii_lowercase())
++            .or(self.fallback.as_ref())
++            .ok_or_else(|| {
++                OmonError::Config(format!(
++                    "no outbound dispatcher for platform {}",
++                    session.platform
++                ))
++            })
++    }
++}
++
++pub fn action_session(action: &OutboundAction) -> Option<&SessionKey> {
++    match action {
++        OutboundAction::SendMessage { session, .. }
++        | OutboundAction::EditMessage { session, .. }
++        | OutboundAction::DeleteMessage { session, .. }
++        | OutboundAction::UploadFile { session, .. }
++        | OutboundAction::Stream { session, .. }
++        | OutboundAction::Typing { session, .. }
++        | OutboundAction::React { session, .. }
++        | OutboundAction::ApprovalRequest { session, .. } => Some(session),
++        OutboundAction::ExpireApproval { .. } => None,
++    }
++}
++
++#[async_trait]
++impl OutboundDispatcher for PlatformRouter {
++    async fn dispatch(&self, action: OutboundAction) -> Result<()> {
++        match action_session(&action) {
++            Some(session) => self.for_session(session)?.dispatch(action).await,
++            None => {
++                let mut targets: Vec<&Arc<dyn OutboundDispatcher>> = self.routes.values().collect();
++                if let Some(fallback) = &self.fallback {
++                    if !targets.iter().any(|target| Arc::ptr_eq(target, fallback)) {
++                        targets.push(fallback);
++                    }
++                }
++                let mut first_error = None;
++                let mut delivered = false;
++                for target in targets {
++                    match target.dispatch(action.clone()).await {
++                        Ok(()) => delivered = true,
++                        Err(error) => {
++                            first_error.get_or_insert(error);
++                        }
++                    }
++                }
++                match (delivered, first_error) {
++                    (false, Some(error)) => Err(error),
++                    _ => Ok(()),
++                }
++            }
++        }
++    }
++
++    async fn owner_thread_is_private(&self, session: &SessionKey) -> bool {
++        match self.for_session(session) {
++            Ok(dispatcher) => dispatcher.owner_thread_is_private(session).await,
++            Err(_) => false,
++        }
++    }
++
++    async fn dispatch_direct_reply(&self, session: SessionKey, content: String) -> Result<()> {
++        self.for_session(&session)?
++            .dispatch_direct_reply(session, content)
++            .await
++    }
++
++    async fn post_status(
++        &self,
++        session: &SessionKey,
++        content: String,
++        reply_to: Option<String>,
++    ) -> Result<Option<String>> {
++        self.for_session(session)?
++            .post_status(session, content, reply_to)
++            .await
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use parking_lot::Mutex;
++
++    #[derive(Default)]
++    struct Recorder(Mutex<Vec<String>>, bool);
++
++    #[async_trait]
++    impl OutboundDispatcher for Recorder {
++        async fn dispatch(&self, action: OutboundAction) -> Result<()> {
++            if self.1 {
++                return Err(OmonError::Multiplexer("down".into()));
++            }
++            let label =
++                action_session(&action).map_or_else(|| "expire".to_owned(), |s| s.platform.clone());
++            self.0.lock().push(label);
++            Ok(())
++        }
++    }
++
++    fn send(platform: &str) -> OutboundAction {
++        OutboundAction::SendMessage {
++            session: SessionKey::new(platform, None::<String>, "c", None::<String>, "u"),
++            content: "hi".into(),
++            reply_to: None,
++        }
++    }
++
++    #[tokio::test]
++    async fn routes_by_platform_and_falls_back() {
++        let discord = Arc::new(Recorder::default());
++        let slack = Arc::new(Recorder::default());
++        let router = PlatformRouter::new(discord.clone()).with_platform("slack", slack.clone());
++        router.dispatch(send("slack")).await.unwrap();
++        router.dispatch(send("discord")).await.unwrap();
++        router.dispatch(send("cron")).await.unwrap();
++        assert_eq!(*slack.0.lock(), ["slack"]);
++        assert_eq!(*discord.0.lock(), ["discord", "cron"]);
++    }
++
++    #[tokio::test]
++    async fn slack_only_router_falls_back_to_slack() {
++        let slack = Arc::new(Recorder::default());
++        let router = PlatformRouter::for_transports(None, Some(slack.clone())).unwrap();
++        router.dispatch(send("discord")).await.unwrap();
++        router.dispatch(send("slack")).await.unwrap();
++        assert_eq!(*slack.0.lock(), ["discord", "slack"]);
++        assert!(PlatformRouter::for_transports(None, None).is_none());
++    }
++
++    #[tokio::test]
++    async fn both_transports_keep_discord_as_fallback() {
++        let discord = Arc::new(Recorder::default());
++        let slack = Arc::new(Recorder::default());
++        let router =
++            PlatformRouter::for_transports(Some(discord.clone()), Some(slack.clone())).unwrap();
++        router.dispatch(send("slack")).await.unwrap();
++        router.dispatch(send("cron")).await.unwrap();
++        router
++            .dispatch(OutboundAction::ExpireApproval {
++                request_id: uuid::Uuid::new_v4(),
++            })
++            .await
++            .unwrap();
++        assert_eq!(*slack.0.lock(), ["slack", "expire"]);
++        assert_eq!(*discord.0.lock(), ["cron", "expire"]);
++    }
++
++    #[tokio::test]
++    async fn expiry_reaches_every_platform_and_tolerates_one_failure() {
++        let discord = Arc::new(Recorder::default());
++        let slack = Arc::new(Recorder(Mutex::new(Vec::new()), true));
++        let router = PlatformRouter::new(discord.clone()).with_platform("slack", slack);
++        router
++            .dispatch(OutboundAction::ExpireApproval {
++                request_id: uuid::Uuid::new_v4(),
++            })
++            .await
++            .unwrap();
++        assert_eq!(*discord.0.lock(), ["expire"]);
++    }
++}
+diff --git a/src/multiplexer/router.rs b/src/multiplexer/router.rs
+index fb6bbf2..82a462f 100644
+--- a/src/multiplexer/router.rs
++++ b/src/multiplexer/router.rs
+@@ -515,6 +515,31 @@ impl SessionMultiplexer {
+         self.sessions.len()
+     }
+ 
++    /// Sessions running a turn or holding queued events; a restart would cut them off.
++    pub async fn busy_sessions(&self) -> usize {
++        let handles: Vec<_> = self
++            .sessions
++            .iter()
++            .map(|entry| entry.value().clone())
++            .collect();
++        let mut busy = 0;
++        for handle in handles {
++            if Self::has_unfinished_work(&handle).await {
++                busy += 1;
++            }
++        }
++        busy
++    }
++
++    /// Answers a pending approval with a short reply from the verified owner. Never reached
++    /// from lane steers or system text.
++    pub async fn resolve_owner_reply(&self, key: &SessionKey, text: &str) -> Result<bool> {
++        if crate::autonomy::parse_short_owner_reply(text).is_none() {
++            return Ok(false);
++        }
++        self.runner.resolve_owner_reply(key, text).await
++    }
++
+     pub async fn session_is_idle(&self, key: &SessionKey) -> Result<bool> {
+         let Some(handle) = self.sessions.get(key).map(|entry| entry.clone()) else {
+             return Ok(true);
+@@ -922,6 +947,7 @@ mod tests {
+             multiplexer.mark_in_flight_resume_pending().await.unwrap(),
+             1
+         );
++        assert_eq!(multiplexer.busy_sessions().await, 1);
+         assert_eq!(resume_pending(&db, &busy).await, 1);
+         assert_eq!(
+             resume_pending(&db, &idle).await,

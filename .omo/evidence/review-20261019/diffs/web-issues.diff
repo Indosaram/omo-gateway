@@ -1,0 +1,3156 @@
+diff --git a/web/src/tracker/inbox/model.tsx b/web/src/tracker/inbox/model.tsx
+new file mode 100644
+index 0000000..63f5972
+--- /dev/null
++++ b/web/src/tracker/inbox/model.tsx
+@@ -0,0 +1,115 @@
++import { AtSign, Bell, Bot, CheckCircle2, CircleAlert, CircleDot, MessageSquare, TrendingUp, UserPlus, XCircle } from 'lucide-react'
++import type { ReactNode } from 'react'
++import type { Issue, Notification, Project, User } from '../types'
++
++export type InboxFilter = 'all' | 'unread' | 'mentions' | 'snoozed'
++
++export const INBOX_FILTERS: { id: InboxFilter; label: string }[] = [
++  { id: 'all', label: 'All' },
++  { id: 'unread', label: 'Unread' },
++  { id: 'mentions', label: 'Mentions' },
++  { id: 'snoozed', label: 'Snoozed' },
++]
++
++export function isSnoozed(n: Notification, now = Date.now()): boolean {
++  return n.snoozed_until !== null && new Date(n.snoozed_until).getTime() > now
++}
++
++export function filterNotifications(items: Notification[], filter: InboxFilter, now = Date.now()): Notification[] {
++  return items
++    .filter((n) => !n.archived_at)
++    .filter((n) => {
++      switch (filter) {
++        case 'snoozed':
++          return isSnoozed(n, now)
++        case 'unread':
++          return !isSnoozed(n, now) && !n.read_at
++        case 'mentions':
++          return !isSnoozed(n, now) && (n.kind === 'mentioned' || n.kind === 'comment')
++        case 'all':
++          return !isSnoozed(n, now)
++      }
++    })
++    .sort((a, b) => b.created_at.localeCompare(a.created_at))
++}
++
++export function filterCount(items: Notification[], filter: InboxFilter): number {
++  const list = filterNotifications(items, filter)
++  return filter === 'snoozed' ? list.length : list.filter((n) => !n.read_at).length
++}
++
++export function kindIcon(kind: string): ReactNode {
++  const size = 10
++  switch (kind) {
++    case 'assigned':
++      return <UserPlus size={size} />
++    case 'mentioned':
++      return <AtSign size={size} />
++    case 'comment':
++      return <MessageSquare size={size} />
++    case 'status_change':
++      return <CircleDot size={size} />
++    case 'lane_blocked':
++      return <CircleAlert size={size} />
++    case 'lane_done_claimed':
++    case 'lane_verified':
++      return <CheckCircle2 size={size} />
++    case 'lane_failed':
++      return <XCircle size={size} />
++    case 'project_update':
++      return <TrendingUp size={size} />
++    case 'subscribed_update':
++      return <Bell size={size} />
++    default:
++      return <Bot size={size} />
++  }
++}
++
++export function describe(n: Notification, actor: User | null): string {
++  if (n.body.trim()) return n.body.trim().split('\n')[0]
++  const who = actor ? actor.display_name || actor.name : 'Someone'
++  switch (n.kind) {
++    case 'assigned':
++      return `${who} assigned the issue to you`
++    case 'mentioned':
++      return `${who} mentioned you`
++    case 'comment':
++      return `${who} commented`
++    case 'status_change':
++      return `${who} changed the status`
++    case 'lane_blocked':
++      return 'Agent is blocked and needs input'
++    case 'lane_done_claimed':
++      return 'Agent claims the work is done'
++    case 'lane_verified':
++      return 'Agent work was verified'
++    case 'lane_failed':
++      return 'Agent lane failed'
++    case 'project_update':
++      return `${who} posted a project update`
++    default:
++      return `${who} updated the issue`
++  }
++}
++
++export function notificationTitle(n: Notification, issue: Issue | undefined, project: Project | undefined): { id: string | null; title: string } {
++  if (issue) return { id: issue.identifier, title: issue.title }
++  if (project) return { id: null, title: project.name }
++  return { id: null, title: 'Notification' }
++}
++
++export function snoozeOptions(now = new Date()): { id: string; label: string; until: string }[] {
++  const at = (days: number, hour = 9) => {
++    const d = new Date(now)
++    d.setDate(d.getDate() + days)
++    d.setHours(hour, 0, 0, 0)
++    return d.toISOString()
++  }
++  const daysToMonday = ((8 - now.getDay()) % 7) || 7
++  return [
++    { id: '1h', label: 'In one hour', until: new Date(now.getTime() + 3_600_000).toISOString() },
++    { id: 'tomorrow', label: 'Tomorrow', until: at(1) },
++    { id: 'next-week', label: 'Next week', until: at(daysToMonday) },
++    { id: 'month', label: 'In one month', until: at(30) },
++  ]
++}
+diff --git a/web/src/tracker/issues/BoardView.tsx b/web/src/tracker/issues/BoardView.tsx
+new file mode 100644
+index 0000000..e285c7d
+--- /dev/null
++++ b/web/src/tracker/issues/BoardView.tsx
+@@ -0,0 +1,204 @@
++import {
++  DndContext,
++  DragOverlay,
++  PointerSensor,
++  closestCorners,
++  useDroppable,
++  useSensor,
++  useSensors,
++  type DragEndEvent,
++  type DragStartEvent,
++} from '@dnd-kit/core'
++import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
++import { CSS } from '@dnd-kit/utilities'
++import { Ellipsis, Plus } from 'lucide-react'
++import { useMemo, useState } from 'react'
++import { sortOrderBetween, type IssueGroup, type TrackerState } from '../store'
++import type { Issue, IssuePatch } from '../types'
++import { ContextMenu, PriorityIcon } from '../ui'
++import { issueContextItems } from './contextItems'
++import { mapPatchToIssueTeam, patchForMove, pickId, updateWithLaneToast, useCollection } from './model'
++import { AssigneeButton, GroupIcon, IssueChips, IssueStatusIcon } from './shared'
++
++const COLUMN_PREFIX = 'col:'
++
++function CardBody({ issue, t, overlay = false }: { issue: Issue; t: TrackerState; overlay?: boolean }) {
++  const c = useCollection()
++  const props = c.display.properties
++  const has = (p: (typeof props)[number]) => props.includes(p)
++  return (
++    <div className={`lic-card-inner${overlay ? ' lic-card-inner--overlay' : ''}`}>
++      <div className="lic-card-top">
++        {has('id') && <span className="lic-card-id t-3 tabular">{issue.identifier}</span>}
++        <span className="lic-grow" />
++        {has('assignee') && <AssigneeButton issue={issue} t={t} />}
++      </div>
++      <div className="lic-card-title">
++        {has('status') && (
++          <button
++            type="button"
++            className="lic-row-icon"
++            title="Change status"
++            onClick={(event) => {
++              event.stopPropagation()
++              c.openPicker('status', issue, event.currentTarget)
++            }}
++          >
++            <IssueStatusIcon issue={issue} t={t} />
++          </button>
++        )}
++        <span className="w-510">{issue.title}</span>
++      </div>
++      <div className="lic-card-props">
++        {has('priority') && (
++          <button
++            type="button"
++            className="lic-chip lic-chip--icon"
++            title="Set priority"
++            onClick={(event) => {
++              event.stopPropagation()
++              c.openPicker('priority', issue, event.currentTarget)
++            }}
++          >
++            <PriorityIcon priority={issue.priority} size={14} />
++          </button>
++        )}
++        <IssueChips issue={issue} t={t} properties={props} compact />
++      </div>
++    </div>
++  )
++}
++
++function BoardCard({ issue, t }: { issue: Issue; t: TrackerState }) {
++  const c = useCollection()
++  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: issue.id })
++  const selected = c.selection.has(issue.id)
++  const focused = c.focusedId === issue.id
++  return (
++    <ContextMenu items={() => issueContextItems(issue, t)} onSelect={(value: unknown) => c.contextAction(issue, pickId(value))}>
++      <div
++        ref={setNodeRef}
++        style={{ transform: CSS.Transform.toString(transform), transition }}
++        className={`lic-card${selected ? ' lic-card--selected' : ''}${focused ? ' lic-card--focused' : ''}${isDragging ? ' lic-card--dragging' : ''}`}
++        data-issue-card={issue.identifier}
++        data-issue-id={issue.id}
++        onClick={(event) => c.onRowClick(issue, event)}
++        onMouseMove={() => c.onRowHover(issue)}
++        {...attributes}
++        {...listeners}
++        tabIndex={focused ? 0 : -1}
++        role="option"
++        aria-selected={selected}
++      >
++        <CardBody issue={issue} t={t} />
++      </div>
++    </ContextMenu>
++  )
++}
++
++function BoardColumn({ group, t }: { group: IssueGroup; t: TrackerState }) {
++  const c = useCollection()
++  const { setNodeRef, isOver } = useDroppable({ id: `${COLUMN_PREFIX}${group.key}` })
++  return (
++    <div
++      className={`lic-col${isOver ? ' lic-col--over' : ''}`}
++      data-board-column={group.key}
++      data-board-column-name={group.label}
++    >
++      <div className="lic-col-head">
++        <GroupIcon group={group} t={t} />
++        <span className="w-510 lic-col-name">{group.label}</span>
++        <span className="t-3 tabular">{group.issues.length}</span>
++        <span className="lic-grow" />
++        <button type="button" className="lic-col-btn" aria-label="Column options" title="Column options">
++          <Ellipsis size={14} />
++        </button>
++        <button
++          type="button"
++          className="lic-col-btn"
++          aria-label="Create issue"
++          title="Create issue"
++          onClick={() => c.createInGroup([group])}
++        >
++          <Plus size={14} />
++        </button>
++      </div>
++      <SortableContext items={group.issues.map((i) => i.id)} strategy={verticalListSortingStrategy}>
++        <div ref={setNodeRef} className="lic-col-body">
++          {group.issues.map((issue) => (
++            <BoardCard key={issue.id} issue={issue} t={t} />
++          ))}
++          {group.issues.length === 0 && <div className="lic-col-empty t-4">No issues</div>}
++        </div>
++      </SortableContext>
++    </div>
++  )
++}
++
++export function BoardView({ groups, t }: { groups: IssueGroup[]; t: TrackerState }) {
++  const c = useCollection()
++  const [activeId, setActiveId] = useState<string | null>(null)
++  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }))
++  const groupOfIssue = useMemo(() => {
++    const map = new Map<string, IssueGroup>()
++    for (const group of groups) for (const issue of group.issues) if (!map.has(issue.id)) map.set(issue.id, group)
++    return map
++  }, [groups])
++  const active = activeId ? t.issuesById.get(activeId) : undefined
++
++  const onDragStart = (event: DragStartEvent) => setActiveId(String(event.active.id))
++
++  const onDragEnd = (event: DragEndEvent) => {
++    setActiveId(null)
++    const overId = event.over ? String(event.over.id) : null
++    if (!overId) return
++    const issueId = String(event.active.id)
++    const issue = t.issuesById.get(issueId)
++    if (!issue) return
++    const from = groupOfIssue.get(issueId)
++    const to = overId.startsWith(COLUMN_PREFIX)
++      ? groups.find((g) => g.key === overId.slice(COLUMN_PREFIX.length))
++      : groupOfIssue.get(overId)
++    if (!to) return
++
++    let patch: IssuePatch = {}
++    if (from?.key !== to.key) {
++      const movePatch = patchForMove(from, to)
++      if (!movePatch) return
++      patch = mapPatchToIssueTeam(movePatch, issue, t)
++    }
++    if (c.display.ordering === 'manual') {
++      const siblings = to.issues.filter((i) => i.id !== issueId)
++      const overIndex = overId.startsWith(COLUMN_PREFIX) ? siblings.length : siblings.findIndex((i) => i.id === overId)
++      const index = overIndex < 0 ? siblings.length : overIndex
++      const before = index > 0 ? siblings[index - 1].sort_order : null
++      const after = index < siblings.length ? siblings[index].sort_order : null
++      patch.sort_order = sortOrderBetween(before, after)
++    }
++    if (Object.keys(patch).length === 0) return
++    void updateWithLaneToast(t, [issueId], patch)
++  }
++
++  return (
++    <DndContext
++      sensors={sensors}
++      collisionDetection={closestCorners}
++      onDragStart={onDragStart}
++      onDragEnd={onDragEnd}
++      onDragCancel={() => setActiveId(null)}
++    >
++      <div className="lic-board">
++        {groups.map((group) => (
++          <BoardColumn key={group.key} group={group} t={t} />
++        ))}
++      </div>
++      <DragOverlay dropAnimation={{ duration: 160, easing: 'cubic-bezier(.2,0,0,1)' }}>
++        {active ? (
++          <div className="lic-card lic-card--overlay">
++            <CardBody issue={active} t={t} overlay />
++          </div>
++        ) : null}
++      </DragOverlay>
++    </DndContext>
++  )
++}
+diff --git a/web/src/tracker/issues/BulkBar.tsx b/web/src/tracker/issues/BulkBar.tsx
+new file mode 100644
+index 0000000..afe605a
+--- /dev/null
++++ b/web/src/tracker/issues/BulkBar.tsx
+@@ -0,0 +1,122 @@
++import { Box, CircleUser, Hexagon, Signal, Tag, Trash2, X } from 'lucide-react'
++import { useState } from 'react'
++import type { TrackerState } from '../store'
++import type { ID } from '../types'
++import {
++  AssigneePicker,
++  Button,
++  CycleIcon,
++  CyclePicker,
++  Dialog,
++  LabelPicker,
++  PriorityPicker,
++  ProjectPicker,
++  StatusPicker,
++  toast,
++} from '../ui'
++import { errorMessage, type PickerKind } from './model'
++
++type BulkPicker = Extract<PickerKind, 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'cycle'>
++
++const ACTIONS: { kind: BulkPicker; label: string; icon: React.ReactNode }[] = [
++  { kind: 'status', label: 'Status', icon: <Hexagon size={14} /> },
++  { kind: 'priority', label: 'Priority', icon: <Signal size={14} /> },
++  { kind: 'assignee', label: 'Assignee', icon: <CircleUser size={14} /> },
++  { kind: 'labels', label: 'Labels', icon: <Tag size={14} /> },
++  { kind: 'project', label: 'Project', icon: <Box size={14} /> },
++  { kind: 'cycle', label: 'Cycle', icon: <CycleIcon progress={0.5} /> },
++]
++
++export function BulkBar({ ids, t, onClear }: { ids: ID[]; t: TrackerState; onClear: () => void }) {
++  const [picker, setPicker] = useState<{ kind: BulkPicker; anchor: HTMLElement } | null>(null)
++  const [confirmDelete, setConfirmDelete] = useState(false)
++  const [deleting, setDeleting] = useState(false)
++  if (ids.length === 0) return null
++
++  const pickerProps = (kind: BulkPicker) => ({
++    issueIds: ids,
++    anchor: picker?.kind === kind ? picker.anchor : null,
++    open: picker?.kind === kind,
++    onOpenChange: (open: boolean) => {
++      if (!open) setPicker(null)
++    },
++  })
++
++  const runDelete = async () => {
++    setDeleting(true)
++    let failed = 0
++    let lastError = ''
++    for (const id of ids) {
++      try {
++        await t.deleteIssue(id)
++      } catch (err) {
++        failed += 1
++        lastError = errorMessage(err)
++      }
++    }
++    setDeleting(false)
++    setConfirmDelete(false)
++    if (failed > 0) toast.error(`${failed} of ${ids.length} issues could not be deleted: ${lastError}`)
++    else toast(`${ids.length} ${ids.length === 1 ? 'issue' : 'issues'} deleted`)
++    onClear()
++  }
++
++  return (
++    <>
++      <div className="lic-bulk anim-toast" role="toolbar" aria-label="Bulk actions" data-bulk-bar>
++        <span className="lic-bulk-count">
++          <span className="w-510 tabular" data-bulk-count>
++            {ids.length} selected
++          </span>
++          <button type="button" className="lic-bulk-clear" aria-label="Clear selection" title="Clear selection" onClick={onClear}>
++            <X size={13} />
++          </button>
++        </span>
++        <span className="lic-bulk-sep" />
++        {ACTIONS.map((action) => (
++          <button
++            key={action.kind}
++            type="button"
++            className="lic-bulk-btn"
++            data-bulk-action={action.kind}
++            onClick={(e) => setPicker({ kind: action.kind, anchor: e.currentTarget })}
++          >
++            {action.icon}
++            <span className="lic-bulk-label">{action.label}</span>
++          </button>
++        ))}
++        <span className="lic-bulk-sep" />
++        <button type="button" className="lic-bulk-btn lic-bulk-btn--danger" data-bulk-action="delete" onClick={() => setConfirmDelete(true)}>
++          <Trash2 size={14} />
++          <span className="lic-bulk-label">Delete</span>
++        </button>
++      </div>
++      <StatusPicker {...pickerProps('status')} />
++      <PriorityPicker {...pickerProps('priority')} />
++      <AssigneePicker {...pickerProps('assignee')} />
++      <LabelPicker {...pickerProps('labels')} />
++      <ProjectPicker {...pickerProps('project')} />
++      <CyclePicker {...pickerProps('cycle')} />
++      <Dialog
++        open={confirmDelete}
++        onOpenChange={setConfirmDelete}
++        title={`Delete ${ids.length} ${ids.length === 1 ? 'issue' : 'issues'}?`}
++        width={420}
++        footer={
++          <>
++            <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
++              Cancel
++            </Button>
++            <Button variant="danger" disabled={deleting} onClick={() => void runDelete()}>
++              Delete
++            </Button>
++          </>
++        }
++      >
++        <p className="t-2" style={{ margin: 0 }}>
++          This permanently deletes the selected issues. Issues linked to an agent lane cannot be deleted.
++        </p>
++      </Dialog>
++    </>
++  )
++}
+diff --git a/web/src/tracker/issues/DisplayOptions.tsx b/web/src/tracker/issues/DisplayOptions.tsx
+new file mode 100644
+index 0000000..660bae2
+--- /dev/null
++++ b/web/src/tracker/issues/DisplayOptions.tsx
+@@ -0,0 +1,196 @@
++import { ChartGantt, Columns3, List } from 'lucide-react'
++import type { DisplayProperty, Grouping, Ordering, ViewDisplay } from '../types'
++import { DEFAULT_DISPLAY } from '../types'
++import { Button, Popover, type Anchor } from '../ui'
++import type { CollectionLayout } from './model'
++
++const GROUPINGS: { id: Grouping; label: string }[] = [
++  { id: 'status', label: 'Status' },
++  { id: 'assignee', label: 'Assignee' },
++  { id: 'project', label: 'Project' },
++  { id: 'priority', label: 'Priority' },
++  { id: 'cycle', label: 'Cycle' },
++  { id: 'label', label: 'Label' },
++  { id: 'team', label: 'Team' },
++  { id: 'none', label: 'No grouping' },
++]
++
++const ORDERINGS: { id: Ordering; label: string }[] = [
++  { id: 'manual', label: 'Manual' },
++  { id: 'priority', label: 'Priority' },
++  { id: 'status', label: 'Status' },
++  { id: 'updated', label: 'Last updated' },
++  { id: 'created', label: 'Last created' },
++  { id: 'due', label: 'Due date' },
++  { id: 'title', label: 'Title' },
++]
++
++const COMPLETED: { id: ViewDisplay['show_completed']; label: string }[] = [
++  { id: 'all', label: 'All' },
++  { id: 'month', label: 'Past month' },
++  { id: 'week', label: 'Past week' },
++  { id: 'none', label: 'None' },
++]
++
++const PROPERTIES: { id: DisplayProperty; label: string }[] = [
++  { id: 'id', label: 'ID' },
++  { id: 'status', label: 'Status' },
++  { id: 'assignee', label: 'Assignee' },
++  { id: 'priority', label: 'Priority' },
++  { id: 'project', label: 'Project' },
++  { id: 'cycle', label: 'Cycle' },
++  { id: 'labels', label: 'Labels' },
++  { id: 'estimate', label: 'Estimate' },
++  { id: 'due', label: 'Due date' },
++  { id: 'sub_issues', label: 'Sub-issues' },
++  { id: 'lane', label: 'Agent lane' },
++  { id: 'created', label: 'Created' },
++  { id: 'updated', label: 'Updated' },
++]
++
++function Select<T extends string>({
++  value,
++  options,
++  onChange,
++  label,
++}: {
++  value: T
++  options: { id: T; label: string }[]
++  onChange: (value: T) => void
++  label: string
++}) {
++  return (
++    <select className="lic-select" aria-label={label} value={value} onChange={(e) => onChange(e.target.value as T)}>
++      {options.map((o) => (
++        <option key={o.id} value={o.id}>
++          {o.label}
++        </option>
++      ))}
++    </select>
++  )
++}
++
++function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
++  return (
++    <button
++      type="button"
++      role="switch"
++      aria-checked={checked}
++      aria-label={label}
++      className={`lic-switch${checked ? ' lic-switch--on' : ''}`}
++      onClick={() => onChange(!checked)}
++    >
++      <span className="lic-switch-knob" />
++    </button>
++  )
++}
++
++export function DisplayOptions({
++  open,
++  onOpenChange,
++  anchor,
++  display,
++  layout,
++  onLayout,
++  onChange,
++}: {
++  open: boolean
++  onOpenChange: (open: boolean) => void
++  anchor: Anchor
++  display: ViewDisplay
++  layout: CollectionLayout
++  onLayout: (layout: CollectionLayout) => void
++  onChange: (display: ViewDisplay) => void
++}) {
++  const set = <K extends keyof ViewDisplay>(key: K, value: ViewDisplay[K]) => onChange({ ...display, [key]: value })
++  const toggleProperty = (p: DisplayProperty) =>
++    set('properties', display.properties.includes(p) ? display.properties.filter((x) => x !== p) : [...display.properties, p])
++  return (
++    <Popover open={open} onOpenChange={onOpenChange} anchor={anchor} align="end" width={340}>
++      <div className="lic-display" data-display-options>
++        <div className="lic-layout-tabs" role="tablist">
++          {(
++            [
++              { id: 'list', label: 'List', icon: <List size={16} /> },
++              { id: 'board', label: 'Board', icon: <Columns3 size={16} /> },
++              { id: 'timeline', label: 'Timeline', icon: <ChartGantt size={16} /> },
++            ] as const
++          ).map((tab) => (
++            <button
++              key={tab.id}
++              type="button"
++              role="tab"
++              aria-selected={layout === tab.id}
++              className={`lic-layout-tab${layout === tab.id ? ' lic-layout-tab--on' : ''}`}
++              onClick={() => onLayout(tab.id)}
++            >
++              {tab.icon}
++              {tab.label}
++            </button>
++          ))}
++        </div>
++        <div className="lic-display-sec">
++          <div className="lic-display-row">
++            <span className="t-2">{layout === 'board' ? 'Columns' : 'Grouping'}</span>
++            <Select
++              label="Grouping"
++              value={display.grouping}
++              options={layout === 'board' ? GROUPINGS.filter((g) => g.id !== 'none') : GROUPINGS}
++              onChange={(v) => set('grouping', v)}
++            />
++          </div>
++          {layout === 'list' && (
++            <div className="lic-display-row">
++              <span className="t-2">Sub-grouping</span>
++              <Select
++                label="Sub-grouping"
++                value={display.sub_grouping}
++                options={GROUPINGS.filter((g) => g.id === 'none' || g.id !== display.grouping)}
++                onChange={(v) => set('sub_grouping', v)}
++              />
++            </div>
++          )}
++          <div className="lic-display-row">
++            <span className="t-2">Ordering</span>
++            <Select label="Ordering" value={display.ordering} options={ORDERINGS} onChange={(v) => set('ordering', v)} />
++          </div>
++        </div>
++        <div className="lic-display-sec">
++          <div className="lic-display-row">
++            <span className="t-2">Completed issues</span>
++            <Select label="Completed issues" value={display.show_completed} options={COMPLETED} onChange={(v) => set('show_completed', v)} />
++          </div>
++          <div className="lic-display-row">
++            <span className="t-2">Show sub-issues</span>
++            <Toggle label="Show sub-issues" checked={display.show_sub_issues} onChange={(v) => set('show_sub_issues', v)} />
++          </div>
++          <div className="lic-display-row">
++            <span className="t-2">Show empty groups</span>
++            <Toggle label="Show empty groups" checked={display.show_empty_groups} onChange={(v) => set('show_empty_groups', v)} />
++          </div>
++        </div>
++        <div className="lic-display-sec">
++          <div className="t-3 lic-display-label">Display properties</div>
++          <div className="lic-prop-pills">
++            {PROPERTIES.map((p) => (
++              <button
++                key={p.id}
++                type="button"
++                aria-pressed={display.properties.includes(p.id)}
++                className={`lic-prop-pill${display.properties.includes(p.id) ? ' lic-prop-pill--on' : ''}`}
++                onClick={() => toggleProperty(p.id)}
++              >
++                {p.label}
++              </button>
++            ))}
++          </div>
++        </div>
++        <div className="lic-display-foot">
++          <Button variant="ghost" size="sm" onClick={() => onChange({ ...DEFAULT_DISPLAY, layout: display.layout })}>
++            Reset to default
++          </Button>
++        </div>
++      </div>
++    </Popover>
++  )
++}
+diff --git a/web/src/tracker/issues/FilterMenu.tsx b/web/src/tracker/issues/FilterMenu.tsx
+new file mode 100644
+index 0000000..62f5548
+--- /dev/null
++++ b/web/src/tracker/issues/FilterMenu.tsx
+@@ -0,0 +1,460 @@
++import { Bot, Box, Calendar, CircleUser, Hexagon, ListFilter, Signal, Tag, Type, User, Users, X } from 'lucide-react'
++import { useMemo, useState } from 'react'
++import { cycleLabel, cycleStatus, stateProgress } from '../format'
++import type { TrackerState } from '../store'
++import type { ID, LaneStatus, Priority, StateType, ViewFilters } from '../types'
++import { LANE_STATUS_LABELS, PRIORITY_LABELS, STATE_TYPE_ORDER } from '../types'
++import { Avatar, CycleIcon, LabelDot, MenuList, Popover, PriorityIcon, ProjectIcon, StatusIcon, type Anchor, type MenuItem } from '../ui'
++
++export type FilterField =
++  | 'status'
++  | 'status_type'
++  | 'priority'
++  | 'assignee'
++  | 'creator'
++  | 'labels'
++  | 'project'
++  | 'cycle'
++  | 'team'
++  | 'lane'
++  | 'due'
++
++interface FieldDef {
++  id: FilterField
++  label: string
++  icon: React.ReactNode
++  plural: string
++  single?: boolean
++}
++
++const FIELD_DEFS: FieldDef[] = [
++  { id: 'status', label: 'Status', plural: 'statuses', icon: <Hexagon size={14} /> },
++  { id: 'status_type', label: 'Status type', plural: 'status types', icon: <Hexagon size={14} /> },
++  { id: 'priority', label: 'Priority', plural: 'priorities', icon: <Signal size={14} /> },
++  { id: 'assignee', label: 'Assignee', plural: 'assignees', icon: <CircleUser size={14} /> },
++  { id: 'creator', label: 'Creator', plural: 'creators', icon: <User size={14} /> },
++  { id: 'labels', label: 'Labels', plural: 'labels', icon: <Tag size={14} /> },
++  { id: 'project', label: 'Project', plural: 'projects', icon: <Box size={14} /> },
++  { id: 'cycle', label: 'Cycle', plural: 'cycles', icon: <CycleIcon progress={0.5} /> },
++  { id: 'team', label: 'Team', plural: 'teams', icon: <Users size={14} /> },
++  { id: 'lane', label: 'Agent lane', plural: 'lane statuses', icon: <Bot size={14} /> },
++  { id: 'due', label: 'Due date', plural: 'due dates', icon: <Calendar size={14} />, single: true },
++]
++
++const STATE_TYPE_LABELS: Record<StateType, string> = {
++  triage: 'Triage',
++  backlog: 'Backlog',
++  unstarted: 'Unstarted',
++  started: 'Started',
++  completed: 'Completed',
++  canceled: 'Canceled',
++}
++
++const DUE_OPTIONS: { id: NonNullable<ViewFilters['due']>; label: string }[] = [
++  { id: 'overdue', label: 'Overdue' },
++  { id: 'today', label: 'Due today' },
++  { id: 'week', label: 'Due within a week' },
++  { id: 'none', label: 'No due date' },
++]
++
++const LANE_ANY = '__any__'
++const LANE_NONE = '__none__'
++
++export function fieldDef(field: FilterField): FieldDef {
++  return FIELD_DEFS.find((f) => f.id === field)!
++}
++
++export function selectedValues(filters: ViewFilters, field: FilterField): string[] {
++  switch (field) {
++    case 'status':
++      return filters.state_ids ?? []
++    case 'status_type':
++      return filters.state_types ?? []
++    case 'priority':
++      return (filters.priorities ?? []).map(String)
++    case 'assignee':
++      return filters.assignee_ids ?? []
++    case 'creator':
++      return filters.creator_ids ?? []
++    case 'labels':
++      return filters.label_ids ?? []
++    case 'project':
++      return filters.project_ids ?? []
++    case 'cycle':
++      return filters.cycle_ids ?? []
++    case 'team':
++      return filters.team_ids ?? []
++    case 'lane': {
++      const values: string[] = [...(filters.lane_statuses ?? [])]
++      if (filters.has_lane === true) values.push(LANE_ANY)
++      if (filters.has_lane === false) values.push(LANE_NONE)
++      return values
++    }
++    case 'due':
++      return filters.due ? [filters.due] : []
++  }
++}
++
++function setValues(filters: ViewFilters, field: FilterField, values: string[]): ViewFilters {
++  const next: ViewFilters = { ...filters }
++  const assign = <K extends keyof ViewFilters>(key: K, value: ViewFilters[K] | undefined) => {
++    if (value === undefined || (Array.isArray(value) && value.length === 0)) delete next[key]
++    else next[key] = value
++  }
++  switch (field) {
++    case 'status':
++      assign('state_ids', values)
++      break
++    case 'status_type':
++      assign('state_types', values as StateType[])
++      break
++    case 'priority':
++      assign('priorities', values.map((v) => Number(v) as Priority))
++      break
++    case 'assignee':
++      assign('assignee_ids', values)
++      break
++    case 'creator':
++      assign('creator_ids', values)
++      break
++    case 'labels':
++      assign('label_ids', values)
++      break
++    case 'project':
++      assign('project_ids', values)
++      break
++    case 'cycle':
++      assign('cycle_ids', values)
++      break
++    case 'team':
++      assign('team_ids', values)
++      break
++    case 'lane': {
++      assign('lane_statuses', values.filter((v) => v !== LANE_ANY && v !== LANE_NONE) as LaneStatus[])
++      assign('has_lane', values.includes(LANE_ANY) ? true : values.includes(LANE_NONE) ? false : undefined)
++      break
++    }
++    case 'due':
++      assign('due', (values[values.length - 1] as ViewFilters['due']) ?? undefined)
++      break
++  }
++  return next
++}
++
++export function clearField(filters: ViewFilters, field: FilterField): ViewFilters {
++  return setValues(filters, field, [])
++}
++
++export function toggleValue(filters: ViewFilters, field: FilterField, value: string): ViewFilters {
++  const current = selectedValues(filters, field)
++  if (fieldDef(field).single) return setValues(filters, field, current.includes(value) ? [] : [value])
++  if (field === 'lane' && (value === LANE_ANY || value === LANE_NONE)) {
++    const rest = current.filter((v) => v !== LANE_ANY && v !== LANE_NONE)
++    return setValues(filters, field, current.includes(value) ? rest : [...rest, value])
++  }
++  return setValues(filters, field, current.includes(value) ? current.filter((v) => v !== value) : [...current, value])
++}
++
++export function activeFields(filters: ViewFilters): FilterField[] {
++  return FIELD_DEFS.map((f) => f.id).filter((field) => selectedValues(filters, field).length > 0)
++}
++
++export function valueItems(field: FilterField, t: TrackerState, teamId: ID | null): MenuItem[] {
++  switch (field) {
++    case 'status': {
++      const states = teamId ? t.teamStates(teamId) : t.states
++      return states.map((state) => {
++        const team = t.teamsById.get(state.team_id)
++        return {
++          id: state.id,
++          label: state.name,
++          hint: teamId ? undefined : team?.key,
++          keywords: team?.name,
++          icon: <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, t.teamStates(state.team_id))} />,
++        }
++      })
++    }
++    case 'status_type':
++      return STATE_TYPE_ORDER.map((type) => ({
++        id: type,
++        label: STATE_TYPE_LABELS[type],
++        icon: <StatusIcon type={type} color="var(--text-3)" progress={0.5} />,
++      }))
++    case 'priority':
++      return ([0, 1, 2, 3, 4] as Priority[]).map((p) => ({ id: String(p), label: PRIORITY_LABELS[p], icon: <PriorityIcon priority={p} /> }))
++    case 'assignee':
++    case 'creator': {
++      const base: MenuItem[] = field === 'assignee'
++        ? [
++            { id: 'none', label: 'No assignee', icon: <Avatar user={null} size={16} /> },
++            { id: 'me', label: 'Current user', icon: <Avatar user={t.me} size={16} /> },
++          ]
++        : []
++      return [
++        ...base,
++        ...t.users.map((user) => ({
++          id: user.id,
++          label: user.name,
++          keywords: `${user.display_name} ${user.email ?? ''}`,
++          icon: <Avatar user={user} size={16} />,
++          hint: user.kind === 'agent' ? 'Agent' : undefined,
++        })),
++      ]
++    }
++    case 'labels':
++      return t.labels
++        .filter((label) => !teamId || label.team_id === null || label.team_id === teamId)
++        .map((label) => ({ id: label.id, label: label.name, icon: <LabelDot color={label.color} /> }))
++    case 'project':
++      return [
++        { id: 'none', label: 'No project', icon: <Box size={14} /> },
++        ...t.projects
++          .filter((p) => !p.archived_at)
++          .map((p) => ({ id: p.id, label: p.name, icon: <ProjectIcon icon={p.icon} color={p.color} /> })),
++      ]
++    case 'cycle':
++      return [
++        { id: 'none', label: 'No cycle', icon: <CycleIcon progress={0} /> },
++        { id: 'current', label: 'Current cycle', icon: <CycleIcon progress={0.5} /> },
++        ...t.cycles
++          .filter((c) => !teamId || c.team_id === teamId)
++          .map((c) => ({
++            id: c.id,
++            label: cycleLabel(c),
++            hint: cycleStatus(c) === 'current' ? 'Current' : t.teamsById.get(c.team_id)?.key,
++            icon: <CycleIcon progress={cycleStatus(c) === 'past' ? 1 : cycleStatus(c) === 'current' ? 0.5 : 0} />,
++          })),
++      ]
++    case 'team':
++      return t.teams.map((team) => ({ id: team.id, label: team.name, hint: team.key, icon: <Users size={14} /> }))
++    case 'lane':
++      return [
++        { id: LANE_ANY, label: 'Has agent lane', icon: <Bot size={14} /> },
++        { id: LANE_NONE, label: 'No agent lane', icon: <Bot size={14} /> },
++        ...(Object.keys(LANE_STATUS_LABELS) as LaneStatus[]).map((status) => ({
++          id: status,
++          label: LANE_STATUS_LABELS[status],
++          icon: <span className={`lic-lane-dot lic-lane--${status}`} />,
++        })),
++      ]
++    case 'due':
++      return DUE_OPTIONS.map((o) => ({ id: o.id, label: o.label, icon: <Calendar size={14} /> }))
++  }
++}
++
++export function FilterPopover({
++  open,
++  onOpenChange,
++  anchor,
++  filters,
++  onChange,
++  t,
++  teamId,
++  initialField = null,
++  showTeam,
++}: {
++  open: boolean
++  onOpenChange: (open: boolean) => void
++  anchor: Anchor
++  filters: ViewFilters
++  onChange: (filters: ViewFilters) => void
++  t: TrackerState
++  teamId: ID | null
++  initialField?: FilterField | null
++  showTeam: boolean
++}) {
++  return (
++    <Popover open={open} onOpenChange={onOpenChange} anchor={anchor} width={260}>
++      <FilterMenuBody
++        key={initialField ?? 'root'}
++        filters={filters}
++        onChange={onChange}
++        t={t}
++        teamId={teamId}
++        initialField={initialField}
++        showTeam={showTeam}
++        onDone={() => onOpenChange(false)}
++      />
++    </Popover>
++  )
++}
++
++function FilterMenuBody({
++  filters,
++  onChange,
++  t,
++  teamId,
++  initialField,
++  showTeam,
++  onDone,
++}: {
++  filters: ViewFilters
++  onChange: (filters: ViewFilters) => void
++  t: TrackerState
++  teamId: ID | null
++  initialField: FilterField | null
++  showTeam: boolean
++  onDone: () => void
++}) {
++  const [field, setField] = useState<FilterField | null>(initialField)
++  const [query, setQuery] = useState('')
++  const fieldItems = useMemo<MenuItem[]>(() => {
++    const items: MenuItem[] = FIELD_DEFS.filter((f) => (f.id === 'team' ? showTeam || !teamId : true)).map((f) => ({
++      id: f.id,
++      label: f.label,
++      icon: f.icon,
++      hint: selectedValues(filters, f.id).length > 0 ? String(selectedValues(filters, f.id).length) : undefined,
++    }))
++    const q = query.trim()
++    if (q) items.unshift({ id: `text:${q}`, label: `Title contains "${q}"`, icon: <Type size={14} />, keywords: q })
++    return items
++  }, [filters, query, showTeam, teamId])
++
++  if (!field) {
++    return (
++      <MenuList
++        items={fieldItems}
++        searchable
++        placeholder="Filter…"
++        query={query}
++        onQueryChange={setQuery}
++        onSelect={(item) => {
++          if (item.id.startsWith('text:')) {
++            onChange({ ...filters, text: item.id.slice(5) })
++            onDone()
++            return
++          }
++          setQuery('')
++          setField(item.id as FilterField)
++        }}
++      />
++    )
++  }
++  const def = fieldDef(field)
++  const items = valueItems(field, t, teamId)
++  return (
++    <MenuList
++      key={field}
++      items={items}
++      searchable
++      multi={!def.single}
++      placeholder={`${def.label}…`}
++      selectedIds={selectedValues(filters, field)}
++      onBack={() => setField(null)}
++      onSelect={(item) => {
++        onChange(toggleValue(filters, field, item.id))
++        if (def.single) onDone()
++      }}
++    />
++  )
++}
++
++function valueSummary(field: FilterField, values: string[], t: TrackerState): React.ReactNode {
++  const items = valueItems(field, t, null)
++  const def = fieldDef(field)
++  if (values.length === 1) {
++    const item = items.find((i) => i.id === values[0])
++    return (
++      <>
++        {item?.icon}
++        <span>{item?.label ?? values[0]}</span>
++      </>
++    )
++  }
++  const icons = values
++    .slice(0, 3)
++    .map((v) => items.find((i) => i.id === v)?.icon)
++    .filter(Boolean)
++  return (
++    <>
++      <span className="lic-fchip-icons">
++        {icons.map((icon, index) => (
++          <span key={index} className="lic-fchip-stack">
++            {icon}
++          </span>
++        ))}
++      </span>
++      <span>
++        {values.length} {def.plural}
++      </span>
++    </>
++  )
++}
++
++function operatorFor(field: FilterField, count: number): string {
++  if (field === 'labels') return count > 1 ? 'include any of' : 'include'
++  if (field === 'due') return 'is'
++  return count > 1 ? 'is any of' : 'is'
++}
++
++export function FilterChips({
++  filters,
++  onChange,
++  onEditField,
++  onAddFilter,
++  t,
++}: {
++  filters: ViewFilters
++  onChange: (filters: ViewFilters) => void
++  onEditField: (field: FilterField, anchor: HTMLElement) => void
++  onAddFilter: (anchor: HTMLElement) => void
++  t: TrackerState
++}) {
++  const fields = activeFields(filters)
++  const text = filters.text?.trim()
++  return (
++    <div className="lic-fchips" data-filter-chips>
++      {text && (
++        <div className="lic-fchip">
++          <span className="lic-fchip-seg">
++            <Type size={13} />
++            Title
++          </span>
++          <span className="lic-fchip-seg t-3">contains</span>
++          <span className="lic-fchip-seg">{text}</span>
++          <button
++            type="button"
++            className="lic-fchip-seg lic-fchip-x"
++            aria-label="Remove filter"
++            onClick={() => {
++              const next = { ...filters }
++              delete next.text
++              onChange(next)
++            }}
++          >
++            <X size={13} />
++          </button>
++        </div>
++      )}
++      {fields.map((field) => {
++        const def = fieldDef(field)
++        const values = selectedValues(filters, field)
++        return (
++          <div key={field} className="lic-fchip" data-filter-chip={field}>
++            <span className="lic-fchip-seg">
++              {def.icon}
++              {def.label}
++            </span>
++            <span className="lic-fchip-seg t-3">{operatorFor(field, values.length)}</span>
++            <button type="button" className="lic-fchip-seg lic-fchip-value" onClick={(e) => onEditField(field, e.currentTarget)}>
++              {valueSummary(field, values, t)}
++            </button>
++            <button
++              type="button"
++              className="lic-fchip-seg lic-fchip-x"
++              aria-label={`Remove ${def.label} filter`}
++              onClick={() => onChange(clearField(filters, field))}
++            >
++              <X size={13} />
++            </button>
++          </div>
++        )
++      })}
++      <button type="button" className="lic-fchip-add" aria-label="Add filter" title="Add filter" onClick={(e) => onAddFilter(e.currentTarget)}>
++        <ListFilter size={14} />
++      </button>
++      <span className="lic-grow" />
++      <span className="lic-fchips-match t-2">Match all filters</span>
++    </div>
++  )
++}
+diff --git a/web/src/tracker/issues/IssueCollection.tsx b/web/src/tracker/issues/IssueCollection.tsx
+new file mode 100644
+index 0000000..3481af5
+--- /dev/null
++++ b/web/src/tracker/issues/IssueCollection.tsx
+@@ -0,0 +1,619 @@
++import { Columns3, LayoutList, ListFilter, Plus, SlidersHorizontal } from 'lucide-react'
++import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
++import { isEditableTarget, useHotkey } from '../hotkeys'
++import { hrefFor, navigate } from '../router'
++import { filterCount, useTracker } from '../store'
++import type { ID, Issue, StateType, ViewDisplay, ViewFilters } from '../types'
++import {
++  AssigneePicker,
++  Button,
++  CyclePicker,
++  Dialog,
++  DueDatePicker,
++  EstimatePicker,
++  Kbd,
++  LabelPicker,
++  PriorityPicker,
++  ProjectPicker,
++  StatusPicker,
++  Tooltip,
++  toast,
++  type PickerProps,
++} from '../ui'
++import { BoardView } from './BoardView'
++import { BulkBar } from './BulkBar'
++import { DisplayOptions } from './DisplayOptions'
++import { FilterChips, FilterPopover, type FilterField } from './FilterMenu'
++import { ListView, listOrder } from './ListView'
++import {
++  CollectionContext,
++  draftForGroups,
++  errorMessage,
++  readLocal,
++  useCollectionModel,
++  writeLocal,
++  type CollectionContextValue,
++  type CollectionLayout,
++  type PickerKind,
++  type PickerRequest,
++  updateWithLaneToast,
++} from './model'
++import { SaveViewDialog } from './SaveViewDialog'
++import { TimelineView } from './TimelineView'
++import './issues.css'
++
++export interface IssueCollectionProps {
++  issues: Issue[]
++  viewKey: string
++  defaultDisplay?: Partial<ViewDisplay>
++  emptyState?: React.ReactNode
++  showTeamTabs?: boolean
++  teamId?: ID | null
++  stateTypes?: StateType[]
++  renderHeader?: (toolbar: React.ReactNode) => React.ReactNode
++  toolbarExtra?: React.ReactNode
++  onSaveView?: (filters: ViewFilters, display: ViewDisplay) => void
++}
++
++const PICKERS: Record<PickerKind, React.ComponentType<PickerProps>> = {
++  status: StatusPicker,
++  priority: PriorityPicker,
++  assignee: AssigneePicker,
++  labels: LabelPicker,
++  project: ProjectPicker,
++  cycle: CyclePicker,
++  estimate: EstimatePicker,
++  due: DueDatePicker,
++}
++
++function useGPrefix(): boolean {
++  const [pending, setPending] = useState(false)
++  useEffect(() => {
++    let timer: number | undefined
++    const onKeyDown = (event: KeyboardEvent) => {
++      if (event.metaKey || event.ctrlKey || event.altKey || isEditableTarget(event.target)) return
++      window.clearTimeout(timer)
++      if (event.code === 'KeyG' && !event.shiftKey) {
++        setPending(true)
++        timer = window.setTimeout(() => setPending(false), 900)
++      } else {
++        timer = window.setTimeout(() => setPending(false), 0)
++      }
++    }
++    window.addEventListener('keydown', onKeyDown, true)
++    return () => {
++      window.clearTimeout(timer)
++      window.removeEventListener('keydown', onKeyDown, true)
++    }
++  }, [])
++  return pending
++}
++
++export function IssueCollection({
++  issues,
++  viewKey,
++  defaultDisplay,
++  emptyState,
++  showTeamTabs = false,
++  teamId = null,
++  stateTypes,
++  renderHeader,
++  toolbarExtra,
++  onSaveView,
++}: IssueCollectionProps) {
++  const t = useTracker()
++  const rawDisplay = t.displayFor(viewKey, defaultDisplay)
++  const rawFilters = t.filtersFor(viewKey)
++  const displaySig = JSON.stringify(rawDisplay)
++  const filtersSig = JSON.stringify(rawFilters)
++  const display = useMemo(() => rawDisplay, [displaySig])
++  const filters = useMemo(() => rawFilters, [filtersSig])
++  const setDisplay = (next: ViewDisplay) => t.setDisplayFor(viewKey, next)
++  const setFilters = (next: ViewFilters) => t.setFiltersFor(viewKey, next)
++
++  const timelineKey = `tracker.timeline.${viewKey}`
++  const collapseKey = `tracker.collapsed.${viewKey}`
++  const [timeline, setTimeline] = useState<boolean>(() => readLocal(timelineKey, false))
++  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(readLocal<string[]>(collapseKey, [])))
++  useEffect(() => {
++    setTimeline(readLocal(timelineKey, false))
++    setCollapsed(new Set(readLocal<string[]>(collapseKey, [])))
++  }, [timelineKey, collapseKey])
++  const layout: CollectionLayout = timeline ? 'timeline' : display.layout
++
++  const setLayout = (next: CollectionLayout) => {
++    const isTimeline = next === 'timeline'
++    setTimeline(isTimeline)
++    writeLocal(timelineKey, isTimeline)
++    if (!isTimeline && next !== display.layout) setDisplay({ ...display, layout: next })
++  }
++
++  const toggleCollapsed = useCallback(
++    (key: string) => {
++      setCollapsed((current) => {
++        const next = new Set(current)
++        if (next.has(key)) next.delete(key)
++        else next.add(key)
++        writeLocal(collapseKey, [...next])
++        return next
++      })
++    },
++    [collapseKey],
++  )
++
++  const { visible, groups } = useCollectionModel(issues, filters, display, layout, teamId, stateTypes, t)
++
++  const order = useMemo(() => {
++    if (layout === 'list') return listOrder(groups, collapsed, display.sub_grouping, t, teamId)
++    const seen = new Set<ID>()
++    const out: Issue[] = []
++    for (const group of groups)
++      for (const issue of group.issues) {
++        if (seen.has(issue.id)) continue
++        seen.add(issue.id)
++        out.push(issue)
++      }
++    return out
++  }, [layout, groups, collapsed, display.sub_grouping, t, teamId])
++
++  const [picker, setPicker] = useState<PickerRequest | null>(null)
++  const [filterOpen, setFilterOpen] = useState<{ anchor: HTMLElement | null; field: FilterField | null } | null>(null)
++  const [displayAnchor, setDisplayAnchor] = useState<HTMLElement | null>(null)
++  const [saveOpen, setSaveOpen] = useState(false)
++  const [deleteIds, setDeleteIds] = useState<ID[] | null>(null)
++  const anchorRef = useRef<ID | null>(null)
++  const scrollRef = useRef<HTMLDivElement | null>(null)
++  const filterBtnRef = useRef<HTMLButtonElement | null>(null)
++  const displayBtnRef = useRef<HTMLButtonElement | null>(null)
++
++  const selection = t.selection
++  const focusedId = t.focusedIssueId && order.some((i) => i.id === t.focusedIssueId) ? t.focusedIssueId : null
++
++  useEffect(() => {
++    t.setSelection(new Set())
++    anchorRef.current = null
++  }, [viewKey])
++
++  useEffect(() => {
++    const ids = new Set(visible.map((i) => i.id))
++    let changed = false
++    const next = new Set<ID>()
++    for (const id of t.selection) {
++      if (ids.has(id)) next.add(id)
++      else changed = true
++    }
++    if (changed) t.setSelection(next)
++  }, [visible])
++
++  const rowElement = (id: ID): HTMLElement | null =>
++    scrollRef.current?.querySelector<HTMLElement>(`[data-issue-id="${CSS.escape(id)}"]`) ?? null
++
++  const focusIssue = (id: ID | null, scroll = true) => {
++    t.setFocusedIssueId(id)
++    if (!id || !scroll) return
++    requestAnimationFrame(() => {
++      const el = rowElement(id)
++      if (el) {
++        el.focus({ preventScroll: true })
++        el.scrollIntoView({ block: 'nearest' })
++      }
++    })
++  }
++
++  const targetIds = (issue?: Issue): ID[] => {
++    if (issue) return selection.has(issue.id) && selection.size > 1 ? [...selection] : [issue.id]
++    if (selection.size > 0) return [...selection]
++    return focusedId ? [focusedId] : []
++  }
++
++  const openPicker = (kind: PickerKind, issue?: Issue, anchor?: HTMLElement | DOMRect | null) => {
++    const ids = targetIds(issue)
++    if (ids.length === 0) return
++    const fallback = rowElement(issue?.id ?? focusedId ?? ids[0])
++    setPicker({ kind, ids, anchor: anchor ?? fallback ?? null })
++  }
++
++  const toggleSelected = (issue: Issue) => {
++    const next = new Set(selection)
++    if (next.has(issue.id)) next.delete(issue.id)
++    else next.add(issue.id)
++    anchorRef.current = issue.id
++    t.setSelection(next)
++  }
++
++  const selectRange = (to: Issue) => {
++    const fromId = anchorRef.current ?? focusedId ?? to.id
++    const a = order.findIndex((i) => i.id === fromId)
++    const b = order.findIndex((i) => i.id === to.id)
++    if (a < 0 || b < 0) {
++      toggleSelected(to)
++      return
++    }
++    const [lo, hi] = a < b ? [a, b] : [b, a]
++    const next = new Set(selection)
++    for (let i = lo; i <= hi; i++) next.add(order[i].id)
++    t.setSelection(next)
++  }
++
++  const openIssue = (issue: Issue) => navigate({ name: 'issue', identifier: issue.identifier })
++
++  const onRowClick = (issue: Issue, event: React.MouseEvent) => {
++    focusIssue(issue.id, false)
++    if (event.shiftKey) {
++      event.preventDefault()
++      selectRange(issue)
++      return
++    }
++    if (event.metaKey || event.ctrlKey) {
++      toggleSelected(issue)
++      return
++    }
++    if (selection.size > 0) {
++      toggleSelected(issue)
++      return
++    }
++    openIssue(issue)
++  }
++
++  const copy = (text: string, message: string) => {
++    navigator.clipboard
++      .writeText(text)
++      .then(() => toast(message))
++      .catch((err: unknown) => toast.error(errorMessage(err)))
++  }
++
++  const assignToMe = (ids: ID[]) => {
++    if (!t.me || ids.length === 0) return
++    const allMine = ids.every((id) => t.issuesById.get(id)?.assignee_id === t.me?.id)
++    void updateWithLaneToast(t, ids, { assignee_id: allMine ? null : t.me.id })
++  }
++
++  const archive = (ids: ID[]) => {
++    if (ids.length === 0) return
++    const archived = ids.every((id) => t.issuesById.get(id)?.archived_at)
++    void updateWithLaneToast(t, ids, { archived: !archived }).then((ok) => {
++      if (ok) toast(`${ids.length === 1 ? 'Issue' : `${ids.length} issues`} ${archived ? 'unarchived' : 'archived'}`)
++    })
++  }
++
++  const contextAction = (issue: Issue, actionId: string) => {
++    const ids = targetIds(issue)
++    switch (actionId) {
++      case 'status':
++      case 'priority':
++      case 'assignee':
++      case 'labels':
++      case 'due':
++        openPicker(actionId as PickerKind, issue)
++        break
++      case 'assign_me':
++        assignToMe(ids)
++        break
++      case 'copy_id':
++        copy(issue.identifier, `Copied ${issue.identifier}`)
++        break
++      case 'copy_link':
++        copy(`${window.location.origin}${window.location.pathname}${hrefFor({ name: 'issue', identifier: issue.identifier })}`, 'Link copied')
++        break
++      case 'archive':
++        archive(ids)
++        break
++      case 'delete':
++        setDeleteIds(ids)
++        break
++    }
++  }
++
++  const ctx: CollectionContextValue = {
++    viewKey,
++    display,
++    teamId,
++    focusedId,
++    selection,
++    collapsed,
++    toggleCollapsed,
++    openPicker: (kind, issue, anchor) => openPicker(kind, issue, anchor),
++    onRowClick,
++    onRowHover: (issue) => {
++      if (t.focusedIssueId !== issue.id) t.setFocusedIssueId(issue.id)
++    },
++    toggleSelected,
++    createInGroup: (gs) => t.openCreate(draftForGroups(gs, teamId, t)),
++    contextAction,
++  }
++
++  const overlayOpen =
++    picker !== null ||
++    filterOpen !== null ||
++    displayAnchor !== null ||
++    saveOpen ||
++    deleteIds !== null ||
++    t.createDraft !== null ||
++    t.paletteOpen ||
++    t.shortcutsOpen
++  const listKeys = { enabled: !overlayOpen }
++  const issueKeys = { enabled: !overlayOpen && t.peekIssueId === null }
++
++  const move = (delta: number) => {
++    if (order.length === 0) return
++    const index = focusedId ? order.findIndex((i) => i.id === focusedId) : -1
++    const next = index < 0 ? (delta > 0 ? 0 : order.length - 1) : Math.min(order.length - 1, Math.max(0, index + delta))
++    const target = order[next]
++    focusIssue(target.id)
++    if (t.peekIssueId) t.setPeekIssueId(target.id)
++    return target
++  }
++
++  const moveColumn = (delta: number) => {
++    if (layout !== 'board' || groups.length === 0) return
++    const col = focusedId ? groups.findIndex((g) => g.issues.some((i) => i.id === focusedId)) : -1
++    const row = col >= 0 ? groups[col].issues.findIndex((i) => i.id === focusedId) : 0
++    for (let c = col + delta; c >= 0 && c < groups.length; c += delta) {
++      const issues = groups[c].issues
++      if (issues.length === 0) continue
++      focusIssue(issues[Math.min(row, issues.length - 1)].id)
++      return
++    }
++  }
++
++  useHotkey(['j', 'arrowdown'], () => move(1), listKeys)
++  useHotkey(['k', 'arrowup'], () => move(-1), listKeys)
++  const extendSelection = (delta: number) => {
++    const before = focusedId
++    const target = move(delta)
++    if (!target) return
++    const next = new Set(selection)
++    if (before) next.add(before)
++    next.add(target.id)
++    t.setSelection(next)
++  }
++  useHotkey(['shift+arrowdown', 'shift+j'], () => extendSelection(1), issueKeys)
++  useHotkey(['shift+arrowup', 'shift+k'], () => extendSelection(-1), issueKeys)
++  useHotkey('arrowright', () => moveColumn(1), { enabled: listKeys.enabled && layout === 'board' })
++  useHotkey('arrowleft', () => moveColumn(-1), { enabled: listKeys.enabled && layout === 'board' })
++  useHotkey(['enter', 'o'], () => {
++    const issue = focusedId ? t.issuesById.get(focusedId) : undefined
++    if (issue) openIssue(issue)
++  }, issueKeys)
++  useHotkey('space', () => {
++    if (t.peekIssueId) {
++      t.setPeekIssueId(null)
++      return
++    }
++    if (focusedId) t.setPeekIssueId(focusedId)
++  }, { enabled: !overlayOpen && (focusedId !== null || t.peekIssueId !== null) })
++  useHotkey('x', () => {
++    const issue = focusedId ? t.issuesById.get(focusedId) : undefined
++    if (issue) toggleSelected(issue)
++  }, issueKeys)
++  useHotkey('shift+x', () => {
++    const issue = focusedId ? t.issuesById.get(focusedId) : undefined
++    if (issue) selectRange(issue)
++  }, issueKeys)
++  useHotkey('mod+a', () => t.setSelection(new Set(order.map((i) => i.id))), issueKeys)
++  useHotkey('escape', () => {
++    if (selection.size > 0) t.setSelection(new Set())
++    else if (filterCount(filters) > 0) setFilters({})
++  }, { enabled: !overlayOpen && t.peekIssueId === null && (selection.size > 0 || filterCount(filters) > 0) })
++  useHotkey('mod+b', () => setLayout(layout === 'board' ? 'list' : 'board'), { enabled: !overlayOpen, allowInInputs: false })
++  useHotkey('f', () => setFilterOpen({ anchor: filterBtnRef.current, field: null }), listKeys)
++  useHotkey('shift+v', () => setDisplayAnchor(displayBtnRef.current), listKeys)
++
++  const hasTarget = selection.size > 0 || focusedId !== null
++  const gPending = useGPrefix()
++  const targetKeys = { enabled: issueKeys.enabled && hasTarget && !gPending }
++  useHotkey('s', () => openPicker('status'), targetKeys)
++  useHotkey('p', () => openPicker('priority'), targetKeys)
++  useHotkey('a', () => openPicker('assignee'), targetKeys)
++  useHotkey('l', () => openPicker('labels'), targetKeys)
++  useHotkey('shift+p', () => openPicker('project'), targetKeys)
++  useHotkey('shift+c', () => openPicker('cycle'), targetKeys)
++  useHotkey('shift+e', () => openPicker('estimate'), targetKeys)
++  useHotkey('shift+d', () => openPicker('due'), targetKeys)
++  useHotkey('i', () => assignToMe(targetIds()), targetKeys)
++  useHotkey('mod+.', () => {
++    const ids = targetIds()
++    const text = ids.map((id) => t.issuesById.get(id)?.identifier).filter(Boolean).join(', ')
++    if (text) copy(text, `Copied ${text}`)
++  }, targetKeys)
++  useHotkey('mod+shift+a', () => archive(targetIds()), targetKeys)
++  useHotkey('mod+backspace', () => setDeleteIds(targetIds()), targetKeys)
++
++  const runDelete = async (ids: ID[]) => {
++    setDeleteIds(null)
++    let failed = 0
++    let last = ''
++    for (const id of ids) {
++      try {
++        await t.deleteIssue(id)
++      } catch (err) {
++        failed += 1
++        last = errorMessage(err)
++      }
++    }
++    if (failed > 0) toast.error(`${failed} of ${ids.length} could not be deleted: ${last}`)
++    else toast(`${ids.length === 1 ? 'Issue' : `${ids.length} issues`} deleted`)
++    t.setSelection(new Set())
++  }
++
++  const activeFilters = filterCount(filters)
++  const toolbar = (
++    <div className="lic-toolbar">
++      <Tooltip content="Filter" kbd={['F']}>
++        <button
++          ref={filterBtnRef}
++          type="button"
++          className={`lic-tool-btn${activeFilters > 0 ? ' lic-tool-btn--on' : ''}`}
++          data-filter-button
++          onClick={(e) => setFilterOpen({ anchor: e.currentTarget, field: null })}
++        >
++          <ListFilter size={14} />
++          <span className="lic-tool-label">Filter</span>
++          {activeFilters > 0 && <span className="lic-tool-count tabular">{activeFilters}</span>}
++        </button>
++      </Tooltip>
++      <span className="lic-grow" />
++      {toolbarExtra}
++      {activeFilters > 0 && (
++        <Button
++          size="sm"
++          variant="ghost"
++          onClick={() => (onSaveView ? onSaveView(filters, display) : setSaveOpen(true))}
++          data-save-view
++        >
++          Save view
++        </Button>
++      )}
++      <div className="lic-seg" role="group" aria-label="Layout">
++        <Tooltip content="List" kbd={['⌘', 'B']}>
++          <button
++            type="button"
++            className={`lic-seg-btn${layout === 'list' ? ' lic-seg-btn--on' : ''}`}
++            aria-pressed={layout === 'list'}
++            aria-label="List layout"
++            data-layout="list"
++            onClick={() => setLayout('list')}
++          >
++            <LayoutList size={14} />
++          </button>
++        </Tooltip>
++        <Tooltip content="Board" kbd={['⌘', 'B']}>
++          <button
++            type="button"
++            className={`lic-seg-btn${layout === 'board' ? ' lic-seg-btn--on' : ''}`}
++            aria-pressed={layout === 'board'}
++            aria-label="Board layout"
++            data-layout="board"
++            onClick={() => setLayout('board')}
++          >
++            <Columns3 size={14} />
++          </button>
++        </Tooltip>
++      </div>
++      <Tooltip content="Display options" kbd={['⇧', 'V']}>
++        <button
++          ref={displayBtnRef}
++          type="button"
++          className="lic-tool-btn"
++          data-display-button
++          onClick={(e) => setDisplayAnchor(e.currentTarget)}
++        >
++          <SlidersHorizontal size={14} />
++          <span className="lic-tool-label">Display</span>
++        </button>
++      </Tooltip>
++    </div>
++  )
++
++  const Picker = picker ? PICKERS[picker.kind] : null
++
++  return (
++    <CollectionContext.Provider value={ctx}>
++      {renderHeader ? renderHeader(toolbar) : <div className="lic-toolbar-row">{toolbar}</div>}
++      {(activeFilters > 0) && (
++        <FilterChips
++          filters={filters}
++          onChange={setFilters}
++          t={t}
++          onEditField={(field, anchor) => setFilterOpen({ anchor, field })}
++          onAddFilter={(anchor) => setFilterOpen({ anchor, field: null })}
++        />
++      )}
++      <div ref={scrollRef} className={`lic-scroll lic-scroll--${layout}`} data-layout-current={layout} data-view-key={viewKey}>
++        {visible.length === 0 && layout !== 'board' ? (
++          <div className="lic-empty">
++            {emptyState ?? (
++              <div className="lic-empty-inner">
++                <div className="t-1 w-510">{activeFilters > 0 ? 'No issues match these filters' : 'No issues'}</div>
++                <div className="t-3">
++                  {activeFilters > 0 ? (
++                    <button type="button" className="lic-link" onClick={() => setFilters({})}>
++                      Clear filters
++                    </button>
++                  ) : (
++                    <>
++                      Press <Kbd keys={['C']} /> to create an issue.
++                    </>
++                  )}
++                </div>
++                {activeFilters === 0 && (
++                  <Button size="sm" variant="secondary" icon={<Plus size={14} />} onClick={() => t.openCreate(draftForGroups([], teamId, t))}>
++                    Create issue
++                  </Button>
++                )}
++              </div>
++            )}
++          </div>
++        ) : layout === 'list' ? (
++          <ListView groups={groups} t={t} />
++        ) : layout === 'board' ? (
++          <BoardView groups={groups} t={t} />
++        ) : (
++          <TimelineView groups={groups} t={t} />
++        )}
++      </div>
++      <BulkBar ids={[...selection]} t={t} onClear={() => t.setSelection(new Set())} />
++      {Picker && picker && (
++        <Picker
++          issueIds={picker.ids}
++          anchor={picker.anchor}
++          open
++          onOpenChange={(open) => {
++            if (!open) {
++              const id = picker.ids[0]
++              setPicker(null)
++              if (focusedId === id) requestAnimationFrame(() => rowElement(id)?.focus({ preventScroll: true }))
++            }
++          }}
++        />
++      )}
++      <FilterPopover
++        open={filterOpen !== null}
++        onOpenChange={(open) => {
++          if (!open) setFilterOpen(null)
++        }}
++        anchor={filterOpen?.anchor ?? filterBtnRef.current}
++        initialField={filterOpen?.field ?? null}
++        filters={filters}
++        onChange={setFilters}
++        t={t}
++        teamId={teamId}
++        showTeam={showTeamTabs || teamId === null}
++      />
++      <DisplayOptions
++        open={displayAnchor !== null}
++        onOpenChange={(open) => {
++          if (!open) setDisplayAnchor(null)
++        }}
++        anchor={displayAnchor}
++        display={display}
++        layout={layout}
++        onLayout={setLayout}
++        onChange={setDisplay}
++      />
++      <SaveViewDialog open={saveOpen} onOpenChange={setSaveOpen} filters={filters} display={display} teamId={teamId} t={t} />
++      <Dialog
++        open={deleteIds !== null}
++        onOpenChange={(open) => {
++          if (!open) setDeleteIds(null)
++        }}
++        title={deleteIds && deleteIds.length > 1 ? `Delete ${deleteIds.length} issues?` : 'Delete issue?'}
++        width={420}
++        footer={
++          <>
++            <Button variant="ghost" onClick={() => setDeleteIds(null)}>
++              Cancel
++            </Button>
++            <Button variant="danger" data-autofocus onClick={() => deleteIds && void runDelete(deleteIds)}>
++              Delete
++            </Button>
++          </>
++        }
++      >
++        <p className="t-2" style={{ margin: 0 }}>
++          This action cannot be undone.
++        </p>
++      </Dialog>
++    </CollectionContext.Provider>
++  )
++}
+diff --git a/web/src/tracker/issues/ListView.tsx b/web/src/tracker/issues/ListView.tsx
+new file mode 100644
+index 0000000..9082059
+--- /dev/null
++++ b/web/src/tracker/issues/ListView.tsx
+@@ -0,0 +1,192 @@
++import { ChevronRight, Plus } from 'lucide-react'
++import { Fragment } from 'react'
++import { groupIssues, type IssueGroup, type TrackerState } from '../store'
++import type { Issue } from '../types'
++import { Checkbox, ContextMenu, PriorityIcon } from '../ui'
++import { pickId, useCollection } from './model'
++import { AssigneeButton, GroupIcon, IssueChips, IssueStatusIcon } from './shared'
++import { issueContextItems } from './contextItems'
++
++function GroupHeader({
++  group,
++  parents,
++  depth,
++  collapsed,
++  t,
++}: {
++  group: IssueGroup
++  parents: IssueGroup[]
++  depth: number
++  collapsed: boolean
++  t: TrackerState
++}) {
++  const c = useCollection()
++  const key = [...parents.map((p) => p.key), group.key].join('/')
++  const estimate = group.issues.reduce((sum, issue) => sum + (issue.estimate ?? 0), 0)
++  return (
++    <div
++      className={`lic-group${depth > 0 ? ' lic-group--sub' : ''}`}
++      data-group-header={group.key}
++      onClick={() => c.toggleCollapsed(key)}
++      role="button"
++      aria-expanded={!collapsed}
++    >
++      <span className={`lic-group-chevron${collapsed ? '' : ' lic-group-chevron--open'}`}>
++        <ChevronRight size={12} />
++      </span>
++      <GroupIcon group={group} t={t} />
++      <span className="lic-group-name w-510">{group.label}</span>
++      <span className="lic-group-count t-3 tabular">{group.issues.length}</span>
++      {estimate > 0 && <span className="lic-group-count t-4 tabular">· {estimate} pts</span>}
++      <span className="lic-grow" />
++      <button
++        type="button"
++        className="lic-group-add"
++        title="Create issue in this group"
++        aria-label="Create issue in this group"
++        onClick={(event) => {
++          event.stopPropagation()
++          c.createInGroup([...parents, group])
++        }}
++      >
++        <Plus size={14} />
++      </button>
++    </div>
++  )
++}
++
++export function IssueRow({ issue, t }: { issue: Issue; t: TrackerState }) {
++  const c = useCollection()
++  const props = c.display.properties
++  const selected = c.selection.has(issue.id)
++  const focused = c.focusedId === issue.id
++  const has = (p: (typeof props)[number]) => props.includes(p)
++  const parent = issue.parent_id ? t.issuesById.get(issue.parent_id) : undefined
++  return (
++    <ContextMenu items={() => issueContextItems(issue, t)} onSelect={(value: unknown) => c.contextAction(issue, pickId(value))}>
++      <div
++        className={`lic-row${selected ? ' lic-row--selected' : ''}${focused ? ' lic-row--focused' : ''}`}
++        data-issue-row={issue.identifier}
++        data-issue-id={issue.id}
++        tabIndex={focused ? 0 : -1}
++        aria-selected={selected}
++        role="option"
++        onClick={(event) => c.onRowClick(issue, event)}
++        onMouseMove={() => c.onRowHover(issue)}
++        onFocus={() => c.onRowHover(issue)}
++      >
++        <span
++          className={`lic-row-check${selected || c.selection.size > 0 ? ' lic-row-check--on' : ''}`}
++          onClick={(event) => {
++            event.stopPropagation()
++            c.toggleSelected(issue)
++          }}
++        >
++          <Checkbox checked={selected} onChange={() => c.toggleSelected(issue)} />
++        </span>
++        {has('priority') && (
++          <button
++            type="button"
++            className="lic-row-icon"
++            title="Set priority"
++            onClick={(event) => {
++              event.stopPropagation()
++              c.openPicker('priority', issue, event.currentTarget)
++            }}
++          >
++            <PriorityIcon priority={issue.priority} size={14} />
++          </button>
++        )}
++        {has('id') && <span className="lic-row-id t-3 tabular">{issue.identifier}</span>}
++        {has('status') && (
++          <button
++            type="button"
++            className="lic-row-icon"
++            title="Change status"
++            onClick={(event) => {
++              event.stopPropagation()
++              c.openPicker('status', issue, event.currentTarget)
++            }}
++          >
++            <IssueStatusIcon issue={issue} t={t} />
++          </button>
++        )}
++        <span className="lic-row-title">
++          <span className="lic-row-title-text w-510">{issue.title}</span>
++          {parent && (
++            <span className="lic-row-parent t-3">
++              <ChevronRight size={11} />
++              {parent.title}
++            </span>
++          )}
++        </span>
++        <span className="lic-row-props">
++          <IssueChips issue={issue} t={t} properties={props} />
++        </span>
++        {has('assignee') && <AssigneeButton issue={issue} t={t} />}
++      </div>
++    </ContextMenu>
++  )
++}
++
++function GroupBlock({
++  group,
++  parents,
++  t,
++}: {
++  group: IssueGroup
++  parents: IssueGroup[]
++  t: TrackerState
++}) {
++  const c = useCollection()
++  const key = [...parents.map((p) => p.key), group.key].join('/')
++  const collapsed = c.collapsed.has(key)
++  const depth = parents.length
++  const sub = depth === 0 ? c.display.sub_grouping : 'none'
++  const subGroups =
++    sub !== 'none' && sub !== group.grouping
++      ? groupIssues(group.issues, sub, t, { teamId: c.teamId, showEmpty: false })
++      : null
++  return (
++    <section className="lic-group-block" data-group={group.key}>
++      {group.grouping !== 'none' && <GroupHeader group={group} parents={parents} depth={depth} collapsed={collapsed} t={t} />}
++      {!collapsed &&
++        (subGroups
++          ? subGroups.map((child) => <GroupBlock key={child.key} group={child} parents={[...parents, group]} t={t} />)
++          : group.issues.map((issue) => <IssueRow key={issue.id} issue={issue} t={t} />))}
++    </section>
++  )
++}
++
++export function ListView({ groups, t }: { groups: IssueGroup[]; t: TrackerState }) {
++  return (
++    <div className="lic-list" role="listbox" aria-multiselectable="true">
++      {groups.map((group) => (
++        <Fragment key={group.key}>
++          <GroupBlock group={group} parents={[]} t={t} />
++        </Fragment>
++      ))}
++    </div>
++  )
++}
++
++export function listOrder(groups: IssueGroup[], collapsed: Set<string>, subGrouping: IssueGroup['grouping'], t: TrackerState, teamId: string | null): Issue[] {
++  const out: Issue[] = []
++  const seen = new Set<string>()
++  const walk = (group: IssueGroup, parents: IssueGroup[]) => {
++    const key = [...parents.map((p) => p.key), group.key].join('/')
++    if (group.grouping !== 'none' && collapsed.has(key)) return
++    const sub = parents.length === 0 ? subGrouping : 'none'
++    if (sub !== 'none' && sub !== group.grouping) {
++      for (const child of groupIssues(group.issues, sub, t, { teamId, showEmpty: false })) walk(child, [...parents, group])
++      return
++    }
++    for (const issue of group.issues) {
++      if (seen.has(issue.id)) continue
++      seen.add(issue.id)
++      out.push(issue)
++    }
++  }
++  for (const group of groups) walk(group, [])
++  return out
++}
+diff --git a/web/src/tracker/issues/SaveViewDialog.tsx b/web/src/tracker/issues/SaveViewDialog.tsx
+new file mode 100644
+index 0000000..fde6f53
+--- /dev/null
++++ b/web/src/tracker/issues/SaveViewDialog.tsx
+@@ -0,0 +1,97 @@
++import { useState } from 'react'
++import { trackerApi } from '../api'
++import { navigate } from '../router'
++import type { TrackerState } from '../store'
++import type { ID, ViewDisplay, ViewFilters } from '../types'
++import { Button, Dialog, toast } from '../ui'
++import { errorMessage } from './model'
++
++export function SaveViewDialog({
++  open,
++  onOpenChange,
++  filters,
++  display,
++  teamId,
++  t,
++}: {
++  open: boolean
++  onOpenChange: (open: boolean) => void
++  filters: ViewFilters
++  display: ViewDisplay
++  teamId: ID | null
++  t: TrackerState
++}) {
++  const [name, setName] = useState('')
++  const [description, setDescription] = useState('')
++  const [saving, setSaving] = useState(false)
++
++  const save = async () => {
++    const trimmed = name.trim()
++    if (!trimmed || saving) return
++    setSaving(true)
++    try {
++      const view = await trackerApi.createView({
++        name: trimmed,
++        description: description.trim() || null,
++        filters,
++        display,
++        team_id: teamId,
++      })
++      t.upsertView(view)
++      onOpenChange(false)
++      setName('')
++      setDescription('')
++      toast.success(`View "${view.name}" saved`)
++      navigate({ name: 'view', viewId: view.id })
++    } catch (err) {
++      toast.error(errorMessage(err))
++    } finally {
++      setSaving(false)
++    }
++  }
++
++  return (
++    <Dialog
++      open={open}
++      onOpenChange={onOpenChange}
++      title="Save as view"
++      width={480}
++      footer={
++        <>
++          <Button variant="ghost" onClick={() => onOpenChange(false)}>
++            Cancel
++          </Button>
++          <Button variant="primary" disabled={!name.trim() || saving} onClick={() => void save()}>
++            Save view
++          </Button>
++        </>
++      }
++    >
++      <form
++        className="lic-form"
++        onSubmit={(e) => {
++          e.preventDefault()
++          void save()
++        }}
++      >
++        <input
++          data-autofocus
++          autoFocus
++          className="lic-input lic-input--title"
++          placeholder="View name"
++          aria-label="View name"
++          value={name}
++          onChange={(e) => setName(e.target.value)}
++        />
++        <input
++          className="lic-input"
++          placeholder="Description (optional)"
++          aria-label="Description"
++          value={description}
++          onChange={(e) => setDescription(e.target.value)}
++        />
++        <button type="submit" hidden />
++      </form>
++    </Dialog>
++  )
++}
+diff --git a/web/src/tracker/issues/TimelineView.tsx b/web/src/tracker/issues/TimelineView.tsx
+new file mode 100644
+index 0000000..fcc0641
+--- /dev/null
++++ b/web/src/tracker/issues/TimelineView.tsx
+@@ -0,0 +1,167 @@
++import { useMemo } from 'react'
++import { parseDateOnly, shortDate, toDateOnly } from '../format'
++import type { IssueGroup, TrackerState } from '../store'
++import type { Issue } from '../types'
++import { useCollection } from './model'
++import { GroupIcon, IssueStatusIcon } from './shared'
++
++const DAY = 86_400_000
++const DAY_W = 28
++
++interface Span {
++  start: number
++  end: number
++  source: 'due' | 'cycle'
++}
++
++function startOfDay(ms: number): number {
++  const d = new Date(ms)
++  d.setHours(0, 0, 0, 0)
++  return d.getTime()
++}
++
++function issueSpan(issue: Issue, t: TrackerState): Span | null {
++  const cycle = issue.cycle_id ? t.cyclesById.get(issue.cycle_id) : undefined
++  if (issue.due_date) {
++    const end = parseDateOnly(issue.due_date).getTime()
++    const startCandidate = startOfDay(new Date(issue.started_at ?? issue.created_at).getTime())
++    const start = Math.min(startCandidate, end)
++    return { start, end, source: 'due' }
++  }
++  if (cycle) {
++    return { start: startOfDay(new Date(cycle.starts_at).getTime()), end: startOfDay(new Date(cycle.ends_at).getTime()), source: 'cycle' }
++  }
++  return null
++}
++
++export function TimelineView({ groups, t }: { groups: IssueGroup[]; t: TrackerState }) {
++  const c = useCollection()
++  const spans = useMemo(() => {
++    const map = new Map<string, Span>()
++    for (const group of groups) for (const issue of group.issues) {
++      const span = issueSpan(issue, t)
++      if (span) map.set(issue.id, span)
++    }
++    return map
++  }, [groups, t])
++
++  const today = startOfDay(Date.now())
++  const values = [...spans.values()]
++  const min = Math.min(today - 7 * DAY, ...values.map((s) => s.start))
++  const max = Math.max(today + 28 * DAY, ...values.map((s) => s.end))
++  const rangeStart = startOfDay(min - 3 * DAY)
++  const days = Math.round((startOfDay(max + 7 * DAY) - rangeStart) / DAY)
++  const width = days * DAY_W
++  const x = (ms: number) => Math.round((ms - rangeStart) / DAY) * DAY_W
++
++  const months: { label: string; left: number }[] = []
++  const ticks: { label: string; left: number; today: boolean; weekend: boolean }[] = []
++  for (let i = 0; i < days; i++) {
++    const date = new Date(rangeStart + i * DAY)
++    if (date.getDate() === 1 || i === 0) {
++      months.push({ label: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), left: i * DAY_W })
++    }
++    ticks.push({
++      label: String(date.getDate()),
++      left: i * DAY_W,
++      today: toDateOnly(date) === toDateOnly(new Date(today)),
++      weekend: date.getDay() === 0 || date.getDay() === 6,
++    })
++  }
++
++  return (
++    <div className="lic-timeline">
++      <div className="lic-tl-side">
++        <div className="lic-tl-head lic-tl-head--side t-3">Issues</div>
++        {groups.map((group) => (
++          <div key={group.key}>
++            {group.grouping !== 'none' && (
++              <div className="lic-tl-group">
++                <GroupIcon group={group} t={t} />
++                <span className="w-510">{group.label}</span>
++                <span className="t-3 tabular">{group.issues.length}</span>
++              </div>
++            )}
++            {group.issues.map((issue) => (
++              <div
++                key={issue.id}
++                className={`lic-tl-row${c.focusedId === issue.id ? ' lic-row--focused' : ''}${c.selection.has(issue.id) ? ' lic-row--selected' : ''}`}
++                data-issue-row={issue.identifier}
++                data-issue-id={issue.id}
++                tabIndex={c.focusedId === issue.id ? 0 : -1}
++                onClick={(event) => c.onRowClick(issue, event)}
++                onMouseMove={() => c.onRowHover(issue)}
++              >
++                <span className="lic-row-id t-3 tabular">{issue.identifier}</span>
++                <IssueStatusIcon issue={issue} t={t} />
++                <span className="lic-row-title-text w-510">{issue.title}</span>
++              </div>
++            ))}
++          </div>
++        ))}
++      </div>
++      <div className="lic-tl-scroll">
++        <div className="lic-tl-canvas" style={{ width }}>
++          <div className="lic-tl-head">
++            <div className="lic-tl-months">
++              {months.map((m) => (
++                <span key={m.left} className="lic-tl-month w-510" style={{ left: m.left }}>
++                  {m.label}
++                </span>
++              ))}
++            </div>
++            <div className="lic-tl-days">
++              {ticks.map((tick) => (
++                <span
++                  key={tick.left}
++                  className={`lic-tl-day t-4 tabular${tick.today ? ' lic-tl-day--today' : ''}`}
++                  style={{ left: tick.left, width: DAY_W }}
++                >
++                  {tick.label}
++                </span>
++              ))}
++            </div>
++          </div>
++          <div className="lic-tl-grid">
++            {ticks
++              .filter((tick) => tick.weekend)
++              .map((tick) => (
++                <span key={tick.left} className="lic-tl-weekend" style={{ left: tick.left, width: DAY_W }} />
++              ))}
++            <span className="lic-tl-today" style={{ left: x(today) + DAY_W / 2 }} />
++            {groups.map((group) => (
++              <div key={group.key}>
++                {group.grouping !== 'none' && <div className="lic-tl-group lic-tl-group--canvas" />}
++                {group.issues.map((issue) => {
++                  const span = spans.get(issue.id)
++                  const state = t.statesById.get(issue.state_id)
++                  return (
++                    <div key={issue.id} className="lic-tl-lane">
++                      {span && (
++                        <button
++                          type="button"
++                          className={`lic-tl-bar lic-tl-bar--${span.source}`}
++                          style={
++                            {
++                              left: x(span.start),
++                              width: Math.max(DAY_W, x(span.end) - x(span.start) + DAY_W),
++                              '--bar': state?.color ?? 'var(--accent)',
++                            } as React.CSSProperties
++                          }
++                          title={`${issue.identifier} · ${shortDate(toDateOnly(new Date(span.start)))} – ${shortDate(toDateOnly(new Date(span.end)))}`}
++                          onClick={(event) => c.onRowClick(issue, event)}
++                        >
++                          <span className="lic-tl-bar-label">{issue.title}</span>
++                        </button>
++                      )}
++                    </div>
++                  )
++                })}
++              </div>
++            ))}
++          </div>
++        </div>
++      </div>
++    </div>
++  )
++}
+diff --git a/web/src/tracker/issues/contextItems.tsx b/web/src/tracker/issues/contextItems.tsx
+new file mode 100644
+index 0000000..452ee36
+--- /dev/null
++++ b/web/src/tracker/issues/contextItems.tsx
+@@ -0,0 +1,20 @@
++import { Archive, Calendar, CircleUser, Copy, Hexagon, Link, Signal, Tag, Trash2, User } from 'lucide-react'
++import type { TrackerState } from '../store'
++import type { Issue } from '../types'
++import type { MenuItem } from '../ui'
++
++export function issueContextItems(issue: Issue, t: TrackerState): MenuItem[] {
++  const isMine = issue.assignee_id !== null && issue.assignee_id === t.me?.id
++  return [
++    { id: 'status', label: 'Status', icon: <Hexagon size={14} />, kbd: 'S', group: 'Properties' },
++    { id: 'priority', label: 'Priority', icon: <Signal size={14} />, kbd: 'P', group: 'Properties' },
++    { id: 'assignee', label: 'Assignee', icon: <CircleUser size={14} />, kbd: 'A', group: 'Properties' },
++    { id: 'assign_me', label: isMine ? 'Unassign from me' : 'Assign to me', icon: <User size={14} />, kbd: 'I', group: 'Properties' },
++    { id: 'labels', label: 'Labels', icon: <Tag size={14} />, kbd: 'L', group: 'Properties' },
++    { id: 'due', label: 'Due date', icon: <Calendar size={14} />, kbd: '⇧D', group: 'Properties' },
++    { id: 'copy_id', label: 'Copy ID', icon: <Copy size={14} />, kbd: '⌘.', group: 'Copy' },
++    { id: 'copy_link', label: 'Copy link', icon: <Link size={14} />, group: 'Copy' },
++    { id: 'archive', label: issue.archived_at ? 'Unarchive' : 'Archive', icon: <Archive size={14} />, kbd: '⌘⇧A', group: 'Danger' },
++    { id: 'delete', label: 'Delete', icon: <Trash2 size={14} />, kbd: '⌘⌫', group: 'Danger', disabled: issue.lane_key !== null },
++  ]
++}
+diff --git a/web/src/tracker/issues/index.ts b/web/src/tracker/issues/index.ts
+new file mode 100644
+index 0000000..8c83967
+--- /dev/null
++++ b/web/src/tracker/issues/index.ts
+@@ -0,0 +1,7 @@
++export { IssueCollection } from './IssueCollection'
++export type { IssueCollectionProps } from './IssueCollection'
++export type { CollectionLayout } from './model'
++export { TeamIssuesPage } from '../pages/TeamIssuesPage'
++export { MyIssuesPage } from '../pages/MyIssuesPage'
++export { ViewPage } from '../pages/ViewPage'
++export { ViewsPage } from '../pages/ViewsPage'
+diff --git a/web/src/tracker/issues/issues.css b/web/src/tracker/issues/issues.css
+new file mode 100644
+index 0000000..3d80ca4
+--- /dev/null
++++ b/web/src/tracker/issues/issues.css
+@@ -0,0 +1,509 @@
++.lin .lic-grow { flex: 1; min-width: 0; }
++
++.lin .lic-toolbar-row {
++  flex: none;
++  height: 40px;
++  display: flex;
++  align-items: center;
++  padding: 0 12px 0 16px;
++  border-bottom: 1px solid var(--border);
++}
++.lin .lic-toolbar { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; }
++.lin .ls-tabs .lic-toolbar { flex: none; }
++.lin .lic-tool-btn {
++  height: 26px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  color: var(--text-2);
++  font-size: 12px;
++  font-weight: 510;
++  border: 1px solid var(--border);
++  transition: background-color var(--dur) var(--ease);
++}
++.lin .lic-tool-btn:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lic-tool-btn--on { color: var(--text-1); background: var(--bg-active); }
++.lin .lic-tool-count {
++  min-width: 16px;
++  height: 16px;
++  padding: 0 4px;
++  border-radius: 8px;
++  background: var(--accent);
++  color: #fff;
++  font-size: 10px;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++}
++.lin .lic-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-ctl); overflow: hidden; height: 26px; }
++.lin .lic-seg-btn { width: 28px; display: inline-flex; align-items: center; justify-content: center; color: var(--text-3); }
++.lin .lic-seg-btn:hover { color: var(--text-1); background: var(--bg-hover); }
++.lin .lic-seg-btn--on { background: var(--bg-active); color: var(--text-1); }
++
++.lin .lic-fchips {
++  flex: none;
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 6px;
++  padding: 6px 12px 6px 16px;
++  border-bottom: 1px solid var(--border);
++  min-height: 40px;
++}
++.lin .lic-fchip {
++  display: inline-flex;
++  align-items: stretch;
++  height: 26px;
++  border-radius: 6px;
++  background: var(--bg-subtle);
++  border: 1px solid var(--border);
++  overflow: hidden;
++  font-size: 12px;
++  font-weight: 510;
++  color: var(--text-1);
++}
++.lin .lic-fchip-seg {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  padding: 0 8px;
++  white-space: nowrap;
++}
++.lin .lic-fchip-seg + .lic-fchip-seg { border-left: 1px solid var(--border); }
++.lin .lic-fchip-seg svg { color: var(--text-3); flex: none; }
++.lin button.lic-fchip-seg:hover { background: var(--bg-hover); }
++.lin .lic-fchip-x { padding: 0 6px; color: var(--text-3); }
++.lin .lic-fchip-x:hover { color: var(--text-1); }
++.lin .lic-fchip-icons { display: inline-flex; }
++.lin .lic-fchip-stack { display: inline-flex; margin-left: -4px; }
++.lin .lic-fchip-stack:first-child { margin-left: 0; }
++.lin .lic-fchip-add {
++  width: 26px;
++  height: 26px;
++  border-radius: 6px;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  color: var(--text-3);
++}
++.lin .lic-fchip-add:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lic-fchips-match { font-size: 12px; font-weight: 510; }
++
++.lin .lic-scroll { flex: 1; min-height: 0; overflow: auto; position: relative; }
++.lin .lic-scroll--board { overflow-y: hidden; }
++.lin .lic-list { padding-bottom: 80px; }
++
++.lin .lic-group {
++  position: sticky;
++  top: 0;
++  z-index: 2;
++  height: 34px;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 12px 0 16px;
++  background: var(--panel);
++  background-image: linear-gradient(var(--bg-group), var(--bg-group));
++  border-bottom: 1px solid var(--border);
++  color: var(--text-1);
++  user-select: none;
++}
++.lin .lic-group--sub { top: 34px; padding-left: 32px; height: 32px; z-index: 1; }
++.lin .lic-group:hover { background-image: linear-gradient(var(--bg-hover), var(--bg-hover)); }
++.lin .lic-group-chevron { display: inline-flex; color: var(--text-4); margin-left: -4px; transition: transform var(--dur) var(--ease); }
++.lin .lic-group-chevron--open { transform: rotate(90deg); }
++.lin .lic-group-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.lin .lic-group-count { font-size: 13px; }
++.lin .lic-group-add {
++  width: 24px;
++  height: 24px;
++  border-radius: var(--radius-ctl);
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  color: var(--text-3);
++  opacity: 0;
++  transition: opacity var(--dur) var(--ease);
++}
++.lin .lic-group:hover .lic-group-add,
++.lin .lic-group-add:focus-visible { opacity: 1; }
++.lin .lic-group-add:hover { background: var(--bg-active); color: var(--text-1); }
++
++.lin .lic-row {
++  height: 44px;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 12px 0 4px;
++  border-bottom: 1px solid var(--border);
++  color: var(--text-1);
++  cursor: default;
++  min-width: 0;
++  transition: background-color 80ms var(--ease);
++}
++.lin .lic-row:hover,
++.lin .lic-row--focused { background: var(--bg-hover); }
++.lin .lic-row--selected { background: var(--bg-selected); }
++.lin .lic-row--selected:hover,
++.lin .lic-row--selected.lic-row--focused { background: var(--bg-selected-hover); }
++.lin .lic-row:focus-visible { box-shadow: inset 0 0 0 1px var(--accent-hi); border-radius: 0; }
++.lin .lic-row-check {
++  width: 24px;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  flex: none;
++  opacity: 0;
++  transition: opacity var(--dur) var(--ease);
++}
++.lin .lic-row:hover .lic-row-check,
++.lin .lic-row-check--on { opacity: 1; }
++.lin .lic-row-icon {
++  width: 22px;
++  height: 22px;
++  border-radius: 4px;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  flex: none;
++}
++.lin .lic-row-icon:hover { background: var(--bg-active); }
++.lin .lic-row-id { width: 64px; flex: none; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.lin .lic-row-title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; }
++.lin .lic-row-title-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
++.lin .lic-row-parent { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex-shrink: 2; }
++.lin .lic-row-props { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex: 0 1 auto; min-width: 0; overflow: hidden; }
++
++.lin .lic-chip {
++  height: 24px;
++  max-width: 180px;
++  padding: 0 8px;
++  border-radius: 12px;
++  border: 1px solid var(--border-strong);
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  flex: none;
++  font-size: 12px;
++  font-weight: 510;
++  color: var(--text-2);
++  white-space: nowrap;
++}
++.lin button.lic-chip:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lic-chip--icon { padding: 0 5px; border-radius: 6px; }
++.lin .lic-chip--static { cursor: default; }
++.lin .lic-chip-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
++.lin .lic-label-dots { display: inline-flex; gap: 2px; }
++.lin .lic-due--overdue { color: var(--danger); border-color: rgba(235, 87, 87, 0.35); }
++.lin .lic-due--soon { color: var(--urgent); }
++.lin .lic-date { font-size: 12px; white-space: nowrap; flex: none; min-width: 44px; text-align: right; }
++.lin .lic-avatar-btn {
++  width: 24px;
++  height: 24px;
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  border-radius: 50%;
++  flex: none;
++}
++.lin .lic-avatar-btn:hover { background: var(--bg-active); }
++
++.lin .lic-lane-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; flex: none; }
++.lin .lic-lane--queued { color: var(--text-3); }
++.lin .lic-lane--working { color: var(--warn); }
++.lin .lic-lane--blocked { color: var(--danger); }
++.lin .lic-lane--done_claimed { color: var(--ok); }
++.lin .lic-lane--not_done { color: var(--urgent); }
++.lin .lic-lane--verified_done,
++.lin .lic-lane--closed { color: var(--accent-hi); }
++.lin .lic-lane--failed { color: var(--text-4); }
++
++.lin .lic-board {
++  display: flex;
++  gap: 8px;
++  height: 100%;
++  padding: 8px 12px 12px;
++  overflow-x: auto;
++  scroll-snap-type: x proximity;
++}
++.lin .lic-col {
++  width: 340px;
++  flex: none;
++  display: flex;
++  flex-direction: column;
++  min-height: 0;
++  border-radius: 8px;
++  scroll-snap-align: start;
++  transition: background-color var(--dur) var(--ease);
++}
++.lin .lic-col--over { background: var(--bg-hover); }
++.lin .lic-col-head {
++  height: 36px;
++  flex: none;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 4px 0 8px;
++}
++.lin .lic-col-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++.lin .lic-col-btn {
++  width: 24px;
++  height: 24px;
++  border-radius: var(--radius-ctl);
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  color: var(--text-3);
++}
++.lin .lic-col-btn:hover { background: var(--bg-active); color: var(--text-1); }
++.lin .lic-col-body { flex: 1; min-height: 60px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding: 2px 2px 40px; }
++.lin .lic-col-empty { font-size: 12px; text-align: center; padding: 16px 0; }
++.lin .lic-card {
++  border-radius: 6px;
++  background: var(--card);
++  border: 1px solid var(--border);
++  padding: 10px 12px;
++  color: var(--text-1);
++  cursor: default;
++  touch-action: manipulation;
++  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
++  transition: border-color var(--dur) var(--ease), background-color var(--dur) var(--ease);
++}
++.lin .lic-card:hover,
++.lin .lic-card--focused { border-color: var(--border-strong); }
++.lin .lic-card--selected { background: var(--bg-selected); border-color: rgba(94, 106, 210, 0.45); }
++.lin .lic-card--dragging { opacity: 0.4; }
++.lin .lic-card--overlay { box-shadow: var(--shadow-pop); cursor: grabbing; transform: rotate(1.5deg); }
++.lin .lic-card-inner { display: flex; flex-direction: column; gap: 6px; }
++.lin .lic-card-top { display: flex; align-items: center; gap: 6px; min-height: 20px; }
++.lin .lic-card-id { font-size: 12px; }
++.lin .lic-card-title { display: flex; align-items: flex-start; gap: 6px; line-height: 1.4; }
++.lin .lic-card-title .lic-row-icon { margin-top: -2px; }
++.lin .lic-card-props { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
++.lin .lic-card-props:empty { display: none; }
++
++.lin .lic-timeline { display: flex; min-height: 100%; }
++.lin .lic-tl-side { width: 320px; flex: none; border-right: 1px solid var(--border); }
++.lin .lic-tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; }
++.lin .lic-tl-canvas { position: relative; min-height: 100%; }
++.lin .lic-tl-head { height: 52px; position: relative; border-bottom: 1px solid var(--border); }
++.lin .lic-tl-head--side { display: flex; align-items: flex-end; padding: 0 16px 8px; font-size: 12px; font-weight: 510; }
++.lin .lic-tl-months { height: 26px; position: relative; }
++.lin .lic-tl-month { position: absolute; top: 6px; padding-left: 6px; font-size: 12px; white-space: nowrap; color: var(--text-2); }
++.lin .lic-tl-days { height: 26px; position: relative; }
++.lin .lic-tl-day { position: absolute; top: 4px; text-align: center; font-size: 11px; }
++.lin .lic-tl-day--today { color: #fff; }
++.lin .lic-tl-day--today::before {
++  content: '';
++  position: absolute;
++  inset: -1px 4px;
++  border-radius: 4px;
++  background: var(--accent);
++  z-index: -1;
++}
++.lin .lic-tl-grid { position: relative; }
++.lin .lic-tl-weekend { position: absolute; top: 0; bottom: 0; background: var(--bg-subtle); }
++.lin .lic-tl-today { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--accent); opacity: 0.6; }
++.lin .lic-tl-group {
++  height: 34px;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 16px;
++  background: var(--bg-group);
++  border-bottom: 1px solid var(--border);
++}
++.lin .lic-tl-group--canvas { padding: 0; }
++.lin .lic-tl-row {
++  height: 40px;
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  padding: 0 16px;
++  border-bottom: 1px solid var(--border);
++  min-width: 0;
++}
++.lin .lic-tl-row:hover { background: var(--bg-hover); }
++.lin .lic-tl-lane { height: 40px; position: relative; border-bottom: 1px solid var(--border); }
++.lin .lic-tl-bar {
++  position: absolute;
++  top: 8px;
++  height: 24px;
++  border-radius: 6px;
++  background: color-mix(in srgb, var(--bar) 22%, transparent);
++  border: 1px solid color-mix(in srgb, var(--bar) 55%, transparent);
++  color: var(--text-1);
++  font-size: 12px;
++  font-weight: 510;
++  padding: 0 8px;
++  display: flex;
++  align-items: center;
++  overflow: hidden;
++}
++.lin .lic-tl-bar--cycle { border-style: dashed; }
++.lin .lic-tl-bar:hover { background: color-mix(in srgb, var(--bar) 32%, transparent); }
++.lin .lic-tl-bar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
++
++.lin .lic-empty { display: flex; align-items: center; justify-content: center; min-height: 320px; height: 100%; padding: 24px; }
++.lin .lic-empty-inner { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
++.lin .lic-link { color: var(--accent-hi); font: inherit; }
++.lin .lic-link:hover { color: var(--accent-hover); text-decoration: underline; }
++
++.lin .lic-bulk {
++  position: absolute;
++  left: 50%;
++  bottom: 20px;
++  z-index: 30;
++  transform: translateX(-50%);
++  display: flex;
++  align-items: center;
++  gap: 2px;
++  height: 40px;
++  padding: 0 6px;
++  border-radius: 10px;
++  background: var(--popover);
++  box-shadow: var(--shadow-pop);
++  max-width: calc(100% - 24px);
++  overflow-x: auto;
++}
++.lin .lic-bulk-count {
++  display: inline-flex;
++  align-items: center;
++  gap: 4px;
++  height: 28px;
++  padding: 0 4px 0 10px;
++  border: 1px dashed var(--border-strong);
++  border-radius: 6px;
++  white-space: nowrap;
++  font-size: 12px;
++}
++.lin .lic-bulk-clear { width: 20px; height: 20px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; color: var(--text-3); }
++.lin .lic-bulk-clear:hover { background: var(--bg-active); color: var(--text-1); }
++.lin .lic-bulk-sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 4px; flex: none; }
++.lin .lic-bulk-btn {
++  height: 28px;
++  padding: 0 8px;
++  border-radius: 6px;
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  color: var(--text-2);
++  font-size: 12px;
++  font-weight: 510;
++  white-space: nowrap;
++}
++.lin .lic-bulk-btn:hover { background: var(--bg-active); color: var(--text-1); }
++.lin .lic-bulk-btn--danger:hover { color: var(--danger); }
++
++.lin .lic-display { padding: 4px; display: flex; flex-direction: column; }
++.lin .lic-layout-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 4px; }
++.lin .lic-layout-tab {
++  height: 52px;
++  border-radius: 6px;
++  border: 1px solid var(--border);
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  gap: 4px;
++  color: var(--text-3);
++  font-size: 12px;
++  font-weight: 510;
++}
++.lin .lic-layout-tab:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lic-layout-tab--on { background: var(--bg-active); color: var(--text-1); border-color: var(--border-strong); }
++.lin .lic-display-sec { padding: 6px 8px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
++.lin .lic-display-row { height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
++.lin .lic-display-label { font-size: 12px; font-weight: 510; padding: 4px 0; }
++.lin .lic-select {
++  height: 26px;
++  min-width: 132px;
++  padding: 0 8px;
++  border-radius: 6px;
++  border: 1px solid var(--border-strong);
++  background: var(--input);
++  color: var(--text-1);
++  font: inherit;
++  font-size: 12px;
++}
++.lin .lic-switch {
++  width: 28px;
++  height: 16px;
++  border-radius: 8px;
++  background: var(--bg-active);
++  border: 1px solid var(--border-strong);
++  position: relative;
++  transition: background-color var(--dur) var(--ease);
++}
++.lin .lic-switch--on { background: var(--accent); border-color: var(--accent); }
++.lin .lic-switch-knob {
++  position: absolute;
++  top: 1px;
++  left: 1px;
++  width: 12px;
++  height: 12px;
++  border-radius: 50%;
++  background: #fff;
++  transition: transform var(--dur) var(--ease);
++}
++.lin .lic-switch--on .lic-switch-knob { transform: translateX(12px); }
++.lin .lic-prop-pills { display: flex; flex-wrap: wrap; gap: 4px; padding-bottom: 4px; }
++.lin .lic-prop-pill {
++  height: 24px;
++  padding: 0 8px;
++  border-radius: 6px;
++  border: 1px solid var(--border);
++  color: var(--text-3);
++  font-size: 12px;
++  font-weight: 510;
++}
++.lin .lic-prop-pill:hover { color: var(--text-1); }
++.lin .lic-prop-pill--on { background: var(--bg-active); color: var(--text-1); border-color: var(--border-strong); }
++.lin .lic-display-foot { display: flex; justify-content: flex-end; padding: 6px 4px 2px; border-top: 1px solid var(--border); }
++
++.lin .lic-form { display: flex; flex-direction: column; gap: 8px; }
++.lin .lic-input {
++  height: 32px;
++  padding: 0 10px;
++  border-radius: 6px;
++  border: 1px solid var(--border-strong);
++  background: var(--input);
++  color: var(--text-1);
++}
++.lin .lic-input:focus { border-color: var(--accent-hi); }
++.lin .lic-input--title { height: 38px; font-size: 15px; font-weight: 510; }
++
++.lin .lic-views { display: flex; flex-direction: column; }
++.lin .lic-views-head,
++.lin .lic-views-row {
++  display: grid;
++  grid-template-columns: minmax(240px, 1fr) 80px 80px 64px 120px;
++  align-items: center;
++  gap: 12px;
++  padding: 0 16px;
++}
++.lin .lic-views-head { height: 34px; font-size: 12px; font-weight: 510; border-bottom: 1px solid var(--border); }
++.lin .lic-views-row { height: 44px; border-bottom: 1px solid var(--border); }
++.lin .lic-views-row:hover { background: var(--bg-hover); }
++.lin .lic-views-name { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; overflow: hidden; }
++.lin .lic-views-desc { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
++
++@media (max-width: 767px) {
++  .lin .lic-row { padding-right: 8px; }
++  .lin .lic-row-id,
++  .lin .lic-row-props,
++  .lin .lic-row-parent,
++  .lin .lic-row-check { display: none; }
++  .lin .lic-tool-label,
++  .lin .lic-bulk-label { display: none; }
++  .lin .lic-col { width: 86vw; scroll-snap-align: center; }
++  .lin .lic-board { scroll-snap-type: x mandatory; }
++  .lin .lic-tl-side { width: 180px; }
++  .lin .lic-fchips-match { display: none; }
++  .lin .lic-views-head,
++  .lin .lic-views-row { grid-template-columns: minmax(0, 1fr) 56px 64px; }
++  .lin .lic-views-head > :nth-child(n + 4),
++  .lin .lic-views-row > :nth-child(n + 4) { display: none; }
++}
+diff --git a/web/src/tracker/issues/model.ts b/web/src/tracker/issues/model.ts
+new file mode 100644
+index 0000000..6f43285
+--- /dev/null
++++ b/web/src/tracker/issues/model.ts
+@@ -0,0 +1,187 @@
++import { createContext, useContext, useMemo } from 'react'
++import { TrackerApiError } from '../api'
++import { isClosedType } from '../format'
++import {
++  applyCompletedWindow,
++  applyFilters,
++  groupIssues,
++  patchForGroup,
++  sortIssues,
++  type IssueGroup,
++  type TrackerState,
++} from '../store'
++import type { ID, Issue, IssueCreate, IssuePatch, StateType, ViewDisplay, ViewFilters } from '../types'
++import { toast } from '../ui'
++
++/** Layouts rendered by IssueCollection. `timeline` is kept outside ViewDisplay (whose union is list|board). */
++export type CollectionLayout = 'list' | 'board' | 'timeline'
++
++export type PickerKind = 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'cycle' | 'estimate' | 'due'
++
++export interface PickerRequest {
++  kind: PickerKind
++  ids: ID[]
++  anchor: HTMLElement | DOMRect | null
++}
++
++export interface CollectionContextValue {
++  viewKey: string
++  display: ViewDisplay
++  teamId: ID | null
++  focusedId: ID | null
++  selection: Set<ID>
++  collapsed: Set<string>
++  toggleCollapsed: (key: string) => void
++  openPicker: (kind: PickerKind, issue: Issue, anchor: HTMLElement | DOMRect | null) => void
++  onRowClick: (issue: Issue, event: React.MouseEvent) => void
++  onRowHover: (issue: Issue) => void
++  toggleSelected: (issue: Issue) => void
++  createInGroup: (groups: IssueGroup[]) => void
++  contextAction: (issue: Issue, actionId: string) => void
++}
++
++export const CollectionContext = createContext<CollectionContextValue | null>(null)
++
++export function useCollection(): CollectionContextValue {
++  const value = useContext(CollectionContext)
++  if (!value) throw new Error('useCollection must be used inside IssueCollection')
++  return value
++}
++
++export function pickId(value: unknown): string {
++  if (typeof value === 'string') return value
++  if (value && typeof value === 'object' && 'id' in value) return String((value as { id: unknown }).id)
++  return String(value)
++}
++
++export function readLocal<T>(key: string, fallback: T): T {
++  try {
++    const raw = localStorage.getItem(key)
++    return raw ? (JSON.parse(raw) as T) : fallback
++  } catch {
++    return fallback
++  }
++}
++
++export function writeLocal(key: string, value: unknown) {
++  try {
++    localStorage.setItem(key, JSON.stringify(value))
++  } catch {
++    // Storage unavailable: the preference lasts for this session only.
++  }
++}
++
++export interface CollectionModel {
++  visible: Issue[]
++  groups: IssueGroup[]
++}
++
++export function useCollectionModel(
++  issues: Issue[],
++  filters: ViewFilters,
++  display: ViewDisplay,
++  layout: CollectionLayout,
++  teamId: ID | null,
++  stateTypes: StateType[] | undefined,
++  t: TrackerState,
++): CollectionModel {
++  return useMemo(() => {
++    let list = applyFilters(issues, filters, t)
++    list = applyCompletedWindow(list, display, t.statesById)
++    if (!display.show_sub_issues) list = list.filter((issue) => !issue.parent_id)
++    list = sortIssues(list, display.ordering, t.statesById)
++    const grouping = layout === 'board' && display.grouping === 'none' ? 'status' : display.grouping
++    const showEmpty = display.show_empty_groups || layout === 'board'
++    let groups = groupIssues(list, grouping, t, { teamId, showEmpty })
++    if (grouping === 'status') {
++      groups = groups.filter((group) => {
++        if (group.issues.length > 0) return true
++        const state = typeof group.value === 'string' ? t.statesById.get(group.value) : undefined
++        if (!state) return false
++        if (stateTypes && !stateTypes.includes(state.type)) return false
++        if (display.show_completed === 'none' && isClosedType(state.type)) return false
++        return true
++      })
++    }
++    return { visible: list, groups }
++  }, [issues, filters, display, layout, teamId, stateTypes, t])
++}
++
++/** Patch moving an issue from one group to another (labels swap instead of only adding). */
++export function patchForMove(from: IssueGroup | undefined, to: IssueGroup): IssuePatch | null {
++  const base = patchForGroup(to)
++  if (to.grouping === 'label') {
++    const patch: IssuePatch = {}
++    if (to.value) patch.add_label_ids = [to.value as ID]
++    if (from && from.grouping === 'label' && from.value && from.value !== to.value) patch.remove_label_ids = [from.value as ID]
++    return patch.add_label_ids || patch.remove_label_ids ? patch : null
++  }
++  return base
++}
++
++/** When grouping by status across teams, a column's state belongs to one team; map it onto the issue's team. */
++export function mapPatchToIssueTeam(patch: IssuePatch, issue: Issue, t: TrackerState): IssuePatch {
++  if (!patch.state_id) return patch
++  const target = t.statesById.get(patch.state_id)
++  if (!target || target.team_id === issue.team_id) return patch
++  const states = t.teamStates(issue.team_id)
++  const match = states.find((s) => s.name === target.name) ?? states.find((s) => s.type === target.type)
++  return match ? { ...patch, state_id: match.id } : withoutState(patch)
++}
++
++function withoutState(patch: IssuePatch): IssuePatch {
++  const copy = { ...patch }
++  delete copy.state_id
++  return copy
++}
++
++export function draftForGroups(groups: IssueGroup[], teamId: ID | null, t: TrackerState): Partial<IssueCreate> {
++  const draft: Partial<IssueCreate> = {}
++  for (const group of groups) {
++    const patch = patchForGroup(group)
++    if (!patch) continue
++    if (patch.state_id) {
++      draft.state_id = patch.state_id
++      const state = t.statesById.get(patch.state_id)
++      if (state) draft.team_id = state.team_id
++    }
++    if (patch.priority !== undefined) draft.priority = patch.priority
++    if (patch.assignee_id !== undefined) draft.assignee_id = patch.assignee_id
++    if (patch.project_id !== undefined) draft.project_id = patch.project_id
++    if (patch.cycle_id !== undefined) draft.cycle_id = patch.cycle_id
++    if (patch.add_label_ids) draft.label_ids = [...(draft.label_ids ?? []), ...patch.add_label_ids]
++  }
++  if (!draft.team_id) {
++    draft.team_id = teamId ?? t.teams.find((team) => !team.system)?.id ?? t.teams[0]?.id
++  }
++  return draft
++}
++
++export function errorMessage(err: unknown): string {
++  return err instanceof Error ? err.message : String(err)
++}
++
++/**
++ * Applies a patch and surfaces lane rejections (409) as toasts. Lane-linked issues that are not
++ * verified can be force-closed from the toast action.
++ */
++export async function updateWithLaneToast(t: TrackerState, ids: ID[], patch: IssuePatch): Promise<boolean> {
++  try {
++    await t.updateIssues(ids, patch)
++    return true
++  } catch (err) {
++    if (err instanceof TrackerApiError && err.code === 'lane_not_verified') {
++      toast.error(err.message, {
++        action: {
++          label: 'Force close',
++          onClick: () => {
++            t.updateIssues(ids, { ...patch, force_note: 'closed from tracker board' }).catch((e) => toast.error(errorMessage(e)))
++          },
++        },
++      })
++    } else if (!(err instanceof TrackerApiError)) {
++      toast.error(errorMessage(err))
++    }
++    return false
++  }
++}
+diff --git a/web/src/tracker/issues/shared.tsx b/web/src/tracker/issues/shared.tsx
+new file mode 100644
+index 0000000..b172378
+--- /dev/null
++++ b/web/src/tracker/issues/shared.tsx
+@@ -0,0 +1,177 @@
++import { Box, CircleDashed, Hexagon, Tag, Users } from 'lucide-react'
++import { compactRelative, cycleLabel, dueState, isClosedType, shortDate, stateProgress } from '../format'
++import type { IssueGroup, TrackerState } from '../store'
++import type { DisplayProperty, Issue, Priority } from '../types'
++import { LANE_STATUS_LABELS } from '../types'
++import { Avatar, CycleIcon, LabelDot, PriorityIcon, ProjectIcon, StatusIcon, Tooltip } from '../ui'
++import { useCollection, type PickerKind } from './model'
++
++export function IssueStatusIcon({ issue, t, size = 14 }: { issue: Issue; t: TrackerState; size?: number }) {
++  const state = t.statesById.get(issue.state_id)
++  if (!state) return <CircleDashed size={size} className="t-4" />
++  return <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, t.teamStates(state.team_id))} size={size} />
++}
++
++export function GroupIcon({ group, t }: { group: IssueGroup; t: TrackerState }) {
++  switch (group.grouping) {
++    case 'status': {
++      const state = typeof group.value === 'string' ? t.statesById.get(group.value) : undefined
++      return state ? (
++        <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, t.teamStates(state.team_id))} size={14} />
++      ) : (
++        <CircleDashed size={14} className="t-4" />
++      )
++    }
++    case 'priority':
++      return <PriorityIcon priority={(group.value as Priority) ?? 0} size={14} />
++    case 'assignee':
++      return <Avatar user={typeof group.value === 'string' ? t.usersById.get(group.value) ?? null : null} size={16} />
++    case 'project': {
++      const project = typeof group.value === 'string' ? t.projectsById.get(group.value) : undefined
++      return project ? <ProjectIcon icon={project.icon} color={project.color} /> : <Box size={14} className="t-4" />
++    }
++    case 'cycle':
++      return <CycleIcon progress={0.5} />
++    case 'label': {
++      const label = typeof group.value === 'string' ? t.labelsById.get(group.value) : undefined
++      return label ? <LabelDot color={label.color} /> : <Tag size={14} className="t-4" />
++    }
++    case 'team':
++      return <Users size={14} className="t-3" />
++    default:
++      return null
++  }
++}
++
++function Chip({
++  children,
++  onClick,
++  title,
++  className,
++}: {
++  children: React.ReactNode
++  onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void
++  title?: string
++  className?: string
++}) {
++  return (
++    <button
++      type="button"
++      className={`lic-chip${className ? ` ${className}` : ''}`}
++      title={title}
++      onClick={(event) => {
++        if (!onClick) return
++        event.stopPropagation()
++        onClick(event)
++      }}
++    >
++      {children}
++    </button>
++  )
++}
++
++export function IssueChips({
++  issue,
++  t,
++  properties,
++  compact = false,
++}: {
++  issue: Issue
++  t: TrackerState
++  properties: DisplayProperty[]
++  compact?: boolean
++}) {
++  const c = useCollection()
++  const has = (p: DisplayProperty) => properties.includes(p)
++  const open = (kind: PickerKind) => (event: React.MouseEvent<HTMLButtonElement>) => c.openPicker(kind, issue, event.currentTarget)
++  const state = t.statesById.get(issue.state_id)
++  const closed = state ? isClosedType(state.type) : false
++  const project = issue.project_id ? t.projectsById.get(issue.project_id) : undefined
++  const cycle = issue.cycle_id ? t.cyclesById.get(issue.cycle_id) : undefined
++  const due = dueState(issue.due_date, closed)
++  const labels = issue.label_ids.map((id) => t.labelsById.get(id)).filter((l) => l !== undefined)
++  return (
++    <>
++      {has('sub_issues') && issue.sub_issue_count > 0 && (
++        <span className="lic-chip lic-chip--static t-3 tabular" title="Sub-issues">
++          <Hexagon size={11} />
++          {issue.sub_issue_completed}/{issue.sub_issue_count}
++        </span>
++      )}
++      {has('lane') && issue.lane && (
++        <span className={`lic-chip lic-chip--static lic-lane lic-lane--${issue.lane.status}`} title={`Agent lane ${issue.lane.key}`}>
++          <span className="lic-lane-dot" />
++          {LANE_STATUS_LABELS[issue.lane.status]}
++        </span>
++      )}
++      {has('labels') &&
++        (labels.length > 2 && compact ? (
++          <Chip onClick={open('labels')} title={labels.map((l) => l.name).join(', ')}>
++            <span className="lic-label-dots">
++              {labels.slice(0, 3).map((l) => (
++                <LabelDot key={l.id} color={l.color} />
++              ))}
++            </span>
++            {labels.length} labels
++          </Chip>
++        ) : (
++          labels.map((label) => (
++            <Chip key={label.id} onClick={open('labels')} className="lic-chip--label">
++              <LabelDot color={label.color} />
++              <span className="lic-chip-text">{label.name}</span>
++            </Chip>
++          ))
++        ))}
++      {has('project') && project && (
++        <Chip onClick={open('project')} className="lic-chip--project">
++          <ProjectIcon icon={project.icon} color={project.color} />
++          <span className="lic-chip-text">{project.name}</span>
++        </Chip>
++      )}
++      {has('cycle') && cycle && (
++        <Chip onClick={open('cycle')}>
++          <CycleIcon progress={0.5} />
++          <span className="lic-chip-text">{cycleLabel(cycle)}</span>
++        </Chip>
++      )}
++      {has('estimate') && issue.estimate !== null && (
++        <Chip onClick={open('estimate')} title="Estimate">
++          <span className="tabular">{issue.estimate}</span>
++        </Chip>
++      )}
++      {has('due') && issue.due_date && (
++        <Chip onClick={open('due')} className={due ? `lic-due--${due}` : undefined} title={`Due ${shortDate(issue.due_date)}`}>
++          {shortDate(issue.due_date)}
++        </Chip>
++      )}
++      {has('created') && !compact && (
++        <Tooltip content={`Created ${shortDate(issue.created_at)}`}>
++          <span className="lic-date t-3">{shortDate(issue.created_at)}</span>
++        </Tooltip>
++      )}
++      {has('updated') && !compact && (
++        <Tooltip content={`Updated ${shortDate(issue.updated_at)}`}>
++          <span className="lic-date t-3">{compactRelative(issue.updated_at)}</span>
++        </Tooltip>
++      )}
++    </>
++  )
++}
++
++export function AssigneeButton({ issue, t }: { issue: Issue; t: TrackerState }) {
++  const c = useCollection()
++  const user = issue.assignee_id ? t.usersById.get(issue.assignee_id) ?? null : null
++  return (
++    <button
++      type="button"
++      className="lic-avatar-btn"
++      title={user ? `Assigned to ${user.name}` : 'Unassigned'}
++      onClick={(event) => {
++        event.stopPropagation()
++        c.openPicker('assignee', issue, event.currentTarget)
++      }}
++    >
++      <Avatar user={user} size={20} />
++    </button>
++  )
++}

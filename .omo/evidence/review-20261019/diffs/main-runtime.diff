@@ -1,0 +1,2207 @@
+diff --git a/src/dashboard.rs b/src/dashboard.rs
+index 5886098..b598234 100644
+--- a/src/dashboard.rs
++++ b/src/dashboard.rs
+@@ -563,6 +563,18 @@ impl OutboundDispatcher for CompositeDispatcher {
+             self.primary.dispatch(action).await
+         }
+     }
++
++    async fn post_status(
++        &self,
++        session: &SessionKey,
++        content: String,
++        reply_to: Option<String>,
++    ) -> omon_gateway::Result<Option<String>> {
++        if session.platform == "web" {
++            return Ok(None);
++        }
++        self.primary.post_status(session, content, reply_to).await
++    }
+ }
+ 
+ fn action_session(action: &OutboundAction) -> Option<&SessionKey> {
+@@ -663,10 +675,38 @@ impl DashboardState {
+     }
+ }
+ 
++/// Slack settings without tokens; `configured:false` when Slack is off.
++pub(crate) fn slack_config_view(slack: Option<&omon_gateway::slack::SlackConfig>) -> Value {
++    let Some(slack) = slack else {
++        return json!({ "configured": false });
++    };
++    json!({
++        "configured": true,
++        "allowed_users": slack.allowed_users,
++        "free_response_channels": slack.free_response_channels,
++        "home_channel": slack.home_channel,
++        "allowed_channels": slack.allowed_channels,
++        "ignored_channels": slack.ignored_channels,
++        "allow_all_users": slack.allow_all_users,
++        "allow_bots": format!("{:?}", slack.allow_bots),
++        "auto_thread": slack.auto_thread,
++        "thread_require_mention": slack.thread_require_mention,
++        "channel_context": slack.channel_context,
++        "channel_context_limit": slack.channel_context_limit,
++        "channel_topic_context": slack.channel_topic_context,
++        "processing_reactions": slack.processing_reactions,
++        "runtime_footer": slack.runtime_footer,
++        "missed_backfill": slack.missed_backfill,
++        "approval_mentions": slack.approval_mentions,
++        "destructive_slash_confirm": slack.destructive_slash_confirm,
++    })
++}
++
+ #[allow(dead_code)]
+ pub(crate) fn config_view_from_gateway(
+     config: &super::Config,
+     settings: &DashboardSettings,
++    slack: Option<&omon_gateway::slack::SlackConfig>,
+ ) -> Value {
+     json!({
+         "model": config.default_model,
+@@ -696,6 +736,7 @@ pub(crate) fn config_view_from_gateway(
+             "thread_sessions_per_user": config.thread_sessions_per_user,
+             "thread_require_mention": config.thread_require_mention,
+         },
++        "slack": slack_config_view(slack),
+         "runtime": {
+             "processing_reactions": config.processing_reactions,
+             "runtime_footer": config.runtime_footer,
+@@ -772,6 +813,7 @@ pub fn router(state: DashboardState) -> Router {
+         .route("/api/approvals/pending", get(list_pending_approvals))
+         .route("/api/approvals/{id}/resolve", post(resolve_approval))
+         .route("/api/approvals/allowlist", get(list_approval_allowlist))
++        .route("/api/autonomy/precedents", get(list_autonomy_precedents))
+         .route("/api/bots", get(list_bots).post(create_bot))
+         .route(
+             "/api/bots/{id}",
+@@ -779,6 +821,10 @@ pub fn router(state: DashboardState) -> Router {
+         )
+         .route("/api/logs", get(list_logs))
+         .route("/api/logs/ws", get(logs_ws))
++        .nest(
++            "/api/tracker",
++            omon_gateway::tracker::router(state.pool.clone()),
++        )
+         .fallback(get(serve_static))
+         .layer(TraceLayer::new_for_http())
+         .layer(axum::middleware::from_fn(validate_host_and_origin))
+@@ -907,6 +953,10 @@ async fn api_status(State(state): State<DashboardState>) -> Result<Json<Value>,
+         .multiplexer
+         .as_ref()
+         .map_or(0, SessionMultiplexer::active_sessions);
++    let busy_sessions = match state.multiplexer.as_ref() {
++        Some(mux) => mux.busy_sessions().await,
++        None => 0,
++    };
+     let (disk_total, disk_available) = state.sample_disk();
+     let memory_bytes = process_memory_bytes();
+     let (disk_headroom_status, disk_used_percent, disk_pressure) =
+@@ -934,6 +984,7 @@ async fn api_status(State(state): State<DashboardState>) -> Result<Json<Value>,
+         "uptime_seconds": state.started_at.elapsed().as_secs(),
+         "bot_connections": state.bot_connections,
+         "active_sessions": active_sessions,
++        "busy_sessions": busy_sessions,
+         "chat_available": state.multiplexer.is_some(),
+         "database": {
+             "sessions": stored_sessions,
+@@ -1267,7 +1318,8 @@ async fn post_chat(
+     })?;
+     let key = resolve_session_key(&state.pool, &id).await?;
+     reject_detached_messenger_session(&state, &key)?;
+-    let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
++    let mut event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
++    event.author_id = omon_gateway::context::owner_author_for(&key);
+     let owner = omon_gateway::sessions::status_reply::owner_id();
+     let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
+     let private_owner = private_owner
+@@ -1379,7 +1431,8 @@ async fn handle_session_socket(
+                                     let _ = send_ws_error(&mut socket, "chat runtime is not configured").await;
+                                     continue;
+                                 };
+-                                let event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), content);
++                                let mut event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), content);
++                                event.author_id = omon_gateway::context::owner_author_for(&key);
+                                 let owner = omon_gateway::sessions::status_reply::owner_id();
+                                 let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
+                                 let private_owner = private_owner || (omon_gateway::sessions::status_reply::matches_intent(content)
+@@ -2373,7 +2426,7 @@ struct ResolveApprovalRequest {
+ 
+ async fn resolve_approval(
+     State(state): State<DashboardState>,
+-    AxumPath(id): AxumPath<Uuid>,
++    AxumPath(id): AxumPath<String>,
+     Json(request): Json<ResolveApprovalRequest>,
+ ) -> Result<Json<Value>, ApiError> {
+     let suffix = match request.decision.trim().to_ascii_lowercase().as_str() {
+@@ -2388,7 +2441,42 @@ async fn resolve_approval(
+             ));
+         }
+     };
+-    let custom_id = format!("omon:approval:{id}:{suffix}");
++    let resolved_uuid = if let Ok(uuid) = Uuid::parse_str(id.trim()) {
++        Some(uuid)
++    } else if let Ok(proposal_id) = id.trim().parse::<i64>() {
++        let msg_id: Option<String> = sqlx::query_scalar(
++            "SELECT platform_message_id FROM action_proposals WHERE id = ?",
++        )
++        .bind(proposal_id)
++        .fetch_optional(&state.pool)
++        .await?
++        .flatten();
++        if let Some(raw) = msg_id {
++            Uuid::parse_str(raw.trim()).ok()
++        } else {
++            let decision = match suffix {
++                "once" | "session" => omon_gateway::ApprovalDecision::Once,
++                "always" => omon_gateway::ApprovalDecision::Always,
++                _ => omon_gateway::ApprovalDecision::Deny { reason: None },
++            };
++            if state.approvals.resolve_proposal_id(proposal_id, decision) {
++                return Ok(Json(
++                    json!({"resolved": true, "id": proposal_id, "decision": suffix}),
++                ));
++            }
++            None
++        }
++    } else {
++        return Err(ApiError::new(
++            StatusCode::BAD_REQUEST,
++            "invalid approval request id",
++        ));
++    };
++
++    let Some(uuid) = resolved_uuid else {
++        return Err(ApiError::not_found("approval request"));
++    };
++    let custom_id = format!("omon:approval:{uuid}:{suffix}");
+     if !state.approvals.resolve_custom_id(&custom_id).await {
+         if state.detached_from_gateway {
+             return Err(ApiError::new(
+@@ -2400,12 +2488,18 @@ async fn resolve_approval(
+         }
+         return Err(ApiError::not_found("approval request"));
+     }
+-    // The requester's terminal event updates both dashboard and Discord UI.
+     Ok(Json(
+-        json!({"resolved": true, "id": id, "decision": suffix}),
++        json!({"resolved": true, "id": uuid, "decision": suffix}),
+     ))
+ }
+ 
++async fn list_autonomy_precedents(
++    State(state): State<DashboardState>,
++) -> Result<Json<Value>, ApiError> {
++    let rows = omon_gateway::autonomy::list_active_precedents(&state.pool).await?;
++    Ok(Json(json!({"items": rows})))
++}
++
+ #[derive(Debug, Serialize, FromRow)]
+ struct ApprovalAllowlistRow {
+     pattern_key: String,
+@@ -2416,7 +2510,9 @@ async fn list_approval_allowlist(
+     State(state): State<DashboardState>,
+ ) -> Result<Json<Value>, ApiError> {
+     let rows = sqlx::query_as::<_, ApprovalAllowlistRow>(
+-        "SELECT pattern_key, created_at FROM approval_allowlist ORDER BY created_at DESC, pattern_key",
++        "SELECT signature AS pattern_key, created_at FROM action_precedents
++         WHERE decision = 'allow' AND revoked_at IS NULL
++         ORDER BY created_at DESC, signature",
+     )
+     .fetch_all(&state.pool)
+     .await?;
+@@ -2608,6 +2704,21 @@ mod tests {
+ 
+     use super::*;
+ 
++    #[test]
++    fn slack_config_view_lists_settings_without_tokens() {
++        assert_eq!(slack_config_view(None), json!({ "configured": false }));
++        let slack = omon_gateway::slack::SlackConfig {
++            home_channel: Some("CHOME".into()),
++            ..omon_gateway::slack::SlackConfig::test_default()
++        };
++        let view = slack_config_view(Some(&slack));
++        assert_eq!(view["configured"], true);
++        assert_eq!(view["home_channel"], "CHOME");
++        assert_eq!(view["missed_backfill"], true);
++        let rendered = view.to_string();
++        assert!(!rendered.contains("xoxb-") && !rendered.contains("xapp-"));
++    }
++
+     async fn test_state() -> DashboardState {
+         let pool = SqlitePoolOptions::new()
+             .max_connections(1)
+diff --git a/src/dashboard_runtime.rs b/src/dashboard_runtime.rs
+index 1643e95..ded7e61 100644
+--- a/src/dashboard_runtime.rs
++++ b/src/dashboard_runtime.rs
+@@ -149,8 +149,11 @@ pub async fn run_standalone(
+         appserver_url = %omo_config.appserver_url,
+         "Configured dashboard agent backend: OMO app-server"
+     );
+-    let omo_backend =
+-        Arc::new(OmoBackend::new(omo_config.clone(), dispatcher.clone()).with_pool(pool.clone()));
++    let omo_backend = Arc::new(
++        OmoBackend::new(omo_config.clone(), dispatcher.clone())
++            .with_pool(pool.clone())
++            .with_approval_requester(approval_requester.clone()),
++    );
+     let mux = SessionMultiplexer::with_dispatcher(
+         pool.clone(),
+         omo_backend.clone(),
+@@ -200,12 +203,22 @@ pub async fn run_standalone(
+         scheduler.start().await;
+     }
+ 
+-    let bot_connections = configured_bot_count();
++    let slack_config = omon_gateway::slack::SlackConfig::from_env(&workspace_root);
++    let bot_connections = configured_bot_count() + usize::from(slack_config.is_some());
+     let policy_defaults = MessageContextPolicyMatrix::from_environment();
+     let policy_store = MessengerPolicyStore::new(pool.clone());
+     let policy_override = policy_store.get_override("discord").await?;
+     let effective_policy = policy_store.effective("discord", &policy_defaults).await?;
+-    let config_view = dashboard_config_view(
++    let slack_policy = match &slack_config {
++        Some(_) => Some(SlackPolicyView {
++            policy_override: policy_store.get_override(omon_gateway::slack::PLATFORM).await?,
++            effective: policy_store
++                .effective(omon_gateway::slack::PLATFORM, &policy_defaults)
++                .await?,
++        }),
++        None => None,
++    };
++    let mut config_view = dashboard_config_view(
+         &settings,
+         &workspace_root,
+         &extra_tool_roots,
+@@ -214,6 +227,12 @@ pub async fn run_standalone(
+         policy_override.as_ref(),
+         &effective_policy,
+     );
++    attach_slack_view(
++        &mut config_view,
++        slack_config.as_ref(),
++        &policy_defaults,
++        slack_policy.as_ref(),
++    );
+     let state = DashboardState::new(
+         pool.clone(),
+         multiplexer,
+@@ -275,6 +294,33 @@ fn dashboard_tool_roots() -> Vec<PathBuf> {
+         })
+ }
+ 
++struct SlackPolicyView {
++    policy_override: Option<MessageContextPolicyMatrix>,
++    effective: MessageContextPolicyMatrix,
++}
++
++/// Adds the `slack` config block and, when Slack is on, its message-context policy.
++fn attach_slack_view(
++    view: &mut Value,
++    slack: Option<&omon_gateway::slack::SlackConfig>,
++    policy_defaults: &MessageContextPolicyMatrix,
++    policy: Option<&SlackPolicyView>,
++) {
++    view["slack"] = super::dashboard::slack_config_view(slack);
++    if let (Some(slack), Some(policy)) = (slack, policy) {
++        view["slack_message_context_policy"] = json!({
++            "platform": omon_gateway::slack::PLATFORM,
++            "environment_defaults": policy_defaults,
++            "persisted_override": policy.policy_override,
++            "effective": policy.effective,
++            "allowed_cross_channels": slack.allowed_channels,
++            "ignored_channels": slack.ignored_channels,
++            "override_store": "messenger_policy_overrides",
++            "search_backend": "sqlite_fts5+slack_rest_backfill",
++        });
++    }
++}
++
+ fn configured_bot_count() -> usize {
+     let mut tokens = Vec::new();
+     for variable in ["DISCORD_BOT_TOKEN", "DISCORD_BOT_TOKENS"] {
+@@ -399,6 +445,36 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn slack_view_adds_config_and_policy_only_when_configured() {
++        let defaults = MessageContextPolicyMatrix::default();
++        let mut off = json!({});
++        attach_slack_view(&mut off, None, &defaults, None);
++        assert_eq!(off["slack"]["configured"], false);
++        assert!(off.get("slack_message_context_policy").is_none());
++
++        let slack = omon_gateway::slack::SlackConfig {
++            allowed_channels: vec!["CALLOWED".into()],
++            ..omon_gateway::slack::SlackConfig::test_default()
++        };
++        let policy = SlackPolicyView {
++            policy_override: None,
++            effective: MessageContextPolicyMatrix {
++                allow_dm_reads: false,
++                ..defaults.clone()
++            },
++        };
++        let mut on = json!({});
++        attach_slack_view(&mut on, Some(&slack), &defaults, Some(&policy));
++        assert_eq!(on["slack"]["configured"], true);
++        assert_eq!(on["slack_message_context_policy"]["platform"], "slack");
++        assert_eq!(on["slack_message_context_policy"]["effective"]["allow_dm_reads"], false);
++        assert_eq!(
++            on["slack_message_context_policy"]["allowed_cross_channels"],
++            json!(["CALLOWED"])
++        );
++    }
++
+     #[test]
+     fn dashboard_config_exposes_message_context_policy_matrix() {
+         let settings = DashboardSettings {
+diff --git a/src/entry.rs b/src/entry.rs
+index c4499ab..9d46288 100644
+--- a/src/entry.rs
++++ b/src/entry.rs
+@@ -1,6 +1,8 @@
+ use clap::{Parser, Subcommand};
+ use omon_gateway::migrate::MigrateArgs;
+-use omon_gateway::profiles::{apply_block, export_json, export_profile};
++use omon_gateway::profiles::{
++    apply_block_with_markers, export_json, export_profile, BlockMarkers, DEFAULT_BLOCK_NAME,
++};
+ use omon_gateway::{OmonError, Result};
+ use tokio_util::sync::CancellationToken;
+ 
+@@ -65,6 +67,7 @@ enum Command {
+     Sessions(omon_gateway::sessions::cli::SessionsArgs),
+     Usage(omon_gateway::usage::UsageArgs),
+     Cron(omon_gateway::cron::report::CronArgs),
++    Autonomy(omon_gateway::autonomy::AutonomyArgs),
+ }
+ 
+ #[derive(Debug, clap::Args)]
+@@ -83,6 +86,9 @@ enum ProfileCommand {
+         bot_id: String,
+         #[arg(long)]
+         block_file: std::path::PathBuf,
++        /// Block name: the file's `<!-- omon:<name>:begin/end -->` markers.
++        #[arg(long, default_value = DEFAULT_BLOCK_NAME)]
++        block: String,
+     },
+ }
+ 
+@@ -117,6 +123,9 @@ async fn main() -> Result<()> {
+     if let Command::Sessions(args) = command {
+         std::process::exit(omon_gateway::sessions::cli::run(args).await);
+     }
++    if let Command::Autonomy(args) = command {
++        std::process::exit(omon_gateway::autonomy::run_cli(args).await);
++    }
+     legacy::dashboard::init_tracing();
+ 
+     match command {
+@@ -144,6 +153,7 @@ async fn main() -> Result<()> {
+         Command::Sessions(args) => std::process::exit(omon_gateway::sessions::cli::run(args).await),
+         Command::Usage(args) => std::process::exit(omon_gateway::usage::run(args).await),
+         Command::Cron(args) => std::process::exit(omon_gateway::cron::report::run(args).await),
++        Command::Autonomy(args) => std::process::exit(omon_gateway::autonomy::run_cli(args).await),
+     }
+ }
+ 
+@@ -169,11 +179,17 @@ async fn run_profile(args: ProfileArgs) -> i32 {
+                     .ok_or_else(|| format!("unknown bot id: {bot_id}"))?;
+                 export_json(&profile).map_err(|error| error.to_string())
+             }
+-            ProfileCommand::ApplyBlock { bot_id, block_file } => {
++            ProfileCommand::ApplyBlock {
++                bot_id,
++                block_file,
++                block: block_name,
++            } => {
++                let markers =
++                    BlockMarkers::named(&block_name).map_err(|error| error.to_string())?;
+                 let block = tokio::fs::read_to_string(block_file)
+                     .await
+                     .map_err(|error| error.to_string())?;
+-                let applied = apply_block(database.pool(), &bot_id, &block)
++                let applied = apply_block_with_markers(database.pool(), &bot_id, &markers, &block)
+                     .await
+                     .map_err(|error| error.to_string())?;
+                 serde_json::to_string_pretty(&serde_json::json!({
+diff --git a/src/lib.rs b/src/lib.rs
+index 9a2bc75..5fea443 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,4 +1,6 @@
+ pub mod agent;
++pub mod autonomy;
++pub mod context;
+ pub mod cron;
+ pub mod discord;
+ pub mod drain_control;
+@@ -14,10 +16,13 @@ pub mod models;
+ pub mod multiplexer;
+ pub mod profiles;
+ pub mod readiness;
++pub mod report;
+ pub mod security;
+ pub mod sessions;
++pub mod slack;
+ pub mod storage;
+ pub mod tools;
++pub mod tracker;
+ pub mod usage;
+ pub mod voice;
+ pub mod voice_transcription;
+diff --git a/src/main.rs b/src/main.rs
+index 1aae77e..5722d95 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -145,12 +145,6 @@ impl Config {
+                 }
+             }
+         }
+-        if tokens.is_empty() {
+-            return Err(OmonError::Config(
+-                "missing required environment variable DISCORD_BOT_TOKEN".into(),
+-            ));
+-        }
+-
+         let workspace_root = env::var_os("OMON_WORKSPACE_ROOT")
+             .map(PathBuf::from)
+             .unwrap_or_else(|| {
+@@ -160,6 +154,10 @@ impl Config {
+                 home.join(".omon").join("workspace")
+             });
+         let _ = std::fs::create_dir_all(&workspace_root);
++        require_a_transport(
++            &tokens,
++            omon_gateway::slack::SlackConfig::from_env(&workspace_root).is_some(),
++        )?;
+ 
+         let extra_tool_roots = optional_env("OMON_TOOL_ROOTS")
+             .map(|val| {
+@@ -222,7 +220,11 @@ impl Config {
+                 optional_env("DISCORD_PROCESSING_REACTIONS").as_deref(),
+                 true,
+             ),
+-            approval_policy: ApprovalPolicy::parse(optional_env("APPROVAL_MODE").as_deref()),
++            approval_policy: if omon_gateway::agent::agent_workspace::full_access_enabled() {
++                ApprovalPolicy::Never
++            } else {
++                ApprovalPolicy::parse(optional_env("APPROVAL_MODE").as_deref())
++            },
+             approval_timeout_secs: approval_timeout_secs_from(
+                 optional_env("APPROVAL_TIMEOUT_SECS").as_deref(),
+             ),
+@@ -290,6 +292,16 @@ impl Config {
+     }
+ }
+ 
++/// Discord is optional once Slack is configured; with neither there is nothing to listen on.
++fn require_a_transport(discord_tokens: &[String], slack_configured: bool) -> Result<()> {
++    if discord_tokens.is_empty() && !slack_configured {
++        return Err(OmonError::Config(
++            "missing required environment variable DISCORD_BOT_TOKEN (or Slack tokens)".into(),
++        ));
++    }
++    Ok(())
++}
++
+ #[derive(Default)]
+ struct SharedDispatcher {
+     inner: RwLock<Option<Arc<dyn OutboundDispatcher>>>,
+@@ -310,6 +322,19 @@ impl OutboundDispatcher for SharedDispatcher {
+             })?;
+         dispatcher.dispatch(action).await
+     }
++
++    async fn post_status(
++        &self,
++        session: &SessionKey,
++        content: String,
++        reply_to: Option<String>,
++    ) -> Result<Option<String>> {
++        let dispatcher =
++            self.inner.read().await.clone().ok_or_else(|| {
++                OmonError::Config("outbound dispatcher is not initialized".into())
++            })?;
++        dispatcher.post_status(session, content, reply_to).await
++    }
+ }
+ 
+ pub use omon_gateway::ledger::recover_pending_delivery_obligations;
+@@ -359,6 +384,37 @@ pub struct StartupAuthorization {
+     pub allowed_channels: Vec<u64>,
+     pub ignored_channels: Vec<u64>,
+     pub paired_users: Vec<u64>,
++    /// Slack ingress rules; `None` keeps Slack sessions unrecoverable (Slack is off).
++    pub slack: Option<SlackStartupAuthorization>,
++}
++
++#[derive(Clone, Debug, Default)]
++pub struct SlackStartupAuthorization {
++    pub allowed_users: Vec<String>,
++    pub allow_all_users: bool,
++    pub allowed_channels: Vec<String>,
++    pub ignored_channels: Vec<String>,
++    pub paired_users: Vec<String>,
++}
++
++impl SlackStartupAuthorization {
++    fn is_authorized_actor(&self, session_key: &SessionKey, actor: Option<&str>) -> bool {
++        let channel = session_key.channel_id.as_str();
++        if self.ignored_channels.iter().any(|id| id == channel) {
++            return false;
++        }
++        if session_key.guild_id.is_some()
++            && !self.allowed_channels.is_empty()
++            && !self.allowed_channels.iter().any(|id| id == channel)
++        {
++            return false;
++        }
++        self.allow_all_users
++            || actor.is_some_and(|id| {
++                self.allowed_users.iter().any(|user| user == id)
++                    || self.paired_users.iter().any(|user| user == id)
++            })
++    }
+ }
+ 
+ impl StartupAuthorization {
+@@ -367,6 +423,12 @@ impl StartupAuthorization {
+     }
+ 
+     fn is_authorized_actor(&self, session_key: &SessionKey, actor: Option<&str>) -> bool {
++        if session_key.platform == omon_gateway::slack::PLATFORM {
++            return self
++                .slack
++                .as_ref()
++                .is_some_and(|slack| slack.is_authorized_actor(session_key, actor));
++        }
+         if let Ok(channel_id) = session_key.channel_id.parse::<u64>() {
+             if !self.ignored_channels.is_empty() && self.ignored_channels.contains(&channel_id) {
+                 return false;
+@@ -424,6 +486,25 @@ async fn pending_recovery_actor(
+             }
+         }
+     }
++    // Slack ingress indexes the Events API `user`, which Slack itself authenticated.
++    if key.platform == omon_gateway::slack::PLATFORM {
++        if let Some(message_id) = unfinished.platform_message_id.as_deref() {
++            let author: Option<String> = sqlx::query_scalar(
++                "SELECT author_id FROM message_search_documents
++                 WHERE platform = 'slack' AND guild_id IS ? AND channel_id = ?
++                   AND message_id = ? AND CASE WHEN json_valid(metadata_json)
++                       THEN json_extract(metadata_json, '$.source') END = 'ingress'",
++            )
++            .bind(&key.guild_id)
++            .bind(key.thread_id.as_deref().unwrap_or(&key.channel_id))
++            .bind(message_id)
++            .fetch_optional(pool)
++            .await?;
++            if author.is_some() {
++                return Ok(author);
++            }
++        }
++    }
+     if key.guild_id.is_none() {
+         return Ok(Some(key.user_id.clone()));
+     }
+@@ -695,12 +776,107 @@ fn hermes_skill_dirs(hermes_root: &Path, home: &Path) -> Vec<PathBuf> {
+ }
+ 
+ /// Owner home DM that leads lanes, proposals and inbox triage. Zero-config:
+-/// OMON_LANE_DEFAULT_LEAD overrides the built-in OmOMeow owner DM.
++/// OMON_LANE_DEFAULT_LEAD overrides the built-in OmOMeow owner DM. When Slack is home
++/// (`OMON_HOME_PLATFORM=slack` or no Discord), boot publishes the Slack owner DM there
++/// before any lead consumer starts (see `boot_slack`).
+ fn default_lead() -> String {
+     std::env::var("OMON_LANE_DEFAULT_LEAD")
+         .unwrap_or_else(|_| omon_gateway::lanes::kibitzer::DEFAULT_LEAD.to_owned())
+ }
+ 
++/// Slack identity resolved once at boot, before any owner-lead consumer starts.
++struct SlackBoot {
++    api: omon_gateway::slack::SlackApi,
++    bot_user_id: String,
++    owner_id: String,
++    /// Set when Slack is the owner home; it is then also the default lead.
++    owner_dm: Option<SessionKey>,
++}
++
++impl SlackBoot {
++    fn inbox_identity(&self) -> (String, String) {
++        (self.owner_id.clone(), self.bot_user_id.clone())
++    }
++}
++
++/// `auth.test`, persona copy and (when Slack is home) the owner DM lead. `None` when Slack is
++/// off or its token is rejected; the caller then runs Discord only.
++async fn boot_slack(
++    pool: &SqlitePool,
++    config: Option<&omon_gateway::slack::SlackConfig>,
++    discord_configured: bool,
++) -> Result<Option<SlackBoot>> {
++    let Some(config) = config else {
++        return Ok(None);
++    };
++    let api = omon_gateway::slack::SlackApi::new(config.bot_token.clone());
++    let auth = match api.auth_test().await {
++        Ok(auth) => auth,
++        Err(error) => {
++            warn!(%error, "Slack auth.test failed; Slack stays off for this run");
++            return Ok(None);
++        }
++    };
++    let persona_source = omon_gateway::slack::home::persona_source(
++        optional_env("OMON_SLACK_PERSONA_FROM").as_deref(),
++    );
++    match omon_gateway::slack::home::copy_persona(pool, &persona_source, &auth.user_id).await {
++        Ok(true) => info!(from = %persona_source, to = %auth.user_id, "copied bot persona to the Slack bot"),
++        Ok(false) => {}
++        Err(error) => warn!(%error, "could not copy bot persona to the Slack bot"),
++    }
++    let slack_home = omon_gateway::slack::home::is_home(
++        optional_env("OMON_HOME_PLATFORM").as_deref(),
++        discord_configured,
++    );
++    let owner_dm = if slack_home {
++        match omon_gateway::slack::home::owner_dm_key(&api, config, &auth.user_id, pool).await {
++            Ok(key) => {
++                if optional_env("OMON_LANE_DEFAULT_LEAD").is_none() {
++                    // Lanes, kibitzer, cron health, proposals and the actor read the lead here.
++                    env::set_var("OMON_LANE_DEFAULT_LEAD", key.storage_key());
++                }
++                info!(lead = %default_lead(), "Slack owner DM is the owner home");
++                Some(key)
++            }
++            Err(error) => {
++                warn!(%error, "could not open the Slack owner DM; the default lead is unchanged");
++                None
++            }
++        }
++    } else {
++        None
++    };
++    Ok(Some(SlackBoot {
++        api,
++        bot_user_id: auth.user_id,
++        owner_id: config.owner_id().to_owned(),
++        owner_dm,
++    }))
++}
++
++/// Owner identity the digest DM must belong to: the Slack owner for a Slack lead.
++fn digest_owner(
++    lead: &str,
++    slack: Option<&omon_gateway::slack::SlackConfig>,
++    owner_override: Option<&str>,
++) -> String {
++    let slack_lead = SessionKey::from_storage_key(lead)
++        .is_ok_and(|key| key.platform == omon_gateway::slack::PLATFORM);
++    if slack_lead {
++        return slack.map_or_else(omon_gateway::slack::owner_id, |config| {
++            config.owner_id().to_owned()
++        });
++    }
++    owner_id_from(owner_override)
++}
++
++async fn flush_slack(runtime: Option<&omon_gateway::slack::SlackRuntime>) {
++    if let Some(runtime) = runtime {
++        runtime.flush().await;
++    }
++}
++
+ #[tokio::main]
+ #[allow(dead_code)]
+ async fn main() -> Result<()> {
+@@ -722,7 +898,8 @@ async fn main() -> Result<()> {
+ /// list; when the reads are still denied we surface the privacy pane so the
+ /// user makes the single toggle that then sticks (the binary is signed with a
+ /// stable Developer ID identity, so the grant survives rebuilds).
+-fn ensure_full_disk_access(workspace_root: &Path) {
++/// Returns true if all protected probes were readable, false if access was denied.
++fn ensure_full_disk_access(workspace_root: &Path) -> bool {
+     let home = env::var("HOME").unwrap_or_default();
+     let candidates = [
+         format!("{home}/Library/Application Support/com.apple.TCC/TCC.db"),
+@@ -757,7 +934,7 @@ fn ensure_full_disk_access(workspace_root: &Path) {
+     }
+     if denied.is_empty() {
+         info!("full disk access: granted (all protected probes readable)");
+-        return;
++        return true;
+     }
+     let marker = workspace_root.join(FDA_PROMPTED_MARKER);
+     if !claim_fda_prompt(&marker) {
+@@ -765,7 +942,7 @@ fn ensure_full_disk_access(workspace_root: &Path) {
+             denied = %denied.join(" | "),
+             "full disk access: denied; the privacy pane was already opened on an earlier boot"
+         );
+-        return;
++        return false;
+     }
+     warn!(
+         denied = %denied.join(" | "),
+@@ -779,6 +956,111 @@ fn ensure_full_disk_access(workspace_root: &Path) {
+             warn!(%error, "could not open the Full Disk Access privacy pane");
+         }
+     }
++    false
++}
++
++/// Single marker file for the Full Disk Access owner DM. Its content is the binary identity
++/// (size + mtime), so a new deploy re-alerts once while crash-loop restarts of the same binary
++/// do not, and markers never accumulate (incident 2026-10-16).
++const FDA_DM_MARKER: &str = ".fda_dm_prompted";
++
++/// Where the Full Disk Access alert goes: the Discord owner DM, or the Slack owner home DM.
++enum FdaAlertChannel<'a> {
++    Discord {
++        http: &'a serenity::http::Http,
++        owner_id: &'a str,
++    },
++    Slack {
++        api: &'a omon_gateway::slack::SlackApi,
++        channel: &'a str,
++    },
++}
++
++impl FdaAlertChannel<'_> {
++    async fn send(&self, message: &str) -> std::result::Result<(), String> {
++        match self {
++            Self::Discord { http, owner_id } => {
++                let recipient = serde_json::json!({ "recipient_id": owner_id });
++                let channel = http
++                    .create_private_channel(&recipient)
++                    .await
++                    .map_err(|error| format!("could not open the owner DM: {error}"))?;
++                channel
++                    .say(*http, message)
++                    .await
++                    .map(|_| ())
++                    .map_err(|error| error.to_string())
++            }
++            Self::Slack { api, channel } => api
++                .post_message(channel, message, None, None)
++                .await
++                .map(|_| ())
++                .map_err(|error| error.to_string()),
++        }
++    }
++
++    fn platform(&self) -> &'static str {
++        match self {
++            Self::Discord { .. } => "discord",
++            Self::Slack { .. } => "slack",
++        }
++    }
++}
++
++/// Sends a DM alert to the owner if Full Disk Access is missing.
++/// Dispatched at most once per binary identity (sized and timestamped marker)
++/// to notify the owner upon new deployment without spamming on crash loops
++/// (incident 2026-10-16).
++async fn notify_owner_fda_denied_if_needed(workspace_root: &Path, channel: FdaAlertChannel<'_>) {
++    let current_exe = match std::env::current_exe() {
++        Ok(path) => path,
++        Err(error) => {
++            warn!(%error, "could not determine current executable path for FDA notice");
++            PathBuf::from("omo-gateway")
++        }
++    };
++    let (size, mtime) = match tokio::fs::metadata(&current_exe).await {
++        Ok(meta) => {
++            let size = meta.len();
++            let mtime = meta
++                .modified()
++                .ok()
++                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
++                .map(|d| d.as_secs())
++                .unwrap_or(0);
++            (size, mtime)
++        }
++        Err(error) => {
++            warn!(%error, "could not read metadata of current executable for FDA marker");
++            (0, 0)
++        }
++    };
++    let identity = format!("{size}:{mtime}");
++    let marker_path = workspace_root.join(FDA_DM_MARKER);
++    if tokio::fs::read_to_string(&marker_path)
++        .await
++        .is_ok_and(|seen| seen.trim() == identity)
++    {
++        return;
++    }
++
++    let message = format!(
++        "⚠️ omo-gateway에 전체 디스크 접근 권한이 없습니다. iMessage 수집이 중단됩니다. 시스템 설정 → 개인정보 보호 및 보안 → 전체 디스크 접근 권한에서 {}를 켜 주세요.",
++        current_exe.display()
++    );
++
++    let platform = channel.platform();
++    match channel.send(&message).await {
++        Ok(()) => {
++            info!(platform, marker = %marker_path.display(), "notified owner of missing Full Disk Access");
++            if let Err(error) = tokio::fs::write(&marker_path, &identity).await {
++                warn!(%error, path = %marker_path.display(), "could not record FDA DM marker");
++            }
++        }
++        Err(error) => {
++            warn!(platform, %error, "failed to send Full Disk Access denial alert to owner");
++        }
++    }
+ }
+ 
+ const FDA_PROMPTED_MARKER: &str = ".fda_prompted";
+@@ -797,6 +1079,33 @@ async fn run_gateway() -> Result<()> {
+     run_gateway_with_dashboard(None).await
+ }
+ 
++/// Fetches the Discord bot user for the provided HTTP client, retrying transient
++/// transport-level network errors (DNS, connect, timeout, reqwest errors) with
++/// exponential backoff (2s doubling to 60s cap). Permanent HTTP status errors
++/// (e.g. 401 unauthorized due to invalid token) fail fast immediately (incident 2026-10-16).
++async fn fetch_current_user_with_retry(
++    http: &serenity::http::Http,
++) -> Result<serenity::model::user::CurrentUser> {
++    let mut backoff = std::time::Duration::from_secs(2);
++    const MAX_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
++
++    loop {
++        match http.get_current_user().await {
++            Ok(user) => return Ok(user),
++            Err(serenity::Error::Http(serenity::http::HttpError::Request(error))) => {
++                warn!(
++                    %error,
++                    retry_in_secs = backoff.as_secs(),
++                    "transient network failure during Discord bot identity lookup; retrying after backoff"
++                );
++                tokio::time::sleep(backoff).await;
++                backoff = (backoff * 2).min(MAX_BACKOFF);
++            }
++            Err(error) => return Err(error.into()),
++        }
++    }
++}
++
+ async fn run_gateway_with_dashboard(
+     dashboard_settings: Option<dashboard::DashboardSettings>,
+ ) -> Result<()> {
+@@ -883,7 +1192,7 @@ async fn run_gateway_with_dashboard(
+             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                 .map_err(|error| OmonError::Config(error.to_string()))?;
+         let kibitzer = initialize_kibitzer(&pool).await?;
+-        let mut lanes = spawn_lane_service(&pool, &shutdown, kibitzer)?;
++        let mut lanes = spawn_lane_service(&pool, &shutdown, kibitzer, None)?;
+         scheduler.start().await;
+         lanes.spawn(native_cron.serve(pool.clone(), scheduler.clone(), shutdown.clone()));
+         let dispatcher = omon_gateway::lanes::dispatch::EventDispatcher::new(
+@@ -903,7 +1212,7 @@ async fn run_gateway_with_dashboard(
+             Ok(())
+         });
+         let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
+-        let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx)?;
++        let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx, None)?;
+         info!(
+             "headless gateway lead runtime ready; output delivery is local transcript acceptance"
+         );
+@@ -924,8 +1233,12 @@ async fn run_gateway_with_dashboard(
+         return outcome;
+     }
+     let config = Config::from_env()?;
+-    ensure_full_disk_access(&config.workspace_root);
++    let fda_granted = ensure_full_disk_access(&config.workspace_root);
+     let pool = init_pool(&config.database_url).await?;
++    let discord_configured = !config.discord_bot_tokens.is_empty();
++    let slack_config =
++        omon_gateway::slack::SlackConfig::from_env(&config.workspace_root).map(Arc::new);
++    let slack_boot = boot_slack(&pool, slack_config.as_deref(), discord_configured).await?;
+     let kibitzer = initialize_kibitzer(&pool).await?;
+ 
+     let approval_guard = SmartApprovalGuard::new().with_pool(pool.clone());
+@@ -936,12 +1249,36 @@ async fn run_gateway_with_dashboard(
+     );
+     let loaded_yolo = approval_guard.load_persisted_yolo().await?;
+     info!(loaded_yolo, "loaded persisted yolo sessions");
++    if omon_gateway::report::claims::report_claims_enabled() {
++        let _ = omon_gateway::report::claims::recover_stale_report_claims(
++            &pool,
++            chrono::Utc::now(),
++        )
++        .await;
++    }
++    let _ = omon_gateway::inbox::proposals::backfill_pending_inbox_proposals(&pool).await;
++    if omon_gateway::agent::agent_workspace::approval_ledger_enabled() {
++        let lead = default_lead();
++        match omon_gateway::autonomy::recover_pending_proposals_on_startup(&pool, &lead).await {
++            Ok(expired) if expired > 0 => {
++                info!(expired, "recovered pending action proposals on startup");
++            }
++            Ok(_) => {}
++            Err(error) => {
++                warn!(%error, "failed to recover pending action proposals on startup");
++            }
++        }
++    }
+     let approval_requester = Arc::new(DiscordApprovalRequester::new(
+         approval_guard.clone(),
+         std::time::Duration::from_secs(config.approval_timeout_secs),
+     ));
+     let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
+-    let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx)?;
++    let mut inbox = spawn_inbox_collector(
++        &pool,
++        inbox_shutdown_rx,
++        slack_boot.as_ref().map(SlackBoot::inbox_identity),
++    )?;
+     let mut tools = ToolRegistry::new().with_approval_requester(
+         approval_requester.clone(),
+         std::time::Duration::from_secs(config.approval_timeout_secs + 5),
+@@ -992,6 +1329,18 @@ async fn run_gateway_with_dashboard(
+         omon_gateway::SkillsTool::new(hermes_skill_dirs(&hermes_root, &home))
+             .with_pool(pool.clone()),
+     );
++    if let (Some(slack), Some(boot)) = (&slack_config, &slack_boot) {
++        let mut message_context = omon_gateway::MessageContextTool::from_environment(pool.clone())
++            .unwrap_or_default();
++        message_context.register_provider(
++            omon_gateway::tools::message_context_slack::SlackMessageContextProvider::new(
++                boot.api.clone(),
++                pool.clone(),
++            )
++            .with_channels(slack.allowed_channels.clone(), slack.ignored_channels.clone()),
++        );
++        tools.register(message_context);
++    }
+     let tool_names = tools.names();
+ 
+     validate_agent_backend_env()?;
+@@ -1007,7 +1356,10 @@ async fn run_gateway_with_dashboard(
+     );
+     let shared_dispatcher = Arc::new(SharedDispatcher::default());
+     let omo_backend = Arc::new(
+-        OmoBackend::new(omo_config.clone(), shared_dispatcher.clone()).with_pool(pool.clone()),
++        OmoBackend::new(omo_config.clone(), shared_dispatcher.clone())
++            .with_pool(pool.clone())
++            .with_approval_requester(approval_requester.clone())
++            .with_engine_turn_follow(true),
+     );
+     let runner: Arc<dyn AgentBackend> = omo_backend.clone();
+     let profile_router = ProfileRouter::new(config.profile_routes.clone());
+@@ -1040,7 +1392,7 @@ async fn run_gateway_with_dashboard(
+     let mut default_bot_id = None;
+     for token in &config.discord_bot_tokens {
+         let http = Arc::new(serenity::http::Http::new(token));
+-        let bot_id = http.get_current_user().await?.id.to_string();
++        let bot_id = fetch_current_user_with_retry(&http).await?.id.to_string();
+         if default_bot_id.is_none() {
+             default_bot_id = Some(bot_id.clone());
+         }
+@@ -1050,26 +1402,73 @@ async fn run_gateway_with_dashboard(
+             )));
+         }
+     }
+-    let default_bot_id = default_bot_id
+-        .ok_or_else(|| OmonError::Config("no Discord bot identities were configured".into()))?;
+-    let dead_targets = Arc::new(
+-        DeadTargetRegistry::new()
+-            .with_pool(pool.clone())
+-            .with_probe_interval(std::time::Duration::from_secs(60)),
+-    );
+-    dead_targets.load_from_db(&pool).await?;
+-    let discord_egress = Arc::new(
+-        DiscordEgress::with_bot_clients(default_bot_id.clone(), bot_http_clients)?
+-            .with_dead_targets(dead_targets.clone())
+-            .with_approval_mentions(config.allowed_users.clone(), config.approval_mentions)
+-            .with_runtime_footer(config.runtime_footer)
+-            .with_default_model(config.default_model.clone())
+-            .with_workspace_root(config.workspace_root.clone()),
+-    );
+-    let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = discord_egress.clone();
+-    shared_dispatcher.set(discord_egress.clone()).await;
++    if !fda_granted {
++        let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
++        let slack_home_dm = slack_boot.as_ref().and_then(|boot| {
++            boot.owner_dm
++                .as_ref()
++                .map(|key| (&boot.api, key.channel_id.as_str()))
++        });
++        let discord_http = default_bot_id
++            .as_ref()
++            .and_then(|bot_id| bot_http_clients.get(bot_id));
++        let alert = match (slack_home_dm, discord_http) {
++            (Some((api, channel)), _) => Some(FdaAlertChannel::Slack { api, channel }),
++            (None, Some(http)) => Some(FdaAlertChannel::Discord {
++                http: http.as_ref(),
++                owner_id: &owner_id,
++            }),
++            (None, None) => None,
++        };
++        if let Some(alert) = alert {
++            notify_owner_fda_denied_if_needed(&config.workspace_root, alert).await;
++        }
++    }
++    let discord_egress = match &default_bot_id {
++        Some(bot_id) => {
++            let dead_targets = Arc::new(
++                DeadTargetRegistry::new()
++                    .with_pool(pool.clone())
++                    .with_probe_interval(std::time::Duration::from_secs(60)),
++            );
++            dead_targets.load_from_db(&pool).await?;
++            Some(Arc::new(
++                DiscordEgress::with_bot_clients(bot_id.clone(), bot_http_clients)?
++                    .with_dead_targets(dead_targets)
++                    .with_approval_mentions(config.allowed_users.clone(), config.approval_mentions)
++                    .with_runtime_footer(config.runtime_footer)
++                    .with_default_model(config.default_model.clone())
++                    .with_workspace_root(config.workspace_root.clone()),
++            ))
++        }
++        None => None,
++    };
++    let slack_egress = match (&slack_config, &slack_boot) {
++        (Some(slack), Some(boot)) => Some(Arc::new(
++            omon_gateway::slack::SlackEgress::new(boot.api.clone())
++                .with_workspace_root(config.workspace_root.clone())
++                .with_runtime_footer(slack.runtime_footer)
++                .with_default_model(Some(config.default_model.clone()))
++                .with_approval_mentions(slack.allowed_users.clone(), slack.approval_mentions)
++                .with_pool(pool.clone()),
++        )),
++        _ => None,
++    };
++    let discord_dispatcher = discord_egress
++        .clone()
++        .map(|egress| egress as Arc<dyn OutboundDispatcher>);
++    let slack_dispatcher = slack_egress
++        .clone()
++        .map(|egress| egress as Arc<dyn OutboundDispatcher>);
++    let platform_router =
++        omon_gateway::multiplexer::PlatformRouter::for_transports(discord_dispatcher, slack_dispatcher)
++            .ok_or_else(|| {
++                OmonError::Config("no Discord or Slack transport could be started".into())
++            })?;
++    let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = Arc::new(platform_router);
++    shared_dispatcher.set(discord_egress_dispatcher.clone()).await;
+     approval_requester
+-        .set_dispatcher(discord_egress.clone())
++        .set_dispatcher(discord_egress_dispatcher.clone())
+         .await;
+     approval_requester
+         .set_heartbeat(multiplexer.activity_heartbeat())
+@@ -1083,12 +1482,17 @@ async fn run_gateway_with_dashboard(
+     let imported = cron_sync.sync().await?;
+     info!(imported, "synchronized Hermes cron stores");
+ 
+-    let recovered = recover_pending_delivery_obligations(&pool, discord_egress.clone()).await?;
++    let recovered =
++        recover_pending_delivery_obligations(&pool, discord_egress_dispatcher.clone()).await?;
+     info!(
+         recovered,
+         "recovered pending outbound delivery obligations on boot"
+     );
+ 
++    let slack_pairing = omon_gateway::discord::pairing::SlackPairingStore::new(pool.clone());
++    if slack_boot.is_some() {
++        slack_pairing.init_cache().await?;
++    }
+     let restart_guard_path = config.workspace_root.join("restart_loop.json");
+     let restart_guard = RestartLoopGuard::new(restart_guard_path);
+     let auth = StartupAuthorization {
+@@ -1101,6 +1505,16 @@ async fn run_gateway_with_dashboard(
+             pairing.init_cache().await?;
+             pairing.get_paired_user_ids().await
+         },
++        slack: match &slack_config {
++            Some(slack) if slack_boot.is_some() => Some(SlackStartupAuthorization {
++                allowed_users: slack.allowed_users.clone(),
++                allow_all_users: slack.allow_all_users,
++                allowed_channels: slack.allowed_channels.clone(),
++                ignored_channels: slack.ignored_channels.clone(),
++                paired_users: slack_pairing.get_paired_user_ids().await,
++            }),
++            _ => None,
++        },
+     };
+     let pending_sessions_count = count_authorized_pending_recoveries(&pool, &auth).await?;
+     if pending_sessions_count > 0 {
+@@ -1150,18 +1564,24 @@ async fn run_gateway_with_dashboard(
+                 cron_script_timeout_secs: config.cron_script_timeout_secs,
+             }),
+         }),
+-        discord_egress,
++        discord_egress_dispatcher.clone(),
+     )
+-    .with_hermes_sync(cron_sync);
++    .with_hermes_sync(cron_sync)
++    .with_output_review();
+     // Persisted owner DM only; never fall back to DISCORD_HOME_CHANNEL.
+-    let owner_id = owner_id_from(optional_env("OMON_OWNER_ID").as_deref());
++    let lead = default_lead();
++    let owner_id = digest_owner(
++        &lead,
++        slack_config.as_deref(),
++        optional_env("OMON_OWNER_ID").as_deref(),
++    );
+     let owner = owner_id.as_str();
+-    // The lead DM belongs to the OmOMeow bot; other bots' DMs with the owner do not count.
++    // The lead DM belongs to the lead bot; other bots' DMs with the owner do not count.
+     let home_dm: Option<String> = sqlx::query_scalar(
+-        "SELECT session_key FROM sessions WHERE session_key=? AND platform='discord' \
++        "SELECT session_key FROM sessions WHERE session_key=? AND platform IN ('discord','slack') \
+          AND guild_id IS NULL AND thread_id IS NULL AND user_id=?",
+     )
+-    .bind(default_lead())
++    .bind(&lead)
+     .bind(owner)
+     .fetch_optional(&pool)
+     .await?;
+@@ -1230,11 +1650,14 @@ async fn run_gateway_with_dashboard(
+         downloader = downloader.with_stt(Arc::new(OpenAiSpeechToText::new(api_key, base_url)));
+     }
+     poise_data.attachment_downloader = Some(downloader);
+-    poise_data.primary_bot_id = Some(default_bot_id.parse().map_err(|_| {
+-        OmonError::Config(format!(
+-            "invalid primary Discord bot identity {default_bot_id}"
+-        ))
+-    })?);
++    if let Some(default_bot_id) = &default_bot_id {
++        poise_data.primary_bot_id = Some(default_bot_id.parse().map_err(|_| {
++            OmonError::Config(format!(
++                "invalid primary Discord bot identity {default_bot_id}"
++            ))
++        })?);
++    }
++    let approval_guard_for_slack = approval_guard.clone();
+     let adapter = DiscordAdapter::new(poise_data.clone()).with_approval_guard(approval_guard);
+ 
+     let mut clients = Vec::new();
+@@ -1245,11 +1668,62 @@ async fn run_gateway_with_dashboard(
+         clients.push(client);
+     }
+ 
+-    let readiness = omon_gateway::collect_runtime_readiness(
++    let mut slack_readiness = omon_gateway::SlackReadiness::Disabled;
++    let slack_runtime = match (slack_config.clone(), slack_egress.clone(), &slack_boot) {
++        (Some(slack_config), Some(slack_egress), Some(_)) => {
++            let destructive_slash_confirm = slack_config.destructive_slash_confirm;
++            match omon_gateway::slack::runtime::build(omon_gateway::slack::runtime::SlackDeps {
++                config: slack_config,
++                egress: slack_egress,
++                commands: omon_gateway::slack::commands::SlackCommandDeps {
++                    multiplexer: multiplexer.clone(),
++                    pool: pool.clone(),
++                    approvals: approval_guard_for_slack.clone(),
++                    tools: poise_data.tools.clone(),
++                    mcp_endpoints: poise_data.mcp_endpoints.clone(),
++                    tool_registry: poise_data.tool_registry.clone(),
++                    llm: poise_data.llm.clone(),
++                    started_at: poise_data.started_at,
++                    destructive_slash_confirm,
++                    pairing: slack_pairing.clone(),
++                },
++                inbox_actions: poise_data.inbox_actions.clone(),
++            })
++            .await
++            {
++                Ok(runtime) => {
++                    slack_readiness = omon_gateway::SlackReadiness::Connected {
++                        bot_user_id: runtime.bot_user_id.clone(),
++                        team_id: runtime.team_id.clone(),
++                    };
++                    Some(Arc::new(runtime))
++                }
++                Err(error) => {
++                    slack_readiness = omon_gateway::SlackReadiness::Failed(error.to_string());
++                    warn!(%error, "Slack is configured but could not start");
++                    None
++                }
++            }
++        }
++        (Some(_), _, None) => {
++            slack_readiness =
++                omon_gateway::SlackReadiness::Failed("Slack auth.test failed at boot".into());
++            None
++        }
++        _ => None,
++    };
++    if slack_runtime.is_none() && clients.is_empty() {
++        return Err(OmonError::Config(
++            "no Discord client and the Slack runtime could not start".into(),
++        ));
++    }
++
++    let readiness = omon_gateway::collect_runtime_readiness_with_slack(
+         &pool,
+         &config.workspace_root,
+         &config.default_model,
+         clients.len(),
++        &slack_readiness,
+     )
+     .await;
+     if readiness.is_ok() {
+@@ -1287,7 +1761,8 @@ async fn run_gateway_with_dashboard(
+         Ok(count) => info!(count, "re-escalated stale cron remediations"),
+         Err(error) => warn!(%error, "failed to sweep stale cron remediations"),
+     }
+-    let mut lane_tasks = spawn_lane_service(&pool, &lane_shutdown, kibitzer)?;
++    let mut lane_tasks =
++        spawn_lane_service(&pool, &lane_shutdown, kibitzer, Some(approval_requester.clone()))?;
+     lane_tasks.spawn(omon_gateway::cron::report::serve_native(
+         pool.clone(),
+         scheduler.clone(),
+@@ -1311,6 +1786,31 @@ async fn run_gateway_with_dashboard(
+         drain_watcher.serve(watcher_shutdown).await;
+         Ok(())
+     });
++    if parse_bool_from(optional_env("OMON_SESSION_WATCH_ENABLED").as_deref(), true) {
++        match (
++            omon_gateway::sessions::control::SessionControl::from_environment(),
++            SessionKey::from_storage_key(&default_lead()),
++        ) {
++            (Ok(control), Ok(owner_dm)) => {
++                let watcher = omon_gateway::sessions::watch::Watcher::with_policy(
++                    pool.clone(),
++                    control,
++                    omon_gateway::sessions::watch::interval_from_env(),
++                    omon_gateway::sessions::watch::NotifyPolicy::from_env(),
++                );
++                lane_tasks.spawn(watcher.serve(
++                    discord_egress_dispatcher.clone(),
++                    owner_dm,
++                    lane_shutdown.clone(),
++                ));
++            }
++            (control, owner_dm) => warn!(
++                control_error = ?control.err().map(|error| error.to_string()),
++                owner_error = ?owner_dm.err().map(|error| error.to_string()),
++                "session watcher not started"
++            ),
++        }
++    }
+ 
+     let dashboard_shutdown = tokio_util::sync::CancellationToken::new();
+     let mut dashboard_server = None;
+@@ -1324,16 +1824,27 @@ async fn run_gateway_with_dashboard(
+             multiplexer.clone(),
+             scheduler.clone(),
+             tools.clone(),
+-            dashboard::config_view_from_gateway(&config, &settings),
++            dashboard::config_view_from_gateway(&config, &settings, slack_config.as_deref()),
+             config.workspace_root.clone(),
+             hermes_skill_dirs(&hermes_root, &home),
+-            config.discord_bot_tokens.len(),
++            config.discord_bot_tokens.len() + usize::from(slack_runtime.is_some()),
+         )
+         .await;
+         dashboard_server =
+             Some(dashboard::spawn_server(settings, state, dashboard_shutdown.clone()).await?);
+     }
+ 
++    if let Some(runtime) = &slack_runtime {
++        info!(bot = %runtime.bot_user_id, team = %runtime.team_id, "omo-gateway listening on Slack");
++        let backfill = runtime.clone();
++        tokio::spawn(async move { backfill.backfill().await });
++        tokio::spawn(runtime.clone().reconcile(lane_shutdown.clone()));
++        lane_tasks.spawn(omon_gateway::slack::runtime::supervise(
++            runtime.clone(),
++            lane_shutdown.clone(),
++        ));
++    }
++
+     let mut join_set = tokio::task::JoinSet::new();
+     for mut client in clients {
+         join_set.spawn(async move { client.start().await });
+@@ -1349,6 +1860,7 @@ async fn run_gateway_with_dashboard(
+         result = lane_tasks.join_next(), if !lane_tasks.is_empty() => {
+             lane_failure = lane_service_exit(result).err();
+             omon_gateway::global_debouncer().flush_all(&poise_data).await;
++            flush_slack(slack_runtime.as_deref()).await;
+             let _ = multiplexer.mark_in_flight_resume_pending().await;
+             for sm in shard_managers {
+                 sm.shutdown_all().await;
+@@ -1359,12 +1871,14 @@ async fn run_gateway_with_dashboard(
+                 discord_task_failed = true;
+             }
+             omon_gateway::global_debouncer().flush_all(&poise_data).await;
++            flush_slack(slack_runtime.as_deref()).await;
+             let _ = multiplexer.mark_in_flight_resume_pending().await;
+         }
+         signal = tokio::signal::ctrl_c() => {
+             signal.map_err(|error| OmonError::Config(format!("failed to listen for Ctrl+C: {error}")))?;
+             info!("shutdown signal received");
+             omon_gateway::global_debouncer().flush_all(&poise_data).await;
++            flush_slack(slack_runtime.as_deref()).await;
+             let _ = multiplexer.mark_in_flight_resume_pending().await;
+             for sm in shard_managers {
+                 sm.shutdown_all().await;
+@@ -1373,6 +1887,7 @@ async fn run_gateway_with_dashboard(
+         _ = wait_for_drain(&mut drain_rx) => {
+             warn!("drain request detected via .drain_request.json marker; shutting down gracefully");
+             omon_gateway::global_debouncer().flush_all(&poise_data).await;
++            flush_slack(slack_runtime.as_deref()).await;
+             let _ = multiplexer.mark_in_flight_resume_pending().await;
+             for sm in shard_managers {
+                 sm.shutdown_all().await;
+@@ -1394,6 +1909,7 @@ async fn run_gateway_with_dashboard(
+         } => {
+             info!("SIGTERM received; shutting down gracefully");
+             omon_gateway::global_debouncer().flush_all(&poise_data).await;
++            flush_slack(slack_runtime.as_deref()).await;
+             let _ = multiplexer.mark_in_flight_resume_pending().await;
+             for sm in shard_managers {
+                 sm.shutdown_all().await;
+@@ -1448,6 +1964,76 @@ mod headless_tests {
+     use serde_json::{json, Value};
+     use tokio_tungstenite::tungstenite::Message;
+ 
++    #[test]
++    fn slack_alone_satisfies_the_transport_requirement() {
++        assert!(require_a_transport(&[], true).is_ok());
++        assert!(require_a_transport(&["token".into()], false).is_ok());
++        let error = require_a_transport(&[], false).unwrap_err().to_string();
++        assert!(error.contains("DISCORD_BOT_TOKEN"));
++    }
++
++    #[test]
++    fn digest_owner_follows_the_lead_platform() {
++        let slack = omon_gateway::slack::SlackConfig {
++            allowed_users: vec!["UOWNER".into()],
++            ..omon_gateway::slack::SlackConfig::test_default()
++        };
++        let slack_lead =
++            SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER")
++                .with_bot_id("UBOT")
++                .storage_key();
++        assert_eq!(digest_owner(&slack_lead, Some(&slack), Some("999")), "UOWNER");
++        assert_eq!(
++            digest_owner(omon_gateway::lanes::kibitzer::DEFAULT_LEAD, Some(&slack), None),
++            omon_gateway::inbox::proposals::OWNER_ID
++        );
++        assert_eq!(
++            digest_owner(omon_gateway::lanes::kibitzer::DEFAULT_LEAD, None, Some("42")),
++            "42"
++        );
++    }
++
++    #[test]
++    fn slack_recovery_uses_slack_rules_only() {
++        let auth = StartupAuthorization {
++            allowed_users: vec![42],
++            slack: Some(SlackStartupAuthorization {
++                allowed_users: vec!["UOWNER".into()],
++                paired_users: vec!["UPAIRED".into()],
++                allowed_channels: vec!["CALLOWED".into()],
++                ignored_channels: vec!["DIGNORED".into()],
++                ..Default::default()
++            }),
++            ..Default::default()
++        };
++        let dm = SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER");
++        assert!(auth.is_authorized(&dm));
++        let paired = SessionKey::new("slack", Some("T1"), "CALLOWED", None::<String>, "");
++        assert!(auth.is_authorized_actor(&paired, Some("UPAIRED")));
++        assert!(!auth.is_authorized(&paired), "a channel session key carries no actor");
++        let outside = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
++        assert!(!auth.is_authorized(&outside));
++        let ignored = SessionKey::new("slack", None::<String>, "DIGNORED", None::<String>, "UOWNER");
++        assert!(!auth.is_authorized(&ignored));
++        let stranger = SessionKey::new("slack", None::<String>, "DX", None::<String>, "42");
++        assert!(!auth.is_authorized(&stranger));
++        let slack_off = StartupAuthorization {
++            allow_all_users: true,
++            ..Default::default()
++        };
++        assert!(!slack_off.is_authorized(&dm));
++    }
++
++    #[tokio::test]
++    async fn slack_inbox_source_is_added_only_with_slack_identity() {
++        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
++        assert_eq!(inbox_sources(&pool, None).len(), 4);
++        assert_eq!(
++            inbox_sources(&pool, Some(("UOWNER".into(), "UBOT".into()))).len(),
++            5
++        );
++    }
++
+     #[tokio::test]
+     async fn qa_gaps_headless_inbox_starts_when_enabled_and_joins() {
+         let (shutdown, mut receiver) = tokio::sync::watch::channel(false);
+@@ -2062,10 +2648,11 @@ async fn stop_lead_runtime(
+ async fn initialize_kibitzer(
+     pool: &SqlitePool,
+ ) -> Result<Option<omon_gateway::lanes::kibitzer::Kibitzer>> {
+-    initialize_kibitzer_when_enabled(
+-        parse_bool_from(optional_env("OMON_KIBITZER_ENABLED").as_deref(), true),
+-        || omon_gateway::lanes::kibitzer::Kibitzer::from_env(pool.clone()),
+-    )
++    let enabled = !omon_gateway::autonomy::action_loop::action_loop_enabled()
++        && parse_bool_from(optional_env("OMON_KIBITZER_ENABLED").as_deref(), true);
++    initialize_kibitzer_when_enabled(enabled, || {
++        omon_gateway::lanes::kibitzer::Kibitzer::from_env(pool.clone())
++    })
+     .await
+ }
+ 
+@@ -2101,12 +2688,25 @@ fn spawn_lane_service(
+     pool: &sqlx::SqlitePool,
+     shutdown: &tokio_util::sync::CancellationToken,
+     kibitzer: Option<omon_gateway::lanes::kibitzer::Kibitzer>,
++    approval_requester: Option<Arc<DiscordApprovalRequester>>,
+ ) -> Result<tokio::task::JoinSet<Result<()>>> {
+     let mut tasks = tokio::task::JoinSet::new();
+-    let kibitzer_hint = spawn_kibitzer(&mut tasks, kibitzer, shutdown);
++    let mut wake_hint = spawn_kibitzer(&mut tasks, kibitzer, shutdown);
++    if omon_gateway::autonomy::action_loop::action_loop_enabled() {
++        let hint = Arc::new(tokio::sync::Notify::new());
++        let serve_hint = hint.clone();
++        let loop_worker =
++            omon_gateway::autonomy::action_loop::ActionLoop::new(pool.clone(), default_lead());
++        let loop_shutdown = shutdown.clone();
++        tasks.spawn(async move { loop_worker.serve(serve_hint, loop_shutdown).await });
++        wake_hint = Some(hint);
++    }
+     if parse_bool_from(optional_env("OMON_LANES_ENABLED").as_deref(), true) {
+-        let mut runner = omon_gateway::lanes::runner::LaneRunner::from_env(pool.clone())?;
+-        if let Some(hint) = kibitzer_hint {
++        let mut runner = omon_gateway::lanes::runner::LaneRunner::from_env_with_requester(
++            pool.clone(),
++            approval_requester,
++        )?;
++        if let Some(hint) = wake_hint {
+             runner = runner.with_kibitzer_hint(hint);
+         }
+         tasks.spawn(runner.serve(shutdown.clone()));
+@@ -2130,18 +2730,21 @@ fn start_inbox_when_enabled<T>(
+     }
+ }
+ 
++/// `slack` is the (owner, bot) Slack user id pair when Slack is running.
+ fn spawn_inbox_collector(
+     pool: &SqlitePool,
+     shutdown: tokio::sync::watch::Receiver<bool>,
++    slack: Option<(String, String)>,
+ ) -> Result<Option<InboxRuntime>> {
+     start_inbox_when_enabled(omon_gateway::inbox::triage::enabled(), || {
+-        spawn_enabled_inbox_collector(pool, shutdown)
++        spawn_enabled_inbox_collector(pool, shutdown, slack)
+     })
+ }
+ 
+ fn spawn_enabled_inbox_collector(
+     pool: &SqlitePool,
+     shutdown: tokio::sync::watch::Receiver<bool>,
++    slack: Option<(String, String)>,
+ ) -> Result<InboxRuntime> {
+     let rules = omon_gateway::inbox::default_filters()?;
+     let (event_tx, event_rx) = omon_gateway::inbox::watchers::event_channel(
+@@ -2164,14 +2767,22 @@ fn spawn_enabled_inbox_collector(
+         default_lead(),
+     );
+     let triage_shutdown = shutdown.clone();
++    let github_enabled = omon_gateway::inbox::sources::github::enabled();
++    let health_lead = default_lead();
+     let task = tokio::spawn(async move {
+         let mut tasks = tokio::task::JoinSet::new();
+ 
++        let mut sources = inbox_sources(&pool, slack);
++        if github_enabled {
++            sources.push(Box::new(
++                omon_gateway::inbox::sources::github::GithubSource::default(),
++            ));
++        }
+         let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(16);
+         tasks.spawn(
+             omon_gateway::inbox::watchers::run_event_watch_with_shutdown(
+                 pool.clone(),
+-                inbox_sources(&pool),
++                sources,
+                 rules,
+                 event_rx,
+                 Some(progress_tx),
+@@ -2184,7 +2795,14 @@ fn spawn_enabled_inbox_collector(
+             watcher_tx.clone(),
+             shutdown.clone(),
+         ));
+-        tasks.spawn(run_mail_event_watcher(watcher_tx.clone(), shutdown.clone()));
++        tasks.spawn(run_mail_event_watcher(
++            watcher_tx.clone(),
++            shutdown.clone(),
++            Some((pool.clone(), health_lead)),
++        ));
++        if github_enabled {
++            tasks.spawn(run_github_event_timer(watcher_tx.clone(), shutdown.clone()));
++        }
+         tasks.spawn(run_kakao_event_timer(watcher_tx, shutdown.clone()));
+ 
+         let mut shutdown = shutdown;
+@@ -2209,15 +2827,26 @@ fn spawn_enabled_inbox_collector(
+     Ok((task, event_tx))
+ }
+ 
+-fn inbox_sources(pool: &SqlitePool) -> Vec<Box<dyn omon_gateway::inbox::InboxSource>> {
+-    vec![
++fn inbox_sources(
++    pool: &SqlitePool,
++    slack: Option<(String, String)>,
++) -> Vec<Box<dyn omon_gateway::inbox::InboxSource>> {
++    let mut sources: Vec<Box<dyn omon_gateway::inbox::InboxSource>> = vec![
+         Box::new(omon_gateway::inbox::sources::mail::MailSource),
+         Box::new(omon_gateway::inbox::sources::kakao::KakaoSource::default()),
+         Box::new(omon_gateway::inbox::sources::imessage::IMessageSource),
+         Box::new(omon_gateway::inbox::sources::discord::DiscordSource::new(
+             pool.clone(),
+         )),
+-    ]
++    ];
++    if let Some((owner, bot)) = slack {
++        sources.push(Box::new(omon_gateway::inbox::sources::slack::SlackSource::new(
++            pool.clone(),
++            owner,
++            bot,
++        )));
++    }
++    sources
+ }
+ 
+ fn log_inbox_results(results: Vec<omon_gateway::inbox::SourceCollectResult>) {
+@@ -2269,23 +2898,119 @@ async fn run_kakao_event_timer(
+     }
+ }
+ 
+-const WATCHER_BACKOFF_INITIAL: std::time::Duration = std::time::Duration::from_secs(5);
+-const WATCHER_BACKOFF_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+-const WATCHER_HEALTHY_RUN: std::time::Duration = std::time::Duration::from_secs(60);
+ 
+ /// How one watcher child lifetime ended.
+-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[derive(Clone, Debug, PartialEq, Eq)]
+ enum WatcherExit {
+     /// Shutdown (or a closed event channel): do not restart.
+     Stop,
+     /// Failed or exited without doing its job: restart with growing backoff.
+-    Failed,
++    Failed { stderr_tail: String },
+     /// Did its job and exited on its own: restart after the initial delay.
+     Completed,
+ }
+ 
+-fn next_watcher_backoff(current: std::time::Duration) -> std::time::Duration {
+-    (current * 2).min(WATCHER_BACKOFF_MAX)
++const WATCHER_STDERR_TAIL_MAX_BYTES: usize = 2048;
++
++/// Keeps the most recent stderr output lines up to a bounded byte size (~2 KiB).
++/// Older lines are dropped from the front when total byte length exceeds the limit
++/// (incident 2026-10-16).
++#[derive(Debug, Clone)]
++pub(crate) struct StderrTailBuffer {
++    max_bytes: usize,
++    total_bytes: usize,
++    lines: std::collections::VecDeque<String>,
++}
++
++impl StderrTailBuffer {
++    pub(crate) fn new(max_bytes: usize) -> Self {
++        Self {
++            max_bytes,
++            total_bytes: 0,
++            lines: std::collections::VecDeque::new(),
++        }
++    }
++
++    pub(crate) fn push_line(&mut self, line: &str) {
++        let line_len = line.len();
++        let line = if line_len > self.max_bytes {
++            let start = line_len - self.max_bytes;
++            let mut char_start = start;
++            while char_start < line_len && !line.is_char_boundary(char_start) {
++                char_start += 1;
++            }
++            &line[char_start..]
++        } else {
++            line
++        };
++
++        let added_bytes = line.len() + if self.lines.is_empty() { 0 } else { 1 };
++        self.lines.push_back(line.to_string());
++        self.total_bytes += added_bytes;
++
++        while self.total_bytes > self.max_bytes && self.lines.len() > 1 {
++            if let Some(front) = self.lines.pop_front() {
++                let removed = front.len() + 1;
++                self.total_bytes = self.total_bytes.saturating_sub(removed);
++            }
++        }
++    }
++
++    pub(crate) fn render(&self) -> String {
++        let mut out = String::with_capacity(self.total_bytes);
++        for (i, line) in self.lines.iter().enumerate() {
++            if i > 0 {
++                out.push('\n');
++            }
++            out.push_str(line);
++        }
++        out
++    }
++}
++
++fn spawn_stderr_tail_collector(
++    stderr: Option<tokio::process::ChildStderr>,
++) -> tokio::task::JoinHandle<String> {
++    tokio::spawn(async move {
++        let Some(stderr) = stderr else {
++            return String::new();
++        };
++        use tokio::io::AsyncBufReadExt;
++        let mut lines = tokio::io::BufReader::new(stderr).lines();
++        let mut buffer = StderrTailBuffer::new(WATCHER_STDERR_TAIL_MAX_BYTES);
++        while let Ok(Some(line)) = lines.next_line().await {
++            buffer.push_line(&line);
++        }
++        buffer.render()
++    })
++}
++
++/// Combines a child's stderr tail with the non-event lines it printed on stdout, so a
++/// watcher that reports failures on stdout (imsg) still explains why it exited.
++fn join_tails(stderr_tail: String, stdout_noise: &StderrTailBuffer) -> String {
++    let stdout_tail = stdout_noise.render();
++    match (stderr_tail.is_empty(), stdout_tail.is_empty()) {
++        (_, true) => stderr_tail,
++        (true, false) => stdout_tail,
++        (false, false) => format!("{stderr_tail}\n{stdout_tail}"),
++    }
++}
++
++async fn reap_stderr_tail(handle: tokio::task::JoinHandle<String>) -> String {
++    tokio::time::timeout(std::time::Duration::from_millis(500), handle)
++        .await
++        .ok()
++        .and_then(|res| res.ok())
++        .unwrap_or_default()
++}
++
++/// Returns true if the stdout line from `zele mail watch` represents a real mail event.
++/// Comment/header lines starting with '#' (e.g. `# Watching inbox every 60s (Ctrl+C to stop)`)
++/// and blank lines are ignored so immediate exits are not classified as completed runs
++/// (incident 2026-10-16).
++pub(crate) fn is_mail_event_line(line: &str) -> bool {
++    let trimmed = line.trim();
++    !trimmed.is_empty() && !trimmed.starts_with('#')
+ }
+ 
+ /// Sleeps for `delay`; false when shutdown arrived first.
+@@ -2310,34 +3035,70 @@ async fn watcher_backoff(
+ /// Restarts an inbox watcher child with bounded exponential backoff instead of
+ /// letting one failure end the watcher until the gateway restarts.
+ async fn supervise_watcher<F, Fut>(
++    name: &'static str,
++    shutdown: tokio::sync::watch::Receiver<bool>,
++    run_once: F,
++) where
++    F: FnMut(tokio::sync::watch::Receiver<bool>) -> Fut,
++    Fut: std::future::Future<Output = WatcherExit>,
++{
++    supervise_watcher_with_health(name, shutdown, None, run_once).await;
++}
++
++/// `health` is (pool, owner lead): auth failures then stop resetting the backoff and
++/// report the dead source once per KST day.
++async fn supervise_watcher_with_health<F, Fut>(
+     name: &'static str,
+     mut shutdown: tokio::sync::watch::Receiver<bool>,
++    health: Option<(SqlitePool, String)>,
+     mut run_once: F,
+ ) where
+     F: FnMut(tokio::sync::watch::Receiver<bool>) -> Fut,
+     Fut: std::future::Future<Output = WatcherExit>,
+ {
+-    let mut delay = WATCHER_BACKOFF_INITIAL;
++    let mut backoff = omon_gateway::inbox::health::Backoff::default();
++    let mut last_fda_error: Option<String> = None;
+     loop {
+         if *shutdown.borrow() {
+             return;
+         }
+         let started = tokio::time::Instant::now();
+-        let wait = match run_once(shutdown.clone()).await {
++        let outcome = run_once(shutdown.clone()).await;
++        let (run, tail) = match outcome {
+             WatcherExit::Stop => return,
+             WatcherExit::Completed => {
+-                delay = WATCHER_BACKOFF_INITIAL;
+-                delay
++                last_fda_error = None;
++                (omon_gateway::inbox::health::WatcherRun::Completed, String::new())
+             }
+-            WatcherExit::Failed => {
+-                if started.elapsed() >= WATCHER_HEALTHY_RUN {
+-                    delay = WATCHER_BACKOFF_INITIAL;
++            WatcherExit::Failed { stderr_tail } => {
++                if name == "imsg"
++                    && (stderr_tail.contains("Operation not permitted")
++                        || stderr_tail.contains("Cannot access Messages database")
++                        || stderr_tail.contains("authorization denied"))
++                    && last_fda_error.as_deref() != Some(stderr_tail.as_str())
++                {
++                    tracing::error!(
++                        watcher = name,
++                        stderr_tail = %stderr_tail,
++                        "imsg watcher failed due to missing Full Disk Access; grant Full Disk Access to omo-gateway in System Settings to resume iMessage collection"
++                    );
++                    last_fda_error = Some(stderr_tail.clone());
+                 }
+-                let wait = delay;
+-                delay = next_watcher_backoff(delay);
+-                wait
++                let run = if health.is_some()
++                    && omon_gateway::inbox::health::is_auth_failure(&stderr_tail)
++                {
++                    omon_gateway::inbox::health::WatcherRun::AuthFailed
++                } else {
++                    omon_gateway::inbox::health::WatcherRun::Failed
++                };
++                (run, stderr_tail)
+             }
+         };
++        let step = backoff.step(run, started.elapsed());
++        if let Some((pool, lead)) = health.as_ref() {
++            record_watcher_health(pool, name, lead, step.health, &tail).await;
++        }
++        let wait = step.wait;
+         warn!(
+             watcher = name,
+             retry_in_secs = wait.as_secs(),
+@@ -2383,22 +3144,30 @@ async fn run_imessage_watch_once(
+         .args(omon_gateway::inbox::watchers::imsg_watch_args(since_rowid))
+         .stdin(Stdio::null())
+         .stdout(Stdio::piped())
+-        .stderr(Stdio::null())
++        .stderr(Stdio::piped())
+         .kill_on_drop(true)
+         .spawn()
+     {
+         Ok(child) => child,
+         Err(error) => {
+             warn!(%error, "imsg watch could not start; check Full Disk Access and local CLI readiness");
+-            return WatcherExit::Failed;
++            return WatcherExit::Failed {
++                stderr_tail: String::new(),
++            };
+         }
+     };
++    let stderr_task = spawn_stderr_tail_collector(child.stderr.take());
+     let Some(stdout) = child.stdout.take() else {
+         warn!("imsg watch has no stdout pipe");
+-        return WatcherExit::Failed;
++        let stderr_tail = reap_stderr_tail(stderr_task).await;
++        return WatcherExit::Failed { stderr_tail };
+     };
+     let mut lines = tokio::io::BufReader::new(stdout).lines();
+-    let mut exit = WatcherExit::Failed;
++    // imsg reports errors such as a Full Disk Access denial on stdout, not stderr.
++    let mut stdout_noise = StderrTailBuffer::new(WATCHER_STDERR_TAIL_MAX_BYTES);
++    let mut exit = WatcherExit::Failed {
++        stderr_tail: String::new(),
++    };
+     loop {
+         if *shutdown.borrow() {
+             exit = WatcherExit::Stop;
+@@ -2413,7 +3182,11 @@ async fn run_imessage_watch_once(
+             }
+             line = lines.next_line() => match line {
+                 Ok(Some(line)) => {
+-                    if let Some(rowid) = omon_gateway::inbox::watchers::parse_imsg_watch_line(&line) {
++                    let Some(rowid) = omon_gateway::inbox::watchers::parse_imsg_watch_line(&line) else {
++                        stdout_noise.push_line(&line);
++                        continue;
++                    };
++                    {
+                         tokio::select! {
+                             result = omon_gateway::inbox::watchers::on_imessage_event(sender, Some(rowid)) => {
+                                 if result.is_err() {
+@@ -2435,32 +3208,99 @@ async fn run_imessage_watch_once(
+                 }
+             },
+             status = child.wait() => {
++                let stderr_tail = join_tails(reap_stderr_tail(stderr_task).await, &stdout_noise);
+                 match status {
+-                    Ok(status) => warn!(?status, "imsg watch exited; check local permissions and CLI readiness"),
+-                    Err(error) => warn!(%error, "waiting for imsg watch failed"),
++                    Ok(status) => warn!(
++                        ?status,
++                        stderr_tail = %stderr_tail,
++                        "imsg watch exited; check local permissions and CLI readiness"
++                    ),
++                    Err(error) => warn!(
++                        %error,
++                        stderr_tail = %stderr_tail,
++                        "waiting for imsg watch failed"
++                    ),
+                 }
+-                return WatcherExit::Failed;
++                return WatcherExit::Failed { stderr_tail };
+             }
+         }
+     }
+     if let Err(error) = child.kill().await {
+         warn!(%error, "failed to stop imsg watch child");
+     }
+-    let _ = child.wait().await;
+-    exit
++    let status = child.wait().await;
++    let stderr_tail = join_tails(reap_stderr_tail(stderr_task).await, &stdout_noise);
++    match exit {
++        WatcherExit::Failed { .. } => {
++            warn!(
++                ?status,
++                stderr_tail = %stderr_tail,
++                "imsg watch exited; check local permissions and CLI readiness"
++            );
++            WatcherExit::Failed { stderr_tail }
++        }
++        other => other,
++    }
+ }
+ 
+ async fn run_mail_event_watcher(
+     sender: omon_gateway::inbox::watchers::InboxEventSender,
+     shutdown: tokio::sync::watch::Receiver<bool>,
++    health: Option<(SqlitePool, String)>,
+ ) {
+-    supervise_watcher("mail", shutdown, move |shutdown| {
++    supervise_watcher_with_health("mail", shutdown, health, move |shutdown| {
+         let sender = sender.clone();
+         async move { run_mail_watch_once(&sender, shutdown).await }
+     })
+     .await;
+ }
+ 
++async fn record_watcher_health(
++    pool: &SqlitePool,
++    name: &str,
++    lead: &str,
++    action: omon_gateway::inbox::health::HealthAction,
++    tail: &str,
++) {
++    use omon_gateway::inbox::health::{self, HealthAction};
++    let result = match action {
++        HealthAction::Healthy => health::clear(pool, name).await.map(|_| false),
++        HealthAction::Degraded => Ok(false),
++        HealthAction::Dead => health::report_dead(pool, name, tail, lead, chrono::Utc::now()).await,
++    };
++    match result {
++        Ok(true) => warn!(watcher = name, "source auth is dead; owner notified once for today"),
++        Ok(false) => {}
++        Err(error) => warn!(watcher = name, %error, "could not record inbox source health"),
++    }
++}
++
++async fn run_github_event_timer(
++    sender: omon_gateway::inbox::watchers::InboxEventSender,
++    mut shutdown: tokio::sync::watch::Receiver<bool>,
++) {
++    let period = omon_gateway::inbox::sources::github::POLL_INTERVAL;
++    let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
++    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
++    loop {
++        if *shutdown.borrow() {
++            break;
++        }
++        tokio::select! {
++            _ = interval.tick() => {},
++            changed = shutdown.changed() => {
++                if changed.is_err() || *shutdown.borrow() { break; }
++            }
++        }
++        tokio::select! {
++            result = omon_gateway::inbox::watchers::on_github_tick(&sender) => {
++                if result.is_err() { break; }
++            }
++            _ = shutdown.changed() => break,
++        }
++    }
++}
++
+ /// One `zele mail watch` child lifetime. Every output line raises a mail event
+ /// as it arrives (coalesced when the channel is full), so a long-running watch
+ /// is not silent until it exits.
+@@ -2489,19 +3329,23 @@ async fn run_mail_watch_once(
+         ])
+         .stdin(Stdio::null())
+         .stdout(Stdio::piped())
+-        .stderr(Stdio::null())
++        .stderr(Stdio::piped())
+         .kill_on_drop(true)
+         .spawn()
+     {
+         Ok(child) => child,
+         Err(error) => {
+             warn!(%error, "zele mail watch could not start; check local CLI and credential readiness");
+-            return WatcherExit::Failed;
++            return WatcherExit::Failed {
++                stderr_tail: String::new(),
++            };
+         }
+     };
++    let stderr_task = spawn_stderr_tail_collector(child.stderr.take());
+     let Some(stdout) = child.stdout.take() else {
+         warn!("zele mail watch has no stdout pipe");
+-        return WatcherExit::Failed;
++        let stderr_tail = reap_stderr_tail(stderr_task).await;
++        return WatcherExit::Failed { stderr_tail };
+     };
+     let mut lines = tokio::io::BufReader::new(stdout).lines();
+     let mut produced_event = false;
+@@ -2515,7 +3359,7 @@ async fn run_mail_watch_once(
+                 }
+             }
+             line = lines.next_line() => match line {
+-                Ok(Some(line)) if !line.trim().is_empty() => {
++                Ok(Some(line)) if is_mail_event_line(&line) => {
+                     produced_event = true;
+                     match sender.try_send(omon_gateway::inbox::watchers::InboxWatcherEvent::Mail) {
+                         Ok(()) | Err(TrySendError::Full(_)) => {}
+@@ -2537,21 +3381,29 @@ async fn run_mail_watch_once(
+     if stop {
+         let _ = child.kill().await;
+         let _ = child.wait().await;
++        let _ = reap_stderr_tail(stderr_task).await;
+         return WatcherExit::Stop;
+     }
+-    match child.wait().await {
++    let status = child.wait().await;
++    let stderr_tail = reap_stderr_tail(stderr_task).await;
++    match status {
+         Ok(status) if status.success() && produced_event => WatcherExit::Completed,
+         Ok(status) => {
+             warn!(
+                 ?status,
+                 produced_event,
++                stderr_tail = %stderr_tail,
+                 "zele mail watch exited without a clean event run; check local account credential readiness"
+             );
+-            WatcherExit::Failed
++            WatcherExit::Failed { stderr_tail }
+         }
+         Err(error) => {
+-            warn!(%error, "waiting for zele mail watch failed");
+-            WatcherExit::Failed
++            warn!(
++                %error,
++                stderr_tail = %stderr_tail,
++                "waiting for zele mail watch failed"
++            );
++            WatcherExit::Failed { stderr_tail }
+         }
+     }
+ }
+@@ -2614,7 +3466,8 @@ fn optional_env(name: &str) -> Option<String> {
+ fn approval_timeout_secs_from(raw: Option<&str>) -> u64 {
+     raw.and_then(|raw| raw.trim().parse::<u64>().ok())
+         .filter(|secs| *secs > 0)
+-        .unwrap_or(900)
++        // The durable ask waits 30 minutes for the owner before the action is declined.
++        .unwrap_or(1800)
+ }
+ 
+ /// Unrecognised tokens fall back to `default` instead of silently reading as
+@@ -3520,7 +4373,9 @@ mod runner_tests {
+             let counter = counter.clone();
+             async move {
+                 if counter.fetch_add(1, Ordering::SeqCst) < 2 {
+-                    super::WatcherExit::Failed
++                    super::WatcherExit::Failed {
++                        stderr_tail: String::new(),
++                    }
+                 } else {
+                     super::WatcherExit::Stop
+                 }
+@@ -3530,12 +4385,12 @@ mod runner_tests {
+         assert_eq!(runs.load(Ordering::SeqCst), 3, "failures must be retried");
+         assert_eq!(
+             started.elapsed(),
+-            super::WATCHER_BACKOFF_INITIAL * 3,
++            omon_gateway::inbox::health::BACKOFF_INITIAL * 3,
+             "backoff doubles between consecutive failures (5s + 10s)"
+         );
+         assert_eq!(
+-            super::next_watcher_backoff(super::WATCHER_BACKOFF_MAX),
+-            super::WATCHER_BACKOFF_MAX
++            omon_gateway::inbox::health::next_backoff(omon_gateway::inbox::health::BACKOFF_MAX),
++            omon_gateway::inbox::health::BACKOFF_MAX
+         );
+     }
+ 
+@@ -3554,7 +4409,9 @@ mod runner_tests {
+             async move {
+                 counter.fetch_add(1, Ordering::SeqCst);
+                 shutdown_tx.send_replace(true);
+-                super::WatcherExit::Failed
++                super::WatcherExit::Failed {
++                    stderr_tail: String::new(),
++                }
+             }
+         })
+         .await;
+@@ -3822,6 +4679,7 @@ mod runner_tests {
+             allowed_channels: vec![],
+             ignored_channels: vec![],
+             paired_users: vec![],
++            slack: None,
+         };
+ 
+         let recovered =
+@@ -3977,12 +4835,12 @@ mod runner_tests {
+     fn parses_approval_timeout_secs_from_env() {
+         assert_eq!(approval_timeout_secs_from(Some("120")), 120);
+         assert_eq!(approval_timeout_secs_from(Some(" 300 ")), 300);
+-        assert_eq!(approval_timeout_secs_from(None), 900);
+-        assert_eq!(approval_timeout_secs_from(Some("")), 900);
+-        assert_eq!(approval_timeout_secs_from(Some("   ")), 900);
+-        assert_eq!(approval_timeout_secs_from(Some("0")), 900);
+-        assert_eq!(approval_timeout_secs_from(Some("-10")), 900);
+-        assert_eq!(approval_timeout_secs_from(Some("invalid")), 900);
++        assert_eq!(approval_timeout_secs_from(None), 1800);
++        assert_eq!(approval_timeout_secs_from(Some("")), 1800);
++        assert_eq!(approval_timeout_secs_from(Some("   ")), 1800);
++        assert_eq!(approval_timeout_secs_from(Some("0")), 1800);
++        assert_eq!(approval_timeout_secs_from(Some("-10")), 1800);
++        assert_eq!(approval_timeout_secs_from(Some("invalid")), 1800);
+     }
+ 
+     #[test]
+@@ -4512,7 +5370,7 @@ mod runner_tests {
+                             super::super::StartupAuthorization { allow_all_users: true, ..Default::default() }
+                         } else {
+                             super::super::StartupAuthorization { allowed_users: vec![42], allow_all_users: false,
+-                                allowed_channels: vec![202,203], ignored_channels: vec![], paired_users: vec![] }
++                                allowed_channels: vec![202,203], ignored_channels: vec![], paired_users: vec![], slack: None }
+                         };
+                         if authorization == Authorization::Deferral {
+                             for allowed_users in [vec![99], vec![]] {
+@@ -5729,4 +6587,81 @@ mod runner_tests {
+ 
+         let _ = std::fs::remove_dir_all(temp_dir);
+     }
++
++    #[test]
++    fn imsg_stdout_error_reaches_the_exit_tail() {
++        let mut noise = super::StderrTailBuffer::new(super::WATCHER_STDERR_TAIL_MAX_BYTES);
++        noise.push_line("unable to open database file (code: 14)");
++        noise.push_line("Permission Error: Cannot access Messages database");
++        let tail = super::join_tails(String::new(), &noise);
++        assert!(tail.contains("Cannot access Messages database"));
++        assert_eq!(
++            super::join_tails("err".into(), &noise).lines().next(),
++            Some("err")
++        );
++        let empty = super::StderrTailBuffer::new(8);
++        assert_eq!(super::join_tails("err".into(), &empty), "err");
++    }
++
++    #[test]
++    fn test_is_mail_event_line_ignores_comments_and_blank_lines() {
++        // Incident 2026-10-16: zele prints a header line at startup:
++        // "# Watching inbox every 60s (Ctrl+C to stop)"
++        // This must not be treated as an event.
++        assert!(!super::is_mail_event_line(
++            "# Watching inbox every 60s (Ctrl+C to stop)"
++        ));
++        assert!(!super::is_mail_event_line("   # indented comment"));
++        assert!(!super::is_mail_event_line(""));
++        assert!(!super::is_mail_event_line("   \t  \n"));
++
++        // Real mail events / output lines
++        assert!(super::is_mail_event_line("new message arrived"));
++        assert!(super::is_mail_event_line(
++            "{\"id\": \"msg-123\", \"subject\": \"hello\"}"
++        ));
++        assert!(super::is_mail_event_line("  mail item 42  "));
++    }
++
++    #[test]
++    fn test_stderr_tail_buffer_bounded_capacity() {
++        use super::StderrTailBuffer;
++
++        let mut buf = StderrTailBuffer::new(20);
++        assert_eq!(buf.render(), "");
++
++        // Appending lines within capacity preserves everything
++        buf.push_line("line 1");
++        assert_eq!(buf.render(), "line 1");
++        buf.push_line("line 2");
++        assert_eq!(buf.render(), "line 1\nline 2");
++
++        // Pushing another line that exceeds capacity drops older lines from front
++        buf.push_line("line 3 is long");
++        let rendered = buf.render();
++        assert!(
++            rendered.len() <= 20,
++            "rendered len {} must be <= 20",
++            rendered.len()
++        );
++        assert!(rendered.ends_with("line 3 is long"));
++        assert!(!rendered.contains("line 1"));
++
++        // Pushing a single line larger than capacity truncates it safely
++        let mut small_buf = StderrTailBuffer::new(10);
++        small_buf.push_line("0123456789extra_content");
++        let truncated = small_buf.render();
++        assert!(
++            truncated.len() <= 10,
++            "rendered len {} must be <= 10",
++            truncated.len()
++        );
++        assert!(truncated.ends_with("extra_content") || truncated.ends_with("ontent"));
++
++        // Handles multi-byte UTF-8 safely without panicking on char boundaries
++        let mut utf8_buf = StderrTailBuffer::new(10);
++        utf8_buf.push_line("한글메시지테스트");
++        let rendered_utf8 = utf8_buf.render();
++        assert!(rendered_utf8.len() <= 10);
++    }
+ }
+diff --git a/src/security/tirith.rs b/src/security/tirith.rs
+index 1638db7..3df7d9f 100644
+--- a/src/security/tirith.rs
++++ b/src/security/tirith.rs
+@@ -331,10 +331,12 @@ mod tests {
+                         executions += 1;
+                     }
+                 }
+-                let persisted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approval_allowlist")
+-                    .fetch_one(db.pool())
+-                    .await
+-                    .unwrap();
++                let persisted: i64 = sqlx::query_scalar(
++                    "SELECT COUNT(*) FROM action_precedents WHERE origin != 'legacy_allowlist'",
++                )
++                .fetch_one(db.pool())
++                .await
++                .unwrap();
+                 let prompt_count = prompts.load(Ordering::SeqCst);
+                 println!("action={action} combined={combined} prompts={prompt_count} executions={executions} persisted={persisted} HTTP={}", calls.load(Ordering::SeqCst));
+                 if executions != 3
+diff --git a/src/usage.rs b/src/usage.rs
+index d01fd64..61bf1fb 100644
+--- a/src/usage.rs
++++ b/src/usage.rs
+@@ -219,7 +219,7 @@ pub async fn session_purpose(
+     if session.key.channel_id == "cron:inbox-triage" {
+         return Ok(Some(Purpose::InboxWrite));
+     }
+-    if session.key.platform == "discord" {
++    if session.key.platform == "discord" || session.key.platform == crate::slack::PLATFORM {
+         return Ok(Some(Purpose::Lead));
+     }
+     Ok(None)

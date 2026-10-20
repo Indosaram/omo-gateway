@@ -1040,83 +1040,48 @@ async fn d2_quiet_hours_defer_when_owner_message_is_thirty_minutes_old() {
 }
 
 #[tokio::test]
-async fn d3_restart_keeps_carded_recent_pending_and_expires_cardless_and_stale() {
+async fn d3_restart_expires_every_engine_approval_even_with_a_card() {
     use omon_gateway::autonomy::{
         insert_proposal, recover_pending_proposals_on_startup, NewProposal, ProposalState,
     };
     let pool = init_pool("sqlite::memory:").await.unwrap();
-    let lead = "slack:T1:C1::U1";
-    let mut ids = Vec::new();
-    for (i, card) in [Some("1760800000.000100"), None, Some("1760800000.000200")]
-        .into_iter()
-        .enumerate()
-    {
-        let id = insert_proposal(
-            &pool,
-            &NewProposal {
-                origin: ProposalOrigin::EngineApproval,
-                session_key: lead.to_string(),
-                signature: format!("vcs_remote:git push:/repo-{i}"),
-                effect: Effect::VcsRemote,
-                target: format!("/repo-{i}"),
-                summary: format!("git push origin lane/{i}"),
-                payload_json: "{}".into(),
-                tainted: false,
-                state: ProposalState::Pending,
-                precedent_id: None,
-                owner_words: None,
-                platform_message_id: card.map(str::to_string),
-            },
-        )
-        .await
-        .unwrap();
-        ids.push(id);
-    }
-    let (carded, cardless, stale) = (ids[0], ids[1], ids[2]);
-    sqlx::query("UPDATE action_proposals SET created_at = datetime('now', '-2 days') WHERE id = ?")
-        .bind(stale)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-    let expired = recover_pending_proposals_on_startup(&pool, lead)
-        .await
-        .unwrap();
-    assert_eq!(expired, 2);
-    let state = |id: i64| {
-        let pool = pool.clone();
-        async move { get_proposal(&pool, id).await.unwrap().unwrap().state }
-    };
-    assert_eq!(state(carded).await, "pending");
-    assert_eq!(state(cardless).await, "expired");
-    assert_eq!(state(stale).await, "expired");
-
-    let bodies: Vec<String> = sqlx::query_scalar(
-        "SELECT body FROM lane_events WHERE kind = 'action_loop' AND lead_session_key = ? ORDER BY id",
+    let session = omon_gateway::SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U1");
+    let lead = session.storage_key();
+    let carded = insert_proposal(
+        &pool,
+        &NewProposal {
+            origin: ProposalOrigin::EngineApproval,
+            session_key: lead.clone(),
+            signature: "vcs_remote:git push:/repo".into(),
+            effect: Effect::VcsRemote,
+            target: "/repo".into(),
+            summary: "git push origin lane/0".into(),
+            payload_json: "{}".into(),
+            tainted: false,
+            state: ProposalState::Pending,
+            precedent_id: None,
+            owner_words: None,
+            platform_message_id: Some("1760800000.000100".into()),
+        },
     )
-    .bind(lead)
-    .fetch_all(&pool)
     .await
     .unwrap();
-    let waiting: Vec<&String> = bodies
-        .iter()
-        .filter(|b| b.contains("still waiting after restart"))
-        .collect();
+
     assert_eq!(
-        waiting.len(),
-        1,
-        "one re-announce event per lead: {bodies:?}"
+        recover_pending_proposals_on_startup(&pool, &lead)
+            .await
+            .unwrap(),
+        1
     );
-    assert!(
-        waiting[0].starts_with("[ACTION_LOOP] 1 pending approval(s) still waiting after restart: ")
+    assert_eq!(
+        get_proposal(&pool, carded).await.unwrap().unwrap().state,
+        "expired",
+        "the turn waiting on this card died with the process"
     );
-    assert!(waiting[0].contains(&format!("#{carded} ")));
-    assert!(!waiting[0].contains(&format!("#{cardless} ")));
-    let expired_body = bodies
-        .iter()
-        .find(|b| b.contains("expired pending proposal(s) on restart"))
-        .expect("expired rows keep the existing notice");
-    assert!(expired_body.contains(&format!("#{cardless} ")));
-    assert!(expired_body.contains(&format!("#{stale} ")));
-    assert!(!expired_body.contains(&format!("#{carded} ")));
+    // The owner's next ordinary "응" is conversation, not an approval of a dead action.
+    let resolved =
+        omon_gateway::autonomy::try_resolve_short_reply(Some(&pool), None, &session, "응")
+            .await
+            .unwrap();
+    assert!(!resolved);
 }

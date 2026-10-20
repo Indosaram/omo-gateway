@@ -209,7 +209,7 @@ done
 
 if [[ "$ONLY_VERIFY" == 1 ]]; then
     # Before the first pinned-path deploy the gateway still runs from target/release.
-    if [[ -z "$(gateway_pid)" ]]; then gateway_pid() { detect_old_pid; }; fi
+    if [[ -z "$(gateway_pid)" ]]; then gateway_pid() { pgrep -f "$TARGET_BIN run" | head -1 || true; }; fi
     verify "0000" "" || die "running gateway is not healthy"
     exit 0
 fi
@@ -218,7 +218,7 @@ cd "$REPO"
 # Several worktrees deploy to the same gateway. A build that does not contain the revision
 # currently deployed silently reverts another session's fixes (2026-10-19: the full-access
 # and Slack ingress fixes were overwritten twice). Refuse it unless forced.
-deployed_rev="$(sed -n 's/^rev=\([0-9a-f]*\).*/\1/p' "$INSTALL_DIR/DEPLOYED" 2>/dev/null | head -1)"
+deployed_rev="$(sed -n 's/^rev=\([0-9a-f]*\).*/\1/p' "$INSTALL_DIR/DEPLOYED" 2>/dev/null | head -1 || true)"
 if [[ -n "$deployed_rev" && "${OMON_DEPLOY_ALLOW_REWIND:-0}" != 1 ]]; then
     if git -C "$REPO" cat-file -e "$deployed_rev^{commit}" 2>/dev/null; then
         git -C "$REPO" merge-base --is-ancestor "$deployed_rev" HEAD \
@@ -299,8 +299,6 @@ rm -rf "$INSTALL_WEB.old"
 mv "$INSTALL_WEB.new" "$INSTALL_WEB"
 rm -rf "$INSTALL_WEB.old"
 INSTALL_WEB="$(cd "$INSTALL_WEB" && pwd)"
-printf 'rev=%s dirty_paths=%s source=%s deployed_at=%s\n' "$source_rev" "$source_dirty" "$REPO" "$stamp" \
-    > "$INSTALL_DIR/DEPLOYED"
 
 # Ensure launchd plist ProgramArguments[0] equals INSTALL_BIN
 if [[ -f "$PLIST" ]]; then
@@ -326,7 +324,7 @@ if [[ -f "$PLIST" ]]; then
     # A kickstart keeps the environment launchd loaded; reload when the plist's
     # EnvironmentVariables changed since then (for example a new feature flag).
     if [[ "$plist_modified" != 1 ]]; then
-        loaded_env="$(launchctl print "gui/${UID:-$(id -u)}/$LABEL" 2>/dev/null \
+        loaded_env="$( { launchctl print "gui/${UID:-$(id -u)}/$LABEL" 2>/dev/null || true; } \
             | sed -n '/^\tenvironment = {/,/^\t}/p' | sed -n 's/^\t\t\([^ ]*\) => \(.*\)$/\1=\2/p' | sort)"
         plist_env="$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables" "$PLIST" 2>/dev/null \
             | sed -n 's/^ *\([^ ]*\) = \(.*\)$/\1=\2/p' | sort)"
@@ -346,6 +344,10 @@ say "restarting $LABEL (old pid ${old_pid:-none})"
 restart
 
 if verify "$since" "$old_pid"; then
+    # Recorded only once the new build is verified: a rolled-back build must never become the
+    # revision the rewind guard above protects.
+    printf 'rev=%s dirty_paths=%s source=%s deployed_at=%s\n' "$source_rev" "$source_dirty" "$REPO" "$stamp" \
+        > "$INSTALL_DIR/DEPLOYED"
     say "deploy OK"
     exit 0
 fi

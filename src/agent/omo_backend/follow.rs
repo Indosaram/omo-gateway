@@ -200,8 +200,11 @@ impl OmoBackend {
                     current = None;
                     latest_text.clear();
                     let rendered = filter_reasoning(&text);
-                    if val.pointer("/params/turn/status").and_then(Value::as_str)
-                        == Some("completed")
+                    // While stopping, a gateway turn is waiting on this thread and its pre-ack
+                    // relay already delivers every completed message of this engine turn.
+                    if !stopping
+                        && val.pointer("/params/turn/status").and_then(Value::as_str)
+                            == Some("completed")
                         && !rendered.trim().is_empty()
                         && !is_explicit_silence(&rendered)
                         && last_delivered.as_deref() != Some(rendered.as_str())

@@ -80,23 +80,19 @@ impl ActionLoop {
         self
     }
 
-    pub async fn collect_new_items(&self, now: DateTime<Utc>) -> sqlx::Result<usize> {
+    /// Buffers unseen items. An item is marked seen only when `flush_coalesced` emits it, so a
+    /// restart inside the coalesce window, a failed flush or the daily cap never loses it: the
+    /// next scan finds it again.
+    pub async fn collect_new_items(&self, _now: DateTime<Utc>) -> sqlx::Result<usize> {
         let candidates = scan_unseen_candidates(&self.pool, &self.lead_session_key).await?;
         let mut added = 0usize;
         let mut batch = self.pending_batch.lock().await;
         for item in candidates {
-            let inserted = sqlx::query(
-                "INSERT INTO action_loop_seen (item_key, seen_at) VALUES (?, ?)
-                 ON CONFLICT(item_key) DO NOTHING",
-            )
-            .bind(&item.item_key)
-            .bind(now)
-            .execute(&self.pool)
-            .await?;
-            if inserted.rows_affected() == 1 {
-                batch.push(item);
-                added += 1;
+            if batch.iter().any(|queued| queued.item_key == item.item_key) {
+                continue;
             }
+            batch.push(item);
+            added += 1;
         }
         Ok(added)
     }
@@ -130,9 +126,10 @@ impl ActionLoop {
             tracing::warn!(
                 lead = %self.lead_session_key,
                 cap = self.daily_cap,
-                dropped_items = items.len(),
-                "action_loop daily cap reached; dropping coalesced batch"
+                deferred_items = items.len(),
+                "action_loop daily cap reached; deferring the batch to the next flush"
             );
+            // Leave unseen items out of the buffer so the next scan re-arms the flush timer.
             return Ok(None);
         }
 
@@ -155,6 +152,9 @@ impl ActionLoop {
             None
         };
 
+        // The event and the seen marks commit together: an item is either emitted and seen, or
+        // neither (and the next scan picks it up again).
+        let mut tx = self.pool.begin().await?;
         let res = sqlx::query(
             "INSERT INTO lane_events (lane_key, lead_session_key, kind, body, created_at, release_at)
              VALUES (NULL, ?, 'action_loop', ?, ?, ?)",
@@ -163,8 +163,19 @@ impl ActionLoop {
         .bind(&body)
         .bind(now)
         .bind(release_at)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+        for item in &items {
+            sqlx::query(
+                "INSERT INTO action_loop_seen (item_key, seen_at) VALUES (?, ?)
+                 ON CONFLICT(item_key) DO NOTHING",
+            )
+            .bind(&item.item_key)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
 
         tracing::info!("action_loop delivered items={}", items.len());
         Ok(Some(res.last_insert_rowid()))

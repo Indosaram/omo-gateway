@@ -44,6 +44,9 @@ function ViewBody({ view }: { view: View }) {
     try {
       const updated = await trackerApi.updateView(view.id, { filters, display })
       t.upsertView(updated)
+      // The server returns filters with sorted keys; re-seed so the saved view is not dirty.
+      t.setFiltersFor(viewKey, updated.filters ?? {})
+      t.setDisplayFor(viewKey, { ...DEFAULT_DISPLAY, ...updated.display })
       toast.success('View updated')
     } catch (err) {
       toast.error(errorMessage(err))

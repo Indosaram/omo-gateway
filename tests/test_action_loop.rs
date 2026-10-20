@@ -136,7 +136,7 @@ async fn c_item_with_existing_proposal_makes_none() {
 }
 
 #[tokio::test]
-async fn d_event_over_daily_cap_is_dropped() {
+async fn d_event_over_daily_cap_is_deferred_not_lost() {
     let pool = init_pool("sqlite::memory:").await.unwrap();
     let worker = ActionLoop::new(pool.clone(), LEAD).with_daily_cap(2);
 
@@ -153,7 +153,7 @@ async fn d_event_over_daily_cap_is_dropped() {
         if i <= 2 {
             assert!(res.is_some(), "item {i} under cap must emit");
         } else {
-            assert_eq!(res, None, "3rd event over cap=2 must be dropped");
+            assert_eq!(res, None, "3rd event over cap=2 must wait for the next day");
         }
     }
 
@@ -163,6 +163,47 @@ async fn d_event_over_daily_cap_is_dropped() {
             .await
             .unwrap();
     assert_eq!(count, 2);
+
+    assert_eq!(
+        worker.collect_new_items(daytime_utc()).await.unwrap(),
+        1,
+        "the next sweep must re-arm the coalesce timer without a new arrival"
+    );
+
+    // Deferred, not dropped: a fresh worker (restart) on the next KST day still emits it.
+    let next_day = daytime_utc() + chrono::Duration::days(1);
+    let restarted = ActionLoop::new(pool.clone(), LEAD).with_daily_cap(2);
+    assert!(restarted.flush_coalesced(next_day).await.unwrap().is_some());
+    let body: String = sqlx::query_scalar(
+        "SELECT body FROM lane_events WHERE kind = 'action_loop' ORDER BY id DESC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(body.contains("msg 3"), "{body}");
+}
+
+#[tokio::test]
+async fn d2_restart_inside_the_coalesce_window_does_not_lose_collected_items() {
+    let pool = init_pool("sqlite::memory:").await.unwrap();
+    insert_inbox_item_and_decision(&pool, "window-1", "owner", "Dana", "확인 부탁").await;
+
+    let before_restart = ActionLoop::new(pool.clone(), LEAD);
+    assert_eq!(
+        before_restart
+            .collect_new_items(daytime_utc())
+            .await
+            .unwrap(),
+        1
+    );
+    drop(before_restart); // gateway restarts before the coalesce window flushes
+
+    let after_restart = ActionLoop::new(pool.clone(), LEAD);
+    assert!(after_restart
+        .flush_coalesced(daytime_utc())
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]

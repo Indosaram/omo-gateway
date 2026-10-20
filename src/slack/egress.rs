@@ -24,8 +24,6 @@ use crate::discord::table_render::{
 use crate::models::{filter_reasoning, is_explicit_silence};
 use crate::{OmonError, OutboundAction, OutboundDispatcher, Result, SessionKey, StreamChunk};
 
-const STREAM_PLACEHOLDER: &str = "…";
-const STREAM_UPDATE_INTERVAL: Duration = Duration::from_millis(1200);
 /// How long a finished stream id is remembered so a retried final chunk does not repost.
 const COMPLETED_RETENTION: Duration = Duration::from_secs(15 * 60);
 const APPROVAL_COMMAND_LIMIT: usize = 2800;
@@ -47,8 +45,6 @@ type StreamKey = (String, Uuid);
 #[derive(Default)]
 struct StreamState {
     ts: Option<String>,
-    last_sequence: Option<u64>,
-    last_update: Option<Instant>,
     final_sent: usize,
     prepared: Option<(String, Vec<RenderedTable>)>,
 }
@@ -63,9 +59,8 @@ struct DeadTarget {
 pub struct SlackEgress {
     api: SlackApi,
     streams: Mutex<HashMap<StreamKey, Arc<tokio::sync::Mutex<StreamState>>>>,
-    completed: Mutex<HashMap<StreamKey, Instant>>,
+    completed: Mutex<HashMap<(String, Uuid, u64), Instant>>,
     approvals: Mutex<HashMap<Uuid, (String, String)>>,
-    update_interval: Duration,
     workspace_root: Option<PathBuf>,
     runtime_footer: bool,
     default_model: Option<String>,
@@ -87,7 +82,6 @@ impl SlackEgress {
             streams: Mutex::new(HashMap::new()),
             completed: Mutex::new(HashMap::new()),
             approvals: Mutex::new(HashMap::new()),
-            update_interval: STREAM_UPDATE_INTERVAL,
             workspace_root: None,
             runtime_footer: false,
             default_model: None,
@@ -133,12 +127,6 @@ impl SlackEgress {
     /// Persists dead targets in `slack_dead_targets` so they survive restarts.
     pub fn with_pool(mut self, pool: SqlitePool) -> Self {
         self.pool = Some(pool);
-        self
-    }
-
-    #[cfg(test)]
-    fn with_update_interval(mut self, interval: Duration) -> Self {
-        self.update_interval = interval;
         self
     }
 
@@ -228,8 +216,16 @@ impl SlackEgress {
     }
 
     async fn stream(&self, session: &SessionKey, chunk: StreamChunk) -> Result<()> {
+        // Partial chunks are never shown (a posted message is never edited or deleted later),
+        // and they allocate nothing: a turn that ends without a final chunk leaves no state.
+        if !chunk.is_final {
+            return Ok(());
+        }
         let key = (session.storage_key(), chunk.stream_id);
-        if self.completed.lock().contains_key(&key) {
+        // One stream can carry several finals (a background run relayed before the turn's own
+        // reply); only a retried copy of the same final, same sequence, is a duplicate.
+        let done = (key.0.clone(), key.1, chunk.sequence);
+        if self.completed.lock().contains_key(&done) {
             return Ok(());
         }
         let channel = session.channel_id.as_str();
@@ -238,7 +234,7 @@ impl SlackEgress {
         }
         let cell = self.streams.lock().entry(key.clone()).or_default().clone();
         let mut state = cell.lock().await;
-        if self.completed.lock().contains_key(&key) {
+        if self.completed.lock().contains_key(&done) {
             return Ok(());
         }
         let thread = reply_thread(session, chunk.reply_to.as_deref());
@@ -249,36 +245,6 @@ impl SlackEgress {
             (chunk.content.clone(), Vec::new())
         };
         let filtered = filter_reasoning(&claim_stripped);
-
-        if !chunk.is_final {
-            if state
-                .last_sequence
-                .is_some_and(|sequence| chunk.sequence <= sequence)
-            {
-                return Ok(());
-            }
-            state.last_sequence = Some(chunk.sequence);
-            let Some(ts) = state.ts.clone() else {
-                let ts = self.post(channel, STREAM_PLACEHOLDER, thread, None).await?;
-                state.ts = Some(ts);
-                state.last_update = Some(Instant::now());
-                return Ok(());
-            };
-            let due = state
-                .last_update
-                .is_none_or(|at| at.elapsed() >= self.update_interval);
-            if !due || filtered.is_empty() || is_explicit_silence(&filtered) {
-                return Ok(());
-            }
-            let Some(text) = render(&filtered).into_iter().next() else {
-                return Ok(());
-            };
-            state.last_update = Some(Instant::now());
-            if let Err(error) = self.api.update_message(channel, &ts, &text, None).await {
-                tracing::debug!(%error, channel, "failed to update slack stream preview");
-            }
-            return Ok(());
-        }
 
         let mut media_error = None;
         if state.prepared.is_none() {
@@ -293,27 +259,16 @@ impl SlackEgress {
         }
         let (text, tables) = state.prepared.clone().unwrap_or_default();
         let chunks = render(&text);
-        if chunks.is_empty() {
-            if let Some(ts) = &state.ts {
-                self.api.delete_message(channel, ts).await?;
-            }
-        }
         for (index, text) in chunks.iter().enumerate().skip(state.final_sent) {
-            match (index, state.ts.clone()) {
-                (0, Some(ts)) => self.api.update_message(channel, &ts, text, None).await?,
-                (0, None) => {
-                    let ts = self.post(channel, text, thread, None).await?;
-                    state.ts = Some(ts);
-                }
-                _ => {
-                    self.post(channel, text, thread, None).await?;
-                }
+            let ts = self.post(channel, text, thread, None).await?;
+            if index == 0 {
+                state.ts = Some(ts);
             }
             state.final_sent = index + 1;
         }
         let final_ts = state.ts.clone();
         drop(state);
-        self.finish_stream(key);
+        self.finish_stream(key, done);
         if let (Some(pool), Some(ts)) = (self.pool.clone(), final_ts) {
             if !extracted_claims.is_empty() {
                 self.spawn_claim_checks(pool, session.clone(), ts, extracted_claims)
@@ -327,11 +282,11 @@ impl SlackEgress {
         }
     }
 
-    fn finish_stream(&self, key: StreamKey) {
+    fn finish_stream(&self, key: StreamKey, done: (String, Uuid, u64)) {
         self.streams.lock().remove(&key);
         let mut completed = self.completed.lock();
         completed.retain(|_, at| at.elapsed() < COMPLETED_RETENTION);
-        completed.insert(key, Instant::now());
+        completed.insert(done, Instant::now());
     }
 
     async fn spawn_claim_checks(
@@ -1101,9 +1056,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_posts_placeholder_updates_and_finishes_with_overflow() {
+    async fn stream_posts_only_final_reply_and_never_edits() {
         let server = fake().await;
-        let egress = server.egress().with_update_interval(Duration::ZERO);
+        let egress = server.egress();
         let id = Uuid::new_v4();
         let reply = long_reply();
         let expected = render(&reply);
@@ -1122,17 +1077,8 @@ mod tests {
         egress.dispatch(stream(id, 2, &reply, true)).await.unwrap();
 
         let requests = server.requests();
-        assert_eq!(requests.len(), 2 + expected.len());
-        assert_eq!(requests[0].0, "chat.postMessage");
-        assert_eq!(requests[0].1["text"], STREAM_PLACEHOLDER);
-        assert_eq!(requests[0].1["thread_ts"], "1699.0001");
-        assert_eq!(requests[1].0, "chat.update");
-        assert_eq!(requests[1].1["ts"], "100.0001");
-        assert_eq!(requests[1].1["text"], to_mrkdwn("Hello **world**").as_str());
-        assert_eq!(requests[2].0, "chat.update");
-        assert_eq!(requests[2].1["ts"], "100.0001");
-        assert_eq!(requests[2].1["text"], expected[0].as_str());
-        for (request, chunk) in requests[3..].iter().zip(&expected[1..]) {
+        assert_eq!(requests.len(), expected.len());
+        for (request, chunk) in requests.iter().zip(&expected) {
             assert_eq!(request.0, "chat.postMessage");
             assert_eq!(request.1["text"], chunk.as_str());
             assert_eq!(request.1["thread_ts"], "1699.0001");
@@ -1141,24 +1087,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stream_preview_updates_are_throttled() {
+    async fn partial_chunks_post_nothing() {
         let server = fake().await;
-        let egress = server
-            .egress()
-            .with_update_interval(Duration::from_secs(3600));
+        let egress = server.egress();
         let id = Uuid::new_v4();
 
         egress.dispatch(stream(id, 0, "a", false)).await.unwrap();
         egress.dispatch(stream(id, 1, "ab", false)).await.unwrap();
-        egress.dispatch(stream(id, 2, "abc", false)).await.unwrap();
-        egress.dispatch(stream(id, 3, "abcd", true)).await.unwrap();
+        assert!(server.paths().is_empty());
 
-        assert_eq!(server.paths(), ["chat.postMessage", "chat.update"]);
-        assert_eq!(server.requests()[1].1["text"], to_mrkdwn("abcd").as_str());
+        egress.dispatch(stream(id, 2, "abcd", true)).await.unwrap();
+        assert_eq!(server.paths(), ["chat.postMessage"]);
+        assert_eq!(server.requests()[0].1["text"], to_mrkdwn("abcd").as_str());
     }
 
     #[tokio::test]
-    async fn silent_final_deletes_placeholder() {
+    async fn silent_final_posts_nothing() {
         let server = fake().await;
         let egress = server.egress();
         let id = Uuid::new_v4();
@@ -1173,10 +1117,7 @@ mod tests {
             .await
             .unwrap();
 
-        let requests = server.requests();
-        assert_eq!(server.paths(), ["chat.postMessage", "chat.delete"]);
-        assert_eq!(requests[1].1["channel"], "C1");
-        assert_eq!(requests[1].1["ts"], "100.0001");
+        assert!(server.paths().is_empty());
     }
 
     #[tokio::test]
@@ -1516,14 +1457,13 @@ mod tests {
         assert_eq!(
             server.paths(),
             [
-                "chat.postMessage",
                 "files.getUploadURLExternal",
                 "upload/F1",
                 "files.completeUploadExternal",
-                "chat.update",
+                "chat.postMessage",
             ]
         );
-        assert_eq!(server.requests()[4].1["text"], "done");
+        assert_eq!(server.requests()[3].1["text"], "done");
     }
 
     #[tokio::test]

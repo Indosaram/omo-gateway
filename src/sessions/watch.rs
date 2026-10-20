@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -114,6 +114,7 @@ pub struct Watcher<R> {
     policy: NotifyPolicy,
     first_seen: HashMap<String, DateTime<Utc>>,
     slack_hints: bool,
+    pending_completions: HashMap<String, Notice>,
 }
 
 fn display_name(session: &LiveSession) -> &str {
@@ -211,6 +212,7 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             policy,
             first_seen: HashMap::new(),
             slack_hints: false,
+            pending_completions: HashMap::new(),
         }
     }
 
@@ -258,8 +260,21 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             }
         }
         self.streaming = Some(current);
-        let present: std::collections::HashSet<&str> =
-            notices.iter().map(|n| n.dedupe_key.as_str()).collect();
+        for notice in &notices {
+            if notice.kind == "completion" {
+                self.pending_completions
+                    .insert(notice.dedupe_key.clone(), notice.clone());
+            }
+        }
+        let mut seen: HashSet<String> = notices.iter().map(|n| n.dedupe_key.clone()).collect();
+        let mut pending: Vec<_> = self.pending_completions.values().cloned().collect();
+        pending.sort_by(|a, b| a.dedupe_key.cmp(&b.dedupe_key));
+        for notice in pending {
+            if seen.insert(notice.dedupe_key.clone()) {
+                notices.push(notice);
+            }
+        }
+        let present: HashSet<&str> = notices.iter().map(|n| n.dedupe_key.as_str()).collect();
         self.first_seen
             .retain(|key, _| present.contains(key.as_str()));
         let quiet = self.policy.is_quiet(now);
@@ -284,7 +299,9 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             .bind(&notice.dedupe_key)
             .fetch_one(&self.pool)
             .await?;
-            if !sent {
+            if sent {
+                self.pending_completions.remove(&notice.dedupe_key);
+            } else {
                 fresh.push(notice);
             }
         }
@@ -336,11 +353,14 @@ impl<R: CommandRunner + 'static> Watcher<R> {
                     reply_to: None,
                 };
                 match dispatcher.dispatch(action).await {
-                    Ok(()) => {
-                        if let Err(error) = self.mark_sent(&notice).await {
+                    Ok(()) => match self.mark_sent(&notice).await {
+                        Ok(()) => {
+                            self.pending_completions.remove(&notice.dedupe_key);
+                        }
+                        Err(error) => {
                             tracing::warn!(%error, key = %notice.dedupe_key, "session notice sent but not recorded");
                         }
-                    }
+                    },
                     Err(error) => {
                         tracing::warn!(%error, key = %notice.dedupe_key, "session notice delivery failed; will retry next tick");
                     }
@@ -637,5 +657,183 @@ mod tests {
             discord[0].text
         );
         assert_eq!(slack[0].dedupe_key, discord[0].dedupe_key);
+    }
+
+    #[tokio::test]
+    async fn completion_during_quiet_hours_is_delivered_on_first_non_quiet_tick() {
+        let pool = pool().await;
+        let runner = Arc::new(Scripted {
+            snapshot: Mutex::new(live(false, false, 5)),
+            remote_down: false,
+        });
+        watch(&pool, "local:01a1429e-8585-7e8a-b89b-2ea8458e4312")
+            .await
+            .unwrap();
+        let mut watcher = policy_watcher(&pool, runner.clone(), NotifyPolicy::default());
+
+        assert!(watcher.tick_at(kst(1, 0)).await.unwrap().is_empty());
+
+        *runner.snapshot.lock() = live(true, false, 6);
+        assert!(watcher.tick_at(kst(1, 30)).await.unwrap().is_empty());
+
+        *runner.snapshot.lock() = live(false, false, 7);
+        // Suppressed during quiet hours
+        assert!(watcher.tick_at(kst(2, 0)).await.unwrap().is_empty());
+        assert!(watcher.tick_at(kst(7, 59)).await.unwrap().is_empty());
+
+        // First non-quiet tick (08:00 KST) delivers the completion notice
+        let notices = watcher.tick_at(kst(8, 0)).await.unwrap();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].kind, "completion");
+        assert!(notices[0].text.contains("finished the task"));
+
+        // Dedupe check cleans up pending completion once sent
+        watcher.mark_sent(&notices[0]).await.unwrap();
+        assert!(watcher.tick_at(kst(8, 1)).await.unwrap().is_empty());
+    }
+
+    struct FailFirstDispatcher {
+        failed_once: std::sync::atomic::AtomicBool,
+        failed_tx: tokio::sync::mpsc::Sender<()>,
+        dispatched_tx: tokio::sync::mpsc::Sender<String>,
+    }
+
+    #[async_trait]
+    impl OutboundDispatcher for FailFirstDispatcher {
+        async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+            if !self
+                .failed_once
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
+                let _ = self.failed_tx.send(()).await;
+                Err(crate::OmonError::Config(
+                    "transient dispatch failure".into(),
+                ))
+            } else {
+                if let OutboundAction::SendMessage { content, .. } = action {
+                    let _ = self.dispatched_tx.send(content).await;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_whose_first_dispatch_fails_is_delivered_on_next_tick_exactly_once() {
+        let pool = pool().await;
+        let runner = Arc::new(Scripted {
+            snapshot: Mutex::new(live(false, false, 5)),
+            remote_down: false,
+        });
+        watch(&pool, "local:01a1429e-8585-7e8a-b89b-2ea8458e4312")
+            .await
+            .unwrap();
+
+        let (tick_tx, mut tick_rx) = tokio::sync::mpsc::channel(16);
+        struct TickTrackingRunner {
+            inner: Arc<Scripted>,
+            tick_tx: tokio::sync::mpsc::Sender<()>,
+        }
+        #[async_trait]
+        impl CommandRunner for TickTrackingRunner {
+            async fn run(
+                &self,
+                machine: &str,
+                argv: &[String],
+            ) -> std::result::Result<CommandOutput, String> {
+                let res = self.inner.run(machine, argv).await;
+                let _ = self.tick_tx.try_send(());
+                res
+            }
+        }
+
+        let tracking_runner = Arc::new(TickTrackingRunner {
+            inner: runner.clone(),
+            tick_tx,
+        });
+
+        let mut watcher = Watcher::with_policy(
+            pool.clone(),
+            SessionControl::new(tracking_runner, vec!["omarchy".into()]),
+            Duration::from_millis(10),
+            NotifyPolicy {
+                notify_after: Duration::ZERO,
+                quiet_hours: None,
+            },
+        );
+
+        // Baseline tick
+        assert!(watcher.tick().await.unwrap().is_empty());
+
+        // Session starts streaming
+        *runner.snapshot.lock() = live(true, false, 6);
+        assert!(watcher.tick().await.unwrap().is_empty());
+
+        // Session transitions to idle -> completion ready on next tick
+        *runner.snapshot.lock() = live(false, false, 7);
+
+        let (failed_tx, mut failed_rx) = tokio::sync::mpsc::channel(1);
+        let (dispatched_tx, mut dispatched_rx) = tokio::sync::mpsc::channel(10);
+        let dispatcher = Arc::new(FailFirstDispatcher {
+            failed_once: std::sync::atomic::AtomicBool::new(false),
+            failed_tx,
+            dispatched_tx,
+        });
+
+        let shutdown = CancellationToken::new();
+        let shutdown_clone = shutdown.clone();
+        let owner_dm = SessionKey::new(
+            "discord",
+            None::<String>,
+            "channel-1",
+            None::<String>,
+            "user-1",
+        );
+
+        let handle =
+            tokio::spawn(async move { watcher.serve(dispatcher, owner_dm, shutdown_clone).await });
+
+        // 1) First dispatch attempt fails
+        tokio::time::timeout(Duration::from_secs(2), failed_rx.recv())
+            .await
+            .expect("timeout waiting for initial dispatch failure")
+            .expect("failed_rx closed");
+
+        // 2) On the next tick, completion is retried and succeeds
+        let content = tokio::time::timeout(Duration::from_secs(2), dispatched_rx.recv())
+            .await
+            .expect("timeout waiting for retried dispatch success")
+            .expect("dispatched_rx closed");
+        assert!(content.contains("finished the task"));
+
+        // Drain any tick signals accumulated so far
+        while tick_rx.try_recv().is_ok() {}
+
+        // 3) Wait for subsequent ticks to execute completely
+        tokio::time::timeout(Duration::from_secs(2), tick_rx.recv())
+            .await
+            .expect("timeout waiting for subsequent tick")
+            .expect("tick_rx closed");
+        while tick_rx.try_recv().is_ok() {}
+        tokio::time::timeout(Duration::from_secs(2), tick_rx.recv())
+            .await
+            .expect("timeout waiting for subsequent tick")
+            .expect("tick_rx closed");
+
+        // Exactly once: no additional messages dispatched
+        assert!(dispatched_rx.try_recv().is_err());
+
+        // Verify SQLite record was inserted
+        let sent: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM session_watch_notices WHERE dedupe_key = ?)",
+        )
+        .bind("c:local:01a1429e-8585-7e8a-b89b-2ea8458e4312:7")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(sent);
+
+        shutdown.cancel();
+        handle.await.unwrap().unwrap();
     }
 }

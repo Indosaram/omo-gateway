@@ -48,11 +48,11 @@ done
 [[ ! -f "$tmp/restarts" ]] || fail "app-server failure must not restart the gateway"
 grep -q 'DRY_ALERT appserver' "$tmp/alerts" || fail "expected app-server alert"
 
-# Patch missing from the launched runtime: alert.
+# Patch missing from the launched runtime: the patch check is removed, so no alert.
 echo 'x.subscribedThreadIds' > "$tmp/rt/dist/modes/app-server/threads/turns.js"
 out=$(run env WATCHDOG_GATEWAY_PATTERN="http.server $port" \
     WATCHDOG_DASHBOARD_URL="http://127.0.0.1:$port/up" WATCHDOG_APPSERVER_URL="http://127.0.0.1:$port/up")
-[[ "$out" == *"DRY_ALERT senpi_patch"* ]] || fail "expected senpi patch alert: $out"
+[[ "$out" != *"DRY_ALERT senpi_patch"* ]] || fail "senpi patch check must not alert: $out"
 
 # No runtime wrapper (or no app-server in it): nothing to check, no alert.
 rm -rf "$tmp/state"

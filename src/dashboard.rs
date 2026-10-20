@@ -2455,7 +2455,8 @@ async fn resolve_approval(
             Uuid::parse_str(raw.trim()).ok()
         } else {
             let decision = match suffix {
-                "once" | "session" => omon_gateway::ApprovalDecision::Once,
+                "once" => omon_gateway::ApprovalDecision::Once,
+                "session" => omon_gateway::ApprovalDecision::Session,
                 "always" => omon_gateway::ApprovalDecision::Always,
                 _ => omon_gateway::ApprovalDecision::Deny { reason: None },
             };

@@ -1,0 +1,3657 @@
+diff --git a/web/src/tracker/projects/CreateProjectDialog.tsx b/web/src/tracker/projects/CreateProjectDialog.tsx
+new file mode 100644
+index 0000000..5599364
+--- /dev/null
++++ b/web/src/tracker/projects/CreateProjectDialog.tsx
+@@ -0,0 +1,196 @@
++import { useEffect, useState } from 'react'
++import { trackerApi } from '../api'
++import { navigate } from '../router'
++import { useTracker } from '../store'
++import type { ID, Priority, ProjectStatus } from '../types'
++import { PRIORITY_LABELS, PROJECT_STATUS_LABELS } from '../types'
++import { Avatar, Button, Dialog, PriorityIcon, ProjectIcon, toast } from '../ui'
++import { ChoiceChip, PROJECT_COLORS, PROJECT_STATUSES, ProjectStatusIcon } from './shared'
++
++export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
++  const t = useTracker()
++  const [name, setName] = useState('')
++  const [summary, setSummary] = useState('')
++  const [description, setDescription] = useState('')
++  const [status, setStatus] = useState<ProjectStatus>('planned')
++  const [priority, setPriority] = useState<Priority>(0)
++  const [color, setColor] = useState(PROJECT_COLORS[0])
++  const [leadId, setLeadId] = useState<ID | null>(null)
++  const [teamIds, setTeamIds] = useState<ID[]>([])
++  const [startDate, setStartDate] = useState('')
++  const [targetDate, setTargetDate] = useState('')
++  const [saving, setSaving] = useState(false)
++
++  useEffect(() => {
++    if (!open) return
++    setName('')
++    setSummary('')
++    setDescription('')
++    setStatus('planned')
++    setPriority(0)
++    setColor(PROJECT_COLORS[0])
++    setLeadId(t.me?.id ?? null)
++    setTeamIds(t.teams.filter((team) => !team.system).slice(0, 1).map((team) => team.id))
++    setStartDate('')
++    setTargetDate('')
++  }, [open])
++
++  const submit = async () => {
++    if (!name.trim() || saving) return
++    setSaving(true)
++    try {
++      const project = await trackerApi.createProject({
++        name: name.trim(),
++        summary,
++        description,
++        status,
++        priority,
++        color,
++        icon: 'box',
++        lead_id: leadId,
++        team_ids: teamIds,
++        start_date: startDate || null,
++        target_date: targetDate || null,
++      })
++      t.upsertProject(project)
++      onOpenChange(false)
++      toast(`Project "${project.name}" created`, {
++        action: { label: 'View', onClick: () => navigate(`/project/${project.id}/overview`) },
++      })
++    } catch (err) {
++      t.reportError(err)
++    } finally {
++      setSaving(false)
++    }
++  }
++
++  const humans = t.users.filter((u) => u.kind === 'human')
++
++  return (
++    <Dialog
++      open={open}
++      onOpenChange={onOpenChange}
++      title="New project"
++      width={640}
++      footer={
++        <div className="flex items-center justify-end gap-2">
++          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
++            Cancel
++          </Button>
++          <Button variant="primary" size="sm" disabled={!name.trim() || saving} onClick={() => void submit()}>
++            Create project
++          </Button>
++        </div>
++      }
++    >
++      <div
++        className="flex flex-col gap-3"
++        onKeyDown={(e) => {
++          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++            e.preventDefault()
++            void submit()
++          }
++        }}
++      >
++        <div className="flex items-center gap-2">
++          <ProjectIcon icon="box" color={color} />
++          <div className="flex gap-1">
++            {PROJECT_COLORS.map((c) => (
++              <button
++                key={c}
++                type="button"
++                aria-label={`Color ${c}`}
++                onClick={() => setColor(c)}
++                className="h-4 w-4 rounded-full"
++                style={{ background: c, boxShadow: c === color ? '0 0 0 2px var(--panel), 0 0 0 3px var(--text-3)' : undefined }}
++              />
++            ))}
++          </div>
++        </div>
++        <input
++          autoFocus
++          value={name}
++          onChange={(e) => setName(e.target.value)}
++          placeholder="Project name"
++          className="w-full bg-transparent text-[22px] w-590 t-1 placeholder:text-[var(--text-4)]"
++        />
++        <input
++          value={summary}
++          onChange={(e) => setSummary(e.target.value)}
++          placeholder="Add a short summary..."
++          className="w-full bg-transparent text-[15px] t-2 placeholder:text-[var(--text-4)]"
++        />
++        <div className="flex flex-wrap items-center gap-1.5">
++          {PROJECT_STATUSES.map((s) => (
++            <ChoiceChip key={s} active={status === s} onClick={() => setStatus(s)}>
++              <ProjectStatusIcon status={s} />
++              {PROJECT_STATUS_LABELS[s]}
++            </ChoiceChip>
++          ))}
++        </div>
++        <div className="flex flex-wrap items-center gap-1.5">
++          {([0, 1, 2, 3, 4] as Priority[]).map((p) => (
++            <ChoiceChip key={p} active={priority === p} onClick={() => setPriority(p)}>
++              <PriorityIcon priority={p} />
++              {PRIORITY_LABELS[p]}
++            </ChoiceChip>
++          ))}
++        </div>
++        <div className="flex flex-wrap items-center gap-1.5">
++          <span className="t-3 text-[12px] w-16">Lead</span>
++          <ChoiceChip active={leadId === null} onClick={() => setLeadId(null)}>
++            No lead
++          </ChoiceChip>
++          {humans.map((u) => (
++            <ChoiceChip key={u.id} active={leadId === u.id} onClick={() => setLeadId(u.id)}>
++              <Avatar user={u} size={16} />
++              {u.display_name || u.name}
++            </ChoiceChip>
++          ))}
++        </div>
++        <div className="flex flex-wrap items-center gap-1.5">
++          <span className="t-3 text-[12px] w-16">Teams</span>
++          {t.teams.map((team) => (
++            <ChoiceChip
++              key={team.id}
++              active={teamIds.includes(team.id)}
++              onClick={() => setTeamIds((cur) => (cur.includes(team.id) ? cur.filter((x) => x !== team.id) : [...cur, team.id]))}
++            >
++              <span className="h-2 w-2 rounded-[2px]" style={{ background: team.color }} />
++              {team.name}
++            </ChoiceChip>
++          ))}
++        </div>
++        <div className="flex flex-wrap items-center gap-3 text-[12px]">
++          <label className="flex items-center gap-2 t-3">
++            Start date
++            <input
++              type="date"
++              value={startDate}
++              onChange={(e) => setStartDate(e.target.value)}
++              className="h-7 rounded-[6px] border px-2 t-2"
++              style={{ background: 'var(--input)' }}
++            />
++          </label>
++          <label className="flex items-center gap-2 t-3">
++            Target date
++            <input
++              type="date"
++              value={targetDate}
++              onChange={(e) => setTargetDate(e.target.value)}
++              className="h-7 rounded-[6px] border px-2 t-2"
++              style={{ background: 'var(--input)' }}
++            />
++          </label>
++        </div>
++        <textarea
++          value={description}
++          onChange={(e) => setDescription(e.target.value)}
++          placeholder="Write a description, a project brief, or collect ideas..."
++          rows={5}
++          className="w-full resize-none rounded-[6px] border bg-transparent p-2 text-[14px] t-2 placeholder:text-[var(--text-4)]"
++        />
++      </div>
++    </Dialog>
++  )
++}
+diff --git a/web/src/tracker/projects/Milestones.tsx b/web/src/tracker/projects/Milestones.tsx
+new file mode 100644
+index 0000000..75781dd
+--- /dev/null
++++ b/web/src/tracker/projects/Milestones.tsx
+@@ -0,0 +1,135 @@
++import { Trash2 } from 'lucide-react'
++import { useState } from 'react'
++import { trackerApi } from '../api'
++import { shortDate } from '../format'
++import { useTracker } from '../store'
++import type { Issue, Milestone } from '../types'
++import { Button, IconButton } from '../ui'
++import { ProgressBar, percent } from './shared'
++
++function MilestoneGlyph({ ratio }: { ratio: number }) {
++  const done = ratio >= 1
++  return (
++    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" style={{ flexShrink: 0 }}>
++      <path
++        d="M7 1.5l5.5 5.5L7 12.5 1.5 7z"
++        fill={done ? 'var(--accent)' : 'none'}
++        stroke={done ? 'var(--accent)' : 'var(--text-3)'}
++        strokeWidth="1.3"
++        strokeLinejoin="round"
++      />
++    </svg>
++  )
++}
++
++export function MilestoneList({
++  projectId,
++  milestones,
++  issues,
++  onChange,
++}: {
++  projectId: string
++  milestones: Milestone[]
++  issues: Issue[]
++  onChange: (next: Milestone[]) => void
++}) {
++  const t = useTracker()
++  const [adding, setAdding] = useState(false)
++  const [name, setName] = useState('')
++  const [date, setDate] = useState('')
++
++  const stats = (m: Milestone) => {
++    const own = issues.filter((i) => i.milestone_id === m.id && t.statesById.get(i.state_id)?.type !== 'canceled')
++    const done = own.filter((i) => t.statesById.get(i.state_id)?.type === 'completed').length
++    return { total: own.length, done, ratio: own.length ? done / own.length : 0 }
++  }
++
++  const add = async () => {
++    if (!name.trim()) return
++    try {
++      const created = await trackerApi.addMilestone(projectId, { name: name.trim(), target_date: date || null })
++      onChange([...milestones, created])
++      setName('')
++      setDate('')
++      setAdding(false)
++    } catch (err) {
++      t.reportError(err)
++    }
++  }
++
++  const remove = async (id: string) => {
++    try {
++      await trackerApi.deleteMilestone(id)
++      onChange(milestones.filter((m) => m.id !== id))
++    } catch (err) {
++      t.reportError(err)
++    }
++  }
++
++  const sorted = milestones.slice().sort((a, b) => a.sort_order - b.sort_order)
++
++  return (
++    <section>
++      <div className="mb-2 flex items-center justify-between">
++        <h3 className="text-[13px] w-510 t-2">Milestones</h3>
++        {!adding && (
++          <Button variant="ghost" size="sm" onClick={() => setAdding(true)}>
++            Add milestone
++          </Button>
++        )}
++      </div>
++      {sorted.length === 0 && !adding && <p className="text-[13px] t-4">Break the project into stages by adding milestones.</p>}
++      <ul className="flex flex-col">
++        {sorted.map((m) => {
++          const s = stats(m)
++          return (
++            <li key={m.id} className="group flex items-center gap-3 border-b py-2 text-[13px]">
++              <MilestoneGlyph ratio={s.ratio} />
++              <span className="min-w-0 flex-1 truncate t-1">{m.name}</span>
++              <span className="w-[120px] max-sm:hidden">
++                <ProgressBar ratio={s.ratio} />
++              </span>
++              <span className="w-10 text-right text-[12px] t-3 tabular">{percent(s.ratio)}</span>
++              <span className="w-[70px] text-right text-[12px] t-3 tabular">
++                {s.done}/{s.total}
++              </span>
++              <span className="w-[64px] text-right text-[12px] t-3">{m.target_date ? shortDate(m.target_date) : ''}</span>
++              <span className="opacity-0 group-hover:opacity-100" style={{ transition: 'opacity 120ms var(--ease)' }}>
++                <IconButton label="Delete milestone" icon={<Trash2 size={13} />} size="sm" onClick={() => void remove(m.id)} />
++              </span>
++            </li>
++          )
++        })}
++      </ul>
++      {adding && (
++        <div className="mt-2 flex flex-wrap items-center gap-2">
++          <input
++            autoFocus
++            value={name}
++            onChange={(e) => setName(e.target.value)}
++            onKeyDown={(e) => {
++              if (e.key === 'Enter') void add()
++              if (e.key === 'Escape') setAdding(false)
++            }}
++            placeholder="Milestone name"
++            className="h-8 min-w-[200px] flex-1 rounded-[6px] border px-2 text-[13px]"
++            style={{ background: 'var(--input)' }}
++          />
++          <input
++            type="date"
++            value={date}
++            onChange={(e) => setDate(e.target.value)}
++            className="h-8 rounded-[6px] border px-2 text-[13px] t-2"
++            style={{ background: 'var(--input)' }}
++          />
++          <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
++            Cancel
++          </Button>
++          <Button variant="primary" size="sm" disabled={!name.trim()} onClick={() => void add()}>
++            Add
++          </Button>
++        </div>
++      )}
++    </section>
++  )
++}
+diff --git a/web/src/tracker/projects/Updates.tsx b/web/src/tracker/projects/Updates.tsx
+new file mode 100644
+index 0000000..6eaaf42
+--- /dev/null
++++ b/web/src/tracker/projects/Updates.tsx
+@@ -0,0 +1,108 @@
++import { useState } from 'react'
++import { trackerApi } from '../api'
++import { relativeTime } from '../format'
++import { useTracker } from '../store'
++import type { ProjectHealth, ProjectUpdate } from '../types'
++import { HEALTH_LABELS } from '../types'
++import { Avatar, Button } from '../ui'
++import { HEALTHS, HEALTH_COLORS, HealthIcon } from './shared'
++import Markdown from 'react-markdown'
++
++export function UpdateComposer({ projectId, onPosted }: { projectId: string; onPosted: (update: ProjectUpdate) => void }) {
++  const t = useTracker()
++  const [health, setHealth] = useState<ProjectHealth>('on_track')
++  const [body, setBody] = useState('')
++  const [saving, setSaving] = useState(false)
++
++  const post = async () => {
++    if (!body.trim() || saving) return
++    setSaving(true)
++    try {
++      const update = await trackerApi.addProjectUpdate(projectId, { health, body: body.trim() })
++      onPosted(update)
++      setBody('')
++    } catch (err) {
++      t.reportError(err)
++    } finally {
++      setSaving(false)
++    }
++  }
++
++  return (
++    <div className="rounded-[8px] border p-3" style={{ background: 'var(--card)' }}>
++      <div className="mb-2 flex flex-wrap items-center gap-1">
++        {HEALTHS.map((h) => (
++          <button
++            key={h}
++            type="button"
++            onClick={() => setHealth(h)}
++            className="inline-flex h-7 items-center gap-1.5 rounded-[6px] px-2 text-[12px] w-510"
++            style={{
++              background: health === h ? 'var(--bg-active)' : 'transparent',
++              color: health === h ? HEALTH_COLORS[h] : 'var(--text-3)',
++            }}
++          >
++            <HealthIcon health={h} />
++            {HEALTH_LABELS[h]}
++          </button>
++        ))}
++      </div>
++      <textarea
++        value={body}
++        onChange={(e) => setBody(e.target.value)}
++        onKeyDown={(e) => {
++          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
++            e.preventDefault()
++            void post()
++          }
++        }}
++        rows={4}
++        placeholder="Write a project update..."
++        className="w-full resize-y bg-transparent text-[14px] t-2 placeholder:text-[var(--text-4)]"
++      />
++      <div className="flex justify-end">
++        <Button variant="primary" size="sm" disabled={!body.trim() || saving} onClick={() => void post()}>
++          Post update
++        </Button>
++      </div>
++    </div>
++  )
++}
++
++export function UpdateCard({
++  update,
++  onDelete,
++  compact,
++}: {
++  update: ProjectUpdate
++  onDelete?: () => void
++  compact?: boolean
++}) {
++  const t = useTracker()
++  const user = t.usersById.get(update.user_id) ?? null
++  return (
++    <article className="rounded-[8px] border p-4" style={{ background: 'var(--card)' }}>
++      <header className="mb-2 flex items-center gap-2 text-[13px]">
++        <span className="inline-flex items-center gap-1.5 w-510" style={{ color: HEALTH_COLORS[update.health] }}>
++          <HealthIcon health={update.health} />
++          {HEALTH_LABELS[update.health]}
++        </span>
++        <span className="t-4">·</span>
++        <Avatar user={user} size={16} />
++        <span className="t-2">{user?.display_name || user?.name || 'Unknown'}</span>
++        <span className="t-4">·</span>
++        <span className="t-3" title={update.created_at}>
++          {relativeTime(update.created_at)}
++        </span>
++        {onDelete && (
++          <button type="button" onClick={onDelete} className="lin-hover ml-auto rounded-[6px] px-2 py-0.5 text-[12px] t-3">
++            Delete
++          </button>
++        )}
++      </header>
++      <div className="lin-markdown" style={compact ? { maxHeight: 160, overflow: 'hidden' } : undefined}>
++        <Markdown>{update.body}</Markdown>
++      </div>
++    </article>
++  )
++}
+diff --git a/web/src/tracker/projects/cycles.tsx b/web/src/tracker/projects/cycles.tsx
+new file mode 100644
+index 0000000..1f7b4ba
+--- /dev/null
++++ b/web/src/tracker/projects/cycles.tsx
+@@ -0,0 +1,239 @@
++import { useState } from 'react'
++import { trackerApi } from '../api'
++import { toDateOnly } from '../format'
++import { useTracker } from '../store'
++import type { Cycle, ID, Issue, Team, WorkflowState } from '../types'
++import { Button, Dialog } from '../ui'
++
++const DAY = 86_400_000
++
++export interface CycleStats {
++  scope: number
++  started: number
++  completed: number
++  ratio: number
++}
++
++export function cycleIssues(cycleId: ID, issues: Issue[]): Issue[] {
++  return issues.filter((i) => i.cycle_id === cycleId && !i.archived_at)
++}
++
++export function cycleStats(cycleId: ID, issues: Issue[], statesById: Map<ID, WorkflowState>): CycleStats {
++  let scope = 0
++  let started = 0
++  let completed = 0
++  for (const issue of cycleIssues(cycleId, issues)) {
++    const type = statesById.get(issue.state_id)?.type
++    if (type === 'canceled') continue
++    scope += 1
++    if (type === 'completed') completed += 1
++    else if (type === 'started') started += 1
++  }
++  return { scope, started, completed, ratio: scope ? completed / scope : 0 }
++}
++
++export interface BurnPoint {
++  t: number
++  scope: number
++  started: number
++  completed: number
++}
++
++export function burnUpSeries(cycle: Cycle, issues: Issue[], statesById: Map<ID, WorkflowState>, now = Date.now()): BurnPoint[] {
++  const start = new Date(cycle.starts_at).getTime()
++  const end = new Date(cycle.ends_at).getTime()
++  const last = Math.min(end, now)
++  const own = cycleIssues(cycle.id, issues).filter((i) => statesById.get(i.state_id)?.type !== 'canceled')
++  const at = (value: string | null) => (value ? new Date(value).getTime() : Infinity)
++  const points: BurnPoint[] = []
++  if (last >= start) {
++    for (let t = start; ; t += DAY) {
++      const tick = Math.min(t, last)
++      points.push({
++        t: tick,
++        scope: own.filter((i) => Math.max(at(i.created_at), start) <= tick).length,
++        started: own.filter((i) => Math.min(at(i.started_at), at(i.completed_at)) <= tick).length,
++        completed: own.filter((i) => at(i.completed_at) <= tick).length,
++      })
++      if (tick === last) break
++    }
++  }
++  if (points.length === 0) points.push({ t: start, scope: own.length, started: 0, completed: 0 })
++  return points
++}
++
++export function BurnUpChart({ cycle, issues }: { cycle: Cycle; issues: Issue[] }) {
++  const t = useTracker()
++  const series = burnUpSeries(cycle, issues, t.statesById)
++  const W = 560
++  const H = 200
++  const P = { l: 8, r: 8, t: 12, b: 24 }
++  const start = new Date(cycle.starts_at).getTime()
++  const end = Math.max(new Date(cycle.ends_at).getTime(), start + DAY)
++  const maxY = Math.max(1, ...series.map((p) => p.scope))
++  const x = (v: number) => P.l + ((v - start) / (end - start)) * (W - P.l - P.r)
++  const y = (v: number) => H - P.b - (v / maxY) * (H - P.t - P.b)
++  const line = (key: keyof Omit<BurnPoint, 't'>) =>
++    series.map((p, i) => `${i === 0 ? 'M' : 'L'}${x(p.t).toFixed(1)},${y(p[key]).toFixed(1)}`).join(' ')
++  const lastPoint = series[series.length - 1]
++  const startedArea = `${line('started')} L${x(lastPoint.t).toFixed(1)},${y(0)} L${x(series[0].t).toFixed(1)},${y(0)} Z`
++  const ticks: number[] = []
++  const days = Math.round((end - start) / DAY)
++  const step = Math.max(1, Math.ceil(days / 5))
++  for (let d = 0; d <= days; d += step) ticks.push(start + d * DAY)
++
++  return (
++    <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full" role="img" aria-label="Cycle burn-up chart">
++      <defs>
++        <linearGradient id={`burn-${cycle.id}`} x1="0" x2="0" y1="0" y2="1">
++          <stop offset="0" stopColor="var(--warn)" stopOpacity="0.14" />
++          <stop offset="1" stopColor="var(--warn)" stopOpacity="0" />
++        </linearGradient>
++      </defs>
++      <rect x={P.l} y={P.t} width={W - P.l - P.r} height={H - P.t - P.b} fill="var(--bg-subtle)" />
++      <line x1={x(start)} x2={x(end)} y1={y(maxY)} y2={y(maxY)} stroke="var(--border-strong)" strokeDasharray="3 3" />
++      <line
++        x1={x(start)}
++        y1={y(0)}
++        x2={x(end)}
++        y2={y(series[series.length - 1].scope)}
++        stroke="var(--accent)"
++        strokeOpacity="0.6"
++        strokeDasharray="3 3"
++      />
++      <path d={startedArea} fill={`url(#burn-${cycle.id})`} />
++      <path d={line('scope')} fill="none" stroke="var(--text-3)" strokeWidth="1.5" />
++      <path d={line('started')} fill="none" stroke="var(--warn)" strokeWidth="1.5" />
++      <path d={line('completed')} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
++      <circle cx={x(lastPoint.t)} cy={y(lastPoint.started)} r="3" fill="var(--warn)" />
++      <circle cx={x(lastPoint.t)} cy={y(lastPoint.completed)} r="3" fill="var(--accent)" />
++      <line x1={P.l} x2={W - P.r} y1={H - P.b} y2={H - P.b} stroke="var(--border-strong)" />
++      {ticks.map((tick) => (
++        <g key={tick}>
++          <line x1={x(tick)} x2={x(tick)} y1={H - P.b} y2={H - P.b + 4} stroke="var(--text-4)" />
++          <text x={x(tick)} y={H - 6} textAnchor="middle" fontSize="11" fill="var(--text-3)">
++            {new Date(tick).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
++          </text>
++        </g>
++      ))}
++    </svg>
++  )
++}
++
++export function CycleLegend({ stats }: { stats: CycleStats }) {
++  const pct = (n: number) => (stats.scope ? Math.round((n / stats.scope) * 100) : 0)
++  const item = (label: string, color: string, value: number, showPct: boolean) => (
++    <div className="flex flex-col gap-0.5">
++      <span className="flex items-center gap-1.5 text-[12px] t-3">
++        <span className="h-2 w-2 rounded-[2px]" style={{ background: color }} />
++        {label}
++      </span>
++      <span className="pl-3.5 text-[13px] t-1 tabular">
++        {value}
++        {showPct && <span className="t-3"> · {pct(value)}%</span>}
++      </span>
++    </div>
++  )
++  return (
++    <div className="flex gap-8">
++      {item('Scope', 'var(--text-3)', stats.scope, false)}
++      {item('Started', 'var(--warn)', stats.started, true)}
++      {item('Completed', 'var(--accent)', stats.completed, true)}
++    </div>
++  )
++}
++
++export function CreateCycleDialog({
++  team,
++  cycles,
++  open,
++  onOpenChange,
++}: {
++  team: Team
++  cycles: Cycle[]
++  open: boolean
++  onOpenChange: (open: boolean) => void
++}) {
++  const t = useTracker()
++  const latestEnd = cycles.reduce((max, c) => Math.max(max, new Date(c.ends_at).getTime()), 0)
++  const defaultStart = latestEnd > Date.now() ? new Date(latestEnd) : new Date()
++  const [name, setName] = useState('')
++  const [startsAt, setStartsAt] = useState(() => toDateOnly(defaultStart))
++  const [endsAt, setEndsAt] = useState(() => toDateOnly(new Date(defaultStart.getTime() + (team.cycle_weeks || 2) * 7 * DAY)))
++  const [saving, setSaving] = useState(false)
++
++  const valid = startsAt && endsAt && endsAt > startsAt
++
++  const submit = async () => {
++    if (!valid || saving) return
++    setSaving(true)
++    try {
++      const cycle = await trackerApi.createCycle({
++        team_id: team.id,
++        starts_at: new Date(`${startsAt}T00:00:00`).toISOString(),
++        ends_at: new Date(`${endsAt}T00:00:00`).toISOString(),
++        name: name.trim() || null,
++      })
++      t.upsertCycle(cycle)
++      onOpenChange(false)
++      setName('')
++    } catch (err) {
++      t.reportError(err)
++    } finally {
++      setSaving(false)
++    }
++  }
++
++  return (
++    <Dialog
++      open={open}
++      onOpenChange={onOpenChange}
++      title={`New cycle · ${team.name}`}
++      width={460}
++      footer={
++        <div className="flex justify-end gap-2">
++          <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
++            Cancel
++          </Button>
++          <Button variant="primary" size="sm" disabled={!valid || saving} onClick={() => void submit()}>
++            Create cycle
++          </Button>
++        </div>
++      }
++    >
++      <div className="flex flex-col gap-3 text-[13px]">
++        <input
++          autoFocus
++          value={name}
++          onChange={(e) => setName(e.target.value)}
++          placeholder="Cycle name (optional)"
++          className="h-9 rounded-[6px] border px-2"
++          style={{ background: 'var(--input)' }}
++        />
++        <div className="flex flex-wrap gap-3">
++          <label className="flex items-center gap-2 t-3">
++            Start
++            <input
++              type="date"
++              value={startsAt}
++              onChange={(e) => setStartsAt(e.target.value)}
++              className="h-8 rounded-[6px] border px-2 t-2"
++              style={{ background: 'var(--input)' }}
++            />
++          </label>
++          <label className="flex items-center gap-2 t-3">
++            End
++            <input
++              type="date"
++              value={endsAt}
++              onChange={(e) => setEndsAt(e.target.value)}
++              className="h-8 rounded-[6px] border px-2 t-2"
++              style={{ background: 'var(--input)' }}
++            />
++          </label>
++        </div>
++        {!valid && <p className="text-[12px]" style={{ color: 'var(--danger)' }}>End date must be after the start date.</p>}
++      </div>
++    </Dialog>
++  )
++}
+diff --git a/web/src/tracker/projects/shared.tsx b/web/src/tracker/projects/shared.tsx
+new file mode 100644
+index 0000000..360f28b
+--- /dev/null
++++ b/web/src/tracker/projects/shared.tsx
+@@ -0,0 +1,183 @@
++import type { ReactNode } from 'react'
++import type { ID, Issue, Project, ProjectHealth, ProjectStatus, WorkflowState } from '../types'
++import { HEALTH_LABELS, PROJECT_STATUS_LABELS } from '../types'
++
++export const PROJECT_STATUSES: ProjectStatus[] = ['backlog', 'planned', 'started', 'paused', 'completed', 'canceled']
++export const HEALTHS: ProjectHealth[] = ['on_track', 'at_risk', 'off_track']
++
++export const HEALTH_COLORS: Record<ProjectHealth, string> = {
++  on_track: 'var(--ok)',
++  at_risk: 'var(--warn)',
++  off_track: 'var(--danger)',
++}
++
++export const PROJECT_STATUS_COLORS: Record<ProjectStatus, string> = {
++  backlog: '#bec2c8',
++  planned: '#e2e2e2',
++  started: '#f2c94c',
++  paused: '#95a2b3',
++  completed: '#5e6ad2',
++  canceled: '#95a2b3',
++}
++
++export const PROJECT_COLORS = ['#5e6ad2', '#4ea7fc', '#4cb782', '#f2c94c', '#fc7840', '#eb5757', '#bb87fc', '#95a2b3']
++
++/** Completed / total over the project's non-archived, non-canceled issues. */
++export function projectIssueStats(
++  projectId: ID,
++  issues: Issue[],
++  statesById: Map<ID, WorkflowState>,
++): { total: number; completed: number; started: number; ratio: number } {
++  let total = 0
++  let completed = 0
++  let started = 0
++  for (const issue of issues) {
++    if (issue.project_id !== projectId || issue.archived_at) continue
++    const type = statesById.get(issue.state_id)?.type
++    if (type === 'canceled') continue
++    total += 1
++    if (type === 'completed') completed += 1
++    else if (type === 'started') started += 1
++  }
++  return { total, completed, started, ratio: total === 0 ? 0 : completed / total }
++}
++
++export function projectProgress(project: Project, issues: Issue[], statesById: Map<ID, WorkflowState>): number {
++  const stats = projectIssueStats(project.id, issues, statesById)
++  if (stats.total > 0) return stats.ratio
++  return project.issue_count > 0 ? project.completed_issue_count / project.issue_count : 0
++}
++
++export function percent(ratio: number): string {
++  return `${Math.round(ratio * 100)}%`
++}
++
++export function ProjectStatusIcon({ status, size = 14 }: { status: ProjectStatus; size?: number }) {
++  const color = PROJECT_STATUS_COLORS[status]
++  const r = 5
++  const c = 2 * Math.PI * r
++  const fill = status === 'started' ? 0.5 : status === 'completed' ? 1 : 0
++  return (
++    <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden="true" style={{ flexShrink: 0 }}>
++      <circle
++        cx="7"
++        cy="7"
++        r={r}
++        fill="none"
++        stroke={color}
++        strokeWidth="1.5"
++        strokeDasharray={status === 'backlog' ? '1.6 1.6' : undefined}
++      />
++      {status === 'paused' && (
++        <>
++          <rect x="5" y="4.5" width="1.3" height="5" rx="0.5" fill={color} />
++          <rect x="7.7" y="4.5" width="1.3" height="5" rx="0.5" fill={color} />
++        </>
++      )}
++      {status === 'canceled' && <path d="M5 5l4 4M9 5l-4 4" stroke={color} strokeWidth="1.4" strokeLinecap="round" />}
++      {fill > 0 && fill < 1 && (
++        <circle
++          cx="7"
++          cy="7"
++          r={r / 2}
++          fill="none"
++          stroke={color}
++          strokeWidth={r}
++          strokeDasharray={`${(c / 2) * fill} ${c}`}
++          transform="rotate(-90 7 7)"
++        />
++      )}
++      {fill === 1 && (
++        <>
++          <circle cx="7" cy="7" r={r} fill={color} />
++          <path d="M4.8 7.1l1.5 1.5 2.9-3" fill="none" stroke="var(--panel)" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
++        </>
++      )}
++    </svg>
++  )
++}
++
++export function ProjectStatusLabel({ status }: { status: ProjectStatus }) {
++  return (
++    <span className="inline-flex items-center gap-1.5 t-2">
++      <ProjectStatusIcon status={status} />
++      {PROJECT_STATUS_LABELS[status]}
++    </span>
++  )
++}
++
++export function HealthIcon({ health, size = 14 }: { health: ProjectHealth | null; size?: number }) {
++  const color = health ? HEALTH_COLORS[health] : 'var(--text-4)'
++  return (
++    <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden="true" style={{ flexShrink: 0 }}>
++      <circle cx="7" cy="7" r="6" fill="none" stroke={color} strokeWidth="1.2" strokeDasharray={health ? undefined : '1.5 1.5'} />
++      <path d="M3.5 7.5h1.8l1.2-2.5 1.6 4 1.1-2h1.3" fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
++    </svg>
++  )
++}
++
++export function HealthLabel({ health }: { health: ProjectHealth | null }) {
++  return (
++    <span className="inline-flex items-center gap-1.5" style={{ color: health ? HEALTH_COLORS[health] : 'var(--text-3)' }}>
++      <HealthIcon health={health} />
++      {health ? HEALTH_LABELS[health] : 'No updates'}
++    </span>
++  )
++}
++
++export function ProgressRing({ ratio, size = 14 }: { ratio: number; size?: number }) {
++  const r = 5
++  const c = 2 * Math.PI * r
++  return (
++    <svg width={size} height={size} viewBox="0 0 14 14" aria-hidden="true" style={{ flexShrink: 0 }}>
++      <circle cx="7" cy="7" r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2" />
++      <circle
++        cx="7"
++        cy="7"
++        r={r}
++        fill="none"
++        stroke="var(--accent)"
++        strokeWidth="2"
++        strokeDasharray={`${c * Math.max(0, Math.min(1, ratio))} ${c}`}
++        strokeLinecap="round"
++        transform="rotate(-90 7 7)"
++      />
++    </svg>
++  )
++}
++
++export function ProgressBar({ ratio, color = 'var(--accent)' }: { ratio: number; color?: string }) {
++  return (
++    <div className="h-1 w-full overflow-hidden rounded-full" style={{ background: 'var(--bg-active)' }}>
++      <div
++        className="h-full rounded-full"
++        style={{ width: '100%', background: color, transform: `scaleX(${Math.max(0, Math.min(1, ratio))})`, transformOrigin: 'left', transition: 'transform 180ms var(--ease)' }}
++      />
++    </div>
++  )
++}
++
++export function ChoiceChip({
++  active,
++  onClick,
++  children,
++}: {
++  active: boolean
++  onClick: () => void
++  children: ReactNode
++}) {
++  return (
++    <button
++      type="button"
++      onClick={onClick}
++      className="inline-flex h-7 items-center gap-1.5 rounded-[6px] border px-2 text-[12px]"
++      style={{
++        borderColor: active ? 'var(--border-strong)' : 'var(--border)',
++        background: active ? 'var(--bg-active)' : 'transparent',
++        color: active ? 'var(--text-1)' : 'var(--text-2)',
++      }}
++    >
++      {children}
++    </button>
++  )
++}
+diff --git a/web/src/tracker/ui/Avatar.tsx b/web/src/tracker/ui/Avatar.tsx
+new file mode 100644
+index 0000000..c831a03
+--- /dev/null
++++ b/web/src/tracker/ui/Avatar.tsx
+@@ -0,0 +1,41 @@
++import { CircleUserRound } from 'lucide-react'
++import { initials } from '../format'
++import type { User } from '../types'
++import { AgentGlyph } from './icons'
++
++export type AvatarSize = 16 | 18 | 20 | 24 | 32
++
++export interface AvatarProps {
++  user: User | null | undefined
++  size?: AvatarSize
++  className?: string
++  title?: string
++}
++
++export function Avatar({ user, size = 20, className, title }: AvatarProps) {
++  if (!user) {
++    return (
++      <span
++        className={['lui-avatar', 'lui-avatar--none', className ?? ''].filter(Boolean).join(' ')}
++        style={{ width: size, height: size }}
++        title={title ?? 'No assignee'}
++        aria-label={title ?? 'No assignee'}
++      >
++        <CircleUserRound size={size} strokeWidth={1.5} />
++      </span>
++    )
++  }
++  const agent = user.kind === 'agent'
++  const label = title ?? user.name
++  return (
++    <span
++      className={['lui-avatar', agent ? 'lui-avatar--agent' : '', className ?? ''].filter(Boolean).join(' ')}
++      style={{ width: size, height: size, background: user.avatar_color, fontSize: Math.max(8, Math.round(size * 0.42)) }}
++      title={label}
++      aria-label={label}
++      role="img"
++    >
++      {agent ? <AgentGlyph size={Math.round(size * 0.66)} color="#fff" /> : initials(user.display_name || user.name)}
++    </span>
++  )
++}
+diff --git a/web/src/tracker/ui/Button.tsx b/web/src/tracker/ui/Button.tsx
+new file mode 100644
+index 0000000..3d4789c
+--- /dev/null
++++ b/web/src/tracker/ui/Button.tsx
+@@ -0,0 +1,61 @@
++import React, { forwardRef } from 'react'
++import { Kbd } from './Kbd'
++import { Tooltip } from './Tooltip'
++
++export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger'
++export type ButtonSize = 'sm' | 'md'
++
++export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
++  variant?: ButtonVariant
++  size?: ButtonSize
++  icon?: React.ReactNode
++  kbd?: string[]
++}
++
++export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
++  { variant = 'secondary', size = 'md', icon, kbd, className, children, type = 'button', ...rest },
++  ref,
++) {
++  const iconOnly = icon !== undefined && (children === undefined || children === null || children === false)
++  const classes = [
++    'lui-btn',
++    `lui-btn--${variant}`,
++    size === 'sm' ? 'lui-btn--sm' : '',
++    iconOnly ? 'lui-btn--icon-only' : '',
++    className ?? '',
++  ]
++    .filter(Boolean)
++    .join(' ')
++  return (
++    <button ref={ref} type={type} className={classes} {...rest}>
++      {icon}
++      {children}
++      {kbd && kbd.length > 0 && <Kbd keys={kbd} />}
++    </button>
++  )
++})
++
++export interface IconButtonProps extends Omit<React.ButtonHTMLAttributes<HTMLButtonElement>, 'children'> {
++  label: string
++  icon: React.ReactNode
++  size?: ButtonSize
++  active?: boolean
++  kbd?: string[]
++  tooltipSide?: 'top' | 'bottom' | 'left' | 'right'
++}
++
++export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
++  { label, icon, size = 'md', active, kbd, tooltipSide = 'bottom', className, type = 'button', ...rest },
++  ref,
++) {
++  const classes = ['lui-iconbtn', size === 'sm' ? 'lui-iconbtn--sm' : '', active ? 'lui-iconbtn--active' : '', className ?? '']
++    .filter(Boolean)
++    .join(' ')
++  return (
++    <Tooltip content={label} kbd={kbd} side={tooltipSide}>
++      <button ref={ref} type={type} aria-label={label} aria-pressed={active} className={classes} {...rest}>
++        {icon}
++      </button>
++    </Tooltip>
++  )
++})
+diff --git a/web/src/tracker/ui/Checkbox.tsx b/web/src/tracker/ui/Checkbox.tsx
+new file mode 100644
+index 0000000..70f42c1
+--- /dev/null
++++ b/web/src/tracker/ui/Checkbox.tsx
+@@ -0,0 +1,40 @@
++import React from 'react'
++import { Check, Minus } from 'lucide-react'
++
++export interface CheckboxProps {
++  checked: boolean
++  indeterminate?: boolean
++  onChange: (checked: boolean, event: React.MouseEvent | React.KeyboardEvent) => void
++  disabled?: boolean
++  label?: string
++  className?: string
++}
++
++export function Checkbox({ checked, indeterminate, onChange, disabled, label, className }: CheckboxProps) {
++  const state = indeterminate ? 'indeterminate' : checked ? 'checked' : 'unchecked'
++  return (
++    <button
++      type="button"
++      role="checkbox"
++      aria-checked={indeterminate ? 'mixed' : checked}
++      aria-label={label}
++      disabled={disabled}
++      data-state={state}
++      className={className ? `lui-checkbox ${className}` : 'lui-checkbox'}
++      onClick={(event) => {
++        event.stopPropagation()
++        onChange(indeterminate ? true : !checked, event)
++      }}
++      onKeyDown={(event) => {
++        if (event.key === ' ' || event.key === 'Enter') {
++          event.preventDefault()
++          event.stopPropagation()
++          onChange(indeterminate ? true : !checked, event)
++        }
++      }}
++    >
++      {state === 'checked' && <Check size={10} strokeWidth={3} />}
++      {state === 'indeterminate' && <Minus size={10} strokeWidth={3} />}
++    </button>
++  )
++}
+diff --git a/web/src/tracker/ui/Dialog.tsx b/web/src/tracker/ui/Dialog.tsx
+new file mode 100644
+index 0000000..391c43a
+--- /dev/null
++++ b/web/src/tracker/ui/Dialog.tsx
+@@ -0,0 +1,85 @@
++import React, { useEffect, useRef } from 'react'
++import { X } from 'lucide-react'
++import { IconButton } from './Button'
++import { Portal, useDismissableLayer } from './layer'
++
++export interface DialogProps {
++  open: boolean
++  onOpenChange: (open: boolean) => void
++  title?: React.ReactNode
++  width?: number | string
++  footer?: React.ReactNode
++  hideClose?: boolean
++  closeOnOutside?: boolean
++  className?: string
++  children: React.ReactNode
++}
++
++export function Dialog(props: DialogProps) {
++  if (!props.open) return null
++  return <DialogSurface {...props} />
++}
++
++const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"]), [contenteditable="true"]'
++
++function DialogSurface({ onOpenChange, title, width = 560, footer, hideClose, closeOnOutside = true, className, children }: DialogProps) {
++  const ref = useRef<HTMLDivElement | null>(null)
++
++  useDismissableLayer({ open: true, element: () => ref.current, onDismiss: () => onOpenChange(false), closeOnOutside })
++
++  useEffect(() => {
++    const previous = document.activeElement as HTMLElement | null
++    const el = ref.current
++    if (el && !el.contains(document.activeElement)) {
++      const auto = el.querySelector<HTMLElement>('[data-autofocus], [autofocus]')
++      ;(auto ?? el).focus({ preventScroll: true })
++    }
++    return () => {
++      if (previous && previous.isConnected) previous.focus({ preventScroll: true })
++    }
++  }, [])
++
++  const onKeyDown = (event: React.KeyboardEvent) => {
++    if (event.key !== 'Tab' || !ref.current) return
++    const nodes = Array.from(ref.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((n) => n.offsetParent !== null)
++    if (nodes.length === 0) {
++      event.preventDefault()
++      return
++    }
++    const first = nodes[0]
++    const last = nodes[nodes.length - 1]
++    if (event.shiftKey && document.activeElement === first) {
++      event.preventDefault()
++      last.focus()
++    } else if (!event.shiftKey && document.activeElement === last) {
++      event.preventDefault()
++      first.focus()
++    }
++  }
++
++  return (
++    <Portal>
++      <div className="lui-overlay">
++        <div
++          ref={ref}
++          role="dialog"
++          aria-modal="true"
++          tabIndex={-1}
++          className={className ? `lui-dialog ${className}` : 'lui-dialog'}
++          style={{ maxWidth: width }}
++          onKeyDown={onKeyDown}
++          onClick={(e) => e.stopPropagation()}
++        >
++          {(title !== undefined || !hideClose) && (
++            <div className="lui-dialog-header">
++              {title !== undefined ? <h2 className="lui-dialog-title">{title}</h2> : <span />}
++              {!hideClose && <IconButton label="Close" size="sm" icon={<X size={14} />} onClick={() => onOpenChange(false)} />}
++            </div>
++          )}
++          <div className="lui-dialog-body">{children}</div>
++          {footer && <div className="lui-dialog-footer">{footer}</div>}
++        </div>
++      </div>
++    </Portal>
++  )
++}
+diff --git a/web/src/tracker/ui/Kbd.tsx b/web/src/tracker/ui/Kbd.tsx
+new file mode 100644
+index 0000000..6c2f6bf
+--- /dev/null
++++ b/web/src/tracker/ui/Kbd.tsx
+@@ -0,0 +1,50 @@
++import { isMac } from '../format'
++
++const GLYPHS: Record<string, string> = {
++  mod: '⌘',
++  cmd: '⌘',
++  meta: '⌘',
++  shift: '⇧',
++  alt: '⌥',
++  option: '⌥',
++  ctrl: '⌃',
++  enter: '↵',
++  return: '↵',
++  backspace: '⌫',
++  delete: '⌫',
++  esc: 'Esc',
++  escape: 'Esc',
++  tab: 'Tab',
++  space: 'Space',
++  up: '↑',
++  down: '↓',
++  left: '←',
++  right: '→',
++}
++
++export function keyGlyph(key: string): string {
++  const lower = key.toLowerCase()
++  if ((lower === 'mod' || lower === 'cmd' || lower === 'meta') && !isMac()) return 'Ctrl'
++  if (lower === 'alt' && !isMac()) return 'Alt'
++  const glyph = GLYPHS[lower]
++  if (glyph) return glyph
++  return key.length === 1 ? key.toUpperCase() : key
++}
++
++export function Kbd({ keys, className }: { keys: string[]; className?: string }) {
++  return (
++    <span className={className ? `lui-kbd ${className}` : 'lui-kbd'}>
++      {keys.map((key, index) =>
++        key === 'then' ? (
++          <span key={index} className="lui-kbd-then">
++            then
++          </span>
++        ) : (
++          <kbd key={index} className="lui-kbd-key">
++            {keyGlyph(key)}
++          </kbd>
++        ),
++      )}
++    </span>
++  )
++}
+diff --git a/web/src/tracker/ui/Menu.tsx b/web/src/tracker/ui/Menu.tsx
+new file mode 100644
+index 0000000..dde2ad7
+--- /dev/null
++++ b/web/src/tracker/ui/Menu.tsx
+@@ -0,0 +1,542 @@
++import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
++import { Check, ChevronRight, Search } from 'lucide-react'
++import { Checkbox } from './Checkbox'
++import { Kbd } from './Kbd'
++import { Portal, useDismissableLayer } from './layer'
++import type { Side } from './Tooltip'
++
++export type Align = 'start' | 'center' | 'end'
++export type Anchor = HTMLElement | DOMRect | null
++
++export interface PopoverProps {
++  open: boolean
++  onOpenChange: (open: boolean) => void
++  anchor: Anchor
++  align?: Align
++  side?: Side
++  width?: number | string
++  offset?: number
++  className?: string
++  children: React.ReactNode
++}
++
++const MARGIN = 8
++
++function anchorRect(anchor: Anchor): DOMRect | null {
++  if (!anchor) return null
++  if (anchor instanceof DOMRect) return anchor
++  if (!anchor.isConnected) return null
++  return anchor.getBoundingClientRect()
++}
++
++function place(rect: DOMRect, size: { width: number; height: number }, side: Side, align: Align, offset: number) {
++  const vw = window.innerWidth
++  const vh = window.innerHeight
++  let resolved = side
++  if (side === 'bottom' && rect.bottom + offset + size.height > vh - MARGIN && rect.top - offset - size.height > MARGIN) resolved = 'top'
++  else if (side === 'top' && rect.top - offset - size.height < MARGIN && rect.bottom + offset + size.height < vh - MARGIN) resolved = 'bottom'
++  else if (side === 'right' && rect.right + offset + size.width > vw - MARGIN && rect.left - offset - size.width > MARGIN) resolved = 'left'
++  else if (side === 'left' && rect.left - offset - size.width < MARGIN && rect.right + offset + size.width < vw - MARGIN) resolved = 'right'
++
++  let left: number
++  let top: number
++  if (resolved === 'bottom' || resolved === 'top') {
++    top = resolved === 'bottom' ? rect.bottom + offset : rect.top - offset - size.height
++    left = align === 'start' ? rect.left : align === 'end' ? rect.right - size.width : rect.left + rect.width / 2 - size.width / 2
++  } else {
++    left = resolved === 'right' ? rect.right + offset : rect.left - offset - size.width
++    top = align === 'start' ? rect.top : align === 'end' ? rect.bottom - size.height : rect.top + rect.height / 2 - size.height / 2
++  }
++  left = Math.min(Math.max(MARGIN, left), Math.max(MARGIN, vw - size.width - MARGIN))
++  top = Math.min(Math.max(MARGIN, top), Math.max(MARGIN, vh - size.height - MARGIN))
++  return { left, top, side: resolved }
++}
++
++export function Popover({ open, onOpenChange, anchor, align = 'start', side = 'bottom', width, offset = 4, className, children }: PopoverProps) {
++  if (!open) return null
++  return (
++    <PopoverSurface onOpenChange={onOpenChange} anchor={anchor} align={align} side={side} width={width} offset={offset} className={className}>
++      {children}
++    </PopoverSurface>
++  )
++}
++
++function PopoverSurface({
++  onOpenChange,
++  anchor,
++  align,
++  side,
++  width,
++  offset,
++  className,
++  children,
++}: Omit<PopoverProps, 'open'> & { align: Align; side: Side; offset: number }) {
++  const ref = useRef<HTMLDivElement | null>(null)
++  const [pos, setPos] = useState<{ left: number; top: number; side: Side } | null>(null)
++  const close = useCallback(() => onOpenChange(false), [onOpenChange])
++
++  useDismissableLayer({
++    open: true,
++    element: () => ref.current,
++    onDismiss: close,
++    ignore: () => [anchor instanceof HTMLElement ? anchor : null],
++  })
++
++  const reposition = useCallback(() => {
++    const rect = anchorRect(anchor)
++    const el = ref.current
++    if (!el) return
++    if (!rect) {
++      setPos({ left: (window.innerWidth - el.offsetWidth) / 2, top: Math.max(MARGIN, window.innerHeight * 0.2), side })
++      return
++    }
++    setPos(place(rect, { width: el.offsetWidth, height: el.offsetHeight }, side, align, offset))
++  }, [anchor, side, align, offset])
++
++  useLayoutEffect(() => {
++    reposition()
++  }, [reposition])
++
++  useEffect(() => {
++    const el = ref.current
++    if (!el) return
++    const observer = new ResizeObserver(() => reposition())
++    observer.observe(el)
++    window.addEventListener('resize', reposition)
++    window.addEventListener('scroll', reposition, true)
++    return () => {
++      observer.disconnect()
++      window.removeEventListener('resize', reposition)
++      window.removeEventListener('scroll', reposition, true)
++    }
++  }, [reposition])
++
++  useEffect(() => {
++    const previous = document.activeElement as HTMLElement | null
++    const el = ref.current
++    if (el && !el.contains(document.activeElement)) {
++      const target = el.querySelector<HTMLElement>('[data-autofocus], input, textarea, [tabindex="-1"], button:not([disabled])')
++      ;(target ?? el).focus({ preventScroll: true })
++    }
++    return () => {
++      const active = document.activeElement
++      const lostFocus = !active || active === document.body || (el !== null && el.contains(active))
++      if (lostFocus && previous && previous.isConnected) previous.focus({ preventScroll: true })
++    }
++  }, [])
++
++  return (
++    <Portal>
++      <div
++        ref={ref}
++        tabIndex={-1}
++        className={className ? `lui-popover ${className}` : 'lui-popover'}
++        data-side={pos?.side ?? side}
++        style={{
++          width,
++          left: pos ? pos.left : -9999,
++          top: pos ? pos.top : -9999,
++          visibility: pos ? 'visible' : 'hidden',
++        }}
++        onClick={(e) => e.stopPropagation()}
++        onDoubleClick={(e) => e.stopPropagation()}
++        onContextMenu={(e) => e.stopPropagation()}
++        onKeyDown={(e) => {
++          if (e.key !== 'Escape') e.stopPropagation()
++        }}
++      >
++        {children}
++      </div>
++    </Portal>
++  )
++}
++
++export interface MenuItem {
++  id: string
++  label: string
++  icon?: React.ReactNode
++  kbd?: string | string[]
++  hint?: React.ReactNode
++  color?: string
++  group?: string
++  disabled?: boolean
++  danger?: boolean
++  keywords?: string
++  children?: MenuItem[]
++}
++
++export interface MenuListProps {
++  items: MenuItem[]
++  onSelect: (item: MenuItem) => void
++  searchable?: boolean
++  placeholder?: string
++  multi?: boolean
++  selectedIds?: string[]
++  emptyText?: string
++  numberShortcuts?: boolean
++  query?: string
++  onQueryChange?: (query: string) => void
++  footer?: React.ReactNode
++  header?: React.ReactNode
++  maxHeight?: number
++  onBack?: () => void
++}
++
++interface Row {
++  item: MenuItem
++  parentLabel?: string
++}
++
++function matchesQuery(item: MenuItem, q: string, parentLabel?: string): boolean {
++  const hay = `${item.label} ${item.keywords ?? ''} ${parentLabel ?? ''}`.toLowerCase()
++  return q
++    .split(/\s+/)
++    .filter(Boolean)
++    .every((part) => hay.includes(part))
++}
++
++function kbdKeys(kbd: string | string[] | undefined): string[] | null {
++  if (kbd === undefined) return null
++  return Array.isArray(kbd) ? kbd : [kbd]
++}
++
++export function MenuList({
++  items,
++  onSelect,
++  searchable,
++  placeholder = 'Search…',
++  multi,
++  selectedIds,
++  emptyText = 'No results',
++  numberShortcuts = true,
++  query: controlledQuery,
++  onQueryChange,
++  footer,
++  header,
++  maxHeight,
++  onBack,
++}: MenuListProps) {
++  const [innerQuery, setInnerQuery] = useState('')
++  const query = controlledQuery ?? innerQuery
++  const setQuery = useCallback(
++    (value: string) => {
++      if (onQueryChange) onQueryChange(value)
++      if (controlledQuery === undefined) setInnerQuery(value)
++    },
++    [onQueryChange, controlledQuery],
++  )
++  const [active, setActive] = useState(0)
++  const [submenu, setSubmenu] = useState<{ id: string; element: HTMLElement } | null>(null)
++  const rootRef = useRef<HTMLDivElement | null>(null)
++  const scrollRef = useRef<HTMLDivElement | null>(null)
++  const typeahead = useRef<{ text: string; timer?: number }>({ text: '' })
++  const selected = useMemo(() => new Set(selectedIds ?? []), [selectedIds])
++
++  const rows: Row[] = useMemo(() => {
++    const q = query.trim().toLowerCase()
++    if (!q) return items.map((item) => ({ item }))
++    const out: Row[] = []
++    for (const item of items) {
++      if (matchesQuery(item, q)) out.push({ item })
++      for (const child of item.children ?? []) {
++        if (matchesQuery(child, q, item.label)) out.push({ item: child, parentLabel: item.label })
++      }
++    }
++    return out
++  }, [items, query])
++
++  const selectable = useMemo(() => rows.map((row, index) => ({ row, index })).filter(({ row }) => !row.item.disabled), [rows])
++
++  const explicitDigits = useMemo(
++    () => rows.some(({ item }) => typeof item.kbd === 'string' && /^\d$/.test(item.kbd)),
++    [rows],
++  )
++
++  const digitFor = useCallback(
++    (row: Row, position: number): string | null => {
++      if (!numberShortcuts) return null
++      if (explicitDigits) return typeof row.item.kbd === 'string' && /^\d$/.test(row.item.kbd) ? row.item.kbd : null
++      if (query.trim()) return null
++      if (position < 9) return String(position + 1)
++      if (position === 9) return '0'
++      return null
++    },
++    [numberShortcuts, explicitDigits, query],
++  )
++
++  useEffect(() => {
++    setActive(0)
++  }, [query])
++
++  useEffect(() => {
++    if (active >= selectable.length) setActive(Math.max(0, selectable.length - 1))
++  }, [active, selectable.length])
++
++  useEffect(() => {
++    const row = selectable[active]
++    if (!row || !scrollRef.current) return
++    const el = scrollRef.current.querySelector<HTMLElement>(`[data-row-index="${row.index}"]`)
++    el?.scrollIntoView({ block: 'nearest' })
++  }, [active, selectable])
++
++  useEffect(() => {
++    if (searchable) return
++    rootRef.current?.focus({ preventScroll: true })
++  }, [searchable])
++
++  const rowElement = (index: number) =>
++    scrollRef.current?.querySelector<HTMLElement>(`[data-row-index="${index}"]`) ?? null
++
++  const choose = useCallback(
++    (row: Row, index: number) => {
++      if (row.item.disabled) return
++      if (row.item.children && row.item.children.length > 0) {
++        const el = rowElement(index)
++        if (el) setSubmenu({ id: row.item.id, element: el })
++        return
++      }
++      onSelect(row.item)
++    },
++    [onSelect],
++  )
++
++  const onKeyDown = (event: React.KeyboardEvent) => {
++    if (submenu) return
++    const count = selectable.length
++    switch (event.key) {
++      case 'ArrowDown':
++        event.preventDefault()
++        if (count) setActive((a) => (a + 1) % count)
++        return
++      case 'ArrowUp':
++        event.preventDefault()
++        if (count) setActive((a) => (a - 1 + count) % count)
++        return
++      case 'Home':
++        if (!searchable) {
++          event.preventDefault()
++          setActive(0)
++        }
++        return
++      case 'End':
++        if (!searchable) {
++          event.preventDefault()
++          setActive(Math.max(0, count - 1))
++        }
++        return
++      case 'Enter': {
++        event.preventDefault()
++        const target = selectable[active]
++        if (target) choose(target.row, target.index)
++        return
++      }
++      case 'ArrowRight': {
++        const target = selectable[active]
++        if (target?.row.item.children?.length) {
++          event.preventDefault()
++          choose(target.row, target.index)
++        }
++        return
++      }
++      case 'ArrowLeft':
++        if (onBack && (!searchable || query === '')) {
++          event.preventDefault()
++          onBack()
++        }
++        return
++      case 'Tab':
++        event.preventDefault()
++        if (count) setActive((a) => (event.shiftKey ? (a - 1 + count) % count : (a + 1) % count))
++        return
++    }
++    if (event.metaKey || event.ctrlKey || event.altKey) return
++    if (/^\d$/.test(event.key) && (!searchable || query === '')) {
++      const position = selectable.findIndex(({ row }, i) => digitFor(row, i) === event.key)
++      if (position >= 0) {
++        event.preventDefault()
++        const target = selectable[position]
++        setActive(position)
++        choose(target.row, target.index)
++        return
++      }
++    }
++    if (!searchable && event.key.length === 1 && event.key !== ' ') {
++      const state = typeahead.current
++      window.clearTimeout(state.timer)
++      state.text += event.key.toLowerCase()
++      state.timer = window.setTimeout(() => {
++        state.text = ''
++      }, 700)
++      const position = selectable.findIndex(({ row }) => row.item.label.toLowerCase().startsWith(state.text))
++      if (position >= 0) {
++        event.preventDefault()
++        setActive(position)
++      }
++    }
++  }
++
++  let lastGroup: string | undefined
++  let selectablePosition = -1
++  const submenuItem = submenu ? rows.find((r) => r.item.id === submenu.id)?.item : undefined
++
++  return (
++    <div
++      ref={rootRef}
++      className="lui-menu"
++      role="menu"
++      tabIndex={-1}
++      onKeyDown={onKeyDown}
++      aria-multiselectable={multi || undefined}
++    >
++      {header}
++      {searchable && (
++        <div className="lui-menu-search">
++          <Search size={14} color="var(--text-4)" />
++          <input
++            data-autofocus
++            autoFocus
++            value={query}
++            placeholder={placeholder}
++            onChange={(e) => setQuery(e.target.value)}
++            aria-label={placeholder}
++            spellCheck={false}
++            autoComplete="off"
++          />
++        </div>
++      )}
++      <div className="lui-menu-scroll" ref={scrollRef} style={maxHeight ? { maxHeight } : undefined}>
++        {rows.length === 0 && <div className="lui-menu-empty">{emptyText}</div>}
++        {rows.map((row, index) => {
++          const { item } = row
++          const groupHeader = item.group && item.group !== lastGroup ? item.group : null
++          const separator = !groupHeader && lastGroup !== undefined && item.group === undefined && index > 0 && rows[index - 1].item.group !== undefined
++          lastGroup = item.group
++          if (!item.disabled) selectablePosition += 1
++          const position = item.disabled ? -1 : selectablePosition
++          const isActive = position >= 0 && position === active
++          const isSelected = selected.has(item.id)
++          const digit = position >= 0 ? digitFor(row, position) : null
++          const keys = kbdKeys(item.kbd)
++          const showKbd = keys && !(keys.length === 1 && /^\d$/.test(keys[0]))
++          return (
++            <React.Fragment key={`${row.parentLabel ?? ''}/${item.id}`}>
++              {groupHeader && <div className="lui-menu-group">{groupHeader}</div>}
++              {separator && <div className="lui-menu-sep" />}
++              <div
++                role={multi ? 'menuitemcheckbox' : 'menuitem'}
++                aria-checked={multi ? isSelected : undefined}
++                aria-disabled={item.disabled || undefined}
++                aria-haspopup={item.children?.length ? 'menu' : undefined}
++                data-row-index={index}
++                data-active={isActive}
++                className="lui-menu-item"
++                style={item.danger ? { color: 'var(--danger)' } : undefined}
++                onMouseMove={() => {
++                  if (position >= 0 && position !== active) setActive(position)
++                  if (item.children?.length && submenu?.id !== item.id) {
++                    const el = rowElement(index)
++                    if (el) setSubmenu({ id: item.id, element: el })
++                  } else if (!item.children?.length && submenu) {
++                    setSubmenu(null)
++                  }
++                }}
++                onMouseDown={(e) => e.preventDefault()}
++                onClick={() => choose(row, index)}
++              >
++                {multi && (
++                  <Checkbox checked={isSelected} onChange={() => choose(row, index)} label={item.label} />
++                )}
++                {item.icon !== undefined && <span className="lui-menu-item-icon">{item.icon}</span>}
++                <span className="lui-menu-item-label">
++                  {row.parentLabel && <span style={{ color: 'var(--text-3)' }}>{row.parentLabel} › </span>}
++                  {item.label}
++                </span>
++                {item.hint !== undefined && <span className="lui-menu-item-hint">{item.hint}</span>}
++                {!multi && isSelected && (
++                  <span className="lui-menu-item-check">
++                    <Check size={14} />
++                  </span>
++                )}
++                {showKbd && keys && <Kbd keys={keys} />}
++                {digit && <span className="lui-menu-item-kbd">{digit}</span>}
++                {item.children?.length ? <ChevronRight size={14} className="lui-menu-item-chevron" /> : null}
++              </div>
++            </React.Fragment>
++          )
++        })}
++      </div>
++      {footer}
++      {submenu && submenuItem?.children && (
++        <Popover
++          open
++          onOpenChange={(open) => {
++            if (!open) {
++              setSubmenu(null)
++              rootRef.current?.focus({ preventScroll: true })
++            }
++          }}
++          anchor={submenu.element}
++          side="right"
++          align="start"
++          offset={6}
++          width={220}
++        >
++          <MenuList
++            items={submenuItem.children}
++            onSelect={onSelect}
++            multi={multi}
++            selectedIds={selectedIds}
++            numberShortcuts={numberShortcuts}
++            searchable={submenuItem.children.length > 8}
++            onBack={() => {
++              setSubmenu(null)
++              rootRef.current?.focus({ preventScroll: true })
++            }}
++          />
++        </Popover>
++      )}
++    </div>
++  )
++}
++
++export interface ContextMenuProps {
++  items: MenuItem[] | (() => MenuItem[])
++  onSelect: (item: MenuItem) => void
++  children: React.ReactNode
++  disabled?: boolean
++  width?: number
++  onOpenChange?: (open: boolean) => void
++}
++
++export function ContextMenu({ items, onSelect, children, disabled, width = 240, onOpenChange }: ContextMenuProps) {
++  const [point, setPoint] = useState<DOMRect | null>(null)
++  const resolved = useMemo(() => (point ? (typeof items === 'function' ? items() : items) : []), [items, point])
++  const setOpen = (open: boolean) => {
++    if (!open) setPoint(null)
++    onOpenChange?.(open)
++  }
++  return (
++    <div
++      style={{ display: 'contents' }}
++      onContextMenu={(event) => {
++        if (disabled) return
++        event.preventDefault()
++        event.stopPropagation()
++        setPoint(new DOMRect(event.clientX, event.clientY, 0, 0))
++        onOpenChange?.(true)
++      }}
++    >
++      {children}
++      <Popover open={point !== null} onOpenChange={setOpen} anchor={point} side="bottom" align="start" offset={0} width={width}>
++        <MenuList
++          items={resolved}
++          numberShortcuts={false}
++          onSelect={(item) => {
++            setOpen(false)
++            onSelect(item)
++          }}
++        />
++      </Popover>
++    </div>
++  )
++}
+diff --git a/web/src/tracker/ui/PropertyChip.tsx b/web/src/tracker/ui/PropertyChip.tsx
+new file mode 100644
+index 0000000..65da71e
+--- /dev/null
++++ b/web/src/tracker/ui/PropertyChip.tsx
+@@ -0,0 +1,333 @@
++import React, { useRef, useState } from 'react'
++import { CalendarDays, CircleDashed, Tag, UserRound } from 'lucide-react'
++import { cycleLabel, cycleProgressRatio, dueState, isClosedType, shortDate, stateProgress } from '../format'
++import { useTracker } from '../store'
++import type { Issue } from '../types'
++import { PRIORITY_LABELS } from '../types'
++import { Avatar } from './Avatar'
++import { CycleIcon, EstimateIcon, LabelDot, PriorityIcon, ProjectIcon, StatusIcon } from './icons'
++import {
++  AssigneePicker,
++  CyclePicker,
++  DueDatePicker,
++  EstimatePicker,
++  LabelPicker,
++  ParentPicker,
++  PriorityPicker,
++  ProjectPicker,
++  StatusPicker,
++  estimateLabel,
++  type PickerProps,
++} from './pickers'
++import { Tooltip } from './Tooltip'
++
++export type PropertyKind = 'status' | 'priority' | 'assignee' | 'labels' | 'project' | 'cycle' | 'estimate' | 'due' | 'parent'
++
++export interface PropertyChipProps {
++  kind: PropertyKind
++  issue: Issue
++  variant?: 'compact' | 'full'
++  issueIds?: string[]
++  maxLabels?: number
++  className?: string
++}
++
++const PICKERS: Record<PropertyKind, React.ComponentType<PickerProps>> = {
++  status: StatusPicker,
++  priority: PriorityPicker,
++  assignee: AssigneePicker,
++  labels: LabelPicker,
++  project: ProjectPicker,
++  cycle: CyclePicker,
++  estimate: EstimatePicker,
++  due: DueDatePicker,
++  parent: ParentPicker,
++}
++
++const TOOLTIPS: Record<PropertyKind, { label: string; kbd: string[] }> = {
++  status: { label: 'Change status', kbd: ['S'] },
++  priority: { label: 'Change priority', kbd: ['P'] },
++  assignee: { label: 'Assign to', kbd: ['A'] },
++  labels: { label: 'Change labels', kbd: ['L'] },
++  project: { label: 'Add to project', kbd: ['shift', 'P'] },
++  cycle: { label: 'Move to cycle', kbd: ['shift', 'C'] },
++  estimate: { label: 'Set estimate', kbd: ['shift', 'E'] },
++  due: { label: 'Set due date', kbd: ['shift', 'D'] },
++  parent: { label: 'Set parent issue', kbd: ['mod', 'shift', 'P'] },
++}
++
++export function PropertyChip({ kind, issue, variant = 'compact', issueIds, maxLabels = 3, className }: PropertyChipProps) {
++  const t = useTracker()
++  const [open, setOpen] = useState(false)
++  const ref = useRef<HTMLButtonElement | null>(null)
++  const full = variant === 'full'
++
++  let content: React.ReactNode = null
++  let iconOnly = false
++  let empty = false
++  let tone: string | undefined
++  let tooltip: React.ReactNode = TOOLTIPS[kind].label
++
++  switch (kind) {
++    case 'status': {
++      const state = t.statesById.get(issue.state_id)
++      const states = t.teamStates(issue.team_id)
++      const icon = state ? (
++        <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, states)} />
++      ) : (
++        <CircleDashed size={14} color="var(--text-3)" />
++      )
++      iconOnly = !full
++      tooltip = state?.name ?? 'Status'
++      content = full ? (
++        <>
++          {icon}
++          <span className="lui-chip-text">{state?.name ?? 'Unknown'}</span>
++        </>
++      ) : (
++        icon
++      )
++      break
++    }
++    case 'priority': {
++      iconOnly = !full
++      tooltip = PRIORITY_LABELS[issue.priority]
++      empty = issue.priority === 0
++      content = full ? (
++        <>
++          <PriorityIcon priority={issue.priority} />
++          <span className="lui-chip-text">{empty ? 'Set priority' : PRIORITY_LABELS[issue.priority]}</span>
++        </>
++      ) : (
++        <PriorityIcon priority={issue.priority} />
++      )
++      break
++    }
++    case 'assignee': {
++      const user = issue.assignee_id ? t.usersById.get(issue.assignee_id) ?? null : null
++      iconOnly = !full
++      empty = !user
++      tooltip = user ? `Assigned to ${user.name}` : 'Unassigned'
++      content = full ? (
++        <>
++          {user ? <Avatar user={user} size={18} /> : <UserRound size={14} color="var(--text-3)" />}
++          <span className="lui-chip-text">{user ? user.name : 'Assign'}</span>
++        </>
++      ) : (
++        <Avatar user={user} size={18} />
++      )
++      break
++    }
++    case 'labels': {
++      const labels = issue.label_ids.map((id) => t.labelsById.get(id)).filter((l): l is NonNullable<typeof l> => Boolean(l))
++      empty = labels.length === 0
++      if (empty) {
++        if (!full) return null
++        content = (
++          <>
++            <Tag size={14} color="var(--text-3)" />
++            <span>Add label</span>
++          </>
++        )
++        break
++      }
++      tooltip = labels.map((l) => l.name).join(', ')
++      if (!full && labels.length > maxLabels) {
++        return (
++          <ChipButton
++            refEl={ref}
++            className={className}
++            tooltip={tooltip}
++            onOpen={() => setOpen(true)}
++            picker={<LabelPicker issueIds={issueIds ?? [issue.id]} anchor={ref.current} open={open} onOpenChange={setOpen} />}
++          >
++            <span className="lui-chip-group">
++              {labels.slice(0, 3).map((l) => (
++                <LabelDot key={l.id} color={l.color} />
++              ))}
++            </span>
++            <span className="lui-chip-text">{labels.length} labels</span>
++          </ChipButton>
++        )
++      }
++      if (full) {
++        content = (
++          <span className="lui-chip-group" style={{ flexWrap: 'wrap', gap: 6 }}>
++            {labels.map((l) => (
++              <span key={l.id} className="lui-chip">
++                <LabelDot color={l.color} />
++                <span className="lui-chip-text">{l.name}</span>
++              </span>
++            ))}
++          </span>
++        )
++        break
++      }
++      return (
++        <span className="lui-chip-group">
++          {labels.map((l, index) => (
++            <ChipButton
++              key={l.id}
++              className={className}
++              tooltip={l.description || l.name}
++              onOpen={(el) => {
++                ref.current = el
++                setOpen(true)
++              }}
++              picker={index === 0 ? <LabelPicker issueIds={issueIds ?? [issue.id]} anchor={ref.current} open={open} onOpenChange={setOpen} /> : null}
++            >
++              <LabelDot color={l.color} />
++              <span className="lui-chip-text">{l.name}</span>
++            </ChipButton>
++          ))}
++        </span>
++      )
++    }
++    case 'project': {
++      const project = issue.project_id ? t.projectsById.get(issue.project_id) : undefined
++      empty = !project
++      if (empty && !full) return null
++      tooltip = project?.name ?? TOOLTIPS.project.label
++      content = project ? (
++        <>
++          <ProjectIcon icon={project.icon} color={project.color} />
++          <span className="lui-chip-text">{project.name}</span>
++        </>
++      ) : (
++        <>
++          <ProjectIcon icon="box" color="var(--text-3)" />
++          <span>Add to project</span>
++        </>
++      )
++      break
++    }
++    case 'cycle': {
++      const cycle = issue.cycle_id ? t.cyclesById.get(issue.cycle_id) : undefined
++      empty = !cycle
++      if (empty && !full) return null
++      content = cycle ? (
++        <>
++          <CycleIcon progress={cycleProgressRatio(cycle)} />
++          <span className="lui-chip-text">{cycleLabel(cycle)}</span>
++        </>
++      ) : (
++        <>
++          <CycleIcon progress={0} />
++          <span>Add to cycle</span>
++        </>
++      )
++      break
++    }
++    case 'estimate': {
++      empty = issue.estimate === null
++      if (empty && !full) return null
++      tooltip = issue.estimate === null ? TOOLTIPS.estimate.label : `Estimate: ${estimateLabel(issue.estimate)}`
++      content = (
++        <>
++          <EstimateIcon />
++          <span className="lui-chip-text">{issue.estimate === null ? 'Set estimate' : full ? estimateLabel(issue.estimate) : issue.estimate}</span>
++        </>
++      )
++      break
++    }
++    case 'due': {
++      empty = !issue.due_date
++      if (empty && !full) return null
++      const state = t.statesById.get(issue.state_id)
++      const due = dueState(issue.due_date, state ? isClosedType(state.type) : false)
++      tone = due === 'overdue' ? 'lui-chip--overdue' : due === 'soon' ? 'lui-chip--soon' : undefined
++      tooltip = issue.due_date ? `Due ${shortDate(issue.due_date)}${due === 'overdue' ? ' (overdue)' : ''}` : TOOLTIPS.due.label
++      content = (
++        <>
++          <CalendarDays size={14} />
++          <span className="lui-chip-text">{issue.due_date ? shortDate(issue.due_date) : 'Set due date'}</span>
++        </>
++      )
++      break
++    }
++    case 'parent': {
++      const parent = issue.parent_id ? t.issuesById.get(issue.parent_id) : undefined
++      empty = !parent
++      if (empty && !full) return null
++      const state = parent ? t.statesById.get(parent.state_id) : undefined
++      tooltip = parent ? `${parent.identifier} ${parent.title}` : TOOLTIPS.parent.label
++      content = parent ? (
++        <>
++          {state && <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, t.teamStates(parent.team_id))} />}
++          <span className="t-3">{parent.identifier}</span>
++          <span className="lui-chip-text">{parent.title}</span>
++        </>
++      ) : (
++        <span>Set parent issue</span>
++      )
++      break
++    }
++  }
++
++  const Picker = PICKERS[kind]
++  const picker = <Picker issueIds={issueIds ?? [issue.id]} anchor={ref.current} open={open} onOpenChange={setOpen} />
++  const baseClass = full ? `lui-prop${empty ? ' lui-prop--empty' : ''}` : iconOnly ? 'lui-chip-icon' : `lui-chip${tone ? ` ${tone}` : ''}`
++
++  return (
++    <ChipButton
++      refEl={ref}
++      className={[baseClass, full && tone ? tone : '', className ?? ''].filter(Boolean).join(' ')}
++      raw
++      tooltip={full ? null : tooltip}
++      kbd={TOOLTIPS[kind].kbd}
++      onOpen={() => setOpen(true)}
++      picker={picker}
++    >
++      {content}
++    </ChipButton>
++  )
++}
++
++interface ChipButtonProps {
++  refEl?: React.MutableRefObject<HTMLButtonElement | null>
++  className?: string
++  raw?: boolean
++  tooltip: React.ReactNode
++  kbd?: string[]
++  onOpen: (el: HTMLButtonElement) => void
++  picker: React.ReactNode
++  children: React.ReactNode
++}
++
++function ChipButton({ refEl, className, raw, tooltip, kbd, onOpen, picker, children }: ChipButtonProps) {
++  const button = (
++    <button
++      type="button"
++      ref={
++        refEl
++          ? (node) => {
++              refEl.current = node
++            }
++          : undefined
++      }
++      className={raw ? className : ['lui-chip', className ?? ''].filter(Boolean).join(' ')}
++      onClick={(event) => {
++        event.stopPropagation()
++        event.preventDefault()
++        onOpen(event.currentTarget)
++      }}
++      onDoubleClick={(event) => event.stopPropagation()}
++      onPointerDown={(event) => event.stopPropagation()}
++      onMouseDown={(event) => event.stopPropagation()}
++    >
++      {children}
++    </button>
++  )
++  return (
++    <>
++      {tooltip ? (
++        <Tooltip content={tooltip} kbd={kbd}>
++          {button}
++        </Tooltip>
++      ) : (
++        button
++      )}
++      {picker}
++    </>
++  )
++}
+diff --git a/web/src/tracker/ui/Toast.tsx b/web/src/tracker/ui/Toast.tsx
+new file mode 100644
+index 0000000..76e687d
+--- /dev/null
++++ b/web/src/tracker/ui/Toast.tsx
+@@ -0,0 +1,99 @@
++import { useEffect, useState, useSyncExternalStore } from 'react'
++import { CircleAlert, CircleCheck, X } from 'lucide-react'
++import { Button, IconButton } from './Button'
++import { Portal } from './layer'
++
++export interface ToastOptions {
++  action?: { label: string; onClick: () => void }
++  kind?: 'info' | 'success' | 'error'
++  duration?: number
++}
++
++interface ToastEntry extends ToastOptions {
++  id: number
++  message: string
++}
++
++let toasts: ToastEntry[] = []
++let nextId = 0
++const listeners = new Set<() => void>()
++
++function emit() {
++  for (const listener of listeners) listener()
++}
++
++export function dismissToast(id: number) {
++  toasts = toasts.filter((t) => t.id !== id)
++  emit()
++}
++
++export function toast(message: string, opts: ToastOptions = {}): number {
++  const id = ++nextId
++  toasts = [...toasts.slice(-4), { id, message, ...opts }]
++  emit()
++  return id
++}
++
++toast.error = (message: string, opts: Omit<ToastOptions, 'kind'> = {}) => toast(message, { ...opts, kind: 'error' })
++toast.success = (message: string, opts: Omit<ToastOptions, 'kind'> = {}) => toast(message, { ...opts, kind: 'success' })
++
++function subscribe(listener: () => void) {
++  listeners.add(listener)
++  return () => {
++    listeners.delete(listener)
++  }
++}
++
++function snapshot() {
++  return toasts
++}
++
++function ToastItem({ entry }: { entry: ToastEntry }) {
++  const [paused, setPaused] = useState(false)
++  const duration = entry.duration ?? (entry.action ? 6000 : 4000)
++  useEffect(() => {
++    if (paused || duration <= 0) return
++    const timer = window.setTimeout(() => dismissToast(entry.id), duration)
++    return () => window.clearTimeout(timer)
++  }, [paused, duration, entry.id])
++
++  return (
++    <div
++      className={`lui-toast${entry.kind ? ` lui-toast--${entry.kind}` : ''}`}
++      role={entry.kind === 'error' ? 'alert' : 'status'}
++      onMouseEnter={() => setPaused(true)}
++      onMouseLeave={() => setPaused(false)}
++    >
++      {entry.kind === 'error' && <CircleAlert size={16} className="lui-toast-icon" />}
++      {entry.kind === 'success' && <CircleCheck size={16} className="lui-toast-icon" />}
++      <span className="lui-toast-msg">{entry.message}</span>
++      {entry.action && (
++        <Button
++          size="sm"
++          variant="secondary"
++          onClick={() => {
++            entry.action?.onClick()
++            dismissToast(entry.id)
++          }}
++        >
++          {entry.action.label}
++        </Button>
++      )}
++      <IconButton label="Dismiss" size="sm" icon={<X size={14} />} onClick={() => dismissToast(entry.id)} />
++    </div>
++  )
++}
++
++export function Toaster() {
++  const list = useSyncExternalStore(subscribe, snapshot, snapshot)
++  if (list.length === 0) return null
++  return (
++    <Portal>
++      <div className="lui-toaster" aria-live="polite">
++        {list.map((entry) => (
++          <ToastItem key={entry.id} entry={entry} />
++        ))}
++      </div>
++    </Portal>
++  )
++}
+diff --git a/web/src/tracker/ui/Tooltip.tsx b/web/src/tracker/ui/Tooltip.tsx
+new file mode 100644
+index 0000000..6d06a06
+--- /dev/null
++++ b/web/src/tracker/ui/Tooltip.tsx
+@@ -0,0 +1,125 @@
++import React, { cloneElement, isValidElement, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
++import { Kbd } from './Kbd'
++import { Portal } from './layer'
++
++export type Side = 'top' | 'bottom' | 'left' | 'right'
++
++interface TooltipProps {
++  content: React.ReactNode
++  kbd?: string[]
++  side?: Side
++  delay?: number
++  disabled?: boolean
++  children: React.ReactNode
++}
++
++const GAP = 6
++
++export function Tooltip({ content, kbd, side = 'bottom', delay = 500, disabled, children }: TooltipProps) {
++  const [open, setOpen] = useState(false)
++  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
++  const triggerRef = useRef<HTMLElement | null>(null)
++  const tipRef = useRef<HTMLDivElement | null>(null)
++  const timer = useRef<number | undefined>(undefined)
++
++  const show = useCallback(() => {
++    if (disabled) return
++    window.clearTimeout(timer.current)
++    timer.current = window.setTimeout(() => setOpen(true), delay)
++  }, [delay, disabled])
++  const hide = useCallback(() => {
++    window.clearTimeout(timer.current)
++    setOpen(false)
++    setPos(null)
++  }, [])
++
++  useEffect(() => () => window.clearTimeout(timer.current), [])
++  useEffect(() => {
++    if (disabled) hide()
++  }, [disabled, hide])
++
++  useLayoutEffect(() => {
++    if (!open || !triggerRef.current || !tipRef.current) return
++    const r = triggerRef.current.getBoundingClientRect()
++    const t = tipRef.current.getBoundingClientRect()
++    let left = r.left + r.width / 2 - t.width / 2
++    let top = r.bottom + GAP
++    if (side === 'top') top = r.top - t.height - GAP
++    if (side === 'left') {
++      left = r.left - t.width - GAP
++      top = r.top + r.height / 2 - t.height / 2
++    }
++    if (side === 'right') {
++      left = r.right + GAP
++      top = r.top + r.height / 2 - t.height / 2
++    }
++    if (side === 'bottom' && top + t.height > window.innerHeight - 4) top = r.top - t.height - GAP
++    if (side === 'top' && top < 4) top = r.bottom + GAP
++    left = Math.min(Math.max(4, left), window.innerWidth - t.width - 4)
++    top = Math.min(Math.max(4, top), window.innerHeight - t.height - 4)
++    setPos({ left, top })
++  }, [open, side])
++
++  const hasContent = content !== null && content !== undefined && content !== ''
++  const tip =
++    open && hasContent ? (
++      <Portal>
++        <div
++          ref={tipRef}
++          role="tooltip"
++          className="lui-tooltip"
++          style={pos ? { left: pos.left, top: pos.top } : { left: -9999, top: -9999 }}
++        >
++          <span>{content}</span>
++          {kbd && kbd.length > 0 && <Kbd keys={kbd} />}
++        </div>
++      </Portal>
++    ) : null
++
++  const handlers = {
++    onMouseEnter: show,
++    onMouseLeave: hide,
++    onFocus: show,
++    onBlur: hide,
++    onPointerDown: hide,
++  }
++
++  if (isValidElement(children) && typeof children.type === 'string') {
++    const child = children as React.ReactElement<Record<string, unknown>>
++    const props = child.props as Record<string, unknown>
++    const originalRef = (child as unknown as { ref?: React.Ref<HTMLElement> }).ref
++    const chain = (name: keyof typeof handlers) => (event: unknown) => {
++      const original = props[name] as ((e: unknown) => void) | undefined
++      original?.(event)
++      handlers[name]()
++    }
++    return (
++      <>
++        {cloneElement(child, {
++          ref: (node: HTMLElement | null) => {
++            triggerRef.current = node
++            if (typeof originalRef === 'function') originalRef(node)
++            else if (originalRef && typeof originalRef === 'object') {
++              ;(originalRef as React.MutableRefObject<HTMLElement | null>).current = node
++            }
++          },
++          onMouseEnter: chain('onMouseEnter'),
++          onMouseLeave: chain('onMouseLeave'),
++          onFocus: chain('onFocus'),
++          onBlur: chain('onBlur'),
++          onPointerDown: chain('onPointerDown'),
++        })}
++        {tip}
++      </>
++    )
++  }
++
++  return (
++    <span className="lui-tooltip-trigger" ref={(node) => {
++        triggerRef.current = node
++      }} {...handlers}>
++      {children}
++      {tip}
++    </span>
++  )
++}
+diff --git a/web/src/tracker/ui/icons.tsx b/web/src/tracker/ui/icons.tsx
+new file mode 100644
+index 0000000..2931bb1
+--- /dev/null
++++ b/web/src/tracker/ui/icons.tsx
+@@ -0,0 +1,281 @@
++import React from 'react'
++import {
++  BookOpen,
++  Bot,
++  Box,
++  Briefcase,
++  Code,
++  Compass,
++  Cpu,
++  Database,
++  Flag,
++  Globe,
++  Heart,
++  Hexagon,
++  Layers,
++  Lightbulb,
++  Map as MapIcon,
++  Package,
++  Puzzle,
++  Rocket,
++  Shield,
++  Sparkles,
++  Star,
++  Target,
++  Users,
++  Zap,
++  type LucideIcon,
++} from 'lucide-react'
++import type { Priority, StateType } from '../types'
++
++interface SvgBaseProps {
++  size?: number
++  className?: string
++  style?: React.CSSProperties
++  title?: string
++}
++
++function Svg({ size = 14, className, style, title, children, viewBox = '0 0 14 14' }: SvgBaseProps & { children: React.ReactNode; viewBox?: string }) {
++  return (
++    <svg
++      width={size}
++      height={size}
++      viewBox={viewBox}
++      fill="none"
++      className={className}
++      style={{ flex: 'none', display: 'block', ...style }}
++      role={title ? 'img' : undefined}
++      aria-label={title}
++      aria-hidden={title ? undefined : true}
++    >
++      {title && <title>{title}</title>}
++      {children}
++    </svg>
++  )
++}
++
++export interface StatusIconProps extends SvgBaseProps {
++  type: StateType
++  color: string
++  progress?: number
++}
++
++function piePath(progress: number): string {
++  const p = Math.min(0.999, Math.max(0.001, progress))
++  const r = 3
++  const cx = 7
++  const cy = 7
++  const angle = p * Math.PI * 2 - Math.PI / 2
++  const x = cx + r * Math.cos(angle)
++  const y = cy + r * Math.sin(angle)
++  const large = p > 0.5 ? 1 : 0
++  return `M ${cx} ${cy} L ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${x.toFixed(3)} ${y.toFixed(3)} Z`
++}
++
++export function StatusIcon({ type, color, progress, size = 14, className, style, title }: StatusIconProps) {
++  switch (type) {
++    case 'backlog':
++      return (
++        <Svg size={size} className={className} style={style} title={title}>
++          <circle cx="7" cy="7" r="6" stroke={color} strokeWidth="1.5" strokeDasharray="1.4 1.74" strokeDashoffset="0.65" />
++        </Svg>
++      )
++    case 'unstarted':
++      return (
++        <Svg size={size} className={className} style={style} title={title}>
++          <circle cx="7" cy="7" r="6" stroke={color} strokeWidth="1.5" />
++        </Svg>
++      )
++    case 'started': {
++      const value = progress ?? 0.5
++      return (
++        <Svg size={size} className={className} style={style} title={title}>
++          <circle cx="7" cy="7" r="6" stroke={color} strokeWidth="1.5" />
++          {value >= 0.999 ? <circle cx="7" cy="7" r="3" fill={color} /> : <path d={piePath(value)} fill={color} />}
++        </Svg>
++      )
++    }
++    case 'completed':
++      return (
++        <Svg size={size} className={className} style={style} title={title}>
++          <circle cx="7" cy="7" r="6.25" fill={color} stroke={color} strokeWidth="1.5" />
++          <path d="M4.4 7.2 6.2 9 9.7 5.3" stroke="var(--panel, #fff)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
++        </Svg>
++      )
++    case 'canceled':
++      return (
++        <Svg size={size} className={className} style={style} title={title}>
++          <circle cx="7" cy="7" r="6.25" fill={color} stroke={color} strokeWidth="1.5" />
++          <path d="M5 5 9 9M9 5 5 9" stroke="var(--panel, #fff)" strokeWidth="1.5" strokeLinecap="round" />
++        </Svg>
++      )
++    case 'triage':
++      return (
++        <Svg size={size} className={className} style={style} title={title}>
++          <circle cx="7" cy="7" r="6.25" fill={color} stroke={color} strokeWidth="1.5" />
++          <path
++            d="M3.6 5.6h5.2M7.3 4l1.6 1.6-1.6 1.6M10.4 8.4H5.2M6.7 6.8 5.1 8.4 6.7 10"
++            stroke="var(--panel, #fff)"
++            strokeWidth="1.2"
++            strokeLinecap="round"
++            strokeLinejoin="round"
++          />
++        </Svg>
++      )
++  }
++}
++
++export interface PriorityIconProps extends SvgBaseProps {
++  priority: Priority
++}
++
++export function PriorityIcon({ priority, size = 14, className, style, title }: PriorityIconProps) {
++  if (priority === 0) {
++    return (
++      <Svg size={size} className={className} style={style} title={title ?? 'No priority'} viewBox="0 0 16 16">
++        <rect x="1.5" y="7.25" width="3" height="1.5" rx="0.5" fill="var(--text-3)" />
++        <rect x="6.5" y="7.25" width="3" height="1.5" rx="0.5" fill="var(--text-3)" />
++        <rect x="11.5" y="7.25" width="3" height="1.5" rx="0.5" fill="var(--text-3)" />
++      </Svg>
++    )
++  }
++  if (priority === 1) {
++    return (
++      <Svg size={size} className={className} style={style} title={title ?? 'Urgent'} viewBox="0 0 16 16">
++        <rect x="1" y="1" width="14" height="14" rx="3" fill="var(--urgent)" />
++        <path d="M8 4v5" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
++        <circle cx="8" cy="11.6" r="1.05" fill="#fff" />
++      </Svg>
++    )
++  }
++  const filled = priority === 2 ? 3 : priority === 3 ? 2 : 1
++  const bars = [
++    { x: 1.5, y: 8, h: 6 },
++    { x: 6.5, y: 5, h: 9 },
++    { x: 11.5, y: 2, h: 12 },
++  ]
++  const label = priority === 2 ? 'High' : priority === 3 ? 'Medium' : 'Low'
++  return (
++    <Svg size={size} className={className} style={style} title={title ?? label} viewBox="0 0 16 16">
++      {bars.map((bar, i) => (
++        <rect
++          key={i}
++          x={bar.x}
++          y={bar.y}
++          width="3"
++          height={bar.h}
++          rx="1"
++          fill="var(--text-2)"
++          fillOpacity={i < filled ? 1 : 0.28}
++        />
++      ))}
++    </Svg>
++  )
++}
++
++export function LabelDot({ color, size = 8, className }: { color: string; size?: number; className?: string }) {
++  return (
++    <span
++      aria-hidden
++      className={className}
++      style={{ display: 'inline-block', flex: 'none', width: size, height: size, borderRadius: 9999, background: color }}
++    />
++  )
++}
++
++const PROJECT_ICONS: Record<string, LucideIcon> = {
++  box: Box,
++  rocket: Rocket,
++  target: Target,
++  flag: Flag,
++  star: Star,
++  zap: Zap,
++  layers: Layers,
++  code: Code,
++  globe: Globe,
++  book: BookOpen,
++  heart: Heart,
++  compass: Compass,
++  briefcase: Briefcase,
++  map: MapIcon,
++  users: Users,
++  hexagon: Hexagon,
++  cpu: Cpu,
++  database: Database,
++  shield: Shield,
++  sparkles: Sparkles,
++  puzzle: Puzzle,
++  package: Package,
++  lightbulb: Lightbulb,
++  bot: Bot,
++}
++
++export const PROJECT_ICON_NAMES = Object.keys(PROJECT_ICONS)
++
++export function iconComponent(name: string | null | undefined): LucideIcon {
++  return (name && PROJECT_ICONS[name]) || Box
++}
++
++export function ProjectIcon({ icon, color, size = 14, className }: { icon: string; color: string; size?: number; className?: string }) {
++  const Icon = iconComponent(icon)
++  return <Icon size={size} color={color} strokeWidth={2} className={className} style={{ flex: 'none' }} aria-hidden />
++}
++
++export function CycleIcon({ progress, size = 14, className, color = 'var(--text-3)' }: { progress: number; size?: number; className?: string; color?: string }) {
++  const p = Math.min(1, Math.max(0, progress))
++  const r = 5.25
++  const circumference = 2 * Math.PI * r
++  return (
++    <Svg size={size} className={className}>
++      <circle cx="7" cy="7" r="6" stroke={color} strokeWidth="1.5" strokeDasharray="2 1.6" opacity={0.6} />
++      {p > 0 && (
++        <circle
++          cx="7"
++          cy="7"
++          r={r / 2}
++          stroke={color}
++          strokeWidth={r}
++          strokeDasharray={`${(p * Math.PI * r).toFixed(3)} ${circumference.toFixed(3)}`}
++          transform="rotate(-90 7 7)"
++          fill="none"
++        />
++      )}
++    </Svg>
++  )
++}
++
++export function EstimateIcon({ size = 14, className, color = 'var(--text-3)' }: { size?: number; className?: string; color?: string }) {
++  return (
++    <Svg size={size} className={className}>
++      <path d="M7 1.8 12.2 11a.6.6 0 0 1-.52.9H2.32a.6.6 0 0 1-.52-.9L7 1.8Z" stroke={color} strokeWidth="1.4" strokeLinejoin="round" />
++    </Svg>
++  )
++}
++
++export function AgentGlyph({ size = 14, className, color = 'currentColor' }: { size?: number; className?: string; color?: string }) {
++  return <Bot size={size} color={color} strokeWidth={2} className={className} style={{ flex: 'none' }} aria-hidden />
++}
++
++export function TeamIcon({ color, name, size = 16 }: { color: string; name: string; size?: number }) {
++  return (
++    <span
++      aria-hidden
++      style={{
++        display: 'inline-flex',
++        alignItems: 'center',
++        justifyContent: 'center',
++        flex: 'none',
++        width: size,
++        height: size,
++        borderRadius: 4,
++        background: color,
++        color: '#fff',
++        fontSize: Math.round(size * 0.56),
++        fontWeight: 590,
++        lineHeight: 1,
++      }}
++    >
++      {name.trim().charAt(0).toUpperCase()}
++    </span>
++  )
++}
+diff --git a/web/src/tracker/ui/index.ts b/web/src/tracker/ui/index.ts
+new file mode 100644
+index 0000000..9d738d2
+--- /dev/null
++++ b/web/src/tracker/ui/index.ts
+@@ -0,0 +1,48 @@
++import './ui.css'
++
++export { Button, IconButton } from './Button'
++export type { ButtonProps, ButtonSize, ButtonVariant, IconButtonProps } from './Button'
++export { Tooltip } from './Tooltip'
++export type { Side } from './Tooltip'
++export { Kbd, keyGlyph } from './Kbd'
++export { Popover, MenuList, ContextMenu } from './Menu'
++export type { Align, Anchor, ContextMenuProps, MenuItem, MenuListProps, PopoverProps } from './Menu'
++export { Dialog } from './Dialog'
++export type { DialogProps } from './Dialog'
++export { toast, dismissToast, Toaster } from './Toast'
++export type { ToastOptions } from './Toast'
++export { Avatar } from './Avatar'
++export type { AvatarProps, AvatarSize } from './Avatar'
++export { Checkbox } from './Checkbox'
++export type { CheckboxProps } from './Checkbox'
++export {
++  AgentGlyph,
++  CycleIcon,
++  EstimateIcon,
++  LabelDot,
++  PriorityIcon,
++  PROJECT_ICON_NAMES,
++  ProjectIcon,
++  StatusIcon,
++  TeamIcon,
++  iconComponent,
++} from './icons'
++export type { PriorityIconProps, StatusIconProps } from './icons'
++export {
++  AssigneePicker,
++  CyclePicker,
++  DueDatePicker,
++  EstimatePicker,
++  LabelPicker,
++  ParentPicker,
++  PriorityPicker,
++  PRIORITY_ORDER,
++  ProjectPicker,
++  StatusPicker,
++  estimateLabel,
++  priorityMenuItems,
++} from './pickers'
++export type { PickerProps } from './pickers'
++export { PropertyChip } from './PropertyChip'
++export type { PropertyChipProps, PropertyKind } from './PropertyChip'
++export { Portal, useDismissableLayer } from './layer'
+diff --git a/web/src/tracker/ui/layer.tsx b/web/src/tracker/ui/layer.tsx
+new file mode 100644
+index 0000000..36945ea
+--- /dev/null
++++ b/web/src/tracker/ui/layer.tsx
+@@ -0,0 +1,89 @@
++import React, { useEffect, useRef } from 'react'
++import { createPortal } from 'react-dom'
++
++export function portalRoot(): HTMLElement {
++  return (document.querySelector('.lin') as HTMLElement | null) ?? document.body
++}
++
++export function Portal({ children }: { children: React.ReactNode }) {
++  return createPortal(children, portalRoot())
++}
++
++interface Layer {
++  id: number
++  element: () => HTMLElement | null
++}
++
++const stack: Layer[] = []
++let seq = 0
++
++function indexOf(id: number): number {
++  return stack.findIndex((layer) => layer.id === id)
++}
++
++function insideLayerAtOrAbove(id: number, target: Node): boolean {
++  const start = indexOf(id)
++  if (start < 0) return false
++  for (let i = start; i < stack.length; i++) {
++    const el = stack[i].element()
++    if (el && el.contains(target)) return true
++  }
++  return false
++}
++
++/**
++ * Registers a dismissable layer (popover, dialog). Only the top-most layer reacts to Escape, and a
++ * pointer-down counts as "outside" only when it lands outside this layer and every layer stacked above it.
++ */
++export function useDismissableLayer(opts: {
++  open: boolean
++  element: () => HTMLElement | null
++  onDismiss: () => void
++  ignore?: () => (Node | null)[]
++  closeOnOutside?: boolean
++}) {
++  const { open, closeOnOutside = true } = opts
++  const ref = useRef(opts)
++  ref.current = opts
++
++  useEffect(() => {
++    if (!open) return
++    const id = ++seq
++    stack.push({ id, element: () => ref.current.element() })
++
++    const onKeyDown = (event: KeyboardEvent) => {
++      if (event.key !== 'Escape') return
++      if (stack[stack.length - 1]?.id !== id) return
++      event.preventDefault()
++      event.stopPropagation()
++      ref.current.onDismiss()
++    }
++    const onPointerDown = (event: PointerEvent) => {
++      if (!closeOnOutside) return
++      const target = event.target as Node | null
++      if (!target) return
++      if (insideLayerAtOrAbove(id, target)) return
++      const ignored = ref.current.ignore?.() ?? []
++      if (ignored.some((node) => node && node.contains(target))) return
++      ref.current.onDismiss()
++    }
++
++    document.addEventListener('keydown', onKeyDown, true)
++    document.addEventListener('pointerdown', onPointerDown, true)
++    return () => {
++      document.removeEventListener('keydown', onKeyDown, true)
++      document.removeEventListener('pointerdown', onPointerDown, true)
++      const index = indexOf(id)
++      if (index >= 0) stack.splice(index, 1)
++    }
++  }, [open, closeOnOutside])
++}
++
++export const stopPropagationHandlers = {
++  onClick: (e: React.SyntheticEvent) => e.stopPropagation(),
++  onDoubleClick: (e: React.SyntheticEvent) => e.stopPropagation(),
++  onMouseDown: (e: React.SyntheticEvent) => e.stopPropagation(),
++  onPointerDown: (e: React.SyntheticEvent) => e.stopPropagation(),
++  onContextMenu: (e: React.SyntheticEvent) => e.stopPropagation(),
++  onKeyDown: (e: React.SyntheticEvent) => e.stopPropagation(),
++}
+diff --git a/web/src/tracker/ui/pickers.tsx b/web/src/tracker/ui/pickers.tsx
+new file mode 100644
+index 0000000..0682331
+--- /dev/null
++++ b/web/src/tracker/ui/pickers.tsx
+@@ -0,0 +1,533 @@
++import React, { useMemo, useState } from 'react'
++import { CalendarDays, ChevronLeft, ChevronRight, CircleDashed, Plus, UserRound, X } from 'lucide-react'
++import { TrackerApiError, trackerApi } from '../api'
++import { cycleLabel, cycleStatus, dueShortcuts, isClosedType, parseDateOnly, shortDate, stateProgress, toDateOnly } from '../format'
++import { useTracker } from '../store'
++import type { Issue, IssuePatch, Priority } from '../types'
++import { ESTIMATE_POINTS, PRIORITY_LABELS } from '../types'
++import { Avatar } from './Avatar'
++import { IconButton } from './Button'
++import { CycleIcon, EstimateIcon, LabelDot, PriorityIcon, ProjectIcon, StatusIcon } from './icons'
++import { MenuList, Popover, type Anchor, type MenuItem } from './Menu'
++import { toast } from './Toast'
++
++export interface PickerProps {
++  issueIds: string[]
++  anchor: Anchor
++  open: boolean
++  onOpenChange: (open: boolean) => void
++}
++
++const LABEL_COLORS = ['#eb5757', '#f2994a', '#f2c94c', '#4cb782', '#26b5ce', '#4ea7fc', '#5e6ad2', '#bb87fc', '#f7c8c1', '#95a2b3']
++
++function useIssues(ids: string[]): Issue[] {
++  const { issuesById } = useTracker()
++  return useMemo(() => ids.map((id) => issuesById.get(id)).filter((i): i is Issue => Boolean(i)), [ids, issuesById])
++}
++
++function common<T>(issues: Issue[], pick: (issue: Issue) => T): T | undefined {
++  if (issues.length === 0) return undefined
++  const first = pick(issues[0])
++  return issues.every((issue) => pick(issue) === first) ? first : undefined
++}
++
++function errorMessage(error: unknown): string {
++  return error instanceof Error ? error.message : String(error)
++}
++
++function useApply(issueIds: string[]) {
++  const { updateIssues } = useTracker()
++  return (patch: IssuePatch) => {
++    updateIssues(issueIds, patch).catch((error: unknown) => {
++      if (error instanceof TrackerApiError && error.code === 'lane_not_verified' && patch.state_id) {
++        toast(error.message, {
++          kind: 'error',
++          action: {
++            label: 'Force close',
++            onClick: () => {
++              updateIssues(issueIds, { ...patch, force_note: 'closed from tracker' }).catch((retry: unknown) =>
++                toast.error(errorMessage(retry)),
++              )
++            },
++          },
++        })
++        return
++      }
++      toast.error(errorMessage(error))
++    })
++  }
++}
++
++interface PickerShellProps extends Omit<PickerProps, 'issueIds'> {
++  items: MenuItem[]
++  onSelect: (item: MenuItem) => void
++  placeholder: string
++  selectedIds?: string[]
++  multi?: boolean
++  width?: number
++  emptyText?: string
++  query?: string
++  onQueryChange?: (q: string) => void
++  footer?: React.ReactNode
++}
++
++function PickerShell({ anchor, open, onOpenChange, items, onSelect, placeholder, selectedIds, multi, width = 240, emptyText, query, onQueryChange, footer }: PickerShellProps) {
++  return (
++    <Popover open={open} onOpenChange={onOpenChange} anchor={anchor} width={width}>
++      <MenuList
++        searchable
++        items={items}
++        placeholder={placeholder}
++        selectedIds={selectedIds}
++        multi={multi}
++        emptyText={emptyText}
++        query={query}
++        onQueryChange={onQueryChange}
++        footer={footer}
++        onSelect={(item) => {
++          onSelect(item)
++          if (!multi) onOpenChange(false)
++        }}
++      />
++    </Popover>
++  )
++}
++
++export function StatusPicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const t = useTracker()
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const teamId = issues[0]?.team_id
++  const items: MenuItem[] = useMemo(() => {
++    if (!teamId) return []
++    const states = t.teamStates(teamId)
++    return states.map((state, index) => ({
++      id: state.id,
++      label: state.name,
++      icon: <StatusIcon type={state.type} color={state.color} progress={stateProgress(state, states)} />,
++      kbd: index < 9 ? String(index + 1) : undefined,
++    }))
++  }, [t, teamId])
++  const current = common(issues, (i) => i.state_id)
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={onOpenChange}
++      items={items}
++      placeholder="Change status…"
++      selectedIds={current ? [current] : []}
++      onSelect={(item) => apply({ state_id: item.id })}
++    />
++  )
++}
++
++export const PRIORITY_ORDER: Priority[] = [0, 1, 2, 3, 4]
++
++export function priorityMenuItems(): MenuItem[] {
++  return PRIORITY_ORDER.map((p) => ({
++    id: String(p),
++    label: PRIORITY_LABELS[p],
++    icon: <PriorityIcon priority={p} />,
++    kbd: String(p),
++  }))
++}
++
++export function PriorityPicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const current = common(issues, (i) => i.priority)
++  const items = useMemo(priorityMenuItems, [])
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={onOpenChange}
++      items={items}
++      placeholder="Set priority to…"
++      width={220}
++      selectedIds={current !== undefined ? [String(current)] : []}
++      onSelect={(item) => apply({ priority: Number(item.id) as Priority })}
++    />
++  )
++}
++
++export function AssigneePicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const t = useTracker()
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const current = common(issues, (i) => i.assignee_id)
++  const items: MenuItem[] = useMemo(() => {
++    const me = t.me
++    const others = t.users.filter((u) => u.id !== me?.id).sort((a, b) => a.name.localeCompare(b.name))
++    const humans = others.filter((u) => u.kind === 'human')
++    const agents = others.filter((u) => u.kind === 'agent')
++    const list: MenuItem[] = [
++      { id: 'none', label: 'No assignee', icon: <UserRound size={14} color="var(--text-3)" />, kbd: '0', keywords: 'unassigned' },
++    ]
++    if (me) list.push({ id: me.id, label: me.name, icon: <Avatar user={me} size={16} />, hint: 'You', kbd: '1', keywords: `${me.display_name} me` })
++    humans.forEach((u, i) =>
++      list.push({
++        id: u.id,
++        label: u.name,
++        icon: <Avatar user={u} size={16} />,
++        kbd: i + 2 <= 9 ? String(i + 2) : undefined,
++        keywords: `${u.display_name} ${u.email ?? ''}`,
++      }),
++    )
++    agents.forEach((u) =>
++      list.push({ id: u.id, label: u.name, icon: <Avatar user={u} size={16} />, group: 'Agents', hint: u.model ?? undefined, keywords: `${u.display_name} agent` }),
++    )
++    return list
++  }, [t.me, t.users])
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={onOpenChange}
++      items={items}
++      placeholder="Assign to…"
++      selectedIds={current === undefined ? [] : [current ?? 'none']}
++      onSelect={(item) => apply({ assignee_id: item.id === 'none' ? null : item.id })}
++    />
++  )
++}
++
++export function LabelPicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const t = useTracker()
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const [query, setQuery] = useState('')
++  const teamId = issues[0]?.team_id ?? null
++  const available = useMemo(
++    () => t.labels.filter((l) => l.team_id === null || l.team_id === teamId).sort((a, b) => a.name.localeCompare(b.name)),
++    [t.labels, teamId],
++  )
++  const selectedIds = useMemo(
++    () => available.filter((l) => issues.length > 0 && issues.every((i) => i.label_ids.includes(l.id))).map((l) => l.id),
++    [available, issues],
++  )
++  const trimmed = query.trim()
++  const exact = available.some((l) => l.name.toLowerCase() === trimmed.toLowerCase())
++  const items: MenuItem[] = useMemo(() => {
++    const byId = new Map(available.map((l) => [l.id, l]))
++    const list: MenuItem[] = available.map((l) => ({
++      id: l.id,
++      label: l.name,
++      icon: <LabelDot color={l.color} />,
++      group: l.parent_id ? byId.get(l.parent_id)?.name : undefined,
++      keywords: l.description ?? undefined,
++    }))
++    list.sort((a, b) => (a.group ?? '').localeCompare(b.group ?? ''))
++    if (trimmed && !exact) {
++      list.push({ id: '__create__', label: `Create new label: "${trimmed}"`, icon: <Plus size={14} />, keywords: trimmed })
++    }
++    return list
++  }, [available, trimmed, exact])
++
++  const createLabel = async () => {
++    try {
++      const color = LABEL_COLORS[Math.floor(Math.random() * LABEL_COLORS.length)]
++      const label = await trackerApi.createLabel({ name: trimmed, color, team_id: teamId })
++      t.upsertLabel(label)
++      setQuery('')
++      apply({ add_label_ids: [label.id] })
++    } catch (error) {
++      toast.error(errorMessage(error))
++    }
++  }
++
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={(next) => {
++        if (!next) setQuery('')
++        onOpenChange(next)
++      }}
++      items={items}
++      multi
++      query={query}
++      onQueryChange={setQuery}
++      placeholder="Change or add labels…"
++      selectedIds={selectedIds}
++      emptyText="No labels"
++      onSelect={(item) => {
++        if (item.id === '__create__') {
++          void createLabel()
++          return
++        }
++        if (selectedIds.includes(item.id)) apply({ remove_label_ids: [item.id] })
++        else apply({ add_label_ids: [item.id] })
++      }}
++    />
++  )
++}
++
++export function ProjectPicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const t = useTracker()
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const current = common(issues, (i) => i.project_id)
++  const teamId = issues[0]?.team_id
++  const items: MenuItem[] = useMemo(() => {
++    const active = t.projects.filter((p) => !p.archived_at).sort((a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name))
++    const list: MenuItem[] = [{ id: 'none', label: 'No project', icon: <CircleDashed size={14} color="var(--text-3)" />, kbd: '0' }]
++    for (const p of active) {
++      const ofTeam = !teamId || p.team_ids.length === 0 || p.team_ids.includes(teamId)
++      list.push({
++        id: p.id,
++        label: p.name,
++        icon: <ProjectIcon icon={p.icon} color={p.color} />,
++        group: ofTeam ? undefined : 'Other teams',
++      })
++    }
++    return list.sort((a, b) => Number(Boolean(a.group)) - Number(Boolean(b.group)))
++  }, [t.projects, teamId])
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={onOpenChange}
++      items={items}
++      placeholder="Add to project…"
++      width={260}
++      selectedIds={current === undefined ? [] : [current ?? 'none']}
++      onSelect={(item) => apply({ project_id: item.id === 'none' ? null : item.id, milestone_id: null })}
++    />
++  )
++}
++
++export function CyclePicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const t = useTracker()
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const current = common(issues, (i) => i.cycle_id)
++  const teamId = issues[0]?.team_id
++  const items: MenuItem[] = useMemo(() => {
++    const now = Date.now()
++    const cycles = t.cycles
++      .filter((c) => c.team_id === teamId && (cycleStatus(c, now) !== 'past' || c.id === current))
++      .sort((a, b) => a.number - b.number)
++    const list: MenuItem[] = [{ id: 'none', label: 'No cycle', icon: <CircleDashed size={14} color="var(--text-3)" />, kbd: '0' }]
++    for (const c of cycles) {
++      const status = cycleStatus(c, now)
++      const span = `${shortDate(c.starts_at)} – ${shortDate(c.ends_at)}`
++      list.push({
++        id: c.id,
++        label: cycleLabel(c),
++        icon: <CycleIcon progress={status === 'current' ? 0.5 : status === 'past' ? 1 : 0} />,
++        hint: status === 'current' ? `Current · ${span}` : status === 'upcoming' ? span : 'Completed',
++      })
++    }
++    return list
++  }, [t.cycles, teamId, current])
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={onOpenChange}
++      items={items}
++      placeholder="Move to cycle…"
++      width={300}
++      emptyText="No cycles"
++      selectedIds={current === undefined ? [] : [current ?? 'none']}
++      onSelect={(item) => apply({ cycle_id: item.id === 'none' ? null : item.id })}
++    />
++  )
++}
++
++export function estimateLabel(value: number): string {
++  return `${value} ${value === 1 ? 'Point' : 'Points'}`
++}
++
++export function EstimatePicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const current = common(issues, (i) => i.estimate)
++  const items: MenuItem[] = useMemo(
++    () => [
++      { id: 'none', label: 'No estimate', icon: <EstimateIcon />, kbd: '0' },
++      ...ESTIMATE_POINTS.map((p, i) => ({ id: String(p), label: estimateLabel(p), icon: <EstimateIcon />, kbd: String(i + 1) })),
++    ],
++    [],
++  )
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={onOpenChange}
++      items={items}
++      placeholder="Set estimate to…"
++      width={220}
++      selectedIds={current === undefined ? [] : [current === null ? 'none' : String(current)]}
++      onSelect={(item) => apply({ estimate: item.id === 'none' ? null : Number(item.id) })}
++    />
++  )
++}
++
++const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
++
++function Calendar({ value, onPick }: { value: string | null; onPick: (date: string) => void }) {
++  const initial = value ? parseDateOnly(value) : new Date()
++  const [month, setMonth] = useState(() => new Date(initial.getFullYear(), initial.getMonth(), 1))
++  const today = toDateOnly(new Date())
++  const days = useMemo(() => {
++    const offset = (month.getDay() + 6) % 7
++    const start = new Date(month.getFullYear(), month.getMonth(), 1 - offset)
++    return Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))
++  }, [month])
++  const shift = (delta: number) => setMonth((m) => new Date(m.getFullYear(), m.getMonth() + delta, 1))
++  return (
++    <div className="lui-cal">
++      <div className="lui-cal-head">
++        <IconButton label="Previous month" size="sm" icon={<ChevronLeft size={14} />} onClick={() => shift(-1)} />
++        <span className="lui-cal-title">{month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</span>
++        <IconButton label="Next month" size="sm" icon={<ChevronRight size={14} />} onClick={() => shift(1)} />
++      </div>
++      <div className="lui-cal-grid">
++        {WEEKDAYS.map((d) => (
++          <span key={d} className="lui-cal-dow">
++            {d}
++          </span>
++        ))}
++        {days.map((day) => {
++          const iso = toDateOnly(day)
++          const classes = [
++            'lui-cal-day',
++            day.getMonth() !== month.getMonth() ? 'lui-cal-day--outside' : '',
++            iso === today ? 'lui-cal-day--today' : '',
++            iso === value ? 'lui-cal-day--selected' : '',
++          ]
++            .filter(Boolean)
++            .join(' ')
++          return (
++            <button key={iso} type="button" className={classes} onClick={() => onPick(iso)} aria-label={iso} aria-pressed={iso === value}>
++              {day.getDate()}
++            </button>
++          )
++        })}
++      </div>
++    </div>
++  )
++}
++
++function parseTypedDate(text: string): string | null {
++  const trimmed = text.trim()
++  if (!trimmed) return null
++  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed
++  const parsed = new Date(trimmed)
++  if (Number.isNaN(parsed.getTime())) return null
++  if (!/\d{4}/.test(trimmed)) parsed.setFullYear(new Date().getFullYear())
++  return toDateOnly(parsed)
++}
++
++export function DueDatePicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const current = common(issues, (i) => i.due_date) ?? null
++  const [typed, setTyped] = useState('')
++  const pick = (date: string | null) => {
++    apply({ due_date: date })
++    setTyped('')
++    onOpenChange(false)
++  }
++  const items: MenuItem[] = useMemo(() => {
++    const list: MenuItem[] = dueShortcuts().map((s) => ({
++      id: `due:${s.id}:${s.date}`,
++      label: s.label,
++      icon: <CalendarDays size={14} color="var(--text-3)" />,
++      hint: parseDateOnly(s.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
++    }))
++    if (current) list.push({ id: '__remove__', label: 'Remove due date', icon: <X size={14} color="var(--text-3)" /> })
++    return list
++  }, [current])
++  const typedDate = parseTypedDate(typed)
++  return (
++    <Popover
++      open={open}
++      onOpenChange={(next) => {
++        if (!next) setTyped('')
++        onOpenChange(next)
++      }}
++      anchor={anchor}
++      width={268}
++    >
++      <MenuList
++        searchable
++        placeholder="Try: Tomorrow, Dec 24, 2026-11-01…"
++        query={typed}
++        onQueryChange={setTyped}
++        numberShortcuts={false}
++        items={
++          typedDate && !items.some((i) => i.label.toLowerCase().startsWith(typed.trim().toLowerCase()))
++            ? [{ id: typedDate, label: shortDate(typedDate), icon: <CalendarDays size={14} />, keywords: typed }]
++            : items
++        }
++        onSelect={(item) => pick(item.id === '__remove__' ? null : item.id.startsWith('due:') ? item.id.slice(item.id.lastIndexOf(':') + 1) : item.id)}
++        footer={<Calendar value={current} onPick={(date) => pick(date)} />}
++      />
++    </Popover>
++  )
++}
++
++export function ParentPicker({ issueIds, anchor, open, onOpenChange }: PickerProps) {
++  const t = useTracker()
++  const issues = useIssues(issueIds)
++  const apply = useApply(issueIds)
++  const [query, setQuery] = useState('')
++  const current = common(issues, (i) => i.parent_id)
++  const teamId = issues[0]?.team_id
++  const excluded = useMemo(() => {
++    const blocked = new Set(issueIds)
++    let grew = true
++    while (grew) {
++      grew = false
++      for (const issue of t.issues) {
++        if (issue.parent_id && blocked.has(issue.parent_id) && !blocked.has(issue.id)) {
++          blocked.add(issue.id)
++          grew = true
++        }
++      }
++    }
++    return blocked
++  }, [t.issues, issueIds])
++  const items: MenuItem[] = useMemo(() => {
++    const q = query.trim().toLowerCase()
++    const candidates = t.issues
++      .filter((i) => !i.archived_at && !excluded.has(i.id) && (!teamId || i.team_id === teamId))
++      .filter((i) => !q || `${i.identifier} ${i.title}`.toLowerCase().includes(q))
++      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
++      .slice(0, 50)
++    const list: MenuItem[] = []
++    if (current) list.push({ id: '__remove__', label: 'Remove parent', icon: <X size={14} color="var(--text-3)" />, keywords: q })
++    for (const issue of candidates) {
++      const state = t.statesById.get(issue.state_id)
++      list.push({
++        id: issue.id,
++        label: `${issue.identifier} ${issue.title}`,
++        keywords: q,
++        icon: state ? <StatusIcon type={state.type} color={state.color} progress={isClosedType(state.type) ? 1 : undefined} /> : undefined,
++      })
++    }
++    return list
++  }, [t.issues, t.statesById, excluded, teamId, query, current])
++  return (
++    <PickerShell
++      anchor={anchor}
++      open={open}
++      onOpenChange={(next) => {
++        if (!next) setQuery('')
++        onOpenChange(next)
++      }}
++      items={items}
++      query={query}
++      onQueryChange={setQuery}
++      placeholder="Set parent issue…"
++      width={360}
++      emptyText="No issues found"
++      selectedIds={current ? [current] : []}
++      onSelect={(item) => apply({ parent_id: item.id === '__remove__' ? null : item.id })}
++    />
++  )
++}
+diff --git a/web/src/tracker/ui/ui.css b/web/src/tracker/ui/ui.css
+new file mode 100644
+index 0000000..df44fd0
+--- /dev/null
++++ b/web/src/tracker/ui/ui.css
+@@ -0,0 +1,355 @@
++.lin .lui-btn {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  gap: 6px;
++  height: 28px;
++  padding: 0 12px;
++  border-radius: var(--radius-ctl);
++  font-size: 13px;
++  font-weight: 510;
++  line-height: 1;
++  white-space: nowrap;
++  user-select: none;
++  border: 1px solid transparent;
++  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
++}
++.lin .lui-btn[disabled] { opacity: 0.5; pointer-events: none; }
++.lin .lui-btn--sm { height: 24px; padding: 0 8px; font-size: 12px; gap: 4px; }
++.lin .lui-btn--icon-only { padding: 0; width: 28px; }
++.lin .lui-btn--sm.lui-btn--icon-only { width: 24px; }
++.lin .lui-btn svg { flex: none; }
++.lin .lui-btn--primary { background: var(--accent); color: #fff; }
++.lin .lui-btn--primary:hover { background: var(--accent-hover); }
++.lin .lui-btn--secondary { background: var(--card); border-color: var(--border-strong); color: var(--text-1); box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08); }
++.lin .lui-btn--secondary:hover { background: var(--bg-active); }
++.lin .lui-btn--ghost { color: var(--text-2); }
++.lin .lui-btn--ghost:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lui-btn--danger { background: var(--danger); color: #fff; }
++.lin .lui-btn--danger:hover { background: #f06c6c; }
++.lin .lui-btn .lui-kbd { margin-left: 2px; }
++.lin .lui-btn--primary .lui-kbd-key,
++.lin .lui-btn--danger .lui-kbd-key { background: rgba(255, 255, 255, 0.18); color: #fff; border-color: transparent; }
++
++.lin .lui-iconbtn {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  width: 28px;
++  height: 28px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-3);
++  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
++}
++.lin .lui-iconbtn--sm { width: 24px; height: 24px; }
++.lin .lui-iconbtn:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lui-iconbtn--active { background: var(--bg-active); color: var(--text-1); }
++.lin .lui-iconbtn[disabled] { opacity: 0.4; pointer-events: none; }
++
++.lin .lui-kbd { display: inline-flex; align-items: center; gap: 2px; }
++.lin .lui-kbd-key {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  min-width: 17px;
++  height: 17px;
++  padding: 0 4px;
++  border-radius: 4px;
++  border: 1px solid var(--border-strong);
++  background: var(--bg-subtle);
++  color: var(--text-3);
++  font-family: var(--font-sans);
++  font-size: 11px;
++  font-weight: 510;
++  line-height: 1;
++}
++.lin .lui-kbd-then { color: var(--text-4); font-size: 11px; padding: 0 2px; }
++
++.lin .lui-tooltip-trigger { display: inline-flex; }
++.lin .lui-tooltip {
++  position: fixed;
++  z-index: 1000;
++  display: inline-flex;
++  align-items: center;
++  gap: 8px;
++  max-width: 320px;
++  padding: 4px 8px;
++  border-radius: 6px;
++  background: var(--popover);
++  box-shadow: var(--shadow-pop);
++  color: var(--text-1);
++  font-size: 12px;
++  font-weight: 510;
++  line-height: 1.4;
++  pointer-events: none;
++  animation: lin-fade-in 120ms var(--ease);
++}
++
++.lin .lui-popover {
++  position: fixed;
++  z-index: 900;
++  min-width: 180px;
++  max-height: min(460px, calc(100vh - 16px));
++  display: flex;
++  flex-direction: column;
++  background: var(--popover);
++  border-radius: var(--radius-pop);
++  box-shadow: var(--shadow-pop);
++  color: var(--text-1);
++  overflow: hidden;
++  animation: lin-pop-in var(--dur) var(--ease);
++}
++.lin .lui-popover[data-side='top'] { transform-origin: bottom; }
++.lin .lui-popover[data-side='right'] { transform-origin: left; }
++.lin .lui-popover[data-side='left'] { transform-origin: right; }
++
++.lin .lui-menu { display: flex; flex-direction: column; min-height: 0; flex: 1; outline: none; }
++.lin .lui-menu-search {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  height: 40px;
++  padding: 0 12px;
++  border-bottom: 1px solid var(--border);
++  flex: none;
++}
++.lin .lui-menu-search input {
++  flex: 1;
++  min-width: 0;
++  height: 100%;
++  border: 0;
++  background: transparent;
++  font-size: 13px;
++  color: var(--text-1);
++}
++.lin .lui-menu-search input::placeholder { color: var(--text-4); }
++.lin .lui-menu-search input:focus-visible { box-shadow: none; }
++.lin .lui-menu-scroll { overflow-y: auto; padding: 4px; min-height: 0; flex: 1; }
++.lin .lui-menu-group {
++  padding: 8px 8px 4px;
++  font-size: 12px;
++  font-weight: 510;
++  color: var(--text-3);
++}
++.lin .lui-menu-sep { height: 1px; margin: 4px 0; background: var(--border); }
++.lin .lui-menu-item {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  width: 100%;
++  height: 32px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-1);
++  font-size: 13px;
++  text-align: left;
++  user-select: none;
++  cursor: default;
++}
++.lin .lui-menu-item[data-active='true'] { background: var(--bg-active); }
++.lin .lui-menu-item[aria-disabled='true'] { opacity: 0.45; }
++.lin .lui-menu-item-icon { display: inline-flex; align-items: center; justify-content: center; width: 16px; flex: none; color: var(--text-2); }
++.lin .lui-menu-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++.lin .lui-menu-item-hint { color: var(--text-4); font-size: 12px; white-space: nowrap; }
++.lin .lui-menu-item-check { display: inline-flex; width: 16px; flex: none; color: var(--text-2); }
++.lin .lui-menu-item-kbd { color: var(--text-4); font-size: 12px; min-width: 12px; text-align: right; font-variant-numeric: tabular-nums; }
++.lin .lui-menu-item-chevron { color: var(--text-4); flex: none; }
++.lin .lui-menu-empty { padding: 10px 8px; color: var(--text-3); font-size: 13px; }
++
++.lin .lui-checkbox {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  flex: none;
++  width: 14px;
++  height: 14px;
++  border-radius: 4px;
++  border: 1px solid var(--border-strong);
++  background: var(--input);
++  color: #fff;
++  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
++}
++.lin .lui-checkbox:hover { border-color: var(--text-4); }
++.lin .lui-checkbox[data-state='checked'],
++.lin .lui-checkbox[data-state='indeterminate'] { background: var(--accent); border-color: var(--accent); }
++
++.lin .lui-avatar {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  flex: none;
++  border-radius: 9999px;
++  color: #fff;
++  font-weight: 590;
++  letter-spacing: -0.2px;
++  line-height: 1;
++  user-select: none;
++  overflow: hidden;
++}
++.lin .lui-avatar--agent { border-radius: 28%; }
++.lin .lui-avatar--none { color: var(--text-4); background: transparent; }
++
++.lin .lui-overlay {
++  position: fixed;
++  inset: 0;
++  z-index: 800;
++  background: var(--overlay);
++  display: flex;
++  align-items: flex-start;
++  justify-content: center;
++  padding: 12vh 16px 16px;
++  animation: lin-fade-in var(--dur) var(--ease);
++}
++.lin .lui-dialog {
++  display: flex;
++  flex-direction: column;
++  width: 100%;
++  max-height: 76vh;
++  background: var(--popover);
++  border-radius: var(--radius-dialog);
++  box-shadow: var(--shadow-dialog);
++  color: var(--text-1);
++  overflow: hidden;
++  animation: lin-pop-in 160ms var(--ease);
++  outline: none;
++}
++.lin .lui-dialog:focus-visible { box-shadow: var(--shadow-dialog); }
++.lin .lui-dialog-header {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 12px;
++  padding: 14px 16px 6px;
++  flex: none;
++}
++.lin .lui-dialog-title { font-size: 14px; font-weight: 590; color: var(--text-1); margin: 0; }
++.lin .lui-dialog-body { padding: 8px 16px 16px; overflow-y: auto; min-height: 0; flex: 1; }
++.lin .lui-dialog-footer {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  gap: 8px;
++  padding: 12px 16px;
++  border-top: 1px solid var(--border);
++  flex: none;
++}
++@media (max-width: 767px) {
++  .lin .lui-overlay { padding: 0; align-items: stretch; }
++  .lin .lui-dialog { max-height: none; height: 100%; border-radius: 0; max-width: none !important; }
++}
++
++.lin .lui-toaster {
++  position: fixed;
++  right: 16px;
++  bottom: 16px;
++  z-index: 1100;
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++  align-items: flex-end;
++  pointer-events: none;
++}
++.lin .lui-toast {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  min-width: 260px;
++  max-width: 420px;
++  padding: 10px 10px 10px 14px;
++  border-radius: var(--radius-pop);
++  background: var(--popover);
++  box-shadow: var(--shadow-pop);
++  color: var(--text-1);
++  font-size: 13px;
++  pointer-events: auto;
++  animation: lin-toast-in 180ms var(--ease);
++}
++.lin .lui-toast-msg { flex: 1; min-width: 0; }
++.lin .lui-toast--error .lui-toast-icon { color: var(--danger); }
++.lin .lui-toast--success .lui-toast-icon { color: var(--ok); }
++@media (max-width: 767px) {
++  .lin .lui-toaster { left: 12px; right: 12px; bottom: 12px; align-items: stretch; }
++  .lin .lui-toast { max-width: none; }
++}
++
++.lin .lui-chip {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  height: 24px;
++  max-width: 220px;
++  padding: 0 8px;
++  border-radius: 9999px;
++  border: 1px solid var(--border-strong);
++  background: transparent;
++  color: var(--text-2);
++  font-size: 12px;
++  font-weight: 510;
++  white-space: nowrap;
++  transition: background-color var(--dur) var(--ease), border-color var(--dur) var(--ease);
++}
++.lin .lui-chip:hover { background: var(--bg-hover); color: var(--text-1); }
++.lin .lui-chip-text { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
++.lin .lui-chip--overdue { color: var(--danger); }
++.lin .lui-chip--soon { color: var(--urgent); }
++.lin .lui-chip-icon {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  width: 24px;
++  height: 24px;
++  border-radius: var(--radius-ctl);
++  flex: none;
++}
++.lin .lui-chip-icon:hover { background: var(--bg-hover); }
++.lin .lui-chip-group { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
++.lin .lui-chip-more { color: var(--text-3); font-size: 12px; }
++
++.lin .lui-prop {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  min-height: 32px;
++  width: 100%;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  color: var(--text-1);
++  font-size: 13px;
++  font-weight: 510;
++  text-align: left;
++  flex-wrap: wrap;
++}
++.lin .lui-prop:hover { background: var(--bg-hover); }
++.lin .lui-prop--empty { color: var(--text-3); font-weight: 400; }
++.lin .lui-prop .lui-chip { pointer-events: none; }
++
++.lin .lui-cal { padding: 8px 10px 10px; border-top: 1px solid var(--border); }
++.lin .lui-cal-head { display: flex; align-items: center; justify-content: space-between; height: 28px; margin-bottom: 4px; }
++.lin .lui-cal-title { font-size: 13px; font-weight: 510; color: var(--text-1); }
++.lin .lui-cal-grid { display: grid; grid-template-columns: repeat(7, 32px); gap: 2px; justify-content: center; }
++.lin .lui-cal-dow { height: 24px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--text-4); font-weight: 510; }
++.lin .lui-cal-day {
++  width: 32px;
++  height: 28px;
++  border-radius: var(--radius-ctl);
++  font-size: 12px;
++  color: var(--text-2);
++  font-variant-numeric: tabular-nums;
++}
++.lin .lui-cal-day:hover { background: var(--bg-active); color: var(--text-1); }
++.lin .lui-cal-day--outside { color: var(--text-4); }
++.lin .lui-cal-day--today { color: var(--accent-hi); font-weight: 590; }
++.lin .lui-cal-day--selected,
++.lin .lui-cal-day--selected:hover { background: var(--accent); color: #fff; }
++.lin .lui-cal-input {
++  width: 100%;
++  height: 32px;
++  margin-top: 8px;
++  padding: 0 8px;
++  border-radius: var(--radius-ctl);
++  border: 1px solid var(--border-strong);
++  background: var(--input);
++  font-size: 13px;
++}
++
++.lin[data-theme='light'] .lui-overlay { background: rgba(0, 0, 0, 0.5); }

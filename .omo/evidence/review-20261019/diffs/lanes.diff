@@ -1,0 +1,2776 @@
+diff --git a/src/lanes/activity.rs b/src/lanes/activity.rs
+index 24ed0f9..87e389f 100644
+--- a/src/lanes/activity.rs
++++ b/src/lanes/activity.rs
+@@ -298,10 +298,10 @@ impl LaneActivity {
+         let now = self.clock.now();
+         let mut tx = self.pool.begin().await?;
+         let lane: Option<Lane> = if let Some(generation) = generation {
+-            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? RETURNING *")
++            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? AND NOT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = lanes.key AND resumed_at IS NULL) AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? RETURNING *")
+                 .bind(now).bind(now).bind(key).bind(now - Duration::minutes(20)).bind(key).bind(generation).fetch_optional(&mut *tx).await?
+         } else {
+-            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? RETURNING *")
++            sqlx::query_as("UPDATE lanes SET stale_posted_at = ?, updated_at = ? WHERE key = ? AND status = 'working' AND stale_posted_at IS NULL AND last_activity_at <= ? AND NOT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = lanes.key AND resumed_at IS NULL) RETURNING *")
+                 .bind(now).bind(now).bind(key).bind(now - Duration::minutes(20)).fetch_optional(&mut *tx).await?
+         };
+         let mut decision = ActivityDecision::default();
+diff --git a/src/lanes/cli.rs b/src/lanes/cli.rs
+index a9d2dad..626509d 100644
+--- a/src/lanes/cli.rs
++++ b/src/lanes/cli.rs
+@@ -26,6 +26,9 @@ pub enum LaneCommand {
+     List {
+         #[arg(long)]
+         status: Option<LaneStatus>,
++        /// Accepted for scripts; output is always JSON.
++        #[arg(long)]
++        json: bool,
+     },
+     Log {
+         key: String,
+@@ -67,6 +70,16 @@ pub enum LaneCommand {
+         path: PathBuf,
+     },
+     CanLaunch,
++    /// Stop a lane: cancel its running turn and start no new one until resumed.
++    Pause {
++        key: String,
++    },
++    /// Let a paused lane take turns again. Exits 2 with NOT_PAUSED when it is not paused.
++    Resume {
++        key: String,
++    },
++    /// Print the session that lanes started from here would report to.
++    Lead,
+     Heavy {
+         label: String,
+         #[arg(last = true, required = true)]
+@@ -90,8 +103,9 @@ pub struct StartArgs {
+     pub brief: PathBuf,
+     #[arg(long)]
+     pub done: String,
++    /// Parent channel: a numeric Discord channel id, or a Slack channel (`slack:C…` or `C…`).
+     #[arg(long)]
+-    pub thread: Option<u64>,
++    pub thread: Option<String>,
+     #[arg(long)]
+     pub cwd: Option<PathBuf>,
+     #[arg(long)]
+@@ -151,12 +165,42 @@ pub async fn execute(
+                 .map_err(|error| invalid(error.to_string()))?;
+             start(pool, args, judge, decision).await
+         }
+-        LaneCommand::List { status } => {
++        LaneCommand::List { status, .. } => {
+             let statuses: Vec<&str> = status
+                 .as_ref()
+                 .map(|status| vec![status.as_str()])
+                 .unwrap_or_default();
+-            Ok((0, json!({"lanes": list_lanes(pool, &statuses).await?})))
++            let paused = crate::storage::lanes::paused_lane_keys(pool).await?;
++            let lanes: Vec<Value> = list_lanes(pool, &statuses)
++                .await?
++                .into_iter()
++                .map(|lane| {
++                    let is_paused = paused.contains(&lane.key);
++                    let mut value = json!(lane);
++                    value["paused"] = json!(is_paused);
++                    value
++                })
++                .collect();
++            Ok((0, json!({"lanes": lanes})))
++        }
++        LaneCommand::Pause { key } => {
++            control_enabled()?;
++            require_lane(pool, &key).await?;
++            let by = std::env::var("PI_SESSION_ID")
++                .map(|id| format!("session:{id}"))
++                .unwrap_or_else(|_| "local-cli".into());
++            let changed = crate::storage::lanes::pause_lane(pool, &key, &by).await?;
++            wake(pool).await?;
++            Ok((0, json!({"key": key, "paused": true, "changed": changed})))
++        }
++        LaneCommand::Resume { key } => {
++            control_enabled()?;
++            require_lane(pool, &key).await?;
++            if !crate::storage::lanes::resume_lane(pool, &key).await? {
++                return Ok((2, json!({"ok": false, "key": key, "error": "NOT_PAUSED"})));
++            }
++            wake(pool).await?;
++            Ok((0, json!({"key": key, "paused": false})))
+         }
+         LaneCommand::Log { key, last } => {
+             require_lane(pool, &key).await?;
+@@ -255,6 +299,20 @@ pub async fn execute(
+                 json!({"can_launch": decision.is_ok(), "reasons": decision.reasons()}),
+             ))
+         }
++        LaneCommand::Lead => {
++            let caller = match std::env::var("PI_SESSION_ID") {
++                Ok(id) => caller_session(pool, &id).await?,
++                Err(_) => None,
++            };
++            let (source, lead) = match caller {
++                Some(lead) => ("caller", Some(lead)),
++                None => ("default", std::env::var("OMON_LANE_DEFAULT_LEAD").ok()),
++            };
++            Ok((
++                if lead.is_some() { 0 } else { 2 },
++                json!({"lead": lead, "source": source}),
++            ))
++        }
+         LaneCommand::Heavy { label, argv } => {
+             let (program, args) = argv
+                 .split_first()
+@@ -278,6 +336,24 @@ pub async fn execute(
+     }
+ }
+ 
++/// The messenger conversation whose agent turn is running this command. The agent shell
++/// carries its omo session id (`PI_SESSION_ID`), which the gateway binds to the session as
++/// `omo_thread_id`, so lane reports return to the thread the work was requested in rather
++/// than to the owner home. Lane sessions are skipped: they never lead other lanes.
++pub async fn caller_session(pool: &SqlitePool, omo_session_id: &str) -> Result<Option<String>> {
++    if omo_session_id.trim().is_empty() {
++        return Ok(None);
++    }
++    Ok(sqlx::query_scalar(
++        "SELECT session_key FROM sessions
++         WHERE json_extract(state_json, '$.metadata.omo_thread_id') = ? AND platform <> 'lane'
++         ORDER BY thread_id IS NOT NULL DESC, updated_at DESC LIMIT 1",
++    )
++    .bind(omo_session_id.trim())
++    .fetch_optional(pool)
++    .await?)
++}
++
+ async fn validate_start(args: &StartArgs) -> Result<()> {
+     if args.key.is_empty()
+         || args.key.len() > 48
+@@ -311,8 +387,14 @@ async fn validate_start(args: &StartArgs) -> Result<()> {
+     if let Some(lead) = &args.lead {
+         SessionKey::from_storage_key(lead)?;
+     }
+-    if args.thread == Some(0) {
+-        return Err(invalid("thread must be a nonzero channel id"));
++    if let Some(thread) = &args.thread {
++        if super::slack_threads::parse_parent(thread).is_none()
++            && !thread.parse::<u64>().is_ok_and(|id| id != 0)
++        {
++            return Err(invalid(
++                "thread must be a nonzero Discord channel id or a Slack channel id",
++            ));
++        }
+     }
+     Ok(())
+ }
+@@ -340,12 +422,17 @@ pub async fn start(
+     let brief = tokio::fs::read_to_string(&brief_path)
+         .await
+         .map_err(super::runner::io_error)?;
+-    let lead = if let Some(lead) = args.lead {
++    let caller = match std::env::var("PI_SESSION_ID") {
++        Ok(id) => caller_session(pool, &id).await?,
++        Err(_) => None,
++    };
++    let lead = if let Some(lead) = args.lead.or(caller) {
+         lead
+     } else {
+-        let newest: Option<(String,)> = if let Some(thread) = args.thread {
++        let newest: Option<(String,)> = if let Some(thread) = &args.thread {
++            let channel = super::slack_threads::parse_parent(thread).unwrap_or(thread);
+             sqlx::query_as("SELECT session_key FROM sessions WHERE thread_id = ? OR channel_id = ? ORDER BY updated_at DESC LIMIT 1")
+-                .bind(thread.to_string()).bind(thread.to_string()).fetch_optional(pool).await?
++                .bind(channel).bind(channel).fetch_optional(pool).await?
+         } else {
+             None
+         };
+@@ -370,6 +457,11 @@ pub async fn start(
+             }
+         }
+     };
++    // A repo lane runs in its own worktree so parallel lanes on one repository never
++    // block each other's done checks. Created last before the row so earlier validation
++    // failures leave nothing behind; every later failure path discards it.
++    let auto_worktree = super::runner::create_auto_worktree(&cwd, &args.key).await?;
++    let cwd = auto_worktree.as_ref().map_or(cwd, |tree| tree.path.clone());
+     let mut lane = Lane::new(
+         &args.key,
+         args.title,
+@@ -384,30 +476,26 @@ pub async fn start(
+     // across network I/O would block every other user of the 1-connection pool.
+     let mut created_bot = None;
+     if !decision.is_hold() {
+-        if let Some(parent) = args.thread {
+-            let threads = super::discord_threads::DiscordThreads::from_env()
+-                .map_err(|error| invalid(error.to_string()))?;
+-            let http = threads.http();
+-            created_bot = Some(
+-                http.get_current_user()
+-                    .await
+-                    .map_err(|error| invalid(error.to_string()))?
+-                    .id
+-                    .to_string(),
+-            );
+-            let thread = super::discord_threads::create_thread(
+-                http,
+-                serenity::all::ChannelId::new(parent),
+-                &lane.key,
+-                &lane.title,
+-            )
+-            .await
+-            .map_err(|error| invalid(error.to_string()))?;
+-            lane.thread_channel_id = Some(thread.thread_channel_id.to_string());
++        if let Some(parent) = &args.thread {
++            let (bot, thread) = match super::guard::create_lane_thread(&lane, parent).await {
++                Ok(created) => created,
++                Err(error) => {
++                    if let Some(tree) = &auto_worktree {
++                        super::runner::discard_auto_worktree(tree).await;
++                    }
++                    return Err(invalid(error));
++                }
++            };
++            created_bot = Some(bot);
++            lane.thread_channel_id = Some(thread);
+         }
+         lane.status = "working".into();
+     }
+-    lane.parent_channel_id = args.thread.map(|id| id.to_string());
++    lane.parent_channel_id = args.thread.as_deref().map(|thread| {
++        super::slack_threads::parse_parent(thread)
++            .map(|channel| format!("{}{channel}", super::slack_threads::REF_PREFIX))
++            .unwrap_or_else(|| thread.to_owned())
++    });
+     // Cap re-check and insert share one write transaction so concurrent starts
+     // cannot both pass a stale launch decision.
+     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+@@ -447,19 +535,25 @@ pub async fn start(
+     };
+     if let Some(thread) = orphan_thread {
+         tracing::warn!(key = %lane.key, %thread, "lane thread not kept (cap re-check or insert failed); archiving");
+-        if let Ok(threads) = super::discord_threads::DiscordThreads::from_env() {
+-            if let Ok(id) = thread.parse::<u64>() {
+-                if let Err(archive_error) = threads.archive(serenity::all::ChannelId::new(id)).await
+-                {
+-                    tracing::warn!(%thread, %archive_error, "orphan lane thread archive failed");
+-                }
+-            }
++        super::guard::discard_orphan_thread(&thread).await;
++    }
++    if inserted.is_err() {
++        if let Some(tree) = &auto_worktree {
++            super::runner::discard_auto_worktree(tree).await;
+         }
+     }
+     inserted?;
+     // The lane row is committed: a failure below must not report the start as
+     // failed (a retry would hit "lane key already exists"), and the wake must still go out.
+     let mut warnings = Vec::new();
++    if let Some(tree) = &auto_worktree {
++        if let Err(error) =
++            super::runner::register_owned_worktree(pool, &lane.key, &tree.repo, &tree.path).await
++        {
++            tracing::warn!(key = %lane.key, %error, "auto worktree registration failed");
++            warnings.push(format!("auto worktree not registered: {error}"));
++        }
++    }
+     if let Err(error) = crate::usage::capture_lane_start(
+         pool,
+         &lane.key,
+@@ -500,6 +594,16 @@ async fn require_lane(pool: &SqlitePool, key: &str) -> Result<Lane> {
+         .ok_or_else(|| invalid(format!("lane not found: {key}")))
+ }
+ 
++fn control_enabled() -> Result<()> {
++    if super::runner::lane_control_enabled() {
++        Ok(())
++    } else {
++        Err(invalid(
++            "lane control is disabled (OMON_LANE_CONTROL_ENABLED)",
++        ))
++    }
++}
++
+ pub async fn enqueue(pool: &SqlitePool, key: &str, text: &str) -> Result<()> {
+     sqlx::query("INSERT INTO lane_inbox(lane_key, text) VALUES (?, ?)")
+         .bind(key)
+@@ -635,6 +739,30 @@ mod tests {
+         db
+     }
+ 
++    #[tokio::test]
++    async fn caller_session_resolves_the_conversation_bound_to_the_agent_session() {
++        let db = Database::connect("sqlite::memory:").await.unwrap();
++        for (key, platform, thread) in [
++            ("thread-key", "slack", "omo-1"),
++            ("lane-key", "lane", "omo-2"),
++        ] {
++            sqlx::query("INSERT INTO sessions (session_key, platform, channel_id, user_id, state_json) VALUES (?, ?, 'C1', '', ?)")
++                .bind(key)
++                .bind(platform)
++                .bind(json!({"metadata": {"omo_thread_id": thread}}).to_string())
++                .execute(db.pool())
++                .await
++                .unwrap();
++        }
++        assert_eq!(
++            caller_session(db.pool(), "omo-1").await.unwrap().as_deref(),
++            Some("thread-key")
++        );
++        assert_eq!(caller_session(db.pool(), "omo-2").await.unwrap(), None);
++        assert_eq!(caller_session(db.pool(), "unknown").await.unwrap(), None);
++        assert_eq!(caller_session(db.pool(), " ").await.unwrap(), None);
++    }
++
+     #[tokio::test]
+     async fn claim_evidence_cannot_forge_the_reopen_generation_marker() {
+         let db = working_lane().await;
+diff --git a/src/lanes/dispatch.rs b/src/lanes/dispatch.rs
+index e361aa6..b36ce7f 100644
+--- a/src/lanes/dispatch.rs
++++ b/src/lanes/dispatch.rs
+@@ -89,9 +89,12 @@ impl EventDispatcher {
+             return Ok(());
+         };
+         if now.signed_duration_since(oldest).num_seconds() < 30
+-            && !events
+-                .iter()
+-                .any(|event| matches!(event.kind.as_str(), "done_claimed" | "dead" | "kibitzer"))
++            && !events.iter().any(|event| {
++                matches!(
++                    event.kind.as_str(),
++                    "done_claimed" | "dead" | "kibitzer" | "cron_report"
++                )
++            })
+         {
+             return Ok(());
+         }
+@@ -210,7 +213,8 @@ impl EventDispatcher {
+ 
+ fn critical(event: &LaneEvent) -> bool {
+     match event.kind.as_str() {
+-        "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed" => true,
++        "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed"
++        | "cron_report" => true,
+         "cron_problem" => event.body.contains("needs_owner"),
+         _ => false,
+     }
+diff --git a/src/lanes/guard.rs b/src/lanes/guard.rs
+index 040b9c1..2bdea4d 100644
+--- a/src/lanes/guard.rs
++++ b/src/lanes/guard.rs
+@@ -488,10 +488,31 @@ impl GuardReport {
+     }
+ }
+ 
++/// Within this window a repeated ALERT is suppressed unless the host got materially worse.
++pub const GUARD_REALERT_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
++/// Disk must drop at least this many GB below the last alerted value to re-alert early.
++pub const GUARD_REALERT_DISK_DROP_GB: u64 = 10;
++/// Free memory must drop at least this many percentage points to re-alert early.
++pub const GUARD_REALERT_MEM_DROP_PCT: u32 = 10;
++
++/// Snapshot of the host at the last emitted ALERT.
++#[derive(Debug, Clone, Copy)]
++struct AlertMark {
++    at: std::time::Instant,
++    load: bool,
++    mem: bool,
++    disk: bool,
++    mem_free_pct: u32,
++    disk_free_gb: u64,
++}
++
+ #[derive(Clone)]
+ pub struct GuardWatcher {
+     thresholds: GuardThresholds,
+     current_state: GuardState,
++    last_alert: Option<AlertMark>,
++    /// Whether the current Alert episode emitted an ALERT (so its CLEAR is worth sending).
++    episode_reported: bool,
+ }
+ 
+ impl Default for GuardWatcher {
+@@ -505,6 +526,8 @@ impl GuardWatcher {
+         Self {
+             thresholds,
+             current_state: GuardState::Clear,
++            last_alert: None,
++            episode_reported: false,
+         }
+     }
+ 
+@@ -517,9 +540,76 @@ impl GuardWatcher {
+     }
+ 
+     pub fn check(&mut self, sample: &HostSample) -> Option<GuardReport> {
++        self.check_at(sample, std::time::Instant::now())
++    }
++
++    /// True when this sample deserves a fresh ALERT given the last emitted one.
++    fn worth_alerting(
++        &self,
++        load: bool,
++        mem: bool,
++        disk: bool,
++        sample: &HostSample,
++        now: std::time::Instant,
++    ) -> bool {
++        let Some(mark) = self.last_alert else {
++            return true;
++        };
++        if now.saturating_duration_since(mark.at) >= GUARD_REALERT_WINDOW {
++            return true;
++        }
++        // A metric that was not part of the last alert is new information.
++        if (load && !mark.load) || (mem && !mark.mem) || (disk && !mark.disk) {
++            return true;
++        }
++        let disk_worse = disk
++            && sample
++                .disk_free_gb
++                .saturating_add(GUARD_REALERT_DISK_DROP_GB)
++                <= mark.disk_free_gb;
++        let mem_worse = mem
++            && sample
++                .mem_free_pct
++                .saturating_add(GUARD_REALERT_MEM_DROP_PCT)
++                <= mark.mem_free_pct;
++        disk_worse || mem_worse
++    }
++
++    fn mark_alert(
++        &mut self,
++        load: bool,
++        mem: bool,
++        disk: bool,
++        sample: &HostSample,
++        now: std::time::Instant,
++    ) {
++        self.last_alert = Some(AlertMark {
++            at: now,
++            load,
++            mem,
++            disk,
++            mem_free_pct: sample.mem_free_pct,
++            disk_free_gb: sample.disk_free_gb,
++        });
++        self.episode_reported = true;
++    }
++
++    /// Deduplicating state machine. While in Alert nothing is emitted unless disk/mem dropped
++    /// by the re-alert margins (or a new metric alerts) since the last emitted ALERT. A
++    /// Clear->Alert flip within [`GUARD_REALERT_WINDOW`] of the last ALERT is suppressed under
++    /// the same rule; CLEAR is sent only for episodes whose ALERT was actually emitted, so
++    /// flapping around a threshold yields one ALERT and one CLEAR.
++    pub fn check_at(
++        &mut self,
++        sample: &HostSample,
++        now: std::time::Instant,
++    ) -> Option<GuardReport> {
+         let mut alert_reasons = Vec::new();
++        let load_alert = sample.load_1m >= self.thresholds.load_alert;
++        let mem_alert = sample.mem_free_pct < self.thresholds.mem_free_min_pct;
++        let disk_alert = sample.disk_free_gb < self.thresholds.disk_free_min_gb;
+ 
+-        if sample.load_1m >= self.thresholds.load_alert {
++        if load_alert {
+             alert_reasons.push(format!(
+                 "load average ({:.2}) >= alert threshold ({:.2})",
+                 sample.load_1m, self.thresholds.load_alert
+@@ -540,8 +630,13 @@ impl GuardWatcher {
+ 
+         match self.current_state {
+             GuardState::Clear => {
+-                if !alert_reasons.is_empty() {
+-                    self.current_state = GuardState::Alert;
++                if alert_reasons.is_empty() {
++                    return None;
++                }
++                self.current_state = GuardState::Alert;
++                self.episode_reported = false;
++                if self.worth_alerting(load_alert, mem_alert, disk_alert, sample, now) {
++                    self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
+                     Some(GuardReport::Alert(alert_reasons.join("; ")))
+                 } else {
+                     None
+@@ -554,10 +649,21 @@ impl GuardWatcher {
+ 
+                 if load_cleared && mem_cleared && disk_cleared {
+                     self.current_state = GuardState::Clear;
+-                    Some(GuardReport::Clear)
+-                } else {
+-                    None
++                    let reported = std::mem::replace(&mut self.episode_reported, false);
++                    return reported.then_some(GuardReport::Clear);
++                }
++                // Still alerting: quiet unless the host got materially worse (or a new metric
++                // started alerting) since the last emitted ALERT. Time alone never re-alerts here.
++                if !alert_reasons.is_empty()
++                    && self.last_alert.is_some_and(|mark| {
++                        now.saturating_duration_since(mark.at) < GUARD_REALERT_WINDOW
++                    })
++                    && self.worth_alerting(load_alert, mem_alert, disk_alert, sample, now)
++                {
++                    self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
++                    return Some(GuardReport::Alert(alert_reasons.join("; ")));
+                 }
++                None
+             }
+         }
+     }
+@@ -581,8 +687,9 @@ impl GuardWatcher {
+             };
+             crate::storage::enqueue_lane_event(pool, None, lead, "guard", &super::scrub(&body))
+                 .await?;
+-            *self = next;
+         }
++        // Suppressed transitions still advance the state machine.
++        *self = next;
+         Ok(())
+     }
+ }
+@@ -603,11 +710,28 @@ async fn active_lane_count<'e>(
+     u64::try_from(count).map_err(|error| crate::OmonError::Config(error.to_string()))
+ }
+ 
+-/// Creates the lane thread with no DB connection held; returns (bot id, thread id).
+-async fn create_launch_thread(
++/// Creates the lane thread with no DB connection held; returns (bot id, thread ref).
++/// A Slack parent (`slack:C…` or `C…`) roots a Slack thread; a numeric parent a Discord one.
++pub async fn create_lane_thread(
+     lane: &crate::storage::Lane,
+     parent: &str,
+ ) -> Result<(String, String), String> {
++    if super::slack_threads::parse_parent(parent).is_some() {
++        let threads = super::slack_threads::SlackLaneThreads::from_env()
++            .ok_or_else(|| "Slack is not configured".to_string())?;
++        let bot = tokio::time::timeout(LAUNCH_DISCORD_TIMEOUT, threads.bot_user_id())
++            .await
++            .map_err(|_| "slack bot lookup timed out".to_string())?
++            .map_err(|error| error.to_string())?;
++        let thread = tokio::time::timeout(
++            LAUNCH_DISCORD_TIMEOUT,
++            threads.create_thread(parent, &lane.key, &lane.title),
++        )
++        .await
++        .map_err(|_| "slack thread creation timed out".to_string())?
++        .map_err(|error| error.to_string())?;
++        return Ok((bot, thread));
++    }
+     let parent = parent.parse::<u64>().map_err(|error| error.to_string())?;
+     let threads =
+         super::discord_threads::DiscordThreads::from_env().map_err(|error| error.to_string())?;
+@@ -631,14 +755,29 @@ async fn create_launch_thread(
+     Ok((bot, created.thread_channel_id.to_string()))
+ }
+ 
+-/// Best effort: the lane service must not stall on a Discord failure here.
+-async fn archive_orphan_thread(thread: u64) {
++/// Best effort: the lane service must not stall on a transport failure here.
++/// Discord archives the orphan thread; Slack deletes its starter message.
++pub async fn discard_orphan_thread(thread: &str) {
++    if super::slack_threads::is_slack_ref(thread) {
++        let Some(threads) = super::slack_threads::SlackLaneThreads::from_env() else {
++            return;
++        };
++        match tokio::time::timeout(LAUNCH_DISCORD_TIMEOUT, threads.delete_thread(thread)).await {
++            Ok(Ok(())) => {}
++            Ok(Err(error)) => tracing::warn!(thread, %error, "orphan lane thread delete failed"),
++            Err(_) => tracing::warn!(thread, "orphan lane thread delete timed out"),
++        }
++        return;
++    }
++    let Ok(id) = thread.parse::<u64>() else {
++        return;
++    };
+     let Ok(threads) = super::discord_threads::DiscordThreads::from_env() else {
+         return;
+     };
+     match tokio::time::timeout(
+         LAUNCH_DISCORD_TIMEOUT,
+-        threads.archive(serenity::all::ChannelId::new(thread)),
++        threads.archive(serenity::all::ChannelId::new(id)),
+     )
+     .await
+     {
+@@ -698,7 +837,7 @@ pub async fn retry_queued(
+         }
+         let mut bot = None;
+         let thread = match (&lane.parent_channel_id, &lane.thread_channel_id) {
+-            (Some(parent), None) => match create_launch_thread(&lane, parent).await {
++            (Some(parent), None) => match create_lane_thread(&lane, parent).await {
+                 Ok((bot_id, thread)) => {
+                     bot = Some(bot_id);
+                     Some(thread)
+@@ -728,8 +867,8 @@ pub async fn retry_queued(
+                 record_launch_problem(pool, &lane, "launch_orphan_thread", &detail).await?;
+                 // The thread id is not persisted, so the next tick creates another
+                 // one: archive this orphan instead of leaving one per tick behind.
+-                if let Some(thread) = thread.as_deref().and_then(|id| id.parse::<u64>().ok()) {
+-                    archive_orphan_thread(thread).await;
++                if let Some(thread) = thread.as_deref() {
++                    discard_orphan_thread(thread).await;
+                 }
+             }
+             if changed.rows_affected() == 0 {
+@@ -1098,6 +1237,90 @@ mod tests {
+         assert_eq!(watcher.state(), GuardState::Clear);
+     }
+ 
++    #[test]
++    fn guard_disk_flapping_within_hour_alerts_once_until_material_drop() {
++        let thresholds = GuardThresholds {
++            load_alert: 150.0,
++            load_ok: 80.0,
++            mem_free_min_pct: 20,
++            disk_free_min_gb: 50,
++            lanes_max: 6,
++        };
++        let mut watcher = GuardWatcher::new(thresholds);
++        let t0 = std::time::Instant::now();
++        let mut alerts = 0;
++        let mut clears = 0;
++        for (minute, gb) in [48u64, 51, 47, 52, 46].into_iter().enumerate() {
++            let now = t0 + Duration::from_secs(minute as u64 * 10 * 60);
++            match watcher.check_at(&HostSample::new(10.0, 50, gb, 0), now) {
++                Some(GuardReport::Alert(_)) => alerts += 1,
++                Some(GuardReport::Clear) => clears += 1,
++                None => {}
++            }
++        }
++        assert_eq!(alerts, 1, "flapping must alert exactly once");
++        assert_eq!(clears, 1, "only the reported episode may CLEAR");
++        assert_eq!(watcher.state(), GuardState::Alert);
++
++        // A drop >=10 GB below the last alerted value re-alerts, even mid-episode.
++        let t_drop = t0 + Duration::from_secs(55 * 60);
++        assert_eq!(
++            watcher.check_at(&HostSample::new(10.0, 50, 40, 0), t_drop),
++            None
++        );
++        let rep = watcher.check_at(&HostSample::new(10.0, 50, 35, 0), t_drop);
++        assert!(
++            rep.as_ref().is_some_and(GuardReport::is_alert),
++            "a drop >=10 GB below the last alerted value must re-alert, got {rep:?}"
++        );
++        assert_eq!(
++            watcher.check_at(&HostSample::new(10.0, 50, 34, 0), t_drop),
++            None
++        );
++    }
++
++    #[test]
++    fn guard_realerts_after_window_and_on_mem_drop() {
++        let thresholds = GuardThresholds {
++            load_alert: 150.0,
++            load_ok: 80.0,
++            mem_free_min_pct: 20,
++            disk_free_min_gb: 50,
++            lanes_max: 6,
++        };
++        let mut watcher = GuardWatcher::new(thresholds);
++        let t0 = std::time::Instant::now();
++        assert!(watcher
++            .check_at(&HostSample::new(10.0, 18, 100, 0), t0)
++            .is_some());
++        assert_eq!(
++            watcher.check_at(&HostSample::new(10.0, 25, 100, 0), t0),
++            Some(GuardReport::Clear)
++        );
++        // 3 points lower within the window: suppressed.
++        assert_eq!(
++            watcher.check_at(&HostSample::new(10.0, 15, 100, 0), t0),
++            None
++        );
++        assert_eq!(
++            watcher.check_at(&HostSample::new(10.0, 25, 100, 0), t0),
++            None
++        );
++        // 10 points lower: re-alert.
++        assert!(watcher
++            .check_at(&HostSample::new(10.0, 8, 100, 0), t0)
++            .is_some());
++        assert_eq!(
++            watcher.check_at(&HostSample::new(10.0, 25, 100, 0), t0),
++            Some(GuardReport::Clear)
++        );
++        // Same value but 24h later: re-alert.
++        let later = t0 + GUARD_REALERT_WINDOW;
++        assert!(watcher
++            .check_at(&HostSample::new(10.0, 8, 100, 0), later)
++            .is_some());
++    }
++
+     #[tokio::test]
+     async fn zero_heavy_slots_is_clamped_instead_of_waiting_forever() {
+         let temp_dir = tempfile::tempdir().expect("create tempdir");
+diff --git a/src/lanes/kibitzer.rs b/src/lanes/kibitzer.rs
+index 7c06eea..7583961 100644
+--- a/src/lanes/kibitzer.rs
++++ b/src/lanes/kibitzer.rs
+@@ -101,6 +101,26 @@ impl OutboundDispatcher for Capture {
+     }
+ }
+ 
++/// The owner's home DM: the verified Discord DM, or a Slack DM with the Slack owner.
++fn is_owner_home_dm(lead: &SessionKey, slack_owner: &str) -> bool {
++    if lead.guild_id.is_some() || lead.thread_id.is_some() {
++        return false;
++    }
++    match lead.platform.as_str() {
++        "discord" => {
++            lead.user_id == "414011632306618368"
++                && lead.bot_id.as_deref() == Some("1465631383862120451")
++                && lead.channel_id == "1474231559895646240"
++        }
++        crate::slack::PLATFORM => {
++            lead.user_id == slack_owner
++                && lead.bot_id.as_deref().is_some_and(|bot| !bot.is_empty())
++                && !lead.channel_id.is_empty()
++        }
++        _ => false,
++    }
++}
++
+ pub struct Kibitzer {
+     pool: SqlitePool,
+     lead: SessionKey,
+@@ -121,13 +141,7 @@ impl Kibitzer {
+         clock: Arc<dyn Clock>,
+         enabled: bool,
+     ) -> Result<Self> {
+-        if lead.platform != "discord"
+-            || lead.guild_id.is_some()
+-            || lead.thread_id.is_some()
+-            || lead.user_id != "414011632306618368"
+-            || lead.bot_id.as_deref() != Some("1465631383862120451")
+-            || lead.channel_id != "1474231559895646240"
+-        {
++        if !is_owner_home_dm(&lead, &crate::slack::owner_id()) {
+             return Err(OmonError::Config(
+                 "kibitzer lead must be the verified owner home DM".into(),
+             ));
+@@ -571,6 +585,46 @@ mod tests {
+         tx.commit().await.unwrap();
+     }
+ 
++    #[test]
++    fn lead_must_be_an_owner_home_dm_on_discord_or_slack() {
++        let slack =
++            |user: &str, bot: Option<&str>, guild: Option<&str>, thread: Option<&str>| SessionKey {
++                platform: "slack".into(),
++                guild_id: guild.map(str::to_owned),
++                channel_id: "D0C9HNVUK5M".into(),
++                thread_id: thread.map(str::to_owned),
++                user_id: user.into(),
++                bot_id: bot.map(str::to_owned),
++            };
++        assert!(is_owner_home_dm(
++            &SessionKey::from_storage_key(DEFAULT_LEAD).unwrap(),
++            "UOWNER"
++        ));
++        assert!(is_owner_home_dm(
++            &slack("UOWNER", Some("UBOT"), None, None),
++            "UOWNER"
++        ));
++        assert!(!is_owner_home_dm(
++            &slack("UOTHER", Some("UBOT"), None, None),
++            "UOWNER"
++        ));
++        assert!(!is_owner_home_dm(
++            &slack("UOWNER", None, None, None),
++            "UOWNER"
++        ));
++        assert!(!is_owner_home_dm(
++            &slack("UOWNER", Some("UBOT"), Some("T1"), None),
++            "UOWNER"
++        ));
++        assert!(!is_owner_home_dm(
++            &slack("UOWNER", Some("UBOT"), None, Some("1.2")),
++            "UOWNER"
++        ));
++        let mut discord = SessionKey::from_storage_key(DEFAULT_LEAD).unwrap();
++        discord.user_id = "UOWNER".into();
++        assert!(!is_owner_home_dm(&discord, "UOWNER"));
++    }
++
+     #[test]
+     fn decision_json_in_a_whole_reply_fence_is_accepted() {
+         let raw = "```json\n{\"wake\":true,\"reason\":\"r\",\"suggested\":\"s\",\"target_lane\":null}\n```";
+diff --git a/src/lanes/mod.rs b/src/lanes/mod.rs
+index 9cb7e23..5a49680 100644
+--- a/src/lanes/mod.rs
++++ b/src/lanes/mod.rs
+@@ -9,6 +9,7 @@ pub mod runner;
+ pub mod scrub;
+ pub mod settle;
+ pub mod signals;
++pub mod slack_threads;
+ pub mod state;
+ 
+ pub use scrub::scrub;
+diff --git a/src/lanes/posts.rs b/src/lanes/posts.rs
+index 14fb21b..a5005eb 100644
+--- a/src/lanes/posts.rs
++++ b/src/lanes/posts.rs
+@@ -70,7 +70,7 @@ pub trait PostSink: Send + Sync {
+     async fn send(&self, post: &Post) -> Result<String>;
+ 
+     /// False means the message was deleted, not an ambiguous transport error.
+-    async fn edit_status(&self, _thread: u64, _message: u64, _body: &str) -> Result<bool> {
++    async fn edit_status(&self, _thread: &str, _message: &str, _body: &str) -> Result<bool> {
+         Err(OmonError::Config(
+             "status edits are unsupported by this sink".into(),
+         ))
+@@ -78,7 +78,7 @@ pub trait PostSink: Send + Sync {
+ 
+     async fn rename_status(
+         &self,
+-        _thread: u64,
++        _thread: &str,
+         _status: super::discord_threads::ThreadStatus,
+         _title: &str,
+     ) -> Result<()> {
+@@ -116,7 +116,9 @@ impl PostSink for DiscordThreads {
+         Ok(message.id.to_string())
+     }
+ 
+-    async fn edit_status(&self, thread: u64, message: u64, body: &str) -> Result<bool> {
++    async fn edit_status(&self, thread: &str, message: &str, body: &str) -> Result<bool> {
++        let thread = discord_id(thread)?;
++        let message = discord_id(message)?;
+         match ChannelId::new(thread)
+             .edit_message(
+                 self.http(),
+@@ -148,17 +150,24 @@ impl PostSink for DiscordThreads {
+ 
+     async fn rename_status(
+         &self,
+-        thread: u64,
++        thread: &str,
+         status: super::discord_threads::ThreadStatus,
+         title: &str,
+     ) -> Result<()> {
+-        self.set_status_with_title(ChannelId::new(thread), status, &scrub(title))
++        self.set_status_with_title(ChannelId::new(discord_id(thread)?), status, &scrub(title))
+             .await
+             .map_err(|error| OmonError::Config(format!("lane status rename: {error}")))?;
+         Ok(())
+     }
+ }
+ 
++fn discord_id(id: &str) -> Result<u64> {
++    id.parse::<u64>()
++        .ok()
++        .filter(|id| *id != 0)
++        .ok_or_else(|| OmonError::Config(format!("invalid Discord lane id: {id}")))
++}
++
+ /// Call once at service startup, before starting its sole delivery worker.
+ pub async fn recover(pool: &SqlitePool) -> Result<()> {
+     sqlx::query("UPDATE lane_transcript SET text = json_set(text, '$.state', 'uncertain', '$.error', 'process stopped before delivery acknowledgement') WHERE role = 'thread_post' AND json_valid(text) AND json_extract(text, '$.state') = 'sending'")
+@@ -192,12 +201,10 @@ async fn drain_inner(
+     let mut sent = 0;
+     for (id, original) in rows {
+         let mut post: Post = serde_json::from_str(&original).map_err(json_error)?;
+-        if post
++        if !post
+             .thread
+             .as_deref()
+-            .and_then(|id| id.parse::<u64>().ok())
+-            .filter(|id| *id != 0)
+-            .is_none()
++            .is_some_and(super::slack_threads::valid_thread_ref)
+         {
+             post.state = PostState::Failed;
+             post.error = Some("missing or invalid thread destination; no send attempted".into());
+@@ -315,9 +322,8 @@ async fn refresh_lane_status_bounded(
+     };
+     let Some(thread) = lane
+         .thread_channel_id
+-        .as_deref()
+-        .and_then(|id| id.parse::<u64>().ok())
+-        .filter(|id| *id != 0)
++        .clone()
++        .filter(|id| super::slack_threads::valid_thread_ref(id))
+     else {
+         return Ok(());
+     };
+@@ -371,7 +377,7 @@ async fn refresh_lane_status_bounded(
+         // and the receipt below still records the status as handled.
+         match tokio::time::timeout(
+             call_timeout,
+-            sink.rename_status(thread, status, &lane.title),
++            sink.rename_status(&thread, status, &lane.title),
+         )
+         .await
+         {
+@@ -400,17 +406,19 @@ async fn refresh_lane_status_bounded(
+         at: now,
+         status: lane.status.clone(),
+     };
+-    let existing = lane
+-        .status_message_id
+-        .as_deref()
+-        .map(|id| id.parse::<u64>())
+-        .transpose()
+-        .map_err(|error| OmonError::Config(format!("invalid lane status message id: {error}")))?;
++    let existing = lane.status_message_id.clone();
++    if let Some(message) = &existing {
++        if !super::slack_threads::is_slack_ref(&thread) {
++            discord_id(message).map_err(|_| {
++                OmonError::Config(format!("invalid lane status message id: {message}"))
++            })?;
++        }
++    }
+     let mut edit_timed_out = false;
+     let edited = if let Some(message) = existing {
+         match tokio::time::timeout(
+             call_timeout,
+-            sink.edit_status(thread, message, &receipt.post.body),
++            sink.edit_status(&thread, &message, &receipt.post.body),
+         )
+         .await
+         {
+@@ -494,13 +502,13 @@ mod tests {
+             Ok("777".into())
+         }
+ 
+-        async fn edit_status(&self, _: u64, _: u64, _: &str) -> Result<bool> {
++        async fn edit_status(&self, _: &str, _: &str, _: &str) -> Result<bool> {
+             std::future::pending::<Result<bool>>().await
+         }
+ 
+         async fn rename_status(
+             &self,
+-            _: u64,
++            _: &str,
+             _: super::super::discord_threads::ThreadStatus,
+             _: &str,
+         ) -> Result<()> {
+diff --git a/src/lanes/runner.rs b/src/lanes/runner.rs
+index be25b9f..ffeba70 100644
+--- a/src/lanes/runner.rs
++++ b/src/lanes/runner.rs
+@@ -29,6 +29,43 @@ tokio::task_local! {
+ 
+ pub const DEFAULT_MAX_TURNS: i64 = 24;
+ 
++/// A working lane quiet this long gets one progress nudge per silence.
++pub const NUDGE_AFTER: chrono::Duration = chrono::Duration::minutes(15);
++pub const NUDGE_TEXT: &str = "[LEAD] 진행 상황을 [REPORT] 한 줄로 보고하고 계속하세요";
++
++/// OMON_LANE_CONTROL_ENABLED (default true), read once per process.
++pub fn lane_control_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| {
++        std::env::var("OMON_LANE_CONTROL_ENABLED").map_or(true, |value| {
++            !matches!(
++                value.trim().to_ascii_lowercase().as_str(),
++                "0" | "false" | "no" | "off"
++            )
++        })
++    })
++}
++
++/// OMON_LANE_AUTO_WORKTREE (default true), read once per process.
++pub fn auto_worktree_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| {
++        std::env::var("OMON_LANE_AUTO_WORKTREE").map_or(true, |value| {
++            !matches!(
++                value.trim().to_ascii_lowercase().as_str(),
++                "0" | "false" | "no" | "off"
++            )
++        })
++    })
++}
++
++async fn paused(pool: &SqlitePool, key: &str) -> Result<bool> {
++    if !lane_control_enabled() {
++        return Ok(false);
++    }
++    crate::storage::lanes::is_lane_paused(pool, key).await
++}
++
+ async fn reopen_generation(pool: &SqlitePool, key: &str) -> Result<i64> {
+     let (generation,): (i64,) = sqlx::query_as(
+         "SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened'",
+@@ -55,9 +92,8 @@ pub async fn reopen(pool: &SqlitePool, key: &str, text: Option<&str>) -> Result<
+         )));
+     }
+     restore_cwd(pool, &lane).await?;
+-    if lane.thread_channel_id.is_some() {
+-        let transport = super::discord_threads::DiscordThreads::from_env()
+-            .map_err(|error| OmonError::Config(error.to_string()))?;
++    if let Some(thread) = &lane.thread_channel_id {
++        let transport = transport_for(thread)?;
+         thread_effect(pool, &lane, Some(&transport), false, LIFECYCLE_TIMEOUT).await?;
+     }
+     apply_reopen(pool, key, text, None).await
+@@ -115,23 +151,58 @@ async fn apply_reopen(
+     Ok(())
+ }
+ 
++/// One transport for the platform of `thread` (a Slack ref or a Discord channel id).
++fn transport_for(thread: &str) -> Result<super::slack_threads::LaneTransports> {
++    let mut transports = super::slack_threads::LaneTransports::default();
++    if super::slack_threads::is_slack_ref(thread) {
++        transports.slack = Some(Arc::new(
++            super::slack_threads::SlackLaneThreads::from_env()
++                .ok_or_else(|| OmonError::Config("Slack is not configured".into()))?,
++        ));
++    } else {
++        transports.discord = Some(Arc::new(
++            super::discord_threads::DiscordThreads::from_env()
++                .map_err(|error| OmonError::Config(error.to_string()))?,
++        ));
++    }
++    Ok(transports)
++}
++
+ #[async_trait]
+ pub trait LaneLifecycle: Send + Sync {
+     async fn bot_id(
+         &self,
+     ) -> std::result::Result<String, super::discord_threads::DiscordThreadError>;
++    /// Bot identity on the platform that owns `thread`.
++    async fn bot_id_for(
++        &self,
++        _thread: &str,
++    ) -> std::result::Result<String, super::discord_threads::DiscordThreadError> {
++        self.bot_id().await
++    }
+     async fn status(
+         &self,
+-        thread: u64,
++        thread: &str,
+         status: super::discord_threads::ThreadStatus,
+     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError>;
+     async fn archived(
+         &self,
+-        thread: u64,
++        thread: &str,
+         archived: bool,
+     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError>;
+ }
+ 
++fn discord_thread(
++    thread: &str,
++) -> std::result::Result<serenity::all::ChannelId, super::discord_threads::DiscordThreadError> {
++    thread
++        .parse::<u64>()
++        .ok()
++        .filter(|id| *id != 0)
++        .map(serenity::all::ChannelId::new)
++        .ok_or_else(|| OmonError::Config("invalid lane thread".into()).into())
++}
++
+ #[async_trait]
+ impl LaneLifecycle for super::discord_threads::DiscordThreads {
+     async fn bot_id(
+@@ -141,19 +212,19 @@ impl LaneLifecycle for super::discord_threads::DiscordThreads {
+     }
+     async fn status(
+         &self,
+-        thread: u64,
++        thread: &str,
+         status: super::discord_threads::ThreadStatus,
+     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError> {
+-        self.set_status(serenity::all::ChannelId::new(thread), status)
++        self.set_status(discord_thread(thread)?, status)
+             .await
+             .map(|_| ())
+     }
+     async fn archived(
+         &self,
+-        thread: u64,
++        thread: &str,
+         archived: bool,
+     ) -> std::result::Result<(), super::discord_threads::DiscordThreadError> {
+-        let thread = serenity::all::ChannelId::new(thread);
++        let thread = discord_thread(thread)?;
+         if archived {
+             self.archive(thread).await
+         } else {
+@@ -185,14 +256,12 @@ async fn thread_effect(
+             .await?;
+     let bound =
+         bound.ok_or_else(|| OmonError::Config("lane has no evidenced bot binding".into()))?;
+-    let thread = thread
+-        .parse::<u64>()
+-        .ok()
+-        .filter(|id| *id != 0)
+-        .ok_or_else(|| OmonError::Config("invalid lane thread".into()))?;
++    if !super::slack_threads::valid_thread_ref(thread) {
++        return Err(OmonError::Config("invalid lane thread".into()));
++    }
+     let transport = transport
+         .ok_or_else(|| OmonError::Config("lane lifecycle transport unavailable".into()))?;
+-    if tokio::time::timeout(timeout, transport.bot_id())
++    if tokio::time::timeout(timeout, transport.bot_id_for(thread))
+         .await
+         .map_err(|_| OmonError::Config("lane lifecycle bot lookup timed out".into()))?
+         .map_err(|error| OmonError::Config(error.to_string()))?
+@@ -343,6 +412,127 @@ pub async fn register_owned_worktree(
+     Ok(())
+ }
+ 
++/// A worktree `lane start` created for one lane.
++#[derive(Debug, Clone)]
++pub struct AutoWorktree {
++    pub repo: PathBuf,
++    pub path: PathBuf,
++    pub branch: String,
++}
++
++/// Creates `<repo-parent>/<repo-name>-lanes/<key>` on a new `lane/<key>` branch from HEAD
++/// when `cwd` (canonical) is the root of a main git worktree, so parallel lanes on one
++/// repository never share a tree. Returns None, and logs why, for any other cwd.
++pub async fn create_auto_worktree(
++    cwd: &std::path::Path,
++    key: &str,
++) -> Result<Option<AutoWorktree>> {
++    if !auto_worktree_enabled() {
++        return Ok(None);
++    }
++    let probe = tokio::process::Command::new("git")
++        .arg("-C")
++        .arg(cwd)
++        .args([
++            "rev-parse",
++            "--path-format=absolute",
++            "--show-toplevel",
++            "--absolute-git-dir",
++            "--git-common-dir",
++        ])
++        .kill_on_drop(true)
++        .output()
++        .await
++        .map_err(io_error)?;
++    if !probe.status.success() {
++        let stderr = String::from_utf8_lossy(&probe.stderr);
++        if stderr.contains("not a git repository") {
++            tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: not a git repository");
++            return Ok(None);
++        }
++        return Err(OmonError::Config(format!(
++            "auto worktree probe {}: {}",
++            cwd.display(),
++            stderr.trim()
++        )));
++    }
++    let stdout = String::from_utf8_lossy(&probe.stdout).into_owned();
++    let mut lines = stdout.lines();
++    let (Some(top), Some(git_dir), Some(common)) = (lines.next(), lines.next(), lines.next())
++    else {
++        return Err(OmonError::Config(
++            "auto worktree probe: unexpected output".into(),
++        ));
++    };
++    let top = tokio::fs::canonicalize(top).await.map_err(io_error)?;
++    let git_dir = tokio::fs::canonicalize(git_dir).await.map_err(io_error)?;
++    let common = tokio::fs::canonicalize(common).await.map_err(io_error)?;
++    if git_dir != common {
++        tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: cwd is already a linked worktree");
++        return Ok(None);
++    }
++    if top != cwd {
++        tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: cwd is not the repository root");
++        return Ok(None);
++    }
++    let repo = top.to_string_lossy().into_owned();
++    if git(&repo, &["rev-parse", "--verify", "--quiet", "HEAD"])
++        .await
++        .is_err()
++    {
++        tracing::info!(key, cwd = %cwd.display(), "auto worktree skipped: repository has no commits");
++        return Ok(None);
++    }
++    let (Some(name), Some(parent)) = (top.file_name(), top.parent()) else {
++        return Err(OmonError::Config(
++            "auto worktree: repository root has no parent".into(),
++        ));
++    };
++    let lanes_dir = parent.join(format!("{}-lanes", name.to_string_lossy()));
++    tokio::fs::create_dir_all(&lanes_dir)
++        .await
++        .map_err(io_error)?;
++    let path = lanes_dir.join(key);
++    let branch = format!("lane/{key}");
++    let target = path.to_string_lossy().into_owned();
++    git(&repo, &["worktree", "add", "-b", &branch, &target, "HEAD"]).await?;
++    let path = tokio::fs::canonicalize(&path).await.map_err(io_error)?;
++    tracing::info!(key, path = %path.display(), "auto worktree created");
++    Ok(Some(AutoWorktree {
++        repo: top,
++        path,
++        branch,
++    }))
++}
++
++/// Undoes `create_auto_worktree` when the lane row was never stored. The tree is fresh
++/// and clean and its branch sits at HEAD, so neither command needs a force flag.
++pub async fn discard_auto_worktree(tree: &AutoWorktree) {
++    let repo = tree.repo.to_string_lossy();
++    if let Err(error) = git(&repo, &["worktree", "remove", &tree.path.to_string_lossy()]).await {
++        tracing::warn!(path = %tree.path.display(), %error, "unused auto worktree not removed");
++        return;
++    }
++    if let Err(error) = git(&repo, &["branch", "-d", &tree.branch]).await {
++        tracing::warn!(branch = %tree.branch, %error, "unused auto worktree branch not deleted");
++    }
++}
++
++/// Why a worktree must survive the sweep: local changes, or commits no remote has.
++async fn keep_reason(path: &str) -> Result<Option<&'static str>> {
++    if !git(path, &["status", "--porcelain"]).await?.is_empty() {
++        return Ok(Some("dirty"));
++    }
++    if !git(path, &["remote"]).await?.is_empty()
++        && !git(path, &["log", "HEAD", "--not", "--remotes", "--oneline"])
++            .await?
++            .is_empty()
++    {
++        return Ok(Some("unpushed"));
++    }
++    Ok(None)
++}
++
+ async fn validate_owned(worktree: &crate::storage::lanes::OwnedWorktree) -> Result<()> {
+     let proof = worktree_proof(&worktree.repo, &worktree.path).await?;
+     if proof
+@@ -606,6 +796,7 @@ pub struct CapturingDispatcher {
+     pool: SqlitePool,
+     streams: tokio::sync::Mutex<HashMap<(String, uuid::Uuid), StreamCapture>>,
+     posts_ready: Arc<Notify>,
++    approval_dispatcher: Option<Arc<dyn OutboundDispatcher>>,
+ }
+ 
+ impl CapturingDispatcher {
+@@ -614,8 +805,14 @@ impl CapturingDispatcher {
+             pool,
+             streams: tokio::sync::Mutex::new(HashMap::new()),
+             posts_ready: Arc::new(Notify::new()),
++            approval_dispatcher: None,
+         }
+     }
++
++    pub fn with_approval_dispatcher(mut self, dispatcher: Arc<dyn OutboundDispatcher>) -> Self {
++        self.approval_dispatcher = Some(dispatcher);
++        self
++    }
+ }
+ 
+ #[async_trait]
+@@ -658,10 +855,55 @@ impl OutboundDispatcher for CapturingDispatcher {
+                 format!("[file] {}", path.display()),
+                 uuid::Uuid::new_v4().to_string(),
+             )),
+-            OutboundAction::ApprovalRequest { .. } => {
+-                return Err(OmonError::Config(
+-                    "lane approval requires lead intervention".into(),
+-                ));
++            OutboundAction::ApprovalRequest {
++                session,
++                request_id,
++                command,
++                reason,
++            } => {
++                let lead_key = if session.platform == "lane" {
++                    sqlx::query_scalar::<_, String>(
++                        "SELECT lead_session_key FROM lanes WHERE key = ?",
++                    )
++                    .bind(&session.channel_id)
++                    .fetch_optional(&self.pool)
++                    .await?
++                    .unwrap_or_else(|| super::kibitzer::DEFAULT_LEAD.to_string())
++                } else {
++                    session.storage_key()
++                };
++                let owner_session =
++                    SessionKey::from_storage_key(&lead_key).unwrap_or_else(|_| session.clone());
++                if let Some(dispatcher) = &self.approval_dispatcher {
++                    dispatcher
++                        .dispatch(OutboundAction::ApprovalRequest {
++                            session: owner_session,
++                            request_id,
++                            command,
++                            reason,
++                        })
++                        .await?;
++                    return Ok(());
++                }
++                let body = format!(
++                    "[APPROVAL_REQUEST] lane={} request_id={} command={} reason={}",
++                    session.channel_id, request_id, command, reason
++                );
++                sqlx::query(
++                    "INSERT INTO lane_events (lane_key, lead_session_key, kind, body, created_at)
++                     VALUES (?, ?, 'action_loop', ?, ?)",
++                )
++                .bind(if session.platform == "lane" {
++                    Some(session.channel_id.as_str())
++                } else {
++                    None
++                })
++                .bind(&lead_key)
++                .bind(&body)
++                .bind(Utc::now())
++                .execute(&self.pool)
++                .await?;
++                return Ok(());
+             }
+             OutboundAction::DeleteMessage { .. }
+             | OutboundAction::Typing { .. }
+@@ -894,6 +1136,90 @@ impl LaneRunner {
+         result
+     }
+ 
++    /// Startup sweep: an owned worktree still registered to a closed or failed lane is
++    /// removed through the close path (a failed lane takes a forced close, a closed one
++    /// replays its completed close intent). A dirty or unpushed worktree is kept and
++    /// reported once as a `worktree_kept` lane event.
++    pub async fn sweep_orphan_worktrees(&self) -> Result<()> {
++        if !auto_worktree_enabled() {
++            return Ok(());
++        }
++        let lanes: Vec<(String, String, String)> = sqlx::query_as(
++            "SELECT DISTINCT l.key, l.status, l.lead_session_key FROM lanes l
++             JOIN lane_owned_worktrees w ON w.lane_key = l.key
++             WHERE w.state = 'registered' AND l.status IN ('closed','failed') ORDER BY l.key",
++        )
++        .fetch_all(&self.pool)
++        .await?;
++        for (key, status, lead) in lanes {
++            let result: Result<()> = async {
++                let paths: Vec<String> = sqlx::query_scalar(
++                    "SELECT path FROM lane_owned_worktrees WHERE lane_key=? AND state='registered' ORDER BY id",
++                )
++                .bind(&key)
++                .fetch_all(&self.pool)
++                .await?;
++                let mut kept = Vec::new();
++                for path in &paths {
++                    if let Some(reason) = keep_reason(path).await? {
++                        kept.push(format!("{reason} {path}"));
++                    }
++                }
++                if !kept.is_empty() {
++                    let body = super::scrub::scrub(&format!(
++                        "worktree kept for {status} lane {key}: {}",
++                        kept.join("; ")
++                    ));
++                    let reported: bool = sqlx::query_scalar(
++                        "SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key=? AND kind='worktree_kept' AND body=?)",
++                    )
++                    .bind(&key)
++                    .bind(&body)
++                    .fetch_one(&self.pool)
++                    .await?;
++                    if !reported {
++                        crate::storage::lanes::enqueue_lane_event(
++                            &self.pool,
++                            Some(&key),
++                            &lead,
++                            "worktree_kept",
++                            &body,
++                        )
++                        .await?;
++                    }
++                    return Ok(());
++                }
++                if status == "failed" {
++                    let id = crate::storage::lanes::request_close(
++                        &self.pool,
++                        &key,
++                        true,
++                        Some("forced: startup sweep of orphan lane worktree"),
++                    )
++                    .await?;
++                    return self.close_intent(id).await;
++                }
++                let intent: Option<crate::storage::lanes::CloseIntent> = sqlx::query_as(
++                    "SELECT * FROM lane_close_intents WHERE lane_key=? AND state='completed' ORDER BY id DESC LIMIT 1",
++                )
++                .bind(&key)
++                .fetch_optional(&self.pool)
++                .await?;
++                match intent {
++                    Some(intent) => remove_owned(&self.pool, &intent).await,
++                    None => Err(OmonError::Config(
++                        "closed lane has no completed close intent".into(),
++                    )),
++                }
++            }
++            .await;
++            if let Err(error) = result {
++                tracing::warn!(%key, %error, "orphan lane worktree sweep failed");
++            }
++        }
++        Ok(())
++    }
++
+     pub async fn apply_owner_replies(&self) -> Result<()> {
+         let replies: Vec<(String,String,Option<String>,i64)>=sqlx::query_as("SELECT message_id,lane_key,text,generation FROM lane_owner_replies WHERE state='pending' AND error IS NULL ORDER BY rowid").fetch_all(&self.pool).await?;
+         for (id, key, text, generation) in replies {
+@@ -971,6 +1297,15 @@ impl LaneRunner {
+     }
+ 
+     pub fn from_env(pool: SqlitePool) -> Result<Self> {
++        Self::from_env_with_requester(pool, None)
++    }
++
++    /// Lane turns raise approval cards in the lead's conversation through the shared requester,
++    /// so a lane action that needs the owner is asked instead of silently declined.
++    pub fn from_env_with_requester(
++        pool: SqlitePool,
++        requester: Option<Arc<crate::DiscordApprovalRequester>>,
++    ) -> Result<Self> {
+         let config = OmoBackendConfig::lane_from_env()?;
+         if config.total_timeout.is_zero() {
+             return Err(OmonError::Config(
+@@ -978,7 +1313,10 @@ impl LaneRunner {
+             ));
+         }
+         let capture = Arc::new(CapturingDispatcher::new(pool.clone()));
+-        let backend = OmoBackend::new(config, capture.clone()).with_pool(pool.clone());
++        let mut backend = OmoBackend::new(config, capture.clone()).with_pool(pool.clone());
++        if let Some(requester) = requester {
++            backend = backend.with_approval_requester(requester);
++        }
+         let mut runner = Self::new(pool, Arc::new(backend));
+         runner.posts_ready = capture.posts_ready.clone();
+         runner.capture = Some(capture);
+@@ -990,17 +1328,28 @@ impl LaneRunner {
+                 )
+             })
+             .unwrap_or(true);
++        let mut transports = super::slack_threads::LaneTransports {
++            discord: None,
++            slack: super::slack_threads::SlackLaneThreads::from_env().map(Arc::new),
++        };
+         if let Some(transport) = super::discord_threads::DiscordThreads::loopback_from_env()? {
+-            let transport = Arc::new(transport);
+-            runner.post_sink = Some(transport.clone());
+-            runner.lifecycle = Some(transport);
++            transports.discord = Some(Arc::new(transport));
+         } else if discord_enabled {
+-            let transport = Arc::new(
+-                super::discord_threads::DiscordThreads::from_env()
+-                    .map_err(|error| OmonError::Config(error.to_string()))?,
+-            );
+-            runner.post_sink = Some(transport.clone());
+-            runner.lifecycle = Some(transport);
++            match super::discord_threads::DiscordThreads::from_env() {
++                Ok(transport) => transports.discord = Some(Arc::new(transport)),
++                // A Slack-only gateway has no Discord token; lanes then live on Slack.
++                Err(super::discord_threads::DiscordThreadError::MissingToken)
++                    if transports.slack.is_some() =>
++                {
++                    tracing::info!("no Discord token; lane threads use Slack only");
++                }
++                Err(error) => return Err(OmonError::Config(error.to_string())),
++            }
++        }
++        if transports.discord.is_some() || transports.slack.is_some() {
++            let transports = Arc::new(transports);
++            runner.post_sink = Some(transports.clone());
++            runner.lifecycle = Some(transports);
+         }
+         if let Ok(value) = std::env::var("OMON_LANE_MAX_TURNS") {
+             runner.max_turns = value
+@@ -1020,6 +1369,9 @@ impl LaneRunner {
+         sqlx::query("UPDATE lane_close_intents SET state='pending' WHERE state='running'")
+             .execute(&self.pool)
+             .await?;
++        if let Err(error) = self.sweep_orphan_worktrees().await {
++            tracing::warn!(%error, "orphan lane worktree sweep failed");
++        }
+         posts::recover(&self.pool).await?;
+         if let Some(sink) = &self.post_sink {
+             posts::drain_with_status(&self.pool, sink.as_ref(), Utc::now()).await?;
+@@ -1061,6 +1413,10 @@ impl LaneRunner {
+                 if released { continue; }
+                 let closing: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_close_intents WHERE lane_key=? AND state IN ('pending','running'))").bind(&lane.key).fetch_one(&self.pool).await?;
+                 if closing { continue; }
++                if paused(&self.pool, &lane.key).await? {
++                    if let Some((notify, _)) = active.get(&lane.key) { notify.notify_one(); }
++                    continue;
++                }
+                 if !active.contains_key(&lane.key) {
+                     let notify = Arc::new(Notify::new());
+                     let runner = self.clone();
+@@ -1171,6 +1527,9 @@ impl LaneRunner {
+         shutdown: CancellationToken,
+     ) -> Result<()> {
+         let initial = self.lane(key).await?;
++        if paused(&self.pool, key).await? {
++            return Ok(());
++        }
+         if crate::sessions::external::ExternalDriver::<
+             crate::sessions::registry::ProcessCommandRunner,
+         >::is_external(&self.pool, key)
+@@ -1222,9 +1581,11 @@ impl LaneRunner {
+             }
+             let lane = self.lane(key).await?;
+             let closing: bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_close_intents WHERE lane_key=? AND state IN ('pending','running'))").bind(key).fetch_one(&self.pool).await?;
++            // A paused lane ends its task; the service respawns it after `lane resume` wakes it.
+             if shutdown.is_cancelled()
+                 || closing
+                 || !matches!(lane.status.as_str(), "working" | "not_done")
++                || paused(&self.pool, key).await?
+             {
+                 return Ok(());
+             }
+@@ -1253,7 +1614,7 @@ impl LaneRunner {
+                     crate::agent::ModelPurpose::LaneSmall,
+                 ))
+             {
+-                let (failed_checks,): (i64,) = sqlx::query_as("SELECT count(*) FROM lane_history WHERE lane_key = ? AND to_status = 'not_done'")
++                let (failed_checks,): (i64,) = sqlx::query_as("SELECT count(*) FROM lane_history WHERE lane_key = ? AND to_status = 'not_done' AND COALESCE(reason, '') NOT IN ('paused', 'resumed')")
+                     .bind(key).fetch_one(&self.pool).await?;
+                 if failed_checks >= 2 {
+                     let mut tx = self.pool.begin().await?;
+@@ -1388,8 +1749,15 @@ impl LaneRunner {
+                                 continue;
+                             }
+                             self.posts_ready.notify_one();
++                            if !turn_task.is_finished() {
++                                self.nudge_quiet(key, &steering_session, generation).await?;
++                            }
+                         }
+                         _ = notify.notified(), if !turn_cancel.is_cancelled() => {
++                            if paused(&self.pool, key).await? {
++                                turn_cancel.cancel();
++                                continue;
++                            }
+                             let current = self.lane(key).await?;
+                             let current_generation = reopen_generation(&self.pool, key).await?;
+                             if current_generation != generation || !matches!(current.status.as_str(), "working" | "not_done" | "done_claimed") {
+@@ -1467,8 +1835,10 @@ impl LaneRunner {
+                 .metadata
+                 .get("omo_thread_id")
+                 .and_then(|value| value.as_str());
++            let paused_now = paused(&self.pool, key).await?;
+             let outcome_text = match &outcome {
+                 Ok(()) => "completed".into(),
++                Err(_) if paused_now => "paused".into(),
+                 Err(error) => format!("error: {error}"),
+             };
+             let mut tx = self.pool.begin().await?;
+@@ -1523,7 +1893,7 @@ impl LaneRunner {
+                         .bind(Utc::now()).bind(id).bind(key).bind(key).bind(generation).execute(&self.pool).await?;
+                 }
+             }
+-            if shutdown.is_cancelled() {
++            if shutdown.is_cancelled() || paused_now {
+                 return Ok(());
+             }
+             errors = if outcome.is_err() { errors + 1 } else { 0 };
+@@ -1573,6 +1943,54 @@ impl LaneRunner {
+         }
+     }
+ 
++    pub async fn nudge_quiet(
++        &self,
++        key: &str,
++        session: &SessionContext,
++        generation: i64,
++    ) -> Result<bool> {
++        self.nudge_quiet_at(key, session, generation, Utc::now())
++            .await
++    }
++
++    /// Steers a working, unpaused lane that has been quiet for [`NUDGE_AFTER`] once per
++    /// silence, and only when the backend reports no tool item in flight. A silence ends
++    /// when captured output moves `last_activity_at` past the previous nudge.
++    pub async fn nudge_quiet_at(
++        &self,
++        key: &str,
++        session: &SessionContext,
++        generation: i64,
++        now: chrono::DateTime<Utc>,
++    ) -> Result<bool> {
++        if !lane_control_enabled() || paused(&self.pool, key).await? {
++            return Ok(false);
++        }
++        let lane = self.lane(key).await?;
++        if lane.status != "working"
++            || lane.last_activity_at > now - NUDGE_AFTER
++            || reopen_generation(&self.pool, key).await? != generation
++        {
++            return Ok(false);
++        }
++        let nudged: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key = ? AND kind = 'nudged' AND created_at >= ?)")
++            .bind(key).bind(lane.last_activity_at).fetch_one(&self.pool).await?;
++        if nudged || self.backend.tool_in_flight(session).await != Some(false) {
++            return Ok(false);
++        }
++        match self.backend.steer(session, NUDGE_TEXT).await {
++            Ok(true) => {}
++            Ok(false) => return Ok(false),
++            Err(error) => {
++                tracing::warn!(%key, %error, "lane nudge deferred");
++                return Ok(false);
++            }
++        }
++        sqlx::query("INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) VALUES (?, ?, 'nudged', ?, ?)")
++            .bind(key).bind(&lane.lead_session_key).bind(NUDGE_TEXT).bind(now).execute(&self.pool).await?;
++        Ok(true)
++    }
++
+     async fn lane(&self, key: &str) -> Result<Lane> {
+         get_lane(&self.pool, key)
+             .await?
+diff --git a/src/lanes/settle.rs b/src/lanes/settle.rs
+index ef7ad92..1788308 100644
+--- a/src/lanes/settle.rs
++++ b/src/lanes/settle.rs
+@@ -49,6 +49,11 @@ impl Settler {
+         let now = self.clock.now();
+         let mut verified = Vec::new();
+         for listed in list_lanes(&self.pool, &["done_claimed"]).await? {
++            if super::runner::lane_control_enabled()
++                && crate::storage::lanes::is_lane_paused(&self.pool, &listed.key).await?
++            {
++                continue;
++            }
+             let mut tx = self.pool.begin().await?;
+             // Read the authoritative attempt only after acquiring SQLite's write lock.
+             sqlx::query("UPDATE lanes SET updated_at = updated_at WHERE key = ?")
+@@ -117,7 +122,11 @@ impl Settler {
+                     }
+                     Err(error) => reasons.push(error.to_string()),
+                 }
+-                match worktree_reasons(&lane).await {
++                let checks = match other_lane_worktrees(&self.pool, &lane.key).await {
++                    Ok(owned) => worktree_reasons(&lane, &owned).await,
++                    Err(error) => Err(error),
++                };
++                match checks {
+                     Ok(checks) => reasons.extend(checks),
+                     Err(error) => reasons.push(error.to_string()),
+                 }
+@@ -252,7 +261,13 @@ impl Drop for DiffInput {
+ }
+ 
+ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
+-    const MAX_DIFF: usize = 256 * 1024;
++    // Measured 2026-10-16: typesafe-judge diff succeeds at 64 KiB of diff text
++    // and fails at 96 KiB with "400 Bad Request max_tokens_exceeded" (exiting 0
++    // but emitting an Error, causing "jev unavailable"). The budget counts old +
++    // new bytes per file while the judge sees unified diff text; keeping the
++    // file budget at 48 KiB ensures the resulting diff stays comfortably below
++    // the API token limit.
++    const MAX_DIFF: usize = 48 * 1024;
+     let mut input = DiffInput(
+         std::env::temp_dir().join(format!("omon-done-diff-{}", uuid::Uuid::new_v4())),
+         String::new(),
+@@ -316,9 +331,7 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
+     if !listed.status.success() {
+         return Err(OmonError::Config("done_diff listing failed".into()));
+     }
+-    let mut budget = MAX_DIFF;
+-    let mut omitted = 0usize;
+-    let mut changes = Vec::new();
++    let mut candidates = Vec::new();
+     for raw in listed
+         .stdout
+         .split(|byte| *byte == 0)
+@@ -357,7 +370,18 @@ async fn lane_diff_input(cwd: &Path, revision: &str) -> Result<DiffInput> {
+         } else {
+             None
+         };
+-        if old_len.unwrap_or(0).saturating_add(new_len.unwrap_or(0)) > budget {
++        let total_len = old_len.unwrap_or(0).saturating_add(new_len.unwrap_or(0));
++        candidates.push((path, total_len));
++    }
++    // Sort changed paths smallest-first (old_len + new_len ascending) so many
++    // small source edits fit before one large artifact consumes the judge budget.
++    candidates.sort_by_key(|(_, len)| *len);
++
++    let mut budget = MAX_DIFF;
++    let mut omitted = 0usize;
++    let mut changes = Vec::new();
++    for (path, total_len) in candidates {
++        if total_len > budget {
+             omitted += 1;
+             continue;
+         }
+@@ -515,7 +539,19 @@ async fn git(cwd: &Path, args: &[&str]) -> Result<String> {
+     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+ }
+ 
+-async fn worktree_reasons(lane: &Lane) -> Result<Vec<String>> {
++/// Worktrees another lane owns: each lane's own done check covers them, so they never
++/// count against this lane's claim even when created after it started.
++async fn other_lane_worktrees(pool: &SqlitePool, key: &str) -> Result<Vec<PathBuf>> {
++    let paths: Vec<String> = sqlx::query_scalar(
++        "SELECT path FROM lane_owned_worktrees WHERE lane_key <> ? AND state = 'registered'",
++    )
++    .bind(key)
++    .fetch_all(pool)
++    .await?;
++    Ok(paths.into_iter().map(PathBuf::from).collect())
++}
++
++async fn worktree_reasons(lane: &Lane, other_lanes: &[PathBuf]) -> Result<Vec<String>> {
+     let cwd = tokio::fs::canonicalize(&lane.cwd)
+         .await
+         .map_err(super::runner::io_error)?;
+@@ -553,6 +589,16 @@ async fn worktree_reasons(lane: &Lane) -> Result<Vec<String>> {
+         if !tokio::fs::try_exists(&path).await.unwrap_or(true) {
+             continue;
+         }
++        let canonical = tokio::fs::canonicalize(&path)
++            .await
++            .unwrap_or_else(|_| path.clone());
++        if !canonical.starts_with(&cwd)
++            && other_lanes
++                .iter()
++                .any(|owned| *owned == canonical || *owned == path)
++        {
++            continue;
++        }
+         if include_worktree(&path, &cwd, lane.created_at, external_creation_time(&path)).await?
+             && !paths.contains(&path)
+         {
+@@ -765,7 +811,7 @@ mod tests {
+             "file x",
+         );
+         lane.created_at = Some(Utc::now() - chrono::Duration::hours(1));
+-        let reasons = worktree_reasons(&lane).await.unwrap();
++        let reasons = worktree_reasons(&lane, &[]).await.unwrap();
+         assert!(reasons.is_empty(), "{reasons:?}");
+     }
+ 
+diff --git a/src/lanes/slack_threads.rs b/src/lanes/slack_threads.rs
+new file mode 100644
+index 0000000..1f809ad
+--- /dev/null
++++ b/src/lanes/slack_threads.rs
+@@ -0,0 +1,744 @@
++//! Slack lane threads. A Slack thread has no channel object of its own: the lane
++//! starter message posted to the parent channel is the thread root, and the lane
++//! thread ref stored in `lanes.thread_channel_id` is `slack:<channel>:<root_ts>`.
++use std::sync::Arc;
++
++use async_trait::async_trait;
++use sqlx::SqlitePool;
++
++use super::discord_threads::{
++    strip_status_prefix, DiscordThreadError, DiscordThreads, ThreadStatus,
++};
++use super::posts::{Post, PostSink};
++use super::runner::LaneLifecycle;
++use super::scrub::scrub;
++use crate::slack::mrkdwn::{split_message, to_mrkdwn};
++use crate::slack::{SlackApi, SlackConfig, MESSAGE_LIMIT};
++use crate::{OmonError, Result};
++
++pub const REF_PREFIX: &str = "slack:";
++const CLOSED_REPLY: &str = "✅ lane closed";
++
++pub fn thread_ref(channel: &str, thread_ts: &str) -> String {
++    format!("{REF_PREFIX}{channel}:{thread_ts}")
++}
++
++pub fn is_slack_ref(thread: &str) -> bool {
++    thread.starts_with(REF_PREFIX)
++}
++
++pub fn parse_ref(thread: &str) -> Option<(&str, &str)> {
++    let (channel, ts) = thread.strip_prefix(REF_PREFIX)?.split_once(':')?;
++    (is_channel_id(channel)
++        && !ts.is_empty()
++        && ts.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
++    .then_some((channel, ts))
++}
++
++pub fn parse_parent(parent: &str) -> Option<&str> {
++    let channel = parent.strip_prefix(REF_PREFIX).unwrap_or(parent);
++    is_channel_id(channel).then_some(channel)
++}
++
++fn is_channel_id(id: &str) -> bool {
++    id.len() >= 2
++        && matches!(id.as_bytes()[0], b'C' | b'G' | b'D')
++        && id
++            .bytes()
++            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
++}
++
++pub fn valid_thread_ref(thread: &str) -> bool {
++    parse_ref(thread).is_some() || thread.parse::<u64>().is_ok_and(|id| id != 0)
++}
++
++fn reaction(status: ThreadStatus) -> &'static str {
++    match status {
++        ThreadStatus::Working => "arrows_counterclockwise",
++        ThreadStatus::Waiting => "double_vertical_bar",
++        ThreadStatus::Done => "white_check_mark",
++    }
++}
++
++/// Slack may echo status emoji back as shortcodes; drop either form.
++fn strip_slack_status(text: &str) -> &str {
++    let mut rest = text.trim();
++    for code in [
++        ":arrows_counterclockwise:",
++        ":double_vertical_bar:",
++        ":white_check_mark:",
++    ] {
++        if let Some(stripped) = rest.strip_prefix(code) {
++            rest = stripped;
++            break;
++        }
++    }
++    strip_status_prefix(rest.trim_start_matches('\u{fe0f}'))
++        .trim_start_matches('\u{fe0f}')
++        .trim()
++}
++
++fn escape(text: &str) -> String {
++    text.replace('&', "&amp;")
++        .replace('<', "&lt;")
++        .replace('>', "&gt;")
++}
++
++/// Lane posts never ping: user, special and subteam mentions are shown literally.
++fn no_pings(text: &str) -> String {
++    text.replace("<!", "&lt;!").replace("<@", "&lt;@")
++}
++
++fn starter_text(status: ThreadStatus, key: &str, title: &str) -> String {
++    let title = escape(scrub(title).trim());
++    let key = escape(scrub(key).trim());
++    if key.is_empty() {
++        format!("{}lane: {title}", status.prefix())
++    } else {
++        format!("{}lane {key}: {title}", status.prefix())
++    }
++}
++
++fn invalid_ref(thread: &str) -> OmonError {
++    OmonError::Config(format!("invalid Slack lane thread ref: {thread}"))
++}
++
++#[derive(Clone)]
++pub struct SlackLaneThreads {
++    api: SlackApi,
++    bot_user_id: Arc<tokio::sync::OnceCell<String>>,
++}
++
++impl SlackLaneThreads {
++    pub fn new(api: SlackApi, bot_user_id: String) -> Self {
++        Self {
++            api,
++            bot_user_id: Arc::new(tokio::sync::OnceCell::from(bot_user_id)),
++        }
++    }
++
++    pub fn lazy(api: SlackApi) -> Self {
++        Self {
++            api,
++            bot_user_id: Arc::new(tokio::sync::OnceCell::new()),
++        }
++    }
++
++    pub fn from_env() -> Option<Self> {
++        SlackConfig::from_env(std::path::Path::new("."))
++            .map(|config| Self::lazy(SlackApi::new(config.bot_token)))
++    }
++
++    pub fn api(&self) -> &SlackApi {
++        &self.api
++    }
++
++    pub async fn bot_user_id(&self) -> Result<String> {
++        self.bot_user_id
++            .get_or_try_init(|| async { Ok::<_, OmonError>(self.api.auth_test().await?.user_id) })
++            .await
++            .cloned()
++    }
++
++    pub async fn create_thread(&self, parent: &str, key: &str, title: &str) -> Result<String> {
++        let channel = parse_parent(parent)
++            .ok_or_else(|| OmonError::Config(format!("invalid Slack lane parent: {parent}")))?;
++        let ts = self
++            .api
++            .post_message(
++                channel,
++                &starter_text(ThreadStatus::Working, key, title),
++                None,
++                None,
++            )
++            .await?;
++        Ok(thread_ref(channel, &ts))
++    }
++
++    pub async fn delete_thread(&self, thread: &str) -> Result<()> {
++        let (channel, ts) = parse_ref(thread).ok_or_else(|| invalid_ref(thread))?;
++        self.api.delete_message(channel, ts).await
++    }
++
++    async fn starter(&self, channel: &str, ts: &str) -> Result<Option<String>> {
++        Ok(self
++            .api
++            .conversations_replies(channel, ts, None, 1)
++            .await?
++            .into_iter()
++            .find(|message| message["ts"].as_str() == Some(ts))
++            .and_then(|message| message["text"].as_str().map(str::to_owned)))
++    }
++
++    pub async fn set_status(
++        &self,
++        thread: &str,
++        status: ThreadStatus,
++        title: Option<&str>,
++    ) -> Result<()> {
++        let (channel, ts) = parse_ref(thread).ok_or_else(|| invalid_ref(thread))?;
++        let text = match (self.starter(channel, ts).await?, title) {
++            (Some(current), _) => format!("{}{}", status.prefix(), strip_slack_status(&current)),
++            (None, Some(title)) => starter_text(status, "", title),
++            (None, None) => {
++                return Err(OmonError::Config(format!(
++                    "Slack lane starter message not found: {thread}"
++                )))
++            }
++        };
++        self.api.update_message(channel, ts, &text, None).await?;
++        for other in ThreadStatus::ALL
++            .into_iter()
++            .filter(|other| *other != status)
++        {
++            if let Err(error) = self.api.remove_reaction(channel, ts, reaction(other)).await {
++                tracing::warn!(%thread, %error, "lane status reaction removal failed");
++            }
++        }
++        if let Err(error) = self.api.add_reaction(channel, ts, reaction(status)).await {
++            tracing::warn!(%thread, %error, "lane status reaction failed");
++        }
++        Ok(())
++    }
++}
++
++#[async_trait]
++impl PostSink for SlackLaneThreads {
++    async fn send(&self, post: &Post) -> Result<String> {
++        let thread = post.thread.as_deref().unwrap_or_default();
++        let (channel, ts) = parse_ref(thread)
++            .ok_or_else(|| OmonError::Config("lane post has no valid thread destination".into()))?;
++        let mut first = None;
++        for chunk in split_message(&no_pings(&to_mrkdwn(&post.body)), MESSAGE_LIMIT) {
++            let sent = self
++                .api
++                .post_message(channel, &chunk, Some(ts), None)
++                .await?;
++            first.get_or_insert(sent);
++        }
++        first.ok_or_else(|| OmonError::Config("lane post body is empty".into()))
++    }
++
++    async fn edit_status(&self, thread: &str, message: &str, body: &str) -> Result<bool> {
++        let (channel, _) = parse_ref(thread).ok_or_else(|| invalid_ref(thread))?;
++        match self
++            .api
++            .update_message(channel, message, &no_pings(&to_mrkdwn(body)), None)
++            .await
++        {
++            Ok(()) => Ok(true),
++            Err(OmonError::Multiplexer(error)) if error.ends_with(": message_not_found") => {
++                Ok(false)
++            }
++            Err(error) => Err(OmonError::Config(format!("lane status edit: {error}"))),
++        }
++    }
++
++    async fn rename_status(&self, thread: &str, status: ThreadStatus, title: &str) -> Result<()> {
++        self.set_status(thread, status, Some(title))
++            .await
++            .map_err(|error| OmonError::Config(format!("lane status rename: {error}")))
++    }
++}
++
++#[async_trait]
++impl LaneLifecycle for SlackLaneThreads {
++    async fn bot_id(&self) -> std::result::Result<String, DiscordThreadError> {
++        Ok(self.bot_user_id().await?)
++    }
++
++    async fn status(
++        &self,
++        thread: &str,
++        status: ThreadStatus,
++    ) -> std::result::Result<(), DiscordThreadError> {
++        Ok(self.set_status(thread, status, None).await?)
++    }
++
++    /// Slack has no archive: closing posts a final reply, reopening needs nothing
++    /// beyond the 🔄 starter the status call already wrote.
++    async fn archived(
++        &self,
++        thread: &str,
++        archived: bool,
++    ) -> std::result::Result<(), DiscordThreadError> {
++        if !archived {
++            return Ok(());
++        }
++        let (channel, ts) = parse_ref(thread).ok_or_else(|| invalid_ref(thread))?;
++        self.api
++            .post_message(channel, CLOSED_REPLY, Some(ts), None)
++            .await?;
++        Ok(())
++    }
++}
++
++#[derive(Clone, Default)]
++pub struct LaneTransports {
++    pub discord: Option<Arc<DiscordThreads>>,
++    pub slack: Option<Arc<SlackLaneThreads>>,
++}
++
++impl LaneTransports {
++    fn slack(&self) -> Result<&SlackLaneThreads> {
++        self.slack
++            .as_deref()
++            .ok_or_else(|| OmonError::Config("Slack lane transport unavailable".into()))
++    }
++
++    fn discord(&self) -> Result<&DiscordThreads> {
++        self.discord
++            .as_deref()
++            .ok_or_else(|| OmonError::Config("Discord lane transport unavailable".into()))
++    }
++
++    fn lifecycle(&self, thread: &str) -> Result<&dyn LaneLifecycle> {
++        let transport: &dyn LaneLifecycle = if is_slack_ref(thread) {
++            self.slack()?
++        } else {
++            self.discord()?
++        };
++        Ok(transport)
++    }
++
++    fn sink(&self, thread: &str) -> Result<&dyn PostSink> {
++        let sink: &dyn PostSink = if is_slack_ref(thread) {
++            self.slack()?
++        } else {
++            self.discord()?
++        };
++        Ok(sink)
++    }
++}
++
++#[async_trait]
++impl PostSink for LaneTransports {
++    async fn send(&self, post: &Post) -> Result<String> {
++        self.sink(post.thread.as_deref().unwrap_or_default())?
++            .send(post)
++            .await
++    }
++
++    async fn edit_status(&self, thread: &str, message: &str, body: &str) -> Result<bool> {
++        self.sink(thread)?.edit_status(thread, message, body).await
++    }
++
++    async fn rename_status(&self, thread: &str, status: ThreadStatus, title: &str) -> Result<()> {
++        self.sink(thread)?
++            .rename_status(thread, status, title)
++            .await
++    }
++}
++
++#[async_trait]
++impl LaneLifecycle for LaneTransports {
++    async fn bot_id(&self) -> std::result::Result<String, DiscordThreadError> {
++        match (&self.discord, &self.slack) {
++            (Some(discord), _) => discord.bot_id().await,
++            (None, Some(slack)) => slack.bot_id().await,
++            (None, None) => {
++                Err(OmonError::Config("lane lifecycle transport unavailable".into()).into())
++            }
++        }
++    }
++
++    async fn bot_id_for(&self, thread: &str) -> std::result::Result<String, DiscordThreadError> {
++        self.lifecycle(thread)?.bot_id().await
++    }
++
++    async fn status(
++        &self,
++        thread: &str,
++        status: ThreadStatus,
++    ) -> std::result::Result<(), DiscordThreadError> {
++        self.lifecycle(thread)?.status(thread, status).await
++    }
++
++    async fn archived(
++        &self,
++        thread: &str,
++        archived: bool,
++    ) -> std::result::Result<(), DiscordThreadError> {
++        self.lifecycle(thread)?.archived(thread, archived).await
++    }
++}
++
++/// Records an owner reply posted in a Slack lane thread. True means the event was
++/// consumed by the lane (reopen/close) and must not be routed further.
++#[allow(clippy::too_many_arguments)]
++pub async fn intercept_owner_reply(
++    pool: &SqlitePool,
++    channel: &str,
++    thread_ts: &str,
++    bot_user_id: &str,
++    user: &str,
++    owner: &str,
++    ts: &str,
++    text: &str,
++) -> Result<bool> {
++    let thread = thread_ref(channel, thread_ts);
++    if crate::storage::get_lane_by_thread(pool, &thread)
++        .await?
++        .is_none()
++    {
++        return Ok(false);
++    }
++    let consumed = crate::storage::lanes::record_owner_reply(
++        pool,
++        &thread,
++        bot_user_id,
++        user,
++        owner,
++        &thread_ref(channel, ts),
++        text,
++    )
++    .await?;
++    if consumed {
++        if let Err(error) = super::runner::wake(pool).await {
++            tracing::warn!(%thread, %error, "lane wake after Slack owner reply failed");
++        }
++    }
++    Ok(consumed)
++}
++
++#[cfg(test)]
++mod tests {
++    use std::sync::Arc;
++
++    use axum::body::Body;
++    use axum::extract::Request;
++    use chrono::Utc;
++    use parking_lot::Mutex;
++    use serde_json::{json, Value};
++
++    use super::*;
++    use crate::storage::{insert_lane, Database, Lane};
++
++    type Responder = dyn Fn(&str, &Value) -> Value + Send + Sync;
++
++    struct Fake {
++        base: String,
++        requests: Arc<Mutex<Vec<(String, Value)>>>,
++    }
++
++    impl Fake {
++        fn threads(&self) -> SlackLaneThreads {
++            SlackLaneThreads::new(
++                SlackApi::with_base_url("xoxb-test".into(), format!("{}/api", self.base)),
++                "UBOT".into(),
++            )
++        }
++
++        fn calls(&self) -> Vec<(String, Value)> {
++            self.requests.lock().clone()
++        }
++
++        fn methods(&self) -> Vec<String> {
++            self.calls().into_iter().map(|(method, _)| method).collect()
++        }
++    }
++
++    async fn fake(responder: impl Fn(&str, &Value) -> Value + Send + Sync + 'static) -> Fake {
++        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let base = format!("http://{}", listener.local_addr().unwrap());
++        let requests = Arc::new(Mutex::new(Vec::new()));
++        let responder: Arc<Responder> = Arc::new(responder);
++        let state = (requests.clone(), responder);
++        let app = axum::Router::new().fallback(move |req: Request| {
++            let (requests, responder) = state.clone();
++            async move {
++                let method = req.uri().path().trim_start_matches("/api/").to_owned();
++                let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
++                    .await
++                    .unwrap();
++                let body: Value = crate::slack::api::decode_test_body(&bytes);
++                requests.lock().push((method.clone(), body.clone()));
++                let mut reply = responder(&method, &body);
++                if reply.get("ok").is_none() {
++                    reply["ok"] = json!(true);
++                }
++                axum::http::Response::builder()
++                    .status(200)
++                    .header("content-type", "application/json")
++                    .body(Body::from(reply.to_string()))
++                    .unwrap()
++            }
++        });
++        tokio::spawn(async move { axum::serve(listener, app).await });
++        Fake { base, requests }
++    }
++
++    #[test]
++    fn refs_and_parents_parse_only_slack_shapes() {
++        let thread = thread_ref("C0123", "1700000000.000100");
++        assert_eq!(thread, "slack:C0123:1700000000.000100");
++        assert_eq!(parse_ref(&thread), Some(("C0123", "1700000000.000100")));
++        assert_eq!(parse_ref("slack:c01:1.2"), None);
++        assert_eq!(parse_ref("slack:C01:"), None);
++        assert_eq!(parse_ref("12345"), None);
++        assert_eq!(parse_parent("slack:C0123"), Some("C0123"));
++        assert_eq!(parse_parent("G9ABC"), Some("G9ABC"));
++        assert_eq!(parse_parent("1474231559895646240"), None);
++        assert!(valid_thread_ref("1474231559895646240"));
++        assert!(valid_thread_ref(&thread));
++        assert!(!valid_thread_ref("0"));
++        assert!(!valid_thread_ref("slack:C01"));
++    }
++
++    #[test]
++    fn status_prefix_is_replaced_in_unicode_and_shortcode_form() {
++        assert_eq!(strip_slack_status("🔄 lane k: t"), "lane k: t");
++        assert_eq!(
++            strip_slack_status(":white_check_mark: lane k: t"),
++            "lane k: t"
++        );
++        assert_eq!(strip_slack_status("⏸\u{fe0f} lane k: t"), "lane k: t");
++        assert_eq!(
++            starter_text(ThreadStatus::Working, "k", "a <b> & c"),
++            "🔄 lane k: a &lt;b&gt; &amp; c"
++        );
++    }
++
++    #[tokio::test]
++    async fn create_posts_starter_to_parent_and_returns_root_ref() {
++        let server = fake(|_, _| json!({ "ts": "1700.0001" })).await;
++        let thread = server
++            .threads()
++            .create_thread("slack:C42", "fix-x", "Fix X")
++            .await
++            .unwrap();
++        assert_eq!(thread, "slack:C42:1700.0001");
++        let calls = server.calls();
++        assert_eq!(calls[0].0, "chat.postMessage");
++        assert_eq!(calls[0].1["channel"], "C42");
++        assert_eq!(calls[0].1["text"], "🔄 lane fix-x: Fix X");
++        assert!(calls[0].1.get("thread_ts").is_none());
++    }
++
++    #[tokio::test]
++    async fn status_rewrites_starter_emoji_and_swaps_reaction() {
++        let server = fake(|method, _| match method {
++            "conversations.replies" => json!({ "messages": [{ "ts": "1700.0001", "text": ":arrows_counterclockwise: lane fix-x: Fix X" }] }),
++            _ => json!({}),
++        })
++        .await;
++        LaneLifecycle::status(&server.threads(), "slack:C42:1700.0001", ThreadStatus::Done)
++            .await
++            .unwrap();
++        let calls = server.calls();
++        let update = calls
++            .iter()
++            .find(|(method, _)| method == "chat.update")
++            .unwrap();
++        assert_eq!(update.1["ts"], "1700.0001");
++        assert_eq!(update.1["text"], "✅ lane fix-x: Fix X");
++        let removed: Vec<_> = calls
++            .iter()
++            .filter(|(method, _)| method == "reactions.remove")
++            .map(|(_, body)| body["name"].as_str().unwrap().to_owned())
++            .collect();
++        assert_eq!(removed, ["arrows_counterclockwise", "double_vertical_bar"]);
++        let added = calls
++            .iter()
++            .find(|(method, _)| method == "reactions.add")
++            .unwrap();
++        assert_eq!(added.1["name"], "white_check_mark");
++        assert_eq!(added.1["timestamp"], "1700.0001");
++    }
++
++    #[tokio::test]
++    async fn close_posts_final_reply_and_reopen_is_a_no_op() {
++        let server = fake(|_, _| json!({ "ts": "1700.0009" })).await;
++        let threads = server.threads();
++        threads.archived("slack:C42:1700.0001", true).await.unwrap();
++        threads
++            .archived("slack:C42:1700.0001", false)
++            .await
++            .unwrap();
++        let calls = server.calls();
++        assert_eq!(calls.len(), 1);
++        assert_eq!(calls[0].1["thread_ts"], "1700.0001");
++        assert_eq!(calls[0].1["text"], CLOSED_REPLY);
++        assert_eq!(LaneLifecycle::bot_id(&threads).await.unwrap(), "UBOT");
++    }
++
++    #[tokio::test]
++    async fn lazy_bot_id_comes_from_auth_test_once() {
++        let server = fake(|_, _| json!({ "user_id": "UAUTH" })).await;
++        let threads = SlackLaneThreads::lazy(SlackApi::with_base_url(
++            "xoxb-test".into(),
++            format!("{}/api", server.base),
++        ));
++        assert_eq!(threads.bot_user_id().await.unwrap(), "UAUTH");
++        assert_eq!(threads.bot_user_id().await.unwrap(), "UAUTH");
++        assert_eq!(server.methods(), ["auth.test"]);
++    }
++
++    #[tokio::test]
++    async fn post_is_threaded_converted_and_never_pings() {
++        let server = fake(|_, _| json!({ "ts": "1700.0002" })).await;
++        let post = Post {
++            source: "s".into(),
++            thread: Some("slack:C42:1700.0001".into()),
++            body: "**done** <!channel> <@U1>".into(),
++            nonce: "n".into(),
++            state: super::super::posts::PostState::Pending,
++            message_id: None,
++            error: None,
++        };
++        assert_eq!(server.threads().send(&post).await.unwrap(), "1700.0002");
++        let calls = server.calls();
++        assert_eq!(calls[0].1["thread_ts"], "1700.0001");
++        let text = calls[0].1["text"].as_str().unwrap();
++        assert!(text.starts_with("*done* "), "{text}");
++        assert!(!text.contains("<!") && !text.contains("<@"), "{text}");
++    }
++
++    #[tokio::test]
++    async fn status_edit_maps_message_not_found_to_false() {
++        let server = fake(|_, body| {
++            if body["ts"] == "gone" {
++                json!({ "ok": false, "error": "message_not_found" })
++            } else if body["ts"] == "bad" {
++                json!({ "ok": false, "error": "cant_update_message" })
++            } else {
++                json!({})
++            }
++        })
++        .await;
++        let threads = server.threads();
++        let thread = "slack:C42:1700.0001";
++        assert!(threads
++            .edit_status(thread, "1700.0003", "⏳ x")
++            .await
++            .unwrap());
++        assert!(!threads.edit_status(thread, "gone", "⏳ x").await.unwrap());
++        assert!(threads.edit_status(thread, "bad", "⏳ x").await.is_err());
++        assert_eq!(server.calls()[0].1["channel"], "C42");
++    }
++
++    #[tokio::test]
++    async fn delete_thread_removes_the_starter() {
++        let server = fake(|_, _| json!({})).await;
++        server
++            .threads()
++            .delete_thread("slack:C42:1700.0001")
++            .await
++            .unwrap();
++        let calls = server.calls();
++        assert_eq!(calls[0].0, "chat.delete");
++        assert_eq!(calls[0].1["ts"], "1700.0001");
++    }
++
++    #[tokio::test]
++    async fn router_sends_slack_refs_to_slack_and_refuses_missing_discord() {
++        let server = fake(|_, _| json!({ "ts": "1700.0004" })).await;
++        let router = LaneTransports {
++            discord: None,
++            slack: Some(Arc::new(server.threads())),
++        };
++        assert_eq!(
++            router.bot_id_for("slack:C42:1700.0001").await.unwrap(),
++            "UBOT"
++        );
++        assert!(router.bot_id_for("1474231559895646240").await.is_err());
++        assert!(router.status("123", ThreadStatus::Done).await.is_err());
++        assert!(server.calls().is_empty());
++    }
++
++    async fn slack_lane(status: &str) -> Database {
++        let db = Database::connect("sqlite::memory:").await.unwrap();
++        let mut lane = Lane::new(
++            "sl",
++            "Slack lane",
++            "lead",
++            "/tmp",
++            "/tmp/brief",
++            "lane",
++            "file x",
++        );
++        lane.status = status.into();
++        lane.thread_channel_id = Some(thread_ref("C42", "1700.0001"));
++        insert_lane(db.pool(), &lane).await.unwrap();
++        crate::storage::lanes::bind_lane_thread(db.pool(), "sl", "UBOT")
++            .await
++            .unwrap();
++        db
++    }
++
++    #[tokio::test]
++    async fn drain_delivers_queued_post_into_the_slack_thread() {
++        let db = slack_lane("working").await;
++        let lane = crate::storage::get_lane(db.pool(), "sl")
++            .await
++            .unwrap()
++            .unwrap();
++        let mut tx = db.pool().begin().await.unwrap();
++        super::super::posts::enqueue(&mut tx, &lane, "milestone:1", "half way", Utc::now())
++            .await
++            .unwrap();
++        tx.commit().await.unwrap();
++        let server = fake(|_, _| json!({ "ts": "1700.0005" })).await;
++        assert_eq!(
++            super::super::posts::drain(db.pool(), &server.threads())
++                .await
++                .unwrap(),
++            1
++        );
++        let calls = server.calls();
++        assert_eq!(calls[0].1["channel"], "C42");
++        assert_eq!(calls[0].1["thread_ts"], "1700.0001");
++        assert_eq!(calls[0].1["text"], "half way");
++    }
++
++    #[tokio::test]
++    async fn owner_reply_in_a_closed_lane_thread_is_consumed() {
++        let db = slack_lane("closed").await;
++        let pool = db.pool();
++        assert!(!intercept_owner_reply(
++            pool,
++            "C42",
++            "1700.0001",
++            "UBOT",
++            "UOTHER",
++            "UOWNER",
++            "1700.0006",
++            "again"
++        )
++        .await
++        .unwrap());
++        assert!(!intercept_owner_reply(
++            pool,
++            "C42",
++            "9999.0001",
++            "UBOT",
++            "UOWNER",
++            "UOWNER",
++            "1700.0007",
++            "again"
++        )
++        .await
++        .unwrap());
++        assert!(intercept_owner_reply(
++            pool,
++            "C42",
++            "1700.0001",
++            "UBOT",
++            "UOWNER",
++            "UOWNER",
++            "1700.0008",
++            "again"
++        )
++        .await
++        .unwrap());
++        let (message, lane, text): (String, String, String) =
++            sqlx::query_as("SELECT message_id, lane_key, text FROM lane_owner_replies")
++                .fetch_one(pool)
++                .await
++                .unwrap();
++        assert_eq!(
++            (message.as_str(), lane.as_str(), text.as_str()),
++            ("slack:C42:1700.0008", "sl", "again")
++        );
++    }
++}
+diff --git a/src/profiles/lanes_block.rs b/src/profiles/lanes_block.rs
+index 39f2b3d..5cb1bd7 100644
+--- a/src/profiles/lanes_block.rs
++++ b/src/profiles/lanes_block.rs
+@@ -2,8 +2,36 @@ use serde::Serialize;
+ use sha2::{Digest, Sha256};
+ use sqlx::SqlitePool;
+ 
+-const BEGIN_MARKER: &str = "<!-- omon:lanes:begin -->";
+-const END_MARKER: &str = "<!-- omon:lanes:end -->";
++/// Block name used by `apply_block` and the CLI when `--block` is omitted.
++pub const DEFAULT_BLOCK_NAME: &str = "lanes";
++
++/// The begin/end comment markers that delimit one named persona block,
++/// e.g. `<!-- omon:lanes:begin -->` ... `<!-- omon:lanes:end -->`.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct BlockMarkers {
++    pub begin: String,
++    pub end: String,
++}
++
++impl BlockMarkers {
++    /// Markers for `omon:<name>`. The name is a CLI boundary value, so it is
++    /// restricted to lowercase ASCII letters, digits and `-`.
++    pub fn named(name: &str) -> std::result::Result<Self, ApplyBlockError> {
++        let valid = !name.is_empty()
++            && name
++                .bytes()
++                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
++        if !valid {
++            return Err(ApplyBlockError::InvalidBlock(format!(
++                "block name must match [a-z0-9-]+: {name:?}"
++            )));
++        }
++        Ok(Self {
++            begin: format!("<!-- omon:{name}:begin -->"),
++            end: format!("<!-- omon:{name}:end -->"),
++        })
++    }
++}
+ #[derive(Clone, Debug, PartialEq, Eq, Serialize, sqlx::FromRow)]
+ pub struct BotProfileExport {
+     pub bot_id: String,
+@@ -60,17 +88,18 @@ fn digest(prompt: &str) -> PromptDigest {
+     }
+ }
+ 
+-fn validate_block(block: &str) -> std::result::Result<(), ApplyBlockError> {
+-    let begins = block.match_indices(BEGIN_MARKER).count();
+-    let ends = block.match_indices(END_MARKER).count();
++fn validate_block(markers: &BlockMarkers, block: &str) -> std::result::Result<(), ApplyBlockError> {
++    let (begin_marker, end_marker) = (markers.begin.as_str(), markers.end.as_str());
++    let begins = block.match_indices(begin_marker).count();
++    let ends = block.match_indices(end_marker).count();
+     if begins != 1 || ends != 1 {
+         return Err(ApplyBlockError::InvalidBlock(
+             "expected exactly one begin and end marker".into(),
+         ));
+     }
+-    let begin = block.find(BEGIN_MARKER).expect("marker count checked");
+-    let end = block.find(END_MARKER).expect("marker count checked");
+-    if end < begin + BEGIN_MARKER.len() {
++    let begin = block.find(begin_marker).expect("marker count checked");
++    let end = block.find(end_marker).expect("marker count checked");
++    if end < begin + begin_marker.len() {
+         return Err(ApplyBlockError::InvalidBlock(
+             "end marker precedes begin marker".into(),
+         ));
+@@ -78,9 +107,9 @@ fn validate_block(block: &str) -> std::result::Result<(), ApplyBlockError> {
+     Ok(())
+ }
+ 
+-fn marked_block(block: &str) -> &str {
+-    let begin = block.find(BEGIN_MARKER).expect("validated begin marker");
+-    let end = block.find(END_MARKER).expect("validated end marker") + END_MARKER.len();
++fn marked_block<'a>(markers: &BlockMarkers, block: &'a str) -> &'a str {
++    let begin = block.find(&markers.begin).expect("validated begin marker");
++    let end = block.find(&markers.end).expect("validated end marker") + markers.end.len();
+     &block[begin..end]
+ }
+ 
+@@ -98,13 +127,28 @@ pub async fn export_profile(
+     .await
+ }
+ 
++/// Apply the default `omon:lanes` block.
+ pub async fn apply_block(
+     pool: &SqlitePool,
+     bot_id: &str,
+     block: &str,
+ ) -> std::result::Result<ApplyBlockResult, ApplyBlockError> {
+-    validate_block(block)?;
+-    let block = marked_block(block);
++    let markers = BlockMarkers::named(DEFAULT_BLOCK_NAME)?;
++    apply_block_with_markers(pool, bot_id, &markers, block).await
++}
++
++/// Insert or replace the block delimited by `markers` in the bot's system
++/// prompt. Text outside those markers, including other named blocks, is kept
++/// byte-for-byte; re-applying the same block is a no-op.
++pub async fn apply_block_with_markers(
++    pool: &SqlitePool,
++    bot_id: &str,
++    markers: &BlockMarkers,
++    block: &str,
++) -> std::result::Result<ApplyBlockResult, ApplyBlockError> {
++    validate_block(markers, block)?;
++    let block = marked_block(markers, block);
++    let (begin_marker, end_marker) = (markers.begin.as_str(), markers.end.as_str());
+     let mut tx = pool
+         .begin_with("BEGIN IMMEDIATE")
+         .await
+@@ -124,10 +168,10 @@ pub async fn apply_block(
+ 
+     let old_prompt = prompt.unwrap_or_default();
+     let before = digest(&old_prompt);
+-    let begin = old_prompt.find(BEGIN_MARKER);
+-    let end = old_prompt.find(END_MARKER);
+-    let begin_count = old_prompt.match_indices(BEGIN_MARKER).count();
+-    let end_count = old_prompt.match_indices(END_MARKER).count();
++    let begin = old_prompt.find(begin_marker);
++    let end = old_prompt.find(end_marker);
++    let begin_count = old_prompt.match_indices(begin_marker).count();
++    let end_count = old_prompt.match_indices(end_marker).count();
+     let new_prompt = match (begin, end) {
+         (None, None) => {
+             if begin_count != 0 || end_count != 0 {
+@@ -146,9 +190,9 @@ pub async fn apply_block(
+             format!("{old_prompt}{separator}{block}")
+         }
+         (Some(start), Some(end))
+-            if begin_count == 1 && end_count == 1 && end >= start + BEGIN_MARKER.len() =>
++            if begin_count == 1 && end_count == 1 && end >= start + begin_marker.len() =>
+         {
+-            let after_end = end + END_MARKER.len();
++            let after_end = end + end_marker.len();
+             if old_prompt[start..after_end] == *block {
+                 old_prompt.clone()
+             } else {
+diff --git a/src/profiles/mod.rs b/src/profiles/mod.rs
+index e0ad820..be03f44 100644
+--- a/src/profiles/mod.rs
++++ b/src/profiles/mod.rs
+@@ -1,6 +1,6 @@
+ pub mod lanes_block;
+ 
+ pub use lanes_block::{
+-    apply_block, export_json, export_profile, ApplyBlockError, ApplyBlockResult, BotProfileExport,
+-    PromptDigest,
++    apply_block, apply_block_with_markers, export_json, export_profile, ApplyBlockError,
++    ApplyBlockResult, BlockMarkers, BotProfileExport, PromptDigest, DEFAULT_BLOCK_NAME,
+ };
+diff --git a/src/storage/lanes.rs b/src/storage/lanes.rs
+index 3d92949..63d6f65 100644
+--- a/src/storage/lanes.rs
++++ b/src/storage/lanes.rs
+@@ -211,6 +211,79 @@ pub async fn request_close(
+     Ok(id)
+ }
+ 
++/// True while the lane has an unresumed pause row.
++pub async fn is_lane_paused(pool: &SqlitePool, key: &str) -> Result<bool> {
++    Ok(sqlx::query_scalar(
++        "SELECT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = ? AND resumed_at IS NULL)",
++    )
++    .bind(key)
++    .fetch_one(pool)
++    .await?)
++}
++
++pub async fn paused_lane_keys(pool: &SqlitePool) -> Result<std::collections::HashSet<String>> {
++    let keys: Vec<String> =
++        sqlx::query_scalar("SELECT lane_key FROM lane_pauses WHERE resumed_at IS NULL")
++            .fetch_all(pool)
++            .await?;
++    Ok(keys.into_iter().collect())
++}
++
++/// Pauses a live lane. Returns false when it was already paused. The status is left
++/// unchanged; the history row records the pause with from = to = current status.
++pub async fn pause_lane(pool: &SqlitePool, key: &str, by: &str) -> Result<bool> {
++    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
++    let status: String = sqlx::query_scalar("SELECT status FROM lanes WHERE key = ?")
++        .bind(key)
++        .fetch_optional(&mut *tx)
++        .await?
++        .ok_or_else(|| OmonError::Config(format!("lane not found: {key}")))?;
++    if matches!(status.as_str(), "closed" | "failed" | "verified_done") {
++        return Err(OmonError::Config(format!("cannot pause a {status} lane")));
++    }
++    let paused: bool = sqlx::query_scalar(
++        "SELECT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = ? AND resumed_at IS NULL)",
++    )
++    .bind(key)
++    .fetch_one(&mut *tx)
++    .await?;
++    if paused {
++        return Ok(false);
++    }
++    let now = Utc::now();
++    sqlx::query("INSERT INTO lane_pauses(lane_key, paused_at, paused_by, resumed_at) VALUES (?, ?, ?, NULL) ON CONFLICT(lane_key) DO UPDATE SET paused_at = excluded.paused_at, paused_by = excluded.paused_by, resumed_at = NULL")
++        .bind(key).bind(now).bind(by).execute(&mut *tx).await?;
++    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, ?, 'paused')")
++        .bind(key).bind(now).bind(&status).bind(&status).execute(&mut *tx).await?;
++    tx.commit().await?;
++    Ok(true)
++}
++
++/// Clears an active pause. Returns false when the lane was not paused.
++pub async fn resume_lane(pool: &SqlitePool, key: &str) -> Result<bool> {
++    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
++    let now = Utc::now();
++    let cleared = sqlx::query(
++        "UPDATE lane_pauses SET resumed_at = ? WHERE lane_key = ? AND resumed_at IS NULL",
++    )
++    .bind(now)
++    .bind(key)
++    .execute(&mut *tx)
++    .await?;
++    if cleared.rows_affected() != 1 {
++        tx.rollback().await?;
++        return Ok(false);
++    }
++    let status: String = sqlx::query_scalar("SELECT status FROM lanes WHERE key = ?")
++        .bind(key)
++        .fetch_one(&mut *tx)
++        .await?;
++    sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, ?, 'resumed')")
++        .bind(key).bind(now).bind(&status).bind(&status).execute(&mut *tx).await?;
++    tx.commit().await?;
++    Ok(true)
++}
++
+ pub async fn bind_lane_thread(pool: &SqlitePool, key: &str, bot: &str) -> Result<()> {
+     let changed = sqlx::query("INSERT INTO lane_thread_bindings(lane_key,bot_id) VALUES (?,?) ON CONFLICT(lane_key) DO UPDATE SET bot_id=excluded.bot_id WHERE lane_thread_bindings.bot_id=excluded.bot_id")
+         .bind(key).bind(bot).execute(pool).await?;
+@@ -772,6 +845,14 @@ pub async fn enqueue_lane_event_with_executor<'e>(
+ pub async fn take_undelivered_events(
+     pool: &SqlitePool,
+     limit: Option<usize>,
++) -> Result<Vec<LaneEvent>> {
++    take_undelivered_events_at(pool, limit, Utc::now()).await
++}
++
++pub async fn take_undelivered_events_at(
++    pool: &SqlitePool,
++    limit: Option<usize>,
++    now: DateTime<Utc>,
+ ) -> Result<Vec<LaneEvent>> {
+     let rows = match limit {
+         Some(lim) => sqlx::query_as::<_, LaneEvent>(
+@@ -779,10 +860,12 @@ pub async fn take_undelivered_events(
+                 SELECT id, lane_key, lead_session_key, kind, body, created_at, delivered_at
+                 FROM lane_events
+                 WHERE delivered_at IS NULL
++                  AND (release_at IS NULL OR julianday(release_at) <= julianday(?))
+                 ORDER BY id ASC
+                 LIMIT ?
+                 "#,
+         )
++        .bind(now)
+         .bind(lim as i64)
+         .fetch_all(pool)
+         .await
+@@ -792,9 +875,11 @@ pub async fn take_undelivered_events(
+                 SELECT id, lane_key, lead_session_key, kind, body, created_at, delivered_at
+                 FROM lane_events
+                 WHERE delivered_at IS NULL
++                  AND (release_at IS NULL OR julianday(release_at) <= julianday(?))
+                 ORDER BY id ASC
+                 "#,
+         )
++        .bind(now)
+         .fetch_all(pool)
+         .await
+         .map_err(OmonError::from)?,

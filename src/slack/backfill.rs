@@ -3,8 +3,10 @@
 //! Targets are free-response channels, the owner DM, every stored cursor and every known thread
 //! session of this bot. Each target is read from its cursor (`conversations.history` for
 //! channels, `conversations.replies` for threads), mapped with the live ingress rules and routed
-//! with `route_awaiting_turn`. The cursor advances only past a message whose turn succeeded (or
-//! that was skipped on purpose), so a failed turn is retried on the next start. A target with no
+//! with `route_awaiting_turn`. The cursor advances past every message whose turn ran (even one
+//! that failed or was stopped, so a reconcile pass never re-runs it) or that was skipped on
+//! purpose; only a turn the gateway never admitted (draining for a restart) holds the cursor for
+//! the next pass. A target with no
 //! cursor yet is seeded at its newest message instead of replaying its whole history.
 
 use std::collections::{BTreeSet, HashMap};
@@ -145,6 +147,10 @@ async fn backfill_target(
             break;
         }
         let event = replay_event(message, channel, thread_ts, bot);
+        // intercept_lane_reply advances the cursor itself when it consumes the reply.
+        if ingress.intercept_replayed_lane_reply(&event).await? {
+            continue;
+        }
         let known_thread = ingress.is_known_thread(&event).await?;
         if let Some(inbound) = ingress.map_replayed(&event, known_thread) {
             match ingress.route_awaiting_turn(inbound).await {
@@ -261,7 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replays_since_cursor_holds_on_failure_and_seeds_new_targets() {
+    async fn replays_since_cursor_never_reruns_a_failed_turn_and_seeds_new_targets() {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let pool = db.pool().clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -299,7 +305,8 @@ mod tests {
             .unwrap();
 
         let routed = run(&ingress).await.unwrap();
-        assert_eq!(routed, 2);
+        // "fail" ran and ended with an error: it counts as handled and is not retried.
+        assert_eq!(routed, 3);
 
         let mut seen = Vec::new();
         while let Ok(content) = rx.try_recv() {
@@ -309,7 +316,7 @@ mod tests {
         assert_eq!(seen, ["fail", "hello", "thread reply"]);
         assert_eq!(
             cursor(&pool, "CFREE", "").await.as_deref(),
-            Some("102.000000")
+            Some("103.000000")
         );
         assert_eq!(
             cursor(&pool, "C1", "1700.000000").await.as_deref(),

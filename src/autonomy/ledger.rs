@@ -239,8 +239,15 @@ pub async fn try_resolve_short_reply(
     let guard_pending = guard
         .map(|g| g.pending_for_session(session))
         .unwrap_or_default();
-    let db_pending = match pool {
-        Some(p) => list_pending_proposals_for_session(p, &session.storage_key()).await?,
+    // An engine or tool approval is only answerable while its turn still waits on the guard;
+    // a row without a live waiter belongs to a turn that is gone, so a short reply is ordinary
+    // conversation, not an approval of an action nothing will run.
+    let db_pending: Vec<ActionProposal> = match pool {
+        Some(p) => list_pending_proposals_for_session(p, &session.storage_key())
+            .await?
+            .into_iter()
+            .filter(|row| !matches!(row.origin.as_str(), "engine_approval" | "tool_approval"))
+            .collect(),
         None => Vec::new(),
     };
     if guard_pending.len() > 1 || db_pending.len() > 1 {
@@ -264,7 +271,7 @@ pub async fn try_resolve_short_reply(
             ApprovalDecision::Deny { reason } => reason.as_deref(),
             _ => None,
         };
-        let _ = decide_proposal(
+        if let Err(error) = decide_proposal(
             pool,
             guard,
             proposal.id,
@@ -273,7 +280,12 @@ pub async fn try_resolve_short_reply(
             words,
             Some(&proposal.session_key),
         )
-        .await;
+        .await
+        {
+            // Not recorded: let the message reach the conversation instead of eating it.
+            tracing::warn!(proposal = proposal.id, %error, "short owner reply could not decide the proposal");
+            return Ok(false);
+        }
         return Ok(true);
     }
     Ok(false)
@@ -694,20 +706,11 @@ pub async fn recover_pending_proposals_on_startup(
     if pending.is_empty() {
         return Ok(0);
     }
-    // A pending row whose approval card is already on the platform and is younger than 24h
-    // stays answerable: the owner can still press the card. Everything else dies with the
-    // process.
-    let kept_ids: Vec<i64> = sqlx::query_scalar(
-        "SELECT id FROM action_proposals
-         WHERE state = 'pending' AND origin IN ('engine_approval','tool_approval')
-           AND platform_message_id IS NOT NULL AND platform_message_id != ''
-           AND julianday(created_at) >= julianday('now', '-1 day')",
-    )
-    .fetch_all(pool)
-    .await?;
-    let (kept, expired): (Vec<&ActionProposal>, Vec<&ActionProposal>) =
-        pending.iter().partition(|p| kept_ids.contains(&p.id));
-    for p in &expired {
+    // Every engine and tool approval dies with the process: the turn that waited on it is gone,
+    // so approving it later would record a decision for an action nothing runs. (Its card, if
+    // pressed, is answered as stale.)
+    let expired = &pending;
+    for p in expired {
         sqlx::query(
             "UPDATE action_proposals
              SET state = 'expired', decided_at = CURRENT_TIMESTAMP
@@ -719,28 +722,17 @@ pub async fn recover_pending_proposals_on_startup(
     }
 
     let mut expired_by_lead: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut kept_by_lead: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (rows, by_lead) in [(&expired, &mut expired_by_lead), (&kept, &mut kept_by_lead)] {
-        for p in rows.iter() {
-            let lead = proposal_lead(pool, p, default_lead).await?;
-            by_lead
-                .entry(lead)
-                .or_default()
-                .push(format!("#{} ({} {})", p.id, p.effect, p.summary));
-        }
+    for p in expired {
+        let lead = proposal_lead(pool, p, default_lead).await?;
+        expired_by_lead
+            .entry(lead)
+            .or_default()
+            .push(format!("#{} ({} {})", p.id, p.effect, p.summary));
     }
 
     for (lead, items) in expired_by_lead {
         let body = format!(
             "[ACTION_LOOP] {} expired pending proposal(s) on restart: {}",
-            items.len(),
-            items.join("; ")
-        );
-        insert_action_loop_event(pool, &lead, &body).await?;
-    }
-    for (lead, items) in kept_by_lead {
-        let body = format!(
-            "[ACTION_LOOP] {} pending approval(s) still waiting after restart: {}",
             items.len(),
             items.join("; ")
         );

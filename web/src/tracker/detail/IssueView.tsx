@@ -165,9 +165,11 @@ interface ViewProps {
   idOrIdentifier: string
   mode: 'page' | 'peek'
   onClose?: () => void
+  /** Rendered inside another page (the inbox) that owns j/k/e/escape navigation. */
+  embedded?: boolean
 }
 
-function IssueView({ idOrIdentifier, mode, onClose }: ViewProps) {
+function IssueView({ idOrIdentifier, mode, onClose, embedded = false }: ViewProps) {
   const t = useTracker()
   const handle = useIssueDetail(idOrIdentifier)
   const { detail, issue, notFound, error, reload, setDetail } = handle
@@ -227,17 +229,17 @@ function IssueView({ idOrIdentifier, mode, onClose }: ViewProps) {
     },
     hotkeyOpts,
   )
-  useHotkey('e', () => title.current?.focus(), hotkeyOpts)
+  useHotkey('e', () => title.current?.focus(), { enabled: hotkeyOpts.enabled && !embedded })
   useHotkey('m', () => composer.current?.focus(), hotkeyOpts)
   useHotkey('mod+.', actions.copyId, { enabled: ready })
   useHotkey(['mod+shift+,', 'mod+shift+<'], actions.copyBranch, { enabled: ready })
   useHotkey('mod+shift+c', actions.copyLink, { enabled: ready })
   useHotkey('mod+shift+a', actions.toggleArchive, { enabled: ready })
   useHotkey('mod+backspace', actions.askDelete, { enabled: ready })
-  useHotkey(['j', 'arrowdown'], () => goTo(1), { enabled: ready && mode === 'page' && picker === null })
-  useHotkey(['k', 'arrowup'], () => goTo(-1), { enabled: ready && mode === 'page' && picker === null })
+  useHotkey(['j', 'arrowdown'], () => goTo(1), { enabled: ready && mode === 'page' && !embedded && picker === null })
+  useHotkey(['k', 'arrowup'], () => goTo(-1), { enabled: ready && mode === 'page' && !embedded && picker === null })
   useHotkey('escape', leave, {
-    enabled: picker === null && t.createDraft === null && (mode === 'peek' || t.peekIssueId === null),
+    enabled: !embedded && picker === null && t.createDraft === null && (mode === 'peek' || t.peekIssueId === null),
   })
 
   const subscribed = detail && t.me ? detail.subscriber_ids.includes(t.me.id) : false
@@ -416,10 +418,10 @@ function IssueView({ idOrIdentifier, mode, onClose }: ViewProps) {
   )
 }
 
-export function IssuePage({ idOrIdentifier }: { idOrIdentifier: string }) {
+export function IssuePage({ idOrIdentifier, embedded = false }: { idOrIdentifier: string; embedded?: boolean }) {
   return (
     <div className="ld-page">
-      <IssueView key={idOrIdentifier} idOrIdentifier={idOrIdentifier} mode="page" />
+      <IssueView key={idOrIdentifier} idOrIdentifier={idOrIdentifier} mode="page" embedded={embedded} />
     </div>
   )
 }

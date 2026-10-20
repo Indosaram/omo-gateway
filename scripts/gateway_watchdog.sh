@@ -3,8 +3,7 @@
 #
 # Restarts the gateway when it is gone or unhealthy, and alerts the owner out of
 # band (macOS notification + Slack DM via the bot token, not via the gateway)
-# when restarts keep failing, the agent backend stays down, or the TurnEngine
-# subscription patch is missing from the app-server runtime the gateway launches.
+# when restarts keep failing or the agent backend stays down.
 #
 # Every input is overridable so the logic can be exercised without touching the
 # running gateway (see `tests/test_gateway_watchdog.sh`).
@@ -17,10 +16,6 @@ LABEL="${WATCHDOG_LABEL:-ai.omon.gateway}"
 GATEWAY_PATTERN="${WATCHDOG_GATEWAY_PATTERN:-(/\.omon/bin|/target/release)/omo-gateway run}"
 DASHBOARD_URL="${WATCHDOG_DASHBOARD_URL:-http://127.0.0.1:9119/api/health}"
 APPSERVER_URL="${WATCHDOG_APPSERVER_URL:-http://127.0.0.1:19742/readyz}"
-# omo 5.1.35 removed `omo app-server`; the gateway runs a preserved runtime through this
-# wrapper (OMON_OMO_BIN), so the patch is checked there, not in the global senpi bundle.
-OMO_RUNTIME="${WATCHDOG_OMO_RUNTIME:-$HOME/.omon/bin/omo-gateway-runtime}"
-PATCH_FILE="${WATCHDOG_PATCH_FILE:-}"
 STATE_DIR="${WATCHDOG_STATE_DIR:-$HOME/.omon/watchdog-state}"
 SLACK_TOKEN_FILE="${WATCHDOG_SLACK_TOKEN_FILE:-$HOME/.omon/secrets/slack-bot-token}"
 SLACK_CHANNEL="${WATCHDOG_SLACK_CHANNEL:-D0C9HNVUK5M}"
@@ -105,17 +100,5 @@ if pgrep -f "$GATEWAY_PATTERN" >/dev/null 2>&1; then
     fi
 fi
 
-# 3. TurnEngine subscription patch in the app-server runtime the gateway actually launches.
-# The global senpi bundle no longer ships an app-server, so it is never the target.
-if [[ -z "$PATCH_FILE" && -f "$OMO_RUNTIME" ]]; then
-    cli_main="$(grep -oE '[^ "]*/dist/cli-main\.js' "$OMO_RUNTIME" 2>/dev/null | head -1)"
-    [[ -n "$cli_main" ]] && PATCH_FILE="$(dirname "$cli_main")/modes/app-server/threads/turns.js"
-fi
-if [[ -n "$PATCH_FILE" && -f "$PATCH_FILE" ]]; then
-    if grep -q '_turnEngineSubscribed' "$PATCH_FILE" 2>/dev/null; then
-        rm -f "$STATE_DIR/alert.senpi_patch"
-    else
-        alert senpi_patch "게이트웨이가 쓰는 app-server 런타임에 구독 패치가 없어요($PATCH_FILE). 게이트웨이가 자동 재시작으로 버티지만 답장이 1분가량 늦어질 수 있어요."
-    fi
-fi
+# The app-server subscription patch check was removed at the owner's request (2026-10-19).
 exit 0

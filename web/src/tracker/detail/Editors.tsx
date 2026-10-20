@@ -89,17 +89,32 @@ export function DescriptionEditor({ issue, compact = false }: { issue: Issue; co
   const save = (next: string) => {
     window.clearTimeout(timer.current)
     if (next === lastSaved.current) return
+    const previous = lastSaved.current
     lastSaved.current = next
     setSaveState('saving')
     updateIssues([issueId], { description: next })
       .then(() => setSaveState('saved'))
       .catch((err) => {
+        // Not saved: let the next blur or keystroke retry instead of treating it as saved.
+        lastSaved.current = previous
         setSaveState('idle')
         notifyError(err)
       })
   }
 
-  useEffect(() => () => window.clearTimeout(timer.current), [])
+  // Closing the peek by clicking outside unmounts the editor before blur fires: flush the
+  // pending autosave instead of dropping the last keystrokes.
+  const latest = useRef(value)
+  latest.current = value
+  const saveRef = useRef(save)
+  saveRef.current = save
+  useEffect(
+    () => () => {
+      window.clearTimeout(timer.current)
+      if (latest.current !== lastSaved.current) saveRef.current(latest.current)
+    },
+    [],
+  )
 
   const onChange = (next: string) => {
     setValue(next)

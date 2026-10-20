@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -451,10 +452,17 @@ pub fn format_detail(
     apply_max_chars(lines, max_chars)
 }
 
+/// Total time `collect` may take; kept below `status_reply::REPLY_TIMEOUT` (25 s).
+const COLLECT_BUDGET: Duration = Duration::from_secs(23);
+
 pub async fn collect<R: CommandRunner + 'static>(
     control: &SessionControl<R>,
     text_limit: usize,
 ) -> Overview {
+    // Listing and probe share one budget that stays under the chat reply cap (25 s): a fast
+    // listing leaves the probe its full window, a host that hangs the listing cannot push the
+    // probe past the cap.
+    let started = tokio::time::Instant::now();
     let list = control.registry().list_all().await;
 
     let mut machines = Vec::new();
@@ -471,12 +479,23 @@ pub async fn collect<R: CommandRunner + 'static>(
     }
 
     let probe = Probe::new(control.runner());
-    let snap_results = probe.snapshot_all(&machines, text_limit).await;
-
-    let snapshots = snap_results
-        .into_iter()
-        .map(|(m, res)| (m, res.map_err(|err| err.to_string())))
-        .collect();
+    let probe_budget = COLLECT_BUDGET.saturating_sub(started.elapsed());
+    let snapshots =
+        match tokio::time::timeout(probe_budget, probe.snapshot_all(&machines, text_limit)).await {
+            Ok(results) => results
+                .into_iter()
+                .map(|(m, res)| (m, res.map_err(|err| err.to_string())))
+                .collect(),
+            Err(_) => machines
+                .into_iter()
+                .map(|m| {
+                    (
+                        m,
+                        Err::<MachineSnapshot, String>("probe timed out".to_string()),
+                    )
+                })
+                .collect(),
+        };
 
     Overview { list, snapshots }
 }
@@ -484,8 +503,10 @@ pub async fn collect<R: CommandRunner + 'static>(
 #[cfg(test)]
 mod tests {
     use super::super::probe::QuestionItem;
-    use super::super::registry::Session;
+    use super::super::registry::{CommandOutput, Session};
     use super::*;
+    use async_trait::async_trait;
+    use std::sync::Arc;
 
     #[test]
     fn state_of_detects_all_states() {
@@ -787,5 +808,56 @@ mod tests {
         assert!(detail.contains("경로: ~/work"));
         assert!(detail.contains("User: 안녕하세요"));
         assert!(detail.contains("Assistant: 무엇을 도와드릴까요?"));
+    }
+
+    struct HangingHostRunner;
+
+    #[async_trait]
+    impl CommandRunner for HangingHostRunner {
+        async fn run(&self, machine: &str, argv: &[String]) -> Result<CommandOutput, String> {
+            if machine == "hanging-host" || argv.iter().any(|arg| arg.contains("hanging-host")) {
+                std::future::pending().await
+            } else if argv.iter().any(|arg| arg == "list") {
+                Ok(CommandOutput {
+                    code: 0,
+                    stdout: b"[]".to_vec(),
+                    stderr: Vec::new(),
+                })
+            } else {
+                Ok(CommandOutput {
+                    code: 0,
+                    stdout: br#"{"sessions":[],"errors":[]}"#.to_vec(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn collect_returns_before_25s_when_one_host_hangs() {
+        let control = SessionControl::new(Arc::new(HangingHostRunner), vec!["hanging-host".into()]);
+        let started = tokio::time::Instant::now();
+        let overview = collect(&control, 100).await;
+        let elapsed = tokio::time::Instant::now() - started;
+
+        assert!(
+            elapsed < Duration::from_secs(25),
+            "collect took {elapsed:?}, expected < 25s"
+        );
+        assert_eq!(elapsed, COLLECT_BUDGET);
+        assert!(
+            overview
+                .list
+                .errors
+                .iter()
+                .any(|e| e.machine == "hanging-host"),
+            "hanging host should be listed in errors"
+        );
+        assert!(
+            overview.snapshots.iter().any(|(m, res)| {
+                m == "hanging-host" && matches!(res, Err(err) if err == "probe timed out")
+            }),
+            "hanging host snapshot should be timed out"
+        );
     }
 }

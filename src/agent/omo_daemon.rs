@@ -865,13 +865,22 @@ pub async fn force_restart_owned_daemon(url: &str) -> bool {
         .lock()
         .ok()
         .and_then(|owned| owned.get(url).and_then(std::sync::Weak::upgrade));
+    // Nothing was killed on these paths: drop the stamp so `forced_restart_since` never tells a
+    // concurrent turn its daemon died (and that resubmitting it is safe) when it did not.
+    let unstamp = || {
+        if let Ok(mut last) = LAST_FORCED_RESTART.lock() {
+            last.remove(url);
+        }
+    };
     let Some(slot) = slot else {
         tracing::warn!(%url, "omo app-server is not owned by this gateway; cannot restart it");
+        unstamp();
         return false;
     };
     {
         let mut guard = slot.lock().await;
         let Some(child) = guard.as_mut() else {
+            unstamp();
             return false;
         };
         tracing::warn!(%url, pid = ?child.id(), "force-restarting unresponsive omo app-server");

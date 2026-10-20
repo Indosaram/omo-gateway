@@ -1,0 +1,1682 @@
+diff --git a/src/sessions/cli.rs b/src/sessions/cli.rs
+index 5a2efc9..33bcac1 100644
+--- a/src/sessions/cli.rs
++++ b/src/sessions/cli.rs
+@@ -1,8 +1,10 @@
+ use clap::{Args, Subcommand};
+-use serde_json::{json, Value};
++use serde_json::json;
+ 
+ use super::control::{ControlError, SendMode, SessionControl, Target};
+ use super::external::ExternalDriver;
++use super::overview;
++use super::watch::{self, Watcher};
+ use crate::storage::Database;
+ 
+ #[derive(Debug, Args)]
+@@ -17,6 +19,12 @@ pub enum SessionsCommand {
+         #[arg(long)]
+         json: bool,
+     },
++    Overview {
++        #[arg(long)]
++        json: bool,
++        #[arg(long, default_value_t = 1900)]
++        max_chars: usize,
++    },
+     Read {
+         target: Target,
+         #[arg(long, default_value_t = 20)]
+@@ -34,6 +42,24 @@ pub enum SessionsCommand {
+     Interrupt {
+         target: Target,
+     },
++    Answer {
++        target: Target,
++        #[arg(long)]
++        text: String,
++        #[arg(long)]
++        request: Option<String>,
++    },
++    Watch {
++        target: Target,
++    },
++    Unwatch {
++        target: Target,
++    },
++    Watched,
++    WatchTick {
++        #[arg(long)]
++        once: bool,
++    },
+     Adopt {
+         target: Target,
+         #[arg(long)]
+@@ -50,10 +76,7 @@ pub enum SessionsCommand {
+ 
+ pub async fn run(args: SessionsArgs) -> i32 {
+     match execute(args.command).await {
+-        Ok((code, value)) => {
+-            println!("{value}");
+-            code
+-        }
++        Ok(code) => code,
+         Err(error) => {
+             eprintln!("{}", json!({"ok":false,"error":error.to_string()}));
+             error.exit_code()
+@@ -61,24 +84,116 @@ pub async fn run(args: SessionsArgs) -> i32 {
+     }
+ }
+ 
+-async fn execute(command: SessionsCommand) -> Result<(i32, Value), ControlError> {
++async fn execute(command: SessionsCommand) -> Result<i32, ControlError> {
+     let control = SessionControl::from_environment()?;
+-    let value = match command {
++    match command {
+         SessionsCommand::List { .. } => {
+             let list = control.registry().list_all().await;
+-            return Ok((list.exit_code, serde_json::to_value(list)?));
++            println!("{}", serde_json::to_string(&list)?);
++            Ok(list.exit_code)
++        }
++        SessionsCommand::Overview { json, max_chars } => {
++            let overview = overview::collect(&control, 1000).await;
++            if json {
++                println!("{}", serde_json::to_string(&overview)?);
++            } else {
++                let formatted = overview::format_overview(&overview, chrono::Utc::now(), max_chars);
++                println!("{formatted}");
++            }
++            Ok(0)
+         }
+         SessionsCommand::Read {
+             target,
+             limit,
+             cursor,
+-        } => control.read(&target, limit, cursor.as_deref()).await?,
++        } => {
++            let value = control.read(&target, limit, cursor.as_deref()).await?;
++            println!("{value}");
++            Ok(0)
++        }
+         SessionsCommand::Send { target, text, mode } => {
+-            control
++            let value = control
+                 .send(&target, &text, mode, uuid::Uuid::new_v4())
+-                .await?
++                .await?;
++            println!("{value}");
++            Ok(0)
++        }
++        SessionsCommand::Interrupt { target } => {
++            let value = control.interrupt(&target).await?;
++            println!("{value}");
++            Ok(0)
++        }
++        SessionsCommand::Answer {
++            target,
++            text,
++            request,
++        } => {
++            let value = control.answer(&target, &text, request.as_deref()).await?;
++            println!("{value}");
++            Ok(0)
++        }
++        SessionsCommand::Watch { target } => {
++            let (resolved_target, _) = control.resolve(&target).await?;
++            let canonical = resolved_target.to_string();
++            let database = database().await?;
++            watch::watch(database.pool(), &canonical)
++                .await
++                .map_err(failure)?;
++            database.close().await;
++            println!(
++                "{}",
++                json!({"ok": true, "target": canonical, "watched": true})
++            );
++            Ok(0)
++        }
++        SessionsCommand::Unwatch { target } => {
++            let canonical = match control.resolve(&target).await {
++                Ok((resolved, _)) => resolved.to_string(),
++                Err(_) => target.to_string(),
++            };
++            let database = database().await?;
++            let removed = watch::unwatch(database.pool(), &canonical)
++                .await
++                .map_err(failure)?;
++            database.close().await;
++            println!(
++                "{}",
++                json!({"ok": true, "target": canonical, "unwatched": removed})
++            );
++            Ok(0)
++        }
++        SessionsCommand::Watched => {
++            let database = database().await?;
++            let targets = watch::watched(database.pool()).await.map_err(failure)?;
++            database.close().await;
++            println!("{}", json!({"ok": true, "watched": targets}));
++            Ok(0)
++        }
++        SessionsCommand::WatchTick { once: _ } => {
++            let database = database().await?;
++            let mut watcher = Watcher::with_policy(
++                database.pool().clone(),
++                control,
++                std::time::Duration::from_secs(60),
++                watch::NotifyPolicy {
++                    notify_after: std::time::Duration::ZERO,
++                    quiet_hours: None,
++                },
++            );
++            let notices = watcher.tick().await.map_err(failure)?;
++            for notice in notices {
++                let line = serde_json::to_string(&json!({
++                    "dedupe_key": notice.dedupe_key,
++                    "target": notice.target,
++                    "kind": notice.kind,
++                    "text": notice.text,
++                }))?;
++                println!("{line}");
++                watcher.mark_sent(&notice).await.map_err(failure)?;
++            }
++            database.close().await;
++            Ok(0)
+         }
+-        SessionsCommand::Interrupt { target } => control.interrupt(&target).await?,
+         SessionsCommand::Adopt {
+             target,
+             goal,
+@@ -96,19 +211,26 @@ async fn execute(command: SessionsCommand) -> Result<(i32, Value), ControlError>
+                 .await
+                 .map_err(failure);
+             database.close().await;
+-            json!({"key":result?,"target":target.to_string(),"kind":"external","status":"working"})
++            let value = json!({"key":result?,"target":target.to_string(),"kind":"external","status":"working"});
++            println!("{value}");
++            Ok(0)
+         }
+         SessionsCommand::Release { target } => {
++            let target = match control.resolve(&target).await {
++                Ok((resolved, _)) => resolved,
++                Err(_) => target,
++            };
+             let database = database().await?;
+             let driver =
+                 ExternalDriver::from_environment(database.pool().clone()).map_err(failure)?;
+             let result = driver.release(&target).await.map_err(failure);
+             database.close().await;
+             result?;
+-            json!({"target":target.to_string(),"released":true})
++            let value = json!({"target":target.to_string(),"released":true});
++            println!("{value}");
++            Ok(0)
+         }
+-    };
+-    Ok((0, value))
++    }
+ }
+ 
+ fn failure(error: impl std::fmt::Display) -> ControlError {
+@@ -122,3 +244,123 @@ async fn database() -> Result<Database, ControlError> {
+     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://omon_gateway.db".into());
+     Database::connect(&url).await.map_err(failure)
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use clap::Parser;
++
++    #[derive(Debug, Parser)]
++    struct TestCli {
++        #[command(subcommand)]
++        command: SessionsCommand,
++    }
++
++    #[test]
++    fn parse_overview_flags() {
++        let parsed =
++            TestCli::try_parse_from(["sessions", "overview", "--json", "--max-chars", "1200"])
++                .expect("parse overview with args");
++        match parsed.command {
++            SessionsCommand::Overview { json, max_chars } => {
++                assert!(json);
++                assert_eq!(max_chars, 1200);
++            }
++            _ => panic!("expected Overview command"),
++        }
++    }
++
++    #[test]
++    fn parse_overview_defaults() {
++        let parsed =
++            TestCli::try_parse_from(["sessions", "overview"]).expect("parse overview default");
++        match parsed.command {
++            SessionsCommand::Overview { json, max_chars } => {
++                assert!(!json);
++                assert_eq!(max_chars, 1900);
++            }
++            _ => panic!("expected Overview command"),
++        }
++    }
++
++    #[test]
++    fn parse_answer_flags() {
++        let parsed = TestCli::try_parse_from([
++            "sessions",
++            "answer",
++            "local:01a13e55",
++            "--text",
++            "yes",
++            "--request",
++            "req-1",
++        ])
++        .expect("parse answer with request");
++        match parsed.command {
++            SessionsCommand::Answer {
++                target,
++                text,
++                request,
++            } => {
++                assert_eq!(target.to_string(), "local:01a13e55");
++                assert_eq!(text, "yes");
++                assert_eq!(request.as_deref(), Some("req-1"));
++            }
++            _ => panic!("expected Answer command"),
++        }
++    }
++
++    #[test]
++    fn parse_watch_and_unwatch() {
++        let watch_cmd =
++            TestCli::try_parse_from(["sessions", "watch", "local:sess-1"]).expect("parse watch");
++        match watch_cmd.command {
++            SessionsCommand::Watch { target } => {
++                assert_eq!(target.to_string(), "local:sess-1");
++            }
++            _ => panic!("expected Watch"),
++        }
++
++        let unwatch_cmd = TestCli::try_parse_from(["sessions", "unwatch", "omarchy:sess-2"])
++            .expect("parse unwatch");
++        match unwatch_cmd.command {
++            SessionsCommand::Unwatch { target } => {
++                assert_eq!(target.to_string(), "omarchy:sess-2");
++            }
++            _ => panic!("expected Unwatch"),
++        }
++
++        let watched_cmd = TestCli::try_parse_from(["sessions", "watched"]).expect("parse watched");
++        match watched_cmd.command {
++            SessionsCommand::Watched => {}
++            _ => panic!("expected Watched"),
++        }
++    }
++
++    #[test]
++    fn parse_watch_tick() {
++        let parsed = TestCli::try_parse_from(["sessions", "watch-tick", "--once"])
++            .expect("parse watch-tick --once");
++        match parsed.command {
++            SessionsCommand::WatchTick { once } => {
++                assert!(once);
++            }
++            _ => panic!("expected WatchTick"),
++        }
++
++        let parsed_no_flag =
++            TestCli::try_parse_from(["sessions", "watch-tick"]).expect("parse watch-tick default");
++        match parsed_no_flag.command {
++            SessionsCommand::WatchTick { once } => {
++                assert!(!once);
++            }
++            _ => panic!("expected WatchTick"),
++        }
++    }
++
++    #[test]
++    fn failure_helper_maps_to_control_error_code_2() {
++        let err = failure("test error");
++        assert_eq!(err.exit_code(), 2);
++        assert_eq!(err.to_string(), "session command failed (2): test error");
++    }
++}
+diff --git a/src/sessions/control.rs b/src/sessions/control.rs
+index 444d4a8..f1e6b05 100644
+--- a/src/sessions/control.rs
++++ b/src/sessions/control.rs
+@@ -1,9 +1,10 @@
+ use std::{fmt, str::FromStr, sync::Arc, time::Duration};
+ 
+ use clap::ValueEnum;
+-use serde_json::Value;
++use serde_json::{json, Value};
+ use thiserror::Error;
+ 
++use super::probe::{answers_for, PendingQuestion, Probe, ProbeError};
+ use super::registry::{
+     CommandOutput, CommandRunner, ProcessCommandRunner, RegistryError, Session, SessionRegistry,
+ };
+@@ -83,8 +84,10 @@ pub enum ControlError {
+     NotRunning,
+     #[error("session does not advertise {0} control")]
+     Unsupported(&'static str),
+-    #[error("remote multiline text is unsupported; stdin/text-file support has not been verified")]
+-    RemoteMultiline,
++    #[error("target matches several sessions: {0}")]
++    Ambiguous(String),
++    #[error("session control failed: {0}")]
++    Probe(String),
+     #[error("text must not be empty or contain NUL")]
+     InvalidText,
+     #[error("session command timed out")]
+@@ -101,13 +104,12 @@ impl ControlError {
+     pub fn exit_code(&self) -> i32 {
+         match self {
+             Self::NotRunning => 3,
+-            Self::InvalidTarget
+-            | Self::Unsupported(_)
+-            | Self::RemoteMultiline
+-            | Self::InvalidText => 2,
++            Self::InvalidTarget | Self::Unsupported(_) | Self::Ambiguous(_) | Self::InvalidText => {
++                2
++            }
+             Self::Registry(error) => error.exit_code(),
+             Self::Command { code, .. } if (1..=5).contains(code) => *code,
+-            Self::Command { .. } | Self::Timeout | Self::Json(_) => 5,
++            Self::Probe(_) | Self::Command { .. } | Self::Timeout | Self::Json(_) => 5,
+         }
+     }
+ }
+@@ -162,6 +164,148 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
+         &self.registry
+     }
+ 
++    pub fn runner(&self) -> Arc<R> {
++        self.runner.clone()
++    }
++
++    pub async fn resolve(&self, target: &Target) -> Result<(Target, Session), ControlError> {
++        let list = SessionRegistry::new(self.runner.clone(), vec![target.machine.clone()])
++            .list_all()
++            .await;
++        let machine_error = list
++            .errors
++            .into_iter()
++            .find(|error| error.machine == target.machine);
++
++        // Daemon-hosted sessions list a host-local id ("rpc-2") that `omo thread` rejects;
++        // the durable id is the only address every subcommand accepts, so it is canonical.
++        let sessions: Vec<Session> = list
++            .sessions
++            .into_iter()
++            .filter(|s| s.machine == target.machine)
++            .map(|mut s| {
++                if let Some(durable) = s.raw.get("durableSessionId").and_then(Value::as_str) {
++                    if !durable.is_empty() && durable != s.session_id {
++                        s.session_id = durable.to_owned();
++                    }
++                }
++                s
++            })
++            .collect();
++
++        // 1. Exact id (canonical durable id or the host-local id the listing reported)
++        let exact_matches: Vec<Session> = sessions
++            .iter()
++            .filter(|s| {
++                s.session_id == target.session
++                    || s.raw.get("sessionId").and_then(Value::as_str)
++                        == Some(target.session.as_str())
++            })
++            .cloned()
++            .collect();
++        if exact_matches.len() == 1 {
++            let session = exact_matches.into_iter().next().unwrap();
++            let resolved_target = Target {
++                machine: target.machine.clone(),
++                session: session.session_id.clone(),
++            };
++            return Ok((resolved_target, session));
++        }
++
++        // 2. Exact durableSessionId
++        let durable_matches: Vec<Session> = sessions
++            .iter()
++            .filter(|s| {
++                s.raw
++                    .get("durableSessionId")
++                    .and_then(Value::as_str)
++                    .map(|d| d == target.session)
++                    .unwrap_or(false)
++            })
++            .cloned()
++            .collect();
++        if durable_matches.len() == 1 {
++            let session = durable_matches.into_iter().next().unwrap();
++            let resolved_target = Target {
++                machine: target.machine.clone(),
++                session: session.session_id.clone(),
++            };
++            return Ok((resolved_target, session));
++        }
++
++        // 3. Unique prefix of either session_id or durableSessionId
++        let prefix_matches: Vec<Session> = sessions
++            .iter()
++            .filter(|s| {
++                let id_match = s.session_id.starts_with(&target.session);
++                let durable_match = s
++                    .raw
++                    .get("durableSessionId")
++                    .and_then(Value::as_str)
++                    .map(|d| d.starts_with(&target.session))
++                    .unwrap_or(false);
++                id_match || durable_match
++            })
++            .cloned()
++            .collect();
++        if prefix_matches.len() == 1 {
++            let session = prefix_matches.into_iter().next().unwrap();
++            let resolved_target = Target {
++                machine: target.machine.clone(),
++                session: session.session_id.clone(),
++            };
++            return Ok((resolved_target, session));
++        }
++        if prefix_matches.len() > 1 {
++            let ids = prefix_matches
++                .iter()
++                .map(|s| s.session_id.as_str())
++                .collect::<Vec<_>>()
++                .join(", ");
++            return Err(ControlError::Ambiguous(ids));
++        }
++
++        // 4. Exact name
++        let name_matches: Vec<Session> = sessions
++            .iter()
++            .filter(|s| {
++                s.raw
++                    .get("name")
++                    .and_then(Value::as_str)
++                    .map(|n| n == target.session)
++                    .unwrap_or(false)
++            })
++            .cloned()
++            .collect();
++        if name_matches.len() == 1 {
++            let session = name_matches.into_iter().next().unwrap();
++            let resolved_target = Target {
++                machine: target.machine.clone(),
++                session: session.session_id.clone(),
++            };
++            return Ok((resolved_target, session));
++        }
++        if name_matches.len() > 1 {
++            let ids = name_matches
++                .iter()
++                .map(|s| s.session_id.as_str())
++                .collect::<Vec<_>>()
++                .join(", ");
++            return Err(ControlError::Ambiguous(ids));
++        }
++
++        match machine_error {
++            Some(error) => Err(ControlError::Command {
++                code: error.code,
++                message: format!(
++                    "session listing failed on {}: {}",
++                    error.machine, error.message
++                ),
++            }),
++            None => Err(ControlError::NotRunning),
++        }
++    }
++
+     pub async fn session(
+         &self,
+         target: &Target,
+@@ -178,7 +322,12 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
+         let session = list
+             .sessions
+             .into_iter()
+-            .find(|s| s.machine == target.machine && s.session_id == target.session)
++            .find(|s| {
++                s.machine == target.machine
++                    && (s.session_id == target.session
++                        || s.raw.get("durableSessionId").and_then(Value::as_str)
++                            == Some(target.session.as_str()))
++            })
+             .ok_or_else(|| match machine_error {
+                 // A failed listing says nothing about the session; only a successful
+                 // listing that lacks it proves it is not running.
+@@ -239,19 +388,20 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
+         limit: usize,
+         cursor: Option<&str>,
+     ) -> Result<Value, ControlError> {
++        let (resolved_target, _session) = self.resolve(target).await?;
+         let mut words = vec![
+             "omo".into(),
+             "thread".into(),
+             "read".into(),
+-            target.session.clone(),
++            resolved_target.session.clone(),
+             "--limit".into(),
+             limit.to_string(),
+-            "--json".into(),
+         ];
+         if let Some(cursor) = cursor {
+             words.extend(["--cursor".into(), cursor.into()]);
+         }
+-        self.command(target, &words).await
++        words.extend(["--all-scope".into(), "--json".into()]);
++        self.command(&resolved_target, &words).await
+     }
+ 
+     pub async fn send(
+@@ -264,22 +414,23 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
+         if text.trim().is_empty() || text.contains('\0') {
+             return Err(ControlError::InvalidText);
+         }
+-        if target.machine != "local" && text.contains(['\n', '\r']) {
+-            return Err(ControlError::RemoteMultiline);
++        let (resolved_target, session) = self.resolve(target).await?;
++        if !session.controls.iter().any(|c| c == "send") {
++            return Err(ControlError::Unsupported("send"));
+         }
+-        self.session(target, "send").await?;
+         self.command(
+-            target,
++            &resolved_target,
+             &[
+                 "omo".into(),
+                 "thread".into(),
+                 "send".into(),
+-                target.session.clone(),
++                resolved_target.session.clone(),
+                 text.into(),
+                 "--mode".into(),
+                 mode.as_str().into(),
+                 "--idempotency-key".into(),
+                 key.to_string(),
++                "--all-scope".into(),
+                 "--json".into(),
+             ],
+         )
+@@ -287,18 +438,101 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
+     }
+ 
+     pub async fn interrupt(&self, target: &Target) -> Result<Value, ControlError> {
+-        self.session(target, "interrupt").await?;
+-        self.command(
+-            target,
+-            &[
+-                "omo".into(),
+-                "thread".into(),
+-                "interrupt".into(),
+-                target.session.clone(),
+-                "--json".into(),
+-            ],
+-        )
+-        .await
++        let (resolved_target, session) = self.resolve(target).await?;
++        if !session.controls.iter().any(|c| c == "interrupt") {
++            return Err(ControlError::Unsupported("interrupt"));
++        }
++        let probe = Probe::new(self.runner.clone());
++        probe
++            .interrupt(resolved_target.machine(), &session.session_id)
++            .await
++            .map_err(|e| match e {
++                ProbeError::NotFound => ControlError::NotRunning,
++                ProbeError::Timeout => ControlError::Timeout,
++                ProbeError::Refused(msg) => ControlError::Command {
++                    code: 4,
++                    message: msg,
++                },
++                other => ControlError::Probe(other.to_string()),
++            })?;
++        Ok(json!({"ok": true, "target": resolved_target.to_string()}))
++    }
++
++    pub async fn answer(
++        &self,
++        target: &Target,
++        text: &str,
++        request_id: Option<&str>,
++    ) -> Result<Value, ControlError> {
++        if text.trim().is_empty() || text.contains('\0') {
++            return Err(ControlError::InvalidText);
++        }
++        let (resolved_target, session) = self.resolve(target).await?;
++        let probe = Probe::new(self.runner.clone());
++        let snapshot = probe
++            .snapshot(resolved_target.machine(), 100)
++            .await
++            .map_err(|e| match e {
++                ProbeError::NotFound => ControlError::NotRunning,
++                ProbeError::Timeout => ControlError::Timeout,
++                ProbeError::Refused(msg) => ControlError::Command {
++                    code: 4,
++                    message: msg,
++                },
++                other => ControlError::Probe(other.to_string()),
++            })?;
++
++        let live_session = snapshot
++            .sessions
++            .into_iter()
++            .find(|s| s.session_id == session.session_id || s.routing_id == session.session_id)
++            .ok_or(ControlError::NotRunning)?;
++
++        let question: PendingQuestion = if let Some(req_id) = request_id {
++            live_session
++                .questions
++                .into_iter()
++                .find(|q| q.request_id == req_id)
++                .ok_or_else(|| {
++                    ControlError::Probe(format!("no pending question matching request_id {req_id}"))
++                })?
++        } else {
++            match live_session.questions.len() {
++                0 => return Err(ControlError::Probe("no pending question".into())),
++                1 => live_session.questions.into_iter().next().unwrap(),
++                n => {
++                    return Err(ControlError::Ambiguous(format!(
++                        "session has {n} pending questions, specify request_id"
++                    )))
++                }
++            }
++        };
++
++        let answers = answers_for(&question, text);
++        probe
++            .answer(
++                resolved_target.machine(),
++                &session.session_id,
++                &question.request_id,
++                &answers,
++                None,
++            )
++            .await
++            .map_err(|e| match e {
++                ProbeError::NotFound => ControlError::NotRunning,
++                ProbeError::Timeout => ControlError::Timeout,
++                ProbeError::Refused(msg) => ControlError::Command {
++                    code: 4,
++                    message: msg,
++                },
++                other => ControlError::Probe(other.to_string()),
++            })?;
++
++        Ok(json!({
++            "ok": true,
++            "target": resolved_target.to_string(),
++            "request_id": question.request_id,
++        }))
+     }
+ }
+ 
+diff --git a/src/sessions/external.rs b/src/sessions/external.rs
+index f11afd1..9bd9a91 100644
+--- a/src/sessions/external.rs
++++ b/src/sessions/external.rs
+@@ -100,6 +100,8 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
+             return Err(invalid("lead must be a session storage key"));
+         }
+         parse_signals(done).map_err(invalid)?;
++        let (resolved, _) = self.control.resolve(target).await.map_err(invalid)?;
++        let target = &resolved;
+         let session = self
+             .control
+             .session(target, "send")
+@@ -238,13 +240,30 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
+         if adoption.sent_at.is_none() {
+             return Ok(0);
+         }
++        let is_numeric_cursor = adoption
++            .cursor
++            .as_deref()
++            .and_then(|c| c.parse::<i64>().ok());
++        let read_cursor = if is_numeric_cursor.is_some() {
++            None
++        } else {
++            adoption.cursor.as_deref()
++        };
+         let output = self
+             .control
+-            .read(&target, 100, adoption.cursor.as_deref())
++            .read(&target, 100, read_cursor)
+             .await
+             .map_err(invalid)?;
+         let cursor = next_cursor(&output).ok_or_else(|| invalid("read response has no cursor"))?;
+         let items = assistant_items(&output)?;
++        let items: Vec<(String, String)> = if let Some(last_seq) = is_numeric_cursor {
++            items
++                .into_iter()
++                .filter(|(id, _)| id.parse::<i64>().map(|seq| seq > last_seq).unwrap_or(true))
++                .collect()
++        } else {
++            items
++        };
+         let activity = LaneActivity::new(self.pool.clone(), self.clock.clone());
+         let mut count = 0;
+         for (id, text) in items {
+@@ -514,12 +533,38 @@ pub async fn remote_checks_with<R: CommandRunner + 'static>(
+ }
+ 
+ fn next_cursor(value: &Value) -> Option<String> {
+-    value
++    let items = value
++        .get("items")
++        .or_else(|| value.get("messages"))
++        .or_else(|| value.get("entries"))
++        .and_then(Value::as_array)
++        .or_else(|| value.as_array());
++    let seqs: Vec<i64> = items
++        .into_iter()
++        .flatten()
++        .filter_map(|item| {
++            item.get("seq").and_then(|s| {
++                s.as_i64()
++                    .or_else(|| s.as_str().and_then(|text| text.parse::<i64>().ok()))
++            })
++        })
++        .collect();
++    // A seq-numbered transcript is tracked by its highest seq, never by the reader's opaque
++    // paging cursor; an empty transcript starts at 0 so a fresh session can be adopted.
++    if let Some(max) = seqs.iter().max() {
++        return Some(max.to_string());
++    }
++    let opaque = value
+         .get("nextCursor")
+         .or_else(|| value.get("next_cursor"))
+         .or_else(|| value.get("cursor"))
+         .and_then(Value::as_str)
+-        .map(str::to_owned)
++        .map(str::to_owned);
++    match (opaque, items) {
++        (Some(cursor), _) => Some(cursor),
++        (None, Some(items)) if items.is_empty() && value.get("kind").is_some() => Some("0".into()),
++        _ => None,
++    }
+ }
+ 
+ fn assistant_items(value: &Value) -> Result<Vec<(String, String)>> {
+@@ -544,26 +589,43 @@ fn assistant_items(value: &Value) -> Result<Vec<(String, String)>> {
+             .get("id")
+             .or_else(|| entry.get("itemId"))
+             .and_then(Value::as_str)
++            .map(str::to_owned)
++            .or_else(|| {
++                entry.get("seq").and_then(|s| {
++                    s.as_i64()
++                        .map(|seq| seq.to_string())
++                        .or_else(|| s.as_str().map(str::to_owned))
++                })
++            })
+             .ok_or_else(|| invalid("assistant message has no stable id"))?;
+-        items.push((id.to_owned(), text));
++        items.push((id, text));
+     }
+     Ok(items)
+ }
+ 
++fn extract_blocks_text(blocks: &[Value]) -> Option<String> {
++    let parts: Vec<&str> = blocks
++        .iter()
++        .filter_map(|block| block.get("text").and_then(Value::as_str))
++        .collect();
++    (!parts.is_empty()).then(|| parts.join("\n"))
++}
++
+ fn entry_text(entry: &Value) -> Option<String> {
+     let content = entry
+         .get("text")
+         .filter(|value| !value.is_null())
+         .or_else(|| entry.get("content"))?;
+     match content {
+-        Value::String(text) => Some(text.clone()),
+-        Value::Array(blocks) => {
+-            let parts: Vec<&str> = blocks
+-                .iter()
+-                .filter_map(|block| block.get("text").and_then(Value::as_str))
+-                .collect();
+-            (!parts.is_empty()).then(|| parts.join("\n"))
++        Value::String(text) => {
++            if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(text) {
++                if let Some(extracted) = extract_blocks_text(&blocks) {
++                    return Some(extracted);
++                }
++            }
++            Some(text.clone())
+         }
++        Value::Array(blocks) => extract_blocks_text(blocks),
+         _ => None,
+     }
+ }
+@@ -604,4 +666,76 @@ mod tests {
+             ]
+         );
+     }
++
++    #[test]
++    fn next_cursor_prefers_highest_seq_over_paging_cursor() {
++        let page_with_next_cursor = json!({
++            "items": [
++                {"seq": 10, "role": "assistant", "content": "hello"},
++                {"seq": 15, "role": "assistant", "content": "world"}
++            ],
++            "next_cursor": "cursor-abc"
++        });
++        assert_eq!(next_cursor(&page_with_next_cursor).as_deref(), Some("15"));
++
++        let page_with_camel_case = json!({
++            "messages": [
++                {"id": "m1", "role": "assistant", "content": "hello"}
++            ],
++            "nextCursor": "cursor-xyz"
++        });
++        assert_eq!(
++            next_cursor(&page_with_camel_case).as_deref(),
++            Some("cursor-xyz")
++        );
++
++        let page_seq_only = json!({
++            "kind": "thread_read",
++            "thread_id": "t1",
++            "items": [
++                {"seq": 12, "role": "user", "content": "q"},
++                {"seq": 18, "role": "assistant", "content": "a"},
++                {"seq": 15, "role": "assistant", "content": "b"}
++            ],
++            "truncated": false
++        });
++        assert_eq!(next_cursor(&page_seq_only).as_deref(), Some("18"));
++
++        let empty_page = json!({
++            "items": []
++        });
++        assert_eq!(next_cursor(&empty_page), None);
++
++        let empty_thread =
++            json!({"kind": "ok", "thread_id": "t1", "items": [], "truncated": false});
++        assert_eq!(next_cursor(&empty_thread).as_deref(), Some("0"));
++    }
++
++    #[test]
++    fn assistant_items_accepts_seq_and_json_encoded_blocks() {
++        let json_blocks_str = serde_json::to_string(&json!([
++            {"type": "text", "text": "first line"},
++            {"type": "tool_use", "id": "t1"},
++            {"type": "text", "text": "second line"}
++        ]))
++        .unwrap();
++
++        let page = json!({
++            "items": [
++                {"seq": 42, "role": "assistant", "content": json_blocks_str},
++                {"seq": "43", "role": "assistant", "content": "simple string"},
++                {"seq": 44, "role": "assistant", "content": [{"type": "text", "text": "array block"}]},
++                {"seq": 45, "role": "user", "content": "user query"}
++            ]
++        });
++
++        assert_eq!(
++            assistant_items(&page).unwrap(),
++            vec![
++                ("42".to_owned(), "first line\nsecond line".to_owned()),
++                ("43".to_owned(), "simple string".to_owned()),
++                ("44".to_owned(), "array block".to_owned())
++            ]
++        );
++    }
+ }
+diff --git a/src/sessions/mod.rs b/src/sessions/mod.rs
+index 4f9130a..b3f3155 100644
+--- a/src/sessions/mod.rs
++++ b/src/sessions/mod.rs
+@@ -1,5 +1,8 @@
+ pub mod cli;
+ pub mod control;
+ pub mod external;
++pub mod overview;
++pub mod probe;
+ pub mod registry;
+ pub mod status_reply;
++pub mod watch;
+diff --git a/src/sessions/probe.py b/src/sessions/probe.py
+new file mode 100644
+index 0000000..adc58fe
+--- /dev/null
++++ b/src/sessions/probe.py
+@@ -0,0 +1,249 @@
++"""omo session control-socket probe, run by omo-gateway locally or over ssh.
++
++Modes (one JSON value on stdout):
++  snapshot <text_limit>
++  interrupt <session>
++  answer <session> <request_id> <answers_json> [comment]
++Exit codes: 0 ok, 3 session not found, 4 refused by the session, 5 other failure.
++"""
++import concurrent.futures
++import glob
++import json
++import os
++import socket
++import sys
++import time
++
++RPC_DIR = os.path.expanduser("~/.omo/agent/rpc")
++DEAD = (ConnectionRefusedError, FileNotFoundError)
++
++
++def rpc(path, request, timeout=4.0, secret=True):
++    deadline = time.monotonic() + timeout
++    conn = socket.socket(socket.AF_UNIX)
++    conn.settimeout(timeout)
++    conn.connect(path)
++    try:
++        if secret:
++            with open(path + ".secret", "rb") as handle:
++                conn.sendall(handle.read())
++        request = dict(request)
++        request["id"] = "omon-%d" % time.time_ns()
++        conn.sendall((json.dumps(request) + "\n").encode())
++        buffer = b""
++        while True:
++            remaining = deadline - time.monotonic()
++            if remaining <= 0:
++                raise TimeoutError("%s timed out" % request.get("type"))
++            conn.settimeout(remaining)
++            chunk = conn.recv(1 << 20)
++            if not chunk:
++                raise RuntimeError("connection closed before the response")
++            buffer += chunk
++            while b"\n" in buffer:
++                line, buffer = buffer.split(b"\n", 1)
++                if not line.strip():
++                    continue
++                message = json.loads(line)
++                if message.get("id") == request["id"]:
++                    return message
++    finally:
++        conn.close()
++
++
++def data_of(response):
++    if response.get("success") is False:
++        raise PermissionError(str(response.get("error") or "refused"))
++    return response.get("data") or {}
++
++
++def text_of(message):
++    content = message.get("content")
++    if isinstance(content, str):
++        return content
++    if isinstance(content, list):
++        return " ".join(
++            block.get("text", "")
++            for block in content
++            if isinstance(block, dict) and block.get("type") == "text"
++        )
++    return ""
++
++
++def pending_questions(messages):
++    asked = {}
++    answered = set()
++    for message in messages:
++        role = message.get("role")
++        if role == "assistant" and isinstance(message.get("content"), list):
++            for block in message["content"]:
++                if (
++                    isinstance(block, dict)
++                    and block.get("type") == "toolCall"
++                    and block.get("name") == "ask_user_question"
++                    and isinstance(block.get("id"), str)
++                ):
++                    asked[block["id"]] = block.get("arguments") or {}
++        elif role == "toolResult" and message.get("toolName") == "ask_user_question":
++            details = message.get("details") or {}
++            if details.get("status") != "pending":
++                answered.add(message.get("toolCallId"))
++        elif role == "user":
++            text = text_of(message)
++            if text.startswith("[Answer to question "):
++                answered.add(text[len("[Answer to question "):].split("]", 1)[0])
++    out = []
++    for request_id, arguments in asked.items():
++        if request_id in answered:
++            continue
++        items = []
++        for index, question in enumerate(arguments.get("questions") or []):
++            if not isinstance(question, dict):
++                continue
++            items.append(
++                {
++                    "id": question.get("id") or "q%d" % (index + 1),
++                    "header": question.get("header"),
++                    "question": question.get("question"),
++                    "options": [
++                        option.get("label")
++                        for option in question.get("options") or []
++                        if isinstance(option, dict) and isinstance(option.get("label"), str)
++                    ],
++                }
++            )
++        out.append({"request_id": request_id, "questions": items})
++    return out
++
++
++def updated_at(session_file):
++    try:
++        mtime = os.path.getmtime(session_file)
++    except (OSError, TypeError):
++        return None
++    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
++
++
++def endpoints():
++    found = []
++    for path in sorted(glob.glob(os.path.join(RPC_DIR, "tui", "*.sock"))):
++        found.append((path, "tui", True, [None]))
++    daemon = os.path.join(RPC_DIR, "rpc.sock")
++    if os.path.exists(daemon):
++        try:
++            listed = data_of(rpc(daemon, {"type": "list_sessions"}, secret=False))
++            ids = [s.get("sessionId") for s in listed.get("sessions") or [] if s.get("sessionId")]
++            found.append((daemon, "rpc_host", False, ids))
++        except DEAD:
++            pass
++    return found
++
++
++def session_view(path, kind, secret, routing, limit):
++    extra = {} if routing is None else {"sessionId": routing}
++    state = data_of(rpc(path, dict({"type": "get_state"}, **extra), secret=secret))
++    session_id = state.get("sessionId") or routing
++    address = routing or session_id
++    try:
++        messages = data_of(
++            rpc(path, {"type": "get_messages", "sessionId": address}, 8.0, secret=secret)
++        ).get("messages") or []
++        messages_error = None
++    except DEAD:
++        raise
++    except Exception as error:
++        messages, messages_error = [], str(error)[:120]
++    last_user = next((text_of(m) for m in reversed(messages) if m.get("role") == "user" and text_of(m).strip()), "")
++    last_assistant = next((text_of(m) for m in reversed(messages) if m.get("role") == "assistant" and text_of(m).strip()), "")
++    durable = session_id
++    if kind == "rpc_host":
++        session_file = state.get("sessionFile") or ""
++        stem = os.path.basename(session_file).rsplit(".", 1)[0]
++        durable = stem.split("_", 1)[1] if "_" in stem else session_id
++    return {
++        "session_id": durable,
++        "routing_id": address,
++        "endpoint_kind": kind,
++        "name": state.get("sessionName"),
++        "cwd": state.get("cwd"),
++        "streaming": bool(state.get("isStreaming")),
++        "compacting": bool(state.get("isCompacting") or state.get("compacting")),
++        "blocking_question": bool(state.get("blocking_question")),
++        "pending_messages": int(state.get("pendingMessageCount") or 0),
++        "message_count": int(state.get("messageCount") or len(messages)),
++        "last_user": last_user[-limit:],
++        "last_assistant": last_assistant[-limit:],
++        "questions": pending_questions(messages),
++        "messages_error": messages_error,
++        "updated_at": updated_at(state.get("sessionFile")),
++        "_endpoint": [path, kind, secret],
++    }
++
++
++def all_sessions(limit):
++    jobs = [(path, kind, secret, routing) for path, kind, secret, ids in endpoints() for routing in ids]
++    sessions, errors = [], []
++    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
++        futures = [(job[0], pool.submit(session_view, *job, limit)) for job in jobs]
++        for path, future in futures:
++            try:
++                sessions.append(future.result())
++            except DEAD:
++                continue
++            except Exception as error:
++                errors.append({"endpoint": path, "error": str(error)[:200]})
++    return sessions, errors
++
++
++def find(target):
++    sessions, _ = all_sessions(1)
++    matches = [s for s in sessions if target in (s["session_id"], s["routing_id"], s["name"])]
++    if len(matches) != 1:
++        emit({"ok": False, "error": "session not found" if not matches else "ambiguous session"}, 3)
++    return matches[0]
++
++
++def emit(value, code=0):
++    sys.stdout.write(json.dumps(value) + "\n")
++    sys.stdout.flush()
++    sys.exit(code)
++
++
++def call(session, request):
++    path, kind, secret = session["_endpoint"]
++    if kind == "rpc_host":
++        request = dict(request, sessionId=session["routing_id"])
++    try:
++        response = rpc(path, request, 8.0, secret=secret)
++    except DEAD:
++        response = None
++    if response is None:
++        emit({"ok": False, "error": "session not found"}, 3)
++    elif response.get("success") is False:
++        emit({"ok": False, "error": str(response.get("error") or "refused")}, 4)
++    emit({"ok": True, "session_id": session["session_id"]})
++
++
++def main(argv):
++    mode = argv[0] if argv else ""
++    if mode == "snapshot":
++        sessions, errors = all_sessions(int(argv[1]) if len(argv) > 1 else 300)
++        for session in sessions:
++            session.pop("_endpoint", None)
++        emit({"sessions": sessions, "errors": errors})
++    if mode == "interrupt" and len(argv) == 2:
++        call(find(argv[1]), {"type": "interrupt"})
++    if mode == "answer" and len(argv) in (4, 5):
++        request = {"type": "extension_ui_response", "uiRequestId": argv[2], "answers": json.loads(argv[3])}
++        if len(argv) == 5 and argv[4].strip():
++            request["comment"] = argv[4]
++        call(find(argv[1]), request)
++    emit({"ok": False, "error": "usage: snapshot <limit> | interrupt <session> | answer <session> <request_id> <answers_json> [comment]"}, 5)
++
++
++try:
++    main(sys.argv[1:])
++except SystemExit:
++    raise
++except Exception as error:
++    emit({"ok": False, "error": str(error)[:300]}, 5)
+diff --git a/src/sessions/probe.rs b/src/sessions/probe.rs
+new file mode 100644
+index 0000000..ce11d73
+--- /dev/null
++++ b/src/sessions/probe.rs
+@@ -0,0 +1,471 @@
++use std::sync::Arc;
++use std::time::Duration;
++
++use base64::Engine;
++use serde::{Deserialize, Serialize};
++use thiserror::Error;
++
++use super::control::{self, Target};
++use super::registry::{CommandRunner, ProcessCommandRunner};
++
++pub const PROBE_PY: &str = include_str!("probe.py");
++pub const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
++
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct QuestionItem {
++    pub id: String,
++    pub header: Option<String>,
++    pub question: Option<String>,
++    pub options: Vec<String>,
++}
++
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct PendingQuestion {
++    pub request_id: String,
++    pub questions: Vec<QuestionItem>,
++}
++
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct LiveSession {
++    #[serde(default)]
++    pub machine: String,
++    pub session_id: String,
++    pub routing_id: String,
++    pub endpoint_kind: String,
++    pub name: Option<String>,
++    pub cwd: Option<String>,
++    pub streaming: bool,
++    pub compacting: bool,
++    pub blocking_question: bool,
++    pub pending_messages: u64,
++    pub message_count: u64,
++    pub last_user: String,
++    pub last_assistant: String,
++    pub questions: Vec<PendingQuestion>,
++    #[serde(default)]
++    pub messages_error: Option<String>,
++    #[serde(default)]
++    pub updated_at: Option<String>,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
++pub struct SnapshotError {
++    pub endpoint: String,
++    pub error: String,
++}
++
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
++pub struct MachineSnapshot {
++    #[serde(default)]
++    pub machine: String,
++    pub sessions: Vec<LiveSession>,
++    pub errors: Vec<SnapshotError>,
++}
++
++#[derive(Debug, Error)]
++pub enum ProbeError {
++    #[error("probe timed out")]
++    Timeout,
++    #[error("probe transport failed: {0}")]
++    Transport(String),
++    #[error("session not found on this machine")]
++    NotFound,
++    #[error("session refused: {0}")]
++    Refused(String),
++    #[error("invalid probe output: {0}")]
++    InvalidJson(String),
++}
++
++pub struct Probe<R = ProcessCommandRunner> {
++    runner: Arc<R>,
++}
++
++impl Probe<ProcessCommandRunner> {
++    pub fn new_process() -> Self {
++        Self {
++            runner: Arc::new(ProcessCommandRunner),
++        }
++    }
++}
++
++impl<R: CommandRunner + 'static> Probe<R> {
++    pub fn new(runner: Arc<R>) -> Self {
++        Self { runner }
++    }
++
++    pub fn argv(machine: &str, args: &[String]) -> Vec<String> {
++        let b64_code = base64::engine::general_purpose::STANDARD.encode(PROBE_PY.as_bytes());
++        let mut inner_words = vec![
++            "python3".to_owned(),
++            "-c".to_owned(),
++            "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))".to_owned(),
++            b64_code,
++        ];
++        inner_words.extend(args.iter().cloned());
++
++        let target_str = format!("{machine}:session");
++        match target_str.parse::<Target>() {
++            Ok(target) => control::transport_argv(&target, &inner_words),
++            Err(_) => inner_words,
++        }
++    }
++
++    pub async fn snapshot(
++        &self,
++        machine: &str,
++        text_limit: usize,
++    ) -> Result<MachineSnapshot, ProbeError> {
++        let args = vec!["snapshot".to_owned(), text_limit.to_string()];
++        let argv = Self::argv(machine, &args);
++
++        let output = tokio::time::timeout(PROBE_TIMEOUT, self.runner.run("local", &argv))
++            .await
++            .map_err(|_| ProbeError::Timeout)?
++            .map_err(ProbeError::Transport)?;
++
++        match output.code {
++            0 => {
++                let stdout_str = std::str::from_utf8(&output.stdout)
++                    .map_err(|e| ProbeError::InvalidJson(e.to_string()))?;
++                let mut snapshot: MachineSnapshot = serde_json::from_str(stdout_str)
++                    .map_err(|e| ProbeError::InvalidJson(format!("{}: {}", e, stdout_str)))?;
++                snapshot.machine = machine.to_owned();
++                for session in &mut snapshot.sessions {
++                    session.machine = machine.to_owned();
++                }
++                Ok(snapshot)
++            }
++            3 => Err(ProbeError::NotFound),
++            4 => {
++                let err_msg = String::from_utf8_lossy(&output.stdout).trim().to_owned();
++                Err(ProbeError::Refused(err_msg))
++            }
++            _ => {
++                let err_msg = if !output.stderr.is_empty() {
++                    String::from_utf8_lossy(&output.stderr).trim().to_owned()
++                } else {
++                    String::from_utf8_lossy(&output.stdout).trim().to_owned()
++                };
++                Err(ProbeError::Transport(format!(
++                    "exit {}: {}",
++                    output.code, err_msg
++                )))
++            }
++        }
++    }
++
++    pub async fn snapshot_all(
++        &self,
++        machines: &[String],
++        text_limit: usize,
++    ) -> Vec<(String, Result<MachineSnapshot, ProbeError>)> {
++        let futures = machines.iter().map(|machine| {
++            let machine_owned = machine.clone();
++            async move {
++                let res = self.snapshot(&machine_owned, text_limit).await;
++                (machine_owned, res)
++            }
++        });
++        futures_util::future::join_all(futures).await
++    }
++
++    pub async fn interrupt(&self, machine: &str, session: &str) -> Result<(), ProbeError> {
++        let args = vec!["interrupt".to_owned(), session.to_owned()];
++        let argv = Self::argv(machine, &args);
++
++        let output = tokio::time::timeout(PROBE_TIMEOUT, self.runner.run("local", &argv))
++            .await
++            .map_err(|_| ProbeError::Timeout)?
++            .map_err(ProbeError::Transport)?;
++
++        match output.code {
++            0 => Ok(()),
++            3 => Err(ProbeError::NotFound),
++            4 => {
++                let err_msg = String::from_utf8_lossy(&output.stdout).trim().to_owned();
++                Err(ProbeError::Refused(err_msg))
++            }
++            _ => {
++                let err_msg = if !output.stderr.is_empty() {
++                    String::from_utf8_lossy(&output.stderr).trim().to_owned()
++                } else {
++                    String::from_utf8_lossy(&output.stdout).trim().to_owned()
++                };
++                Err(ProbeError::Transport(format!(
++                    "exit {}: {}",
++                    output.code, err_msg
++                )))
++            }
++        }
++    }
++
++    pub async fn answer(
++        &self,
++        machine: &str,
++        session: &str,
++        request_id: &str,
++        answers: &serde_json::Value,
++        comment: Option<&str>,
++    ) -> Result<(), ProbeError> {
++        let mut args = vec![
++            "answer".to_owned(),
++            session.to_owned(),
++            request_id.to_owned(),
++            answers.to_string(),
++        ];
++        if let Some(c) = comment {
++            args.push(c.to_owned());
++        }
++        let argv = Self::argv(machine, &args);
++
++        let output = tokio::time::timeout(PROBE_TIMEOUT, self.runner.run("local", &argv))
++            .await
++            .map_err(|_| ProbeError::Timeout)?
++            .map_err(ProbeError::Transport)?;
++
++        match output.code {
++            0 => Ok(()),
++            3 => Err(ProbeError::NotFound),
++            4 => {
++                let err_msg = String::from_utf8_lossy(&output.stdout).trim().to_owned();
++                Err(ProbeError::Refused(err_msg))
++            }
++            _ => {
++                let err_msg = if !output.stderr.is_empty() {
++                    String::from_utf8_lossy(&output.stderr).trim().to_owned()
++                } else {
++                    String::from_utf8_lossy(&output.stdout).trim().to_owned()
++                };
++                Err(ProbeError::Transport(format!(
++                    "exit {}: {}",
++                    output.code, err_msg
++                )))
++            }
++        }
++    }
++}
++
++pub fn answers_for(question: &PendingQuestion, text: &str) -> serde_json::Value {
++    let trimmed = text.trim();
++    let mut map = serde_json::Map::new();
++
++    for item in &question.questions {
++        let is_match = item.options.iter().any(|opt| opt == trimmed);
++        let val = if is_match {
++            serde_json::json!({
++                "selected": [trimmed]
++            })
++        } else {
++            serde_json::json!({
++                "selected": [],
++                "text": trimmed
++            })
++        };
++        map.insert(item.id.clone(), val);
++    }
++
++    serde_json::Value::Object(map)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::sessions::registry::CommandOutput;
++    use async_trait::async_trait;
++    use std::sync::Mutex;
++
++    struct FakeRunner {
++        outputs: Mutex<std::collections::VecDeque<Result<CommandOutput, String>>>,
++        recorded: Mutex<Vec<(String, Vec<String>)>>,
++    }
++
++    impl FakeRunner {
++        fn new(outputs: Vec<Result<CommandOutput, String>>) -> Self {
++            Self {
++                outputs: Mutex::new(outputs.into()),
++                recorded: Mutex::new(Vec::new()),
++            }
++        }
++    }
++
++    #[async_trait]
++    impl CommandRunner for FakeRunner {
++        async fn run(&self, machine: &str, argv: &[String]) -> Result<CommandOutput, String> {
++            self.recorded
++                .lock()
++                .unwrap()
++                .push((machine.to_owned(), argv.to_vec()));
++            self.outputs
++                .lock()
++                .unwrap()
++                .pop_front()
++                .expect("runner has queued output")
++        }
++    }
++
++    #[test]
++    fn test_argv_local_and_remote() {
++        let local_argv =
++            Probe::<ProcessCommandRunner>::argv("local", &["snapshot".into(), "300".into()]);
++        assert_eq!(local_argv[0], "python3");
++        assert_eq!(local_argv[1], "-c");
++        assert_eq!(
++            local_argv[2],
++            "import base64,sys;exec(base64.b64decode(sys.argv.pop(1)))"
++        );
++        assert!(!local_argv[3].is_empty());
++        assert_eq!(local_argv[4], "snapshot");
++        assert_eq!(local_argv[5], "300");
++
++        let remote_argv =
++            Probe::<ProcessCommandRunner>::argv("omarchy", &["snapshot".into(), "300".into()]);
++        assert_eq!(remote_argv[0], "ssh");
++        assert_eq!(remote_argv[1], "-o");
++        assert_eq!(remote_argv[2], "BatchMode=yes");
++        assert_eq!(remote_argv[3], "-o");
++        assert_eq!(remote_argv[4], "ConnectTimeout=5");
++        assert_eq!(remote_argv[5], "--");
++        assert_eq!(remote_argv[6], "omarchy");
++        assert!(remote_argv[7].starts_with("'python3'"));
++        assert_eq!(remote_argv[8], "'-c'");
++    }
++
++    #[tokio::test]
++    async fn test_snapshot_parses_json_and_fills_machine() {
++        let json_body = r#"{
++            "sessions": [{
++                "session_id": "sess-123",
++                "routing_id": "rpc-1",
++                "endpoint_kind": "tui",
++                "name": "my-session",
++                "cwd": "/home/user",
++                "streaming": true,
++                "compacting": false,
++                "blocking_question": false,
++                "pending_messages": 0,
++                "message_count": 5,
++                "last_user": "hello",
++                "last_assistant": "hi there",
++                "questions": []
++            }],
++            "errors": []
++        }"#;
++
++        let fake = Arc::new(FakeRunner::new(vec![Ok(CommandOutput {
++            code: 0,
++            stdout: json_body.as_bytes().to_vec(),
++            stderr: vec![],
++        })]));
++
++        let probe = Probe::new(fake);
++        let snapshot = probe.snapshot("local", 300).await.expect("snapshot parses");
++        assert_eq!(snapshot.machine, "local");
++        assert_eq!(snapshot.sessions.len(), 1);
++        let sess = &snapshot.sessions[0];
++        assert_eq!(sess.machine, "local");
++        assert_eq!(sess.session_id, "sess-123");
++        assert_eq!(sess.routing_id, "rpc-1");
++        assert_eq!(sess.endpoint_kind, "tui");
++        assert_eq!(sess.name.as_deref(), Some("my-session"));
++        assert!(sess.streaming);
++        assert!(!sess.compacting);
++        assert!(!sess.blocking_question);
++        assert_eq!(sess.message_count, 5);
++        assert_eq!(sess.last_user, "hello");
++        assert_eq!(sess.last_assistant, "hi there");
++    }
++
++    #[tokio::test]
++    async fn test_exit_codes_and_timeout() {
++        let fake_exit_3 = Arc::new(FakeRunner::new(vec![Ok(CommandOutput {
++            code: 3,
++            stdout: b"{\"ok\":false,\"error\":\"not found\"}".to_vec(),
++            stderr: vec![],
++        })]));
++        let probe = Probe::new(fake_exit_3);
++        let err = probe.interrupt("local", "nonexistent").await.unwrap_err();
++        match err {
++            ProbeError::NotFound => {}
++            other => panic!("expected NotFound, got {other:?}"),
++        }
++
++        struct HangingRunner;
++        #[async_trait]
++        impl CommandRunner for HangingRunner {
++            async fn run(&self, _machine: &str, _argv: &[String]) -> Result<CommandOutput, String> {
++                tokio::time::sleep(PROBE_TIMEOUT * 2).await;
++                Ok(CommandOutput {
++                    code: 0,
++                    stdout: vec![],
++                    stderr: vec![],
++                })
++            }
++        }
++        tokio::time::pause();
++        let err = Probe::new(Arc::new(HangingRunner))
++            .snapshot("omarchy", 10)
++            .await
++            .unwrap_err();
++        assert!(matches!(err, ProbeError::Timeout), "{err:?}");
++    }
++
++    #[tokio::test]
++    async fn remote_probe_runs_ssh_argv_locally_once() {
++        let runner = Arc::new(FakeRunner::new(vec![Ok(CommandOutput {
++            code: 0,
++            stdout: br#"{"sessions":[],"errors":[]}"#.to_vec(),
++            stderr: vec![],
++        })]));
++        Probe::new(runner.clone())
++            .snapshot("omarchy", 10)
++            .await
++            .unwrap();
++        let recorded = runner.recorded.lock().unwrap();
++        assert_eq!(recorded[0].0, "local");
++        assert_eq!(recorded[0].1[0], "ssh");
++        assert_eq!(recorded[0].1.iter().filter(|w| *w == "ssh").count(), 1);
++    }
++
++    #[test]
++    fn test_answers_for_mapping() {
++        let pq = PendingQuestion {
++            request_id: "req-1".into(),
++            questions: vec![
++                QuestionItem {
++                    id: "q1".into(),
++                    header: Some("Approval".into()),
++                    question: Some("Proceed?".into()),
++                    options: vec!["Yes".into(), "No".into()],
++                },
++                QuestionItem {
++                    id: "q2".into(),
++                    header: None,
++                    question: Some("Notes?".into()),
++                    options: vec![],
++                },
++            ],
++        };
++
++        let ans_match = answers_for(&pq, "Yes");
++        let obj = ans_match.as_object().expect("object");
++        assert_eq!(
++            obj.get("q1").unwrap(),
++            &serde_json::json!({ "selected": ["Yes"] })
++        );
++        assert_eq!(
++            obj.get("q2").unwrap(),
++            &serde_json::json!({ "selected": [], "text": "Yes" })
++        );
++
++        let ans_custom = answers_for(&pq, "Maybe later");
++        let obj2 = ans_custom.as_object().expect("object");
++        assert_eq!(
++            obj2.get("q1").unwrap(),
++            &serde_json::json!({ "selected": [], "text": "Maybe later" })
++        );
++        assert_eq!(
++            obj2.get("q2").unwrap(),
++            &serde_json::json!({ "selected": [], "text": "Maybe later" })
++        );
++    }
++}

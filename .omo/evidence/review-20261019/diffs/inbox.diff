@@ -1,0 +1,2075 @@
+diff --git a/src/inbox/cli.rs b/src/inbox/cli.rs
+index cc586b2..d8a4d9a 100644
+--- a/src/inbox/cli.rs
++++ b/src/inbox/cli.rs
+@@ -4,6 +4,8 @@ use sqlx::SqlitePool;
+ use super::{
+     list::{self, ClassFilter},
+     set::{self, Status},
++    sources::github::GithubSource,
++    InboxSource,
+ };
+ 
+ #[derive(Debug, Args)]
+@@ -17,6 +19,11 @@ pub enum ListStatus {
+     Open,
+ }
+ 
++#[derive(Clone, Copy, Debug, ValueEnum)]
++pub enum CollectSource {
++    Github,
++}
++
+ #[derive(Debug, Subcommand)]
+ pub enum InboxCommand {
+     List {
+@@ -32,6 +39,15 @@ pub enum InboxCommand {
+         #[arg(long, value_enum)]
+         status: Status,
+     },
++    /// Runs one read-only collection for a source; --dry-run prints without storing.
++    Collect {
++        #[arg(long, value_enum)]
++        source: CollectSource,
++        #[arg(long)]
++        dry_run: bool,
++        #[arg(long)]
++        json: bool,
++    },
+ }
+ 
+ #[derive(Debug)]
+@@ -64,6 +80,11 @@ pub async fn execute(pool: &SqlitePool, args: InboxArgs) -> CliOutput {
+                     .map_err(|e| e.to_string())?;
+                 Ok(String::new())
+             }
++            InboxCommand::Collect {
++                source: CollectSource::Github,
++                dry_run,
++                json,
++            } => collect_github(pool, &GithubSource::default(), dry_run, json).await,
+         }
+     }
+     .await;
+@@ -81,6 +102,72 @@ pub async fn execute(pool: &SqlitePool, args: InboxArgs) -> CliOutput {
+     }
+ }
+ 
++pub async fn collect_github(
++    pool: &SqlitePool,
++    source: &GithubSource,
++    dry_run: bool,
++    json: bool,
++) -> Result<String, String> {
++    let cursor: Option<String> =
++        sqlx::query_scalar("SELECT cursor FROM inbox_cursors WHERE source = 'github'")
++            .fetch_optional(pool)
++            .await
++            .map_err(|e| e.to_string())?;
++    let poll = source
++        .poll(cursor.as_deref())
++        .await
++        .map_err(|e| e.to_string())?;
++    let mut stored = None;
++    if !dry_run {
++        let results = super::collect_all(
++            pool,
++            &[source as &dyn InboxSource],
++            &super::prefilter::PrefilterRules::default(),
++        )
++        .await;
++        if let Some(error) = results.first().and_then(|r| r.error.clone()) {
++            return Err(error);
++        }
++        stored = results.first().map(|r| r.stats.inserted);
++    }
++    if json {
++        let items: Vec<_> = poll
++            .items
++            .iter()
++            .map(|item| {
++                serde_json::json!({
++                    "id": item.source_ref,
++                    "title": item.title,
++                    "snippet": item.snippet,
++                    "link": item.link,
++                })
++            })
++            .collect();
++        return serde_json::to_string_pretty(&serde_json::json!({
++            "source": "github",
++            "dry_run": dry_run,
++            "open_prs": poll.open_prs,
++            "changes": items,
++            "stored": stored,
++        }))
++        .map_err(|e| e.to_string());
++    }
++    let mut out = format!("open PRs: {}\n", poll.open_prs.len());
++    for pr in &poll.open_prs {
++        out.push_str(&format!(
++            "- {} [{}] {}\n",
++            pr.url,
++            pr.ci.as_deref().unwrap_or("no checks"),
++            pr.title
++        ));
++    }
++    out.push_str(&format!("changes: {}", poll.items.len()));
++    for item in &poll.items {
++        out.push_str(&format!("\n- {}", item.snippet));
++    }
++    Ok(out)
++}
++
+ pub async fn run(args: InboxArgs) -> i32 {
+     let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite://omon_gateway.db".into());
+     let database = match crate::Database::connect(&url).await {
+diff --git a/src/inbox/digest.rs b/src/inbox/digest.rs
+index 22fa2db..e943f2b 100644
+--- a/src/inbox/digest.rs
++++ b/src/inbox/digest.rs
+@@ -17,7 +17,7 @@ pub const JOB_ID: &str = "omon:inbox-digest";
+ /// The caller supplies the configured owner identity and the persisted home DM.
+ /// A shared channel or a thread cannot become a digest destination.
+ pub fn spec(home: &SessionKey, owner: &str) -> Result<CronJobSpec> {
+-    if home.platform != "discord"
++    if !matches!(home.platform.as_str(), "discord" | "slack")
+         || home.guild_id.is_some()
+         || home.thread_id.is_some()
+         || home.user_id != owner
+@@ -35,9 +35,9 @@ pub fn spec(home: &SessionKey, owner: &str) -> Result<CronJobSpec> {
+             "schedule": {"kind": "cron", "expr": "0 9 * * *", "timezone": "Asia/Seoul"},
+             "deliver": "origin",
+             // The digest can carry a one-time owner approval token: it must reach the
+-            // owner's Discord DM but never the session transcript the agent reads.
++            // owner's DM but never the session transcript the agent reads.
+             "attach_to_session": false,
+-            "origin": {"platform": "discord", "chat_id": home.channel_id,
++            "origin": {"platform": home.platform, "chat_id": home.channel_id,
+                 "user_id": owner, "bot_id": home.bot_id}
+         }),
+     );
+@@ -175,4 +175,94 @@ mod tests {
+             Some(false)
+         );
+     }
++
++    #[test]
++    fn slack_owner_dm_is_a_valid_home_and_sets_origin_platform() {
++        let home = SessionKey::new(
++            "slack",
++            None::<String>,
++            "D0OWNER",
++            None::<String>,
++            "U0OWNER",
++        )
++        .with_bot_id("U0BOT");
++        let spec = spec(&home, "U0OWNER").unwrap();
++        assert_eq!(spec.payload["origin"]["platform"], "slack");
++        assert_eq!(spec.payload["origin"]["chat_id"], "D0OWNER");
++        assert_eq!(spec.payload["origin"]["user_id"], "U0OWNER");
++        assert_eq!(spec.payload["origin"]["bot_id"], "U0BOT");
++        assert_eq!(spec.session_key, Some(home.storage_key()));
++
++        let discord = SessionKey::new("discord", None::<String>, "dm", None::<String>, "owner");
++        assert_eq!(spec_platform(&discord, "owner"), "discord");
++    }
++
++    #[test]
++    fn slack_channel_thread_or_foreign_user_is_rejected() {
++        for home in [
++            SessionKey::new("slack", Some("T1"), "C1", None::<String>, "U0OWNER"),
++            SessionKey::new("slack", None::<String>, "D1", Some("1.2"), "U0OWNER"),
++            SessionKey::new("slack", None::<String>, "D1", None::<String>, "U0OTHER"),
++            SessionKey::new("web", None::<String>, "D1", None::<String>, "U0OWNER"),
++        ] {
++            assert!(spec(&home, "U0OWNER").is_err(), "{home:?}");
++        }
++    }
++
++    #[tokio::test]
++    async fn executor_guard_accepts_registered_slack_digest() {
++        struct Never;
++        #[async_trait]
++        impl CronTaskExecutor for Never {
++            async fn execute(&self, _: &CronJob) -> Result<Option<String>> {
++                panic!("digest must not reach the inner executor")
++            }
++        }
++        let pool = sqlx::sqlite::SqlitePoolOptions::new()
++            .max_connections(1)
++            .connect("sqlite::memory:")
++            .await
++            .unwrap();
++        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
++        let home = SessionKey::new(
++            "slack",
++            None::<String>,
++            "D0OWNER",
++            None::<String>,
++            "U0OWNER",
++        )
++        .with_bot_id("U0BOT");
++        let spec = spec(&home, "U0OWNER").unwrap();
++        let job = CronJob {
++            id: JOB_ID.into(),
++            session_key: spec.session_key.clone(),
++            expression: spec.expression.clone(),
++            payload_json: spec.payload.to_string(),
++            enabled: true,
++            next_run_at: None,
++            created_at: Utc::now(),
++            updated_at: Utc::now(),
++            authority: String::new(),
++        };
++        let executor = DigestExecutor {
++            pool,
++            inner: Arc::new(Never),
++        };
++        assert!(executor.execute(&job).await.is_ok());
++
++        let mut tampered = spec.payload.clone();
++        tampered["origin"]["chat_id"] = serde_json::json!("C0SHARED");
++        let job = CronJob {
++            payload_json: tampered.to_string(),
++            ..job
++        };
++        assert!(executor.execute(&job).await.is_err());
++    }
++
++    fn spec_platform(home: &SessionKey, owner: &str) -> String {
++        spec(home, owner).unwrap().payload["origin"]["platform"]
++            .as_str()
++            .unwrap()
++            .to_owned()
++    }
+ }
+diff --git a/src/inbox/health.rs b/src/inbox/health.rs
+new file mode 100644
+index 0000000..d35211e
+--- /dev/null
++++ b/src/inbox/health.rs
+@@ -0,0 +1,203 @@
++//! Watcher restart backoff and dead-source reporting. The backoff decision is pure so
++//! the supervisor in main stays a thin loop; the DB side reports an auth-dead source to
++//! the owner lead at most once per source per KST day and clears silently on recovery.
++
++use std::time::Duration;
++
++use chrono::{DateTime, Utc};
++use sqlx::SqlitePool;
++
++use crate::Result;
++
++pub const BACKOFF_INITIAL: Duration = Duration::from_secs(5);
++pub const BACKOFF_MAX: Duration = Duration::from_secs(300);
++pub const HEALTHY_RUN: Duration = Duration::from_secs(60);
++pub const AUTH_FAILURES_BEFORE_NOTICE: u32 = 3;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum WatcherRun {
++    Completed,
++    Failed,
++    AuthFailed,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum HealthAction {
++    Healthy,
++    Degraded,
++    Dead,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct Step {
++    pub wait: Duration,
++    pub health: HealthAction,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct Backoff {
++    pub delay: Duration,
++    pub auth_failures: u32,
++}
++
++impl Default for Backoff {
++    fn default() -> Self {
++        Self {
++            delay: BACKOFF_INITIAL,
++            auth_failures: 0,
++        }
++    }
++}
++
++pub fn next_backoff(current: Duration) -> Duration {
++    (current * 2).min(BACKOFF_MAX)
++}
++
++impl Backoff {
++    /// A long run resets the delay only when it did not end in an auth failure; an
++    /// expired login keeps doubling up to the cap instead of looping every 5 s.
++    pub fn step(&mut self, run: WatcherRun, ran_for: Duration) -> Step {
++        match run {
++            WatcherRun::Completed => {
++                self.auth_failures = 0;
++                self.delay = BACKOFF_INITIAL;
++                Step {
++                    wait: self.delay,
++                    health: HealthAction::Healthy,
++                }
++            }
++            WatcherRun::Failed => {
++                self.auth_failures = 0;
++                if ran_for >= HEALTHY_RUN {
++                    self.delay = BACKOFF_INITIAL;
++                }
++                let wait = self.delay;
++                self.delay = next_backoff(self.delay);
++                Step {
++                    wait,
++                    health: HealthAction::Degraded,
++                }
++            }
++            WatcherRun::AuthFailed => {
++                self.auth_failures = self.auth_failures.saturating_add(1);
++                let wait = self.delay;
++                self.delay = next_backoff(self.delay);
++                Step {
++                    wait,
++                    health: if self.auth_failures >= AUTH_FAILURES_BEFORE_NOTICE {
++                        HealthAction::Dead
++                    } else {
++                        HealthAction::Degraded
++                    },
++                }
++            }
++        }
++    }
++}
++
++pub fn is_auth_failure(output_tail: &str) -> bool {
++    let lower = output_tail.to_ascii_lowercase();
++    [
++        "auth_expired",
++        "token expired",
++        "invalid_grant",
++        "unauthorized",
++        "unauthenticated",
++        "not authenticated",
++        "not logged in",
++        "login required",
++        "zele login",
++        "invalid credentials",
++        "credentials expired",
++    ]
++    .iter()
++    .any(|needle| lower.contains(needle))
++}
++
++pub fn notice_text(source: &str) -> String {
++    match source {
++        "mail" => "mail: zele 로그인 만료 - 터미널에서 `zele login` 실행 필요".to_owned(),
++        other => format!("{other}: 인증 실패가 계속됨 - 해당 CLI 로그인 확인 필요"),
++    }
++}
++
++pub fn kst_day(at: DateTime<Utc>) -> String {
++    at.with_timezone(&chrono_tz::Asia::Seoul)
++        .date_naive()
++        .to_string()
++}
++
++/// Records a dead source and queues one `source_health` lane event for `lead`. Returns
++/// true only when an event was inserted; repeats on the same KST day insert nothing.
++pub async fn report_dead(
++    pool: &SqlitePool,
++    source: &str,
++    detail: &str,
++    lead: &str,
++    now: DateTime<Utc>,
++) -> Result<bool> {
++    let today = kst_day(now);
++    let day_start = chrono::NaiveDate::parse_from_str(&today, "%Y-%m-%d")
++        .ok()
++        .and_then(|day| day.and_hms_opt(0, 0, 0))
++        .and_then(|midnight| midnight.and_local_timezone(chrono_tz::Asia::Seoul).single())
++        .map(|at| at.with_timezone(&Utc))
++        .unwrap_or(now);
++    let body = notice_text(source);
++    let detail: String = detail.chars().take(500).collect();
++    let mut tx = pool.begin().await?;
++    sqlx::query(
++        "INSERT INTO source_health(source, state, detail, since, notified_on) \
++         VALUES(?, 'auth_failed', ?, ?, NULL) \
++         ON CONFLICT(source) DO UPDATE SET state = excluded.state, detail = excluded.detail",
++    )
++    .bind(source)
++    .bind(&detail)
++    .bind(now)
++    .execute(&mut *tx)
++    .await?;
++    let mut claimed = sqlx::query(
++        "UPDATE source_health SET notified_on = ? \
++         WHERE source = ? AND (notified_on IS NULL OR notified_on <> ?)",
++    )
++    .bind(&today)
++    .bind(source)
++    .bind(&today)
++    .execute(&mut *tx)
++    .await?
++    .rows_affected()
++        > 0;
++    if claimed {
++        let already_today: i64 = sqlx::query_scalar(
++            "SELECT count(*) FROM lane_events WHERE kind = 'source_health' AND body = ? \
++             AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?)",
++        )
++        .bind(&body)
++        .bind(day_start)
++        .bind(day_start + chrono::TimeDelta::days(1))
++        .fetch_one(&mut *tx)
++        .await?;
++        claimed = already_today == 0;
++    }
++    if claimed {
++        sqlx::query(
++            "INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) \
++             VALUES(NULL, ?, 'source_health', ?, ?)",
++        )
++        .bind(lead)
++        .bind(&body)
++        .bind(now)
++        .execute(&mut *tx)
++        .await?;
++    }
++    tx.commit().await?;
++    Ok(claimed)
++}
++
++pub async fn clear(pool: &SqlitePool, source: &str) -> Result<()> {
++    sqlx::query("DELETE FROM source_health WHERE source = ?")
++        .bind(source)
++        .execute(pool)
++        .await?;
++    Ok(())
++}
+diff --git a/src/inbox/mod.rs b/src/inbox/mod.rs
+index 73e36b2..32b3c52 100644
+--- a/src/inbox/mod.rs
++++ b/src/inbox/mod.rs
+@@ -2,6 +2,7 @@
+ 
+ pub mod cli;
+ pub mod digest;
++pub mod health;
+ pub mod list;
+ pub mod prefilter;
+ pub mod proposals;
+@@ -45,6 +46,8 @@ pub enum InboxSourceKind {
+     Kakao,
+     Discord,
+     Imessage,
++    Slack,
++    Github,
+ }
+ 
+ impl InboxSourceKind {
+@@ -54,6 +57,8 @@ impl InboxSourceKind {
+             Self::Kakao => "kakao",
+             Self::Discord => "discord",
+             Self::Imessage => "imessage",
++            Self::Slack => "slack",
++            Self::Github => "github",
+         }
+     }
+ }
+@@ -290,6 +295,10 @@ async fn commit_source(
+     .bind(Utc::now())
+     .execute(&mut *tx)
+     .await?;
++    sqlx::query("DELETE FROM source_health WHERE source = ?")
++        .bind(source.as_str())
++        .execute(&mut *tx)
++        .await?;
+     tx.commit().await?;
+     Ok(stats)
+ }
+diff --git a/src/inbox/prefilter.rs b/src/inbox/prefilter.rs
+index ca825a9..4a42f8b 100644
+--- a/src/inbox/prefilter.rs
++++ b/src/inbox/prefilter.rs
+@@ -18,6 +18,8 @@ pub struct PrefilterRules {
+     pub excluded_kakao_rooms: HashSet<String>,
+     pub owner_discord_id: String,
+     pub bot_discord_id: Option<String>,
++    pub owner_slack_id: String,
++    pub bot_slack_id: Option<String>,
+ }
+ 
+ impl Default for PrefilterRules {
+@@ -29,6 +31,8 @@ impl Default for PrefilterRules {
+             excluded_kakao_rooms: ["18491246151592761".to_owned()].into_iter().collect(),
+             owner_discord_id: "414011632306618368".to_owned(),
+             bot_discord_id: None,
++            owner_slack_id: crate::slack::owner_id(),
++            bot_slack_id: None,
+         }
+     }
+ }
+@@ -161,6 +165,26 @@ impl PrefilterRules {
+                 }
+                 None
+             }
++            InboxSourceKind::Slack => {
++                let author = item.author.as_deref().unwrap_or_default();
++                if author == self.owner_slack_id
++                    || self
++                        .bot_slack_id
++                        .as_deref()
++                        .is_some_and(|bot_id| author == bot_id)
++                {
++                    return Some("slack_author_excluded");
++                }
++                let owner_mention = item
++                    .snippet
++                    .contains(&format!("<@{}>", self.owner_slack_id));
++                let room_type = item.room_type.as_deref().unwrap_or_default();
++                if !owner_mention && !matches!(room_type, "dm" | "owner_reply") {
++                    return Some("slack_not_owner_mention_or_dm");
++                }
++                None
++            }
++            InboxSourceKind::Github => None,
+         }
+     }
+ 
+@@ -213,3 +237,60 @@ pub async fn record_drop(
+     .map_err(OmonError::from)?;
+     Ok(())
+ }
++
++#[cfg(test)]
++mod tests {
++    use chrono::Utc;
++
++    use super::*;
++
++    fn slack_item(author: &str, room_type: &str, snippet: &str) -> InboxItem {
++        let mut item = InboxItem::new(
++            InboxSourceKind::Slack,
++            "1700000001.000100",
++            snippet,
++            Utc::now(),
++        );
++        item.author = Some(author.into());
++        item.room_type = Some(room_type.into());
++        item
++    }
++
++    #[test]
++    fn slack_keeps_dm_mention_and_owner_reply_and_drops_the_rest() {
++        let rules = PrefilterRules {
++            owner_slack_id: "U0OWNER".into(),
++            bot_slack_id: Some("U0BOT".into()),
++            ..Default::default()
++        };
++        assert_eq!(rules.drop_reason(&slack_item("U0A", "dm", "hello")), None);
++        assert_eq!(
++            rules.drop_reason(&slack_item("U0A", "owner_reply", "ok")),
++            None
++        );
++        assert_eq!(
++            rules.drop_reason(&slack_item("U0A", "channel", "hey <@U0OWNER>")),
++            None
++        );
++        assert_eq!(
++            rules.drop_reason(&slack_item("U0A", "channel", "hey <@U0OTHER>")),
++            Some("slack_not_owner_mention_or_dm")
++        );
++        assert_eq!(
++            rules.drop_reason(&slack_item("U0OWNER", "dm", "self")),
++            Some("slack_author_excluded")
++        );
++        assert_eq!(
++            rules.drop_reason(&slack_item("U0BOT", "dm", "bot")),
++            Some("slack_author_excluded")
++        );
++    }
++
++    #[test]
++    fn rules_files_without_slack_fields_load_with_defaults() {
++        let rules: PrefilterRules = serde_json::from_str(r#"{"owner_discord_id":"1"}"#).unwrap();
++        assert_eq!(rules.owner_slack_id, crate::slack::owner_id());
++        assert_eq!(rules.bot_slack_id, None);
++        assert_eq!(rules.owner_discord_id, "1");
++    }
++}
+diff --git a/src/inbox/proposals.rs b/src/inbox/proposals.rs
+index b115149..44430be 100644
+--- a/src/inbox/proposals.rs
++++ b/src/inbox/proposals.rs
+@@ -235,7 +235,7 @@ impl Actions for GatewayActions {
+                 title: proposal.title.clone(),
+                 brief,
+                 done: done.to_owned(),
+-                thread: self.parent_channel_id,
++                thread: self.parent_channel_id.map(|id| id.to_string()),
+                 cwd: Some(cwd.into()),
+                 lead: Some(self.lead_session_key.clone()),
+                 model: LaneModel::Auto,
+@@ -371,6 +371,45 @@ impl Proposals {
+         .ok_or_else(|| invalid("no actionable bot proposal in this owner channel"))?;
+         sqlx::query("UPDATE inbox_decisions SET status='proposed' WHERE item_id=? AND class='bot' AND status='open'")
+             .bind(item_id).execute(&mut **tx).await?;
++
++        let author: String =
++            sqlx::query_scalar("SELECT COALESCE(author, '') FROM inbox_items WHERE id = ?")
++                .bind(item_id)
++                .fetch_optional(&mut **tx)
++                .await?
++                .unwrap_or_default();
++        let (effect, target, signature) = classify_inbox_proposal(&proposal, action, &author);
++        let payload = serde_json::json!({
++            "inbox_proposal_number": proposal.number,
++            "item_id": proposal.item_id,
++            "action": action,
++        })
++        .to_string();
++        let initial_state = if effect == crate::autonomy::Effect::Read {
++            "auto_allowed"
++        } else {
++            "pending"
++        };
++        sqlx::query(
++            "INSERT INTO action_proposals
++                (origin, session_key, signature, effect, target, summary, payload_json, tainted, state)
++             SELECT 'inbox', ?, ?, ?, ?, ?, ?, 1, ?
++             WHERE NOT EXISTS (
++                 SELECT 1 FROM action_proposals
++                 WHERE origin = 'inbox' AND json_extract(payload_json, '$.item_id') = ?
++             )",
++        )
++        .bind(channel_id)
++        .bind(&signature)
++        .bind(effect.as_str())
++        .bind(&target)
++        .bind(proposal.display())
++        .bind(&payload)
++        .bind(initial_state)
++        .bind(&proposal.item_id)
++        .execute(&mut **tx)
++        .await?;
++
+         Ok(proposal)
+     }
+ 
+@@ -403,6 +442,18 @@ impl Proposals {
+         let Some(proposal) = proposal else {
+             return Ok(ApprovalResult::NotMatched);
+         };
++        if let Some(ledger_id) = self.ledger_proposal_id(&proposal.item_id).await? {
++            let _ = crate::autonomy::decide_proposal(
++                &self.pool,
++                None,
++                ledger_id,
++                "allow",
++                crate::autonomy::PrecedentScope::Exact,
++                Some(reply.content),
++                Some(reply.channel_id),
++            )
++            .await;
++        }
+         self.execute_approved(proposal, reply.message_id, actions)
+             .await
+     }
+@@ -521,9 +572,241 @@ impl Proposals {
+         if action != Action::Lookup {
+             return Ok(ApprovalResult::NotMatched);
+         }
++        if let Some(ledger_id) = self.ledger_proposal_id(&proposal.item_id).await? {
++            let _ = crate::autonomy::update_proposal_decision(
++                &self.pool,
++                ledger_id,
++                crate::autonomy::ProposalState::AutoAllowed,
++                None,
++                None,
++            )
++            .await;
++        }
+         self.execute_approved(proposal, &format!("auto:inbox-proposal-{number}"), actions)
+             .await
+     }
++
++    pub async fn ledger_proposal_id(&self, item_id: &str) -> Result<Option<i64>> {
++        let id: Option<i64> = sqlx::query_scalar(
++            "SELECT id FROM action_proposals
++             WHERE origin = 'inbox' AND json_extract(payload_json, '$.item_id') = ?
++             ORDER BY id DESC LIMIT 1",
++        )
++        .bind(item_id)
++        .fetch_optional(&self.pool)
++        .await?;
++        Ok(id)
++    }
++
++    pub async fn evaluate_with_ledger(
++        &self,
++        number: i64,
++        actions: &dyn Actions,
++        dispatcher: Option<&dyn crate::OutboundDispatcher>,
++        session: Option<&crate::SessionKey>,
++    ) -> Result<ApprovalResult> {
++        let _ = backfill_pending_inbox_proposals(&self.pool).await?;
++        let proposal: Option<Proposal> =
++            sqlx::query_as("SELECT * FROM inbox_proposals WHERE number=? AND owner_id=?")
++                .bind(number)
++                .bind(&self.owner_id)
++                .fetch_optional(&self.pool)
++                .await?;
++        let Some(proposal) = proposal else {
++            return Ok(ApprovalResult::NotMatched);
++        };
++        let action: Action =
++            serde_json::from_str(&proposal.action_json).map_err(|e| invalid(e.to_string()))?;
++        let author: String =
++            sqlx::query_scalar("SELECT COALESCE(author, '') FROM inbox_items WHERE id = ?")
++                .bind(&proposal.item_id)
++                .fetch_optional(&self.pool)
++                .await?
++                .unwrap_or_default();
++        let (effect, target, signature) = classify_inbox_proposal(&proposal, &action, &author);
++        let ledger_id = self.ledger_proposal_id(&proposal.item_id).await?;
++
++        if effect == crate::autonomy::Effect::Read {
++            if let Some(id) = ledger_id {
++                let _ = crate::autonomy::update_proposal_decision(
++                    &self.pool,
++                    id,
++                    crate::autonomy::ProposalState::AutoAllowed,
++                    None,
++                    None,
++                )
++                .await;
++            }
++            return self
++                .execute_approved(proposal, &format!("auto:inbox-proposal-{number}"), actions)
++                .await;
++        }
++
++        if let Some(prec) =
++            crate::autonomy::find_matching_precedent(&self.pool, &signature, effect, &target, true)
++                .await?
++        {
++            if prec.decision == "allow" {
++                if let Some(id) = ledger_id {
++                    let _ = crate::autonomy::update_proposal_decision(
++                        &self.pool,
++                        id,
++                        crate::autonomy::ProposalState::AutoAllowed,
++                        Some(prec.id),
++                        None,
++                    )
++                    .await;
++                }
++                return self
++                    .execute_approved(
++                        proposal,
++                        &format!("precedent:{}:inbox-proposal-{number}", prec.id),
++                        actions,
++                    )
++                    .await;
++            }
++            if let Some(id) = ledger_id {
++                let _ = crate::autonomy::update_proposal_decision(
++                    &self.pool,
++                    id,
++                    crate::autonomy::ProposalState::AutoDenied,
++                    Some(prec.id),
++                    prec.owner_words.as_deref(),
++                )
++                .await;
++            }
++            return Ok(ApprovalResult::NotMatched);
++        }
++
++        if let (Some(disp), Some(sess)) = (dispatcher, session) {
++            let req_id = uuid::Uuid::new_v4();
++            disp.dispatch(crate::OutboundAction::ApprovalRequest {
++                session: sess.clone(),
++                request_id: req_id,
++                command: proposal.proposed_action.clone(),
++                reason: format!(
++                    "{}\neffect: {} | target: {}",
++                    proposal.display(),
++                    effect.as_str(),
++                    target
++                ),
++            })
++            .await?;
++            if let Some(id) = ledger_id {
++                let _ =
++                    crate::autonomy::set_proposal_message_id(&self.pool, id, &req_id.to_string())
++                        .await;
++            }
++        }
++        Ok(ApprovalResult::NotMatched)
++    }
++}
++
++pub fn classify_inbox_proposal(
++    proposal: &Proposal,
++    action: &Action,
++    author: &str,
++) -> (crate::autonomy::Effect, String, String) {
++    use crate::autonomy::Effect;
++    match action {
++        Action::Lookup => {
++            let target = proposal
++                .link
++                .clone()
++                .unwrap_or_else(|| proposal.item_id.clone());
++            (
++                Effect::Read,
++                target.clone(),
++                format!("read:inbox_lookup:{target}"),
++            )
++        }
++        Action::Repo { cwd, .. } => (
++            Effect::WriteLocal,
++            cwd.clone(),
++            format!("write_local:inbox_repo:{cwd}"),
++        ),
++        Action::Draft => {
++            let clean_author = author.trim();
++            let addresses_author = !clean_author.is_empty()
++                && (proposal.proposed_action.contains(clean_author)
++                    || proposal
++                        .proposed_action
++                        .to_ascii_lowercase()
++                        .contains("send")
++                    || proposal
++                        .proposed_action
++                        .to_ascii_lowercase()
++                        .contains("reply")
++                    || proposal.proposed_action.contains("답장")
++                    || proposal.proposed_action.contains("회신")
++                    || proposal.proposed_action.contains("발송"));
++            if addresses_author {
++                (
++                    Effect::ExternalSend,
++                    clean_author.to_string(),
++                    format!("external_send:inbox_draft:{clean_author}"),
++                )
++            } else {
++                let target = if !clean_author.is_empty() {
++                    clean_author.to_string()
++                } else {
++                    proposal.channel_id.clone()
++                };
++                (
++                    Effect::Draft,
++                    target.clone(),
++                    format!("draft:inbox_draft:{target}"),
++                )
++            }
++        }
++    }
++}
++
++pub async fn backfill_pending_inbox_proposals(pool: &SqlitePool) -> Result<usize> {
++    let _ = Proposals::new(pool.clone(), OWNER_ID).await?;
++    let pending: Vec<Proposal> =
++        sqlx::query_as("SELECT * FROM inbox_proposals WHERE state = 'pending' ORDER BY number ASC")
++            .fetch_all(pool)
++            .await?;
++    let mut inserted = 0usize;
++    for proposal in pending {
++        let action: Action = serde_json::from_str(&proposal.action_json).unwrap_or(Action::Draft);
++        let author: String =
++            sqlx::query_scalar("SELECT COALESCE(author, '') FROM inbox_items WHERE id = ?")
++                .bind(&proposal.item_id)
++                .fetch_optional(pool)
++                .await?
++                .unwrap_or_default();
++        let (effect, target, signature) = classify_inbox_proposal(&proposal, &action, &author);
++        let payload = serde_json::json!({
++            "inbox_proposal_number": proposal.number,
++            "item_id": proposal.item_id,
++            "action": action,
++        })
++        .to_string();
++        let res = sqlx::query(
++            "INSERT INTO action_proposals
++                (origin, session_key, signature, effect, target, summary, payload_json, tainted, state)
++             SELECT 'inbox', ?, ?, ?, ?, ?, ?, 1, 'pending'
++             WHERE NOT EXISTS (
++                 SELECT 1 FROM action_proposals
++                 WHERE origin = 'inbox' AND json_extract(payload_json, '$.item_id') = ?
++             )",
++        )
++        .bind(&proposal.channel_id)
++        .bind(&signature)
++        .bind(effect.as_str())
++        .bind(&target)
++        .bind(proposal.display())
++        .bind(&payload)
++        .bind(&proposal.item_id)
++        .execute(pool)
++        .await?;
++        if res.rows_affected() == 1 {
++            inserted += 1;
++        }
++    }
++    Ok(inserted)
+ }
+ 
+ pub fn approval_number(content: &str) -> Option<i64> {
+diff --git a/src/inbox/sources/github.rs b/src/inbox/sources/github.rs
+new file mode 100644
+index 0000000..bbc8527
+--- /dev/null
++++ b/src/inbox/sources/github.rs
+@@ -0,0 +1,446 @@
++//! Read-only GitHub source: the owner's own PRs (CI and merge state) plus participating
++//! notifications. It only emits on change; the previous snapshot lives in the inbox
++//! cursor, so nothing is stored beyond URLs, states and timestamps (never a token).
++
++use std::collections::BTreeMap;
++use std::ffi::OsString;
++use std::process::Stdio;
++use std::time::Duration;
++
++use async_trait::async_trait;
++use chrono::{DateTime, Utc};
++use serde::{Deserialize, Serialize};
++use serde_json::Value;
++use tokio::process::Command;
++
++use crate::inbox::{InboxItem, InboxSource, InboxSourceKind};
++use crate::{OmonError, Result};
++
++/// Kill switch, read once at gateway startup. Default off until the integration gate.
++pub const ENABLED_ENV: &str = "OMON_GITHUB_SOURCE_ENABLED";
++pub const POLL_INTERVAL: Duration = Duration::from_secs(300);
++
++/// Read-only GraphQL query: `gh search prs` cannot return statusCheckRollup, so the
++/// head commit rollup is read through the search API instead. No mutation is ever sent.
++const PR_QUERY: &str = "query{search(query:\"is:pr author:@me archived:false sort:updated-desc\",type:ISSUE,first:50){nodes{... on PullRequest{url title number updatedAt state repository{nameWithOwner} commits(last:1){nodes{commit{oid statusCheckRollup{state}}}}}}}}";
++/// GET only; listing notifications does not mark them read.
++const NOTIFICATIONS_PATH: &str = "notifications?participating=true&per_page=50";
++/// Notification reasons worth the owner's attention. CI activity comes from the PR rollup.
++const NOTIFY_REASONS: &[&str] = &[
++    "review_requested",
++    "mention",
++    "team_mention",
++    "comment",
++    "assign",
++    "author",
++];
++
++pub fn enabled() -> bool {
++    enabled_from(std::env::var(ENABLED_ENV).ok().as_deref())
++}
++
++pub fn enabled_from(raw: Option<&str>) -> bool {
++    matches!(
++        raw.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
++        Some("1" | "true" | "yes" | "on")
++    )
++}
++
++#[derive(Clone, Debug)]
++pub struct GithubSource {
++    gh_bin: OsString,
++}
++
++impl Default for GithubSource {
++    fn default() -> Self {
++        Self {
++            gh_bin: OsString::from("gh"),
++        }
++    }
++}
++
++#[derive(Clone, Debug, Serialize)]
++pub struct OpenPr {
++    pub url: String,
++    pub title: String,
++    pub repo: String,
++    pub updated_at: String,
++    pub ci: Option<String>,
++}
++
++#[derive(Clone, Debug)]
++pub struct GithubPoll {
++    pub items: Vec<InboxItem>,
++    pub open_prs: Vec<OpenPr>,
++    pub cursor: String,
++}
++
++#[derive(Clone, Debug, Default, Serialize, Deserialize)]
++struct Snapshot {
++    #[serde(default)]
++    prs: BTreeMap<String, PrState>,
++    #[serde(default)]
++    notes: BTreeMap<String, String>,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
++struct PrState {
++    state: String,
++    ci: Option<String>,
++    oid: Option<String>,
++    updated_at: String,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++enum PrChange {
++    CiFailed,
++    CiRecovered,
++    Merged,
++    Closed,
++}
++
++impl PrChange {
++    fn tag(self) -> &'static str {
++        match self {
++            Self::CiFailed => "ci_failed",
++            Self::CiRecovered => "ci_recovered",
++            Self::Merged => "merged",
++            Self::Closed => "closed",
++        }
++    }
++
++    fn label(self) -> &'static str {
++        match self {
++            Self::CiFailed => "CI failed",
++            Self::CiRecovered => "CI recovered",
++            Self::Merged => "merged",
++            Self::Closed => "closed without merge",
++        }
++    }
++}
++
++impl GithubSource {
++    pub fn with_gh_bin(bin: impl Into<OsString>) -> Self {
++        Self { gh_bin: bin.into() }
++    }
++
++    pub async fn poll(&self, cursor: Option<&str>) -> Result<GithubPoll> {
++        let notifications = self.gh(&["api", NOTIFICATIONS_PATH]).await?;
++        let query = format!("query={PR_QUERY}");
++        let prs = self.gh(&["api", "graphql", "-f", query.as_str()]).await?;
++        Self::diff(cursor, &notifications, &prs)
++    }
++
++    async fn gh(&self, args: &[&str]) -> Result<Value> {
++        let what = args.get(1).copied().unwrap_or_default();
++        let what = what.split('?').next().unwrap_or_default();
++        let output = Command::new(&self.gh_bin)
++            .args(args)
++            .stdin(Stdio::null())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::piped())
++            .kill_on_drop(true)
++            .output()
++            .await
++            .map_err(|error| unavailable(format!("gh could not start: {error}")))?;
++        if !output.status.success() {
++            let stderr: String = String::from_utf8_lossy(&output.stderr)
++                .trim()
++                .chars()
++                .take(500)
++                .collect();
++            return Err(unavailable(format!(
++                "gh api {what} exited {}: {stderr}",
++                output.status
++            )));
++        }
++        serde_json::from_slice(&output.stdout).map_err(|error| {
++            OmonError::ToolExecution(format!(
++                "github source returned invalid JSON from gh api {what}: {error}"
++            ))
++        })
++    }
++
++    /// Pure change detection. Without a previous snapshot the call only records a
++    /// baseline, so a first boot does not flood the inbox with old activity.
++    pub fn diff(cursor: Option<&str>, notifications: &Value, prs: &Value) -> Result<GithubPoll> {
++        let previous: Option<Snapshot> = cursor
++            .filter(|c| !c.trim().is_empty())
++            .and_then(|c| serde_json::from_str(c).ok());
++        let baseline = previous.is_none();
++        let previous = previous.unwrap_or_default();
++        let mut next = Snapshot::default();
++        let mut items = Vec::new();
++        let mut open_prs = Vec::new();
++
++        let nodes = prs
++            .pointer("/data/search/nodes")
++            .and_then(Value::as_array)
++            .ok_or_else(|| {
++                let detail = prs
++                    .pointer("/errors/0/message")
++                    .and_then(Value::as_str)
++                    .unwrap_or("missing data.search.nodes");
++                OmonError::ToolExecution(format!("github source PR query failed: {detail}"))
++            })?;
++        for node in nodes {
++            // Non-PR search hits come back as empty objects.
++            let Some(url) = node.get("url").and_then(Value::as_str) else {
++                continue;
++            };
++            let title = text(node, "title");
++            let repo = node
++                .pointer("/repository/nameWithOwner")
++                .and_then(Value::as_str)
++                .unwrap_or_default()
++                .to_owned();
++            let commit = node.pointer("/commits/nodes/0/commit");
++            let current = PrState {
++                state: text(node, "state"),
++                ci: commit
++                    .and_then(|c| c.pointer("/statusCheckRollup/state"))
++                    .and_then(Value::as_str)
++                    .map(str::to_owned),
++                oid: commit
++                    .and_then(|c| c.get("oid"))
++                    .and_then(Value::as_str)
++                    .map(str::to_owned),
++                updated_at: text(node, "updatedAt"),
++            };
++            if current.state == "OPEN" {
++                open_prs.push(OpenPr {
++                    url: url.to_owned(),
++                    title: title.clone(),
++                    repo: repo.clone(),
++                    updated_at: current.updated_at.clone(),
++                    ci: current.ci.clone(),
++                });
++            }
++            if !baseline {
++                if let Some(prev) = previous.prs.get(url) {
++                    for change in pr_changes(prev, &current) {
++                        items.push(pr_item(url, &title, &repo, node, &current, change));
++                    }
++                }
++            }
++            next.prs.insert(url.to_owned(), current);
++        }
++
++        let threads = notifications.as_array().ok_or_else(|| {
++            OmonError::ToolExecution("github notifications response must be a JSON array".into())
++        })?;
++        for thread in threads {
++            let (Some(id), Some(updated)) = (
++                thread.get("id").and_then(Value::as_str),
++                thread.get("updated_at").and_then(Value::as_str),
++            ) else {
++                continue;
++            };
++            next.notes.insert(id.to_owned(), updated.to_owned());
++            let reason = thread
++                .get("reason")
++                .and_then(Value::as_str)
++                .unwrap_or_default();
++            if baseline
++                || !NOTIFY_REASONS.contains(&reason)
++                || previous.notes.get(id).map(String::as_str) == Some(updated)
++            {
++                continue;
++            }
++            items.push(notification_item(thread, reason, updated));
++        }
++
++        let cursor = serde_json::to_string(&next)
++            .map_err(|error| OmonError::ToolExecution(format!("github snapshot: {error}")))?;
++        Ok(GithubPoll {
++            items,
++            open_prs,
++            cursor,
++        })
++    }
++}
++
++fn unavailable(detail: String) -> OmonError {
++    OmonError::ToolExecution(format!("github source unavailable: {detail}"))
++}
++
++fn text(value: &Value, key: &str) -> String {
++    value
++        .get(key)
++        .and_then(Value::as_str)
++        .unwrap_or_default()
++        .to_owned()
++}
++
++fn failing(ci: Option<&str>) -> bool {
++    matches!(ci, Some("FAILURE" | "ERROR"))
++}
++
++fn pr_changes(prev: &PrState, cur: &PrState) -> Vec<PrChange> {
++    if prev.state == "OPEN" && cur.state == "MERGED" {
++        return vec![PrChange::Merged];
++    }
++    if prev.state == "OPEN" && cur.state == "CLOSED" {
++        return vec![PrChange::Closed];
++    }
++    if cur.state != "OPEN" {
++        return Vec::new();
++    }
++    let now_failing = failing(cur.ci.as_deref());
++    let was_failing = failing(prev.ci.as_deref());
++    if now_failing && !(was_failing && prev.oid == cur.oid) {
++        vec![PrChange::CiFailed]
++    } else if was_failing && cur.ci.as_deref() == Some("SUCCESS") {
++        vec![PrChange::CiRecovered]
++    } else {
++        Vec::new()
++    }
++}
++
++fn received_at(raw: &str) -> DateTime<Utc> {
++    DateTime::parse_from_rfc3339(raw)
++        .map(|at| at.with_timezone(&Utc))
++        .unwrap_or_else(|_| Utc::now())
++}
++
++fn pr_item(
++    url: &str,
++    title: &str,
++    repo: &str,
++    node: &Value,
++    current: &PrState,
++    change: PrChange,
++) -> InboxItem {
++    let number = node
++        .get("number")
++        .and_then(Value::as_i64)
++        .unwrap_or_default();
++    // updatedAt does not move when checks finish, so the change tag (and head commit for
++    // CI) keeps distinct events from colliding on one source_ref.
++    let mut tag = change.tag().to_owned();
++    if matches!(change, PrChange::CiFailed | PrChange::CiRecovered) {
++        if let Some(oid) = current.oid.as_deref() {
++            tag.push('@');
++            tag.extend(oid.chars().take(12));
++        }
++    }
++    let source_ref = format!("gh:{url}:{}:{tag}", current.updated_at);
++    let snippet = format!("[{}] {repo}#{number}: {title}", change.label());
++    let mut item = InboxItem::new(
++        InboxSourceKind::Github,
++        source_ref,
++        snippet,
++        received_at(&current.updated_at),
++    );
++    item.thread_ref = Some(url.to_owned());
++    item.author = Some(repo.to_owned());
++    item.title = Some(title.to_owned());
++    item.room_type = Some("github".into());
++    item.link = Some(url.to_owned());
++    item
++}
++
++fn notification_item(thread: &Value, reason: &str, updated: &str) -> InboxItem {
++    let repo = thread
++        .pointer("/repository/full_name")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++    let title = thread
++        .pointer("/subject/title")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++    let link = thread
++        .pointer("/subject/url")
++        .and_then(Value::as_str)
++        .and_then(api_to_html)
++        .or_else(|| {
++            thread
++                .pointer("/repository/html_url")
++                .and_then(Value::as_str)
++                .map(str::to_owned)
++        })
++        .unwrap_or_else(|| format!("https://github.com/{repo}"));
++    let source_ref = format!("gh:{link}:{updated}");
++    let snippet = format!("[{}] {repo}: {title}", reason.replace('_', " "));
++    let mut item = InboxItem::new(
++        InboxSourceKind::Github,
++        source_ref,
++        snippet,
++        received_at(updated),
++    );
++    item.thread_ref = Some(link.clone());
++    item.author = Some(repo.to_owned());
++    item.title = Some(title.to_owned());
++    item.room_type = Some("github".into());
++    item.link = Some(link);
++    item
++}
++
++fn api_to_html(api: &str) -> Option<String> {
++    let path = api.strip_prefix("https://api.github.com/repos/")?;
++    let path = path
++        .replacen("/pulls/", "/pull/", 1)
++        .replacen("/commits/", "/commit/", 1);
++    Some(format!("https://github.com/{path}"))
++}
++
++#[async_trait]
++impl InboxSource for GithubSource {
++    fn name(&self) -> InboxSourceKind {
++        InboxSourceKind::Github
++    }
++
++    async fn fetch_since(&self, cursor: Option<&str>) -> Result<(Vec<InboxItem>, String)> {
++        let poll = self.poll(cursor).await?;
++        Ok((poll.items, poll.cursor))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use serde_json::json;
++
++    use super::*;
++
++    fn prs(ci: &str, state: &str) -> Value {
++        json!({"data": {"search": {"nodes": [{
++            "url": "https://github.com/o/r/pull/7", "title": "t", "number": 7,
++            "updatedAt": "2026-10-15T11:57:11Z", "state": state,
++            "repository": {"nameWithOwner": "o/r"},
++            "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"state": ci}}}]}
++        }, {}]}}})
++    }
++
++    #[test]
++    fn baseline_then_merge_emits_once() {
++        let base = GithubSource::diff(None, &json!([]), &prs("SUCCESS", "OPEN")).unwrap();
++        assert!(base.items.is_empty());
++        assert_eq!(base.open_prs.len(), 1);
++        let merged =
++            GithubSource::diff(Some(&base.cursor), &json!([]), &prs("SUCCESS", "MERGED")).unwrap();
++        assert_eq!(merged.items.len(), 1);
++        assert!(merged.items[0].source_ref.ends_with(":merged"));
++        let again = GithubSource::diff(Some(&merged.cursor), &json!([]), &prs("SUCCESS", "MERGED"))
++            .unwrap();
++        assert!(again.items.is_empty());
++    }
++
++    #[test]
++    fn api_urls_become_web_links() {
++        assert_eq!(
++            api_to_html("https://api.github.com/repos/o/r/pulls/7").as_deref(),
++            Some("https://github.com/o/r/pull/7")
++        );
++        assert_eq!(
++            api_to_html("https://api.github.com/repos/o/r/issues/3").as_deref(),
++            Some("https://github.com/o/r/issues/3")
++        );
++    }
++
++    #[test]
++    fn kill_switch_defaults_off() {
++        assert!(!enabled_from(None));
++        assert!(!enabled_from(Some("false")));
++        assert!(enabled_from(Some("true")));
++    }
++}
+diff --git a/src/inbox/sources/mod.rs b/src/inbox/sources/mod.rs
+index 4b6fb12..9c8604f 100644
+--- a/src/inbox/sources/mod.rs
++++ b/src/inbox/sources/mod.rs
+@@ -1,7 +1,9 @@
+ pub mod discord;
++pub mod github;
+ pub mod imessage;
+ pub mod kakao;
+ pub mod mail;
++pub mod slack;
+ 
+ use std::ffi::OsStr;
+ use std::process::Stdio;
+diff --git a/src/inbox/sources/slack.rs b/src/inbox/sources/slack.rs
+new file mode 100644
+index 0000000..976ef8d
+--- /dev/null
++++ b/src/inbox/sources/slack.rs
+@@ -0,0 +1,325 @@
++use async_trait::async_trait;
++use chrono::{DateTime, Utc};
++use sqlx::SqlitePool;
++
++use crate::inbox::{InboxItem, InboxSource, InboxSourceKind};
++use crate::{OmonError, Result};
++
++#[derive(Clone)]
++pub struct SlackSource {
++    pool: SqlitePool,
++    owner_id: String,
++    bot_id: String,
++}
++
++impl SlackSource {
++    pub fn new(pool: SqlitePool, owner_slack_id: String, bot_slack_id: String) -> Self {
++        Self {
++            pool,
++            owner_id: owner_slack_id,
++            bot_id: bot_slack_id,
++        }
++    }
++}
++
++#[async_trait]
++impl InboxSource for SlackSource {
++    fn name(&self) -> InboxSourceKind {
++        InboxSourceKind::Slack
++    }
++
++    async fn fetch_since(&self, cursor: Option<&str>) -> Result<(Vec<InboxItem>, String)> {
++        let after = cursor.unwrap_or("");
++        // Ingress keys thread documents by thread_ts, so links recover the real channel.
++        let rows = sqlx::query(
++            "SELECT d.guild_id, d.thread_id, d.message_id, d.author_id, d.author_name, \
++                    d.content, d.timestamp, \
++                    COALESCE( \
++                      json_extract(d.metadata_json, '$.channel_id'), \
++                      CASE WHEN d.thread_id IS NOT NULL AND d.channel_id = d.thread_id THEN ( \
++                        SELECT s.channel_id FROM sessions s \
++                        WHERE s.platform = 'slack' AND s.thread_id = d.thread_id LIMIT 1 \
++                      ) END, \
++                      d.channel_id \
++                    ) AS real_channel, \
++                    CASE \
++                      WHEN d.guild_id IS NULL OR d.guild_id = '' THEN 'dm' \
++                      WHEN EXISTS ( \
++                        SELECT 1 FROM message_search_documents parent \
++                        WHERE parent.platform = 'slack' \
++                          AND parent.author_id = ? \
++                          AND parent.message_id IN ( \
++                            COALESCE(d.thread_id, ''), \
++                            COALESCE(json_extract(d.metadata_json, '$.referenced_message_id'), '') \
++                          ) \
++                          AND parent.message_id <> d.message_id \
++                      ) THEN 'owner_reply' \
++                      ELSE 'channel' \
++                    END AS calculated_room_type \
++             FROM message_search_documents d \
++             WHERE d.platform = 'slack' \
++               AND d.message_id > ? \
++               AND d.author_id <> '' \
++               AND d.author_id <> ? \
++               AND d.author_id <> ? \
++               AND d.author_id NOT IN (SELECT bot_id FROM bot_profiles) \
++               AND ( \
++                 (d.guild_id IS NULL OR d.guild_id = '') \
++                 OR instr(d.content, ?) > 0 \
++                 OR EXISTS ( \
++                   SELECT 1 FROM message_search_documents parent \
++                   WHERE parent.platform = 'slack' \
++                     AND parent.author_id = ? \
++                     AND parent.message_id IN ( \
++                       COALESCE(d.thread_id, ''), \
++                       COALESCE(json_extract(d.metadata_json, '$.referenced_message_id'), '') \
++                     ) \
++                     AND parent.message_id <> d.message_id \
++                 ) \
++               ) \
++             ORDER BY d.message_id",
++        )
++        .bind(&self.owner_id)
++        .bind(after)
++        .bind(&self.owner_id)
++        .bind(&self.bot_id)
++        .bind(format!("<@{}>", self.owner_id))
++        .bind(&self.owner_id)
++        .fetch_all(&self.pool)
++        .await?;
++        let mut items = Vec::new();
++        let mut next = after.to_owned();
++        for row in rows {
++            use sqlx::Row;
++            let ts: String = row.try_get("message_id")?;
++            let content: String = row.try_get("content")?;
++            let received = match ts_to_datetime(&ts) {
++                Some(at) => at,
++                None => {
++                    let at: String = row.try_get("timestamp")?;
++                    DateTime::parse_from_rfc3339(&at)
++                        .map_err(|error| {
++                            OmonError::ToolExecution(format!(
++                                "invalid Slack indexed timestamp: {error}"
++                            ))
++                        })?
++                        .with_timezone(&Utc)
++                }
++            };
++            let thread: Option<String> = row.try_get("thread_id")?;
++            let channel: String = row.try_get("real_channel")?;
++            let author: String = row.try_get("author_id")?;
++            let author_name: String = row.try_get("author_name")?;
++            let mut item = InboxItem::new(InboxSourceKind::Slack, ts.clone(), content, received);
++            item.link = Some(permalink(&channel, &ts, thread.as_deref()));
++            item.thread_ref = thread;
++            item.title = Some(if author_name.trim().is_empty() {
++                author.clone()
++            } else {
++                author_name
++            });
++            item.author = Some(author);
++            item.room_type = Some(row.try_get("calculated_room_type")?);
++            next = next.max(ts);
++            items.push(item);
++        }
++        Ok((items, next))
++    }
++}
++
++pub fn permalink(channel: &str, ts: &str, thread_ts: Option<&str>) -> String {
++    let base = format!(
++        "https://slack.com/archives/{channel}/p{}",
++        ts.replace('.', "")
++    );
++    match thread_ts.filter(|thread| *thread != ts) {
++        Some(thread) => format!("{base}?thread_ts={thread}&cid={channel}"),
++        None => base,
++    }
++}
++
++fn ts_to_datetime(ts: &str) -> Option<DateTime<Utc>> {
++    let (secs, frac) = ts.split_once('.')?;
++    let secs = secs.parse::<i64>().ok()?;
++    let micros = format!("{frac:0<6}").get(..6)?.parse::<u32>().ok()?;
++    DateTime::from_timestamp(secs, micros * 1_000)
++}
++
++#[cfg(test)]
++mod tests {
++    use serde_json::json;
++
++    use super::*;
++    use crate::storage::{MessageSearchDocument, MessageSearchIndex};
++
++    const OWNER: &str = "U0OWNER";
++    const BOT: &str = "U0BOT";
++
++    async fn pool() -> SqlitePool {
++        let pool = sqlx::sqlite::SqlitePoolOptions::new()
++            .max_connections(1)
++            .connect("sqlite::memory:")
++            .await
++            .unwrap();
++        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
++        pool
++    }
++
++    fn doc(
++        guild: Option<&str>,
++        channel: &str,
++        thread: Option<&str>,
++        ts: &str,
++        author: &str,
++        content: &str,
++    ) -> MessageSearchDocument {
++        MessageSearchDocument {
++            platform: "slack".into(),
++            guild_id: guild.map(str::to_owned),
++            channel_id: thread.unwrap_or(channel).to_owned(),
++            thread_id: thread.map(str::to_owned),
++            message_id: ts.into(),
++            author_id: author.into(),
++            author_name: String::new(),
++            content: content.into(),
++            attachment_names: Vec::new(),
++            timestamp: Utc::now(),
++            metadata: json!({"source": "ingress"}),
++        }
++    }
++
++    #[tokio::test]
++    async fn collects_dm_mention_and_owner_thread_reply_only() {
++        let pool = pool().await;
++        let index = MessageSearchIndex::new(pool.clone());
++        sqlx::query(
++            "INSERT INTO sessions(session_key, platform, guild_id, channel_id, thread_id, user_id) \
++             VALUES('k1', 'slack', 'T1', 'C1', '1700000100.000100', '')",
++        )
++        .execute(&pool)
++        .await
++        .unwrap();
++        index
++            .upsert_many(&[
++                doc(
++                    None,
++                    "D1",
++                    None,
++                    "1700000001.000100",
++                    "U0ALICE",
++                    "hi from dm",
++                ),
++                doc(
++                    Some("T1"),
++                    "C1",
++                    None,
++                    "1700000002.000100",
++                    "U0ALICE",
++                    "ping <@U0OWNER> please",
++                ),
++                doc(
++                    Some("T1"),
++                    "C1",
++                    None,
++                    "1700000003.000100",
++                    "U0ALICE",
++                    "unrelated chatter",
++                ),
++                doc(
++                    Some("T1"),
++                    "C1",
++                    None,
++                    "1700000100.000100",
++                    OWNER,
++                    "owner root",
++                ),
++                doc(
++                    Some("T1"),
++                    "C1",
++                    Some("1700000100.000100"),
++                    "1700000101.000100",
++                    "U0BOB",
++                    "reply to owner",
++                ),
++                doc(
++                    None,
++                    "D1",
++                    None,
++                    "1700000004.000100",
++                    OWNER,
++                    "owner's own dm",
++                ),
++                doc(None, "D1", None, "1700000005.000100", BOT, "bot dm"),
++            ])
++            .await
++            .unwrap();
++        let source = SlackSource::new(pool.clone(), OWNER.into(), BOT.into());
++
++        let (items, cursor) = source.fetch_since(None).await.unwrap();
++
++        let refs: Vec<_> = items.iter().map(|item| item.source_ref.as_str()).collect();
++        assert_eq!(
++            refs,
++            [
++                "1700000001.000100",
++                "1700000002.000100",
++                "1700000101.000100"
++            ]
++        );
++        assert_eq!(cursor, "1700000101.000100");
++        assert!(items
++            .iter()
++            .all(|item| item.source == InboxSourceKind::Slack));
++        assert_eq!(items[0].room_type.as_deref(), Some("dm"));
++        assert_eq!(items[1].room_type.as_deref(), Some("channel"));
++        assert_eq!(items[2].room_type.as_deref(), Some("owner_reply"));
++        assert_eq!(
++            items[0].link.as_deref(),
++            Some("https://slack.com/archives/D1/p1700000001000100")
++        );
++        assert_eq!(
++            items[2].link.as_deref(),
++            Some("https://slack.com/archives/C1/p1700000101000100?thread_ts=1700000100.000100&cid=C1")
++        );
++        assert_eq!(items[2].thread_ref.as_deref(), Some("1700000100.000100"));
++        assert_eq!(items[1].author.as_deref(), Some("U0ALICE"));
++        assert_eq!(items[0].received_at.timestamp(), 1_700_000_001);
++
++        let (again, next) = source.fetch_since(Some(&cursor)).await.unwrap();
++        assert!(again.is_empty());
++        assert_eq!(next, cursor);
++    }
++
++    #[tokio::test]
++    async fn collect_all_commits_slack_items_through_prefilter() {
++        let pool = pool().await;
++        MessageSearchIndex::new(pool.clone())
++            .upsert(&doc(
++                None,
++                "D1",
++                None,
++                "1700000001.000100",
++                "U0ALICE",
++                "need your review",
++            ))
++            .await
++            .unwrap();
++        let source = SlackSource::new(pool.clone(), OWNER.into(), BOT.into());
++        let rules = crate::inbox::prefilter::PrefilterRules {
++            owner_slack_id: OWNER.into(),
++            ..Default::default()
++        };
++
++        let results =
++            crate::inbox::collect_all(&pool, &[&source as &dyn InboxSource], &rules).await;
++
++        assert_eq!(results[0].error, None);
++        assert_eq!(results[0].stats.inserted, 1);
++        let stored: (String, String) = sqlx::query_as("SELECT source, link FROM inbox_items")
++            .fetch_one(&pool)
++            .await
++            .unwrap();
++        assert_eq!(stored.0, "slack");
++        assert_eq!(stored.1, "https://slack.com/archives/D1/p1700000001000100");
++    }
++}
+diff --git a/src/inbox/triage.rs b/src/inbox/triage.rs
+index 234eadf..ccfb86d 100644
+--- a/src/inbox/triage.rs
++++ b/src/inbox/triage.rs
+@@ -18,6 +18,8 @@ pub const BATCH_SIZE: usize = 20;
+ /// 6000-char cap below still bounds each turn.
+ pub const WRITING_BATCH_SIZE: usize = BATCH_SIZE;
+ pub const BATCH_WINDOW: Duration = Duration::from_secs(120);
++/// Messages received longer ago than this are filed as fyi without a model call.
++pub const STALE_AFTER_HOURS: i64 = 24;
+ const INSTRUCTIONS: &str = "owner_must_act = needs the owner's own decision, signature, payment or a personal reply; bot_can_handle = a coding/ops task an agent can do alone without speaking as the owner; fyi = information only; ignore = ads/promotions";
+ const OPTIONS: &[&str] = &["owner_must_act", "bot_can_handle", "fyi", "ignore"];
+ 
+@@ -57,7 +59,7 @@ impl Class {
+             )),
+         }
+     }
+-    fn as_str(self) -> &'static str {
++    pub const fn as_str(self) -> &'static str {
+         match self {
+             Self::Owner => "owner",
+             Self::Bot => "bot",
+@@ -67,6 +69,13 @@ impl Class {
+     }
+ }
+ 
++/// Fixed Korean fallback reason used when the reason writer times out or fails (incident 2026-10-16).
++pub const FALLBACK_REASON_PREFIX: &str = "자동 분류(사유 작성 실패): ";
++
++pub fn fallback_reason(class: Class) -> String {
++    format!("{}{}", FALLBACK_REASON_PREFIX, class.as_str())
++}
++
+ #[derive(Debug, Serialize)]
+ pub struct WritingItem {
+     pub id: String,
+@@ -195,6 +204,10 @@ impl Triage {
+         if pending && self.recovery_remaining > 0 {
+             self.recovery_remaining -= 1;
+             self.deadline = Some(now + chrono::Duration::seconds(120));
++        } else if pending {
++            // The judge breaker stays open for 30 minutes after an upstream rate limit; items
++            // left pending must be retried after it closes, not wait for the next new message.
++            self.deadline = Some(now + chrono::Duration::minutes(30));
+         }
+         result
+     }
+@@ -216,10 +229,73 @@ impl Triage {
+         Ok(stored)
+     }
+ 
++    /// Batches actionable writing items and requests reasons + proposed actions from the writer.
++    ///
++    /// Incident 2026-10-16: writer turn timeouts or malformed JSON returned from this method
++    /// must be caught and logged rather than aborting triage, so that jev classifications
++    /// still get persisted with a fallback reason instead of entering an infinite retry loop.
++    async fn write_batch(&self, chunk: &[WritingItem]) -> Result<Vec<WritingDecision>> {
++        let mut writing = chunk
++            .iter()
++            .map(|item| WritingItem {
++                id: item.id.clone(),
++                class: item.class,
++                text: item.text.clone(),
++            })
++            .collect::<Vec<_>>();
++        while serde_json::to_string(&writing)
++            .map_err(|error| OmonError::Config(error.to_string()))?
++            .chars()
++            .count()
++            > 6000
++        {
++            for item in &mut writing {
++                item.text = item
++                    .text
++                    .chars()
++                    .take(item.text.chars().count() / 2)
++                    .collect();
++            }
++        }
++        let raw = self.writer.write(&writing).await?;
++        let value: serde_json::Value =
++            serde_json::from_str(&raw).map_err(|error| OmonError::Config(error.to_string()))?;
++        let rows = value
++            .as_array()
++            .ok_or_else(|| OmonError::Config("inbox response must be an array".into()))?;
++        if rows.iter().any(|row| {
++            !row.as_object()
++                .is_some_and(|o| o.contains_key("proposed_action"))
++        }) {
++            return Err(OmonError::Config(
++                "inbox response missing proposed_action".into(),
++            ));
++        }
++        let parsed: Vec<WritingDecision> =
++            serde_json::from_value(value).map_err(|error| OmonError::Config(error.to_string()))?;
++        let mut seen = HashSet::new();
++        for row in &parsed {
++            if !seen.insert(&row.id) || row.reason.trim().is_empty() {
++                return Err(OmonError::Config(
++                    "duplicate inbox id or empty reason".into(),
++                ));
++            }
++            if !writing.iter().any(|item| item.id == row.id) {
++                tracing::warn!(item_id = %row.id, "unknown inbox triage response id ignored");
++            }
++        }
++        Ok(parsed)
++    }
++
+     async fn classify(&self, items: &[Item], now: DateTime<Utc>) -> Result<usize> {
+         let mut classified = Vec::with_capacity(items.len());
+         let mut writing = Vec::new();
+         for item in items {
++            // Backlog that arrives late is history, not a new task for the owner.
++            if now - item.received_at > chrono::Duration::hours(STALE_AFTER_HOURS) {
++                classified.push((item, Class::Fyi, None));
++                continue;
++            }
+             let text = item.text();
+             let choice = self
+                 .judge
+@@ -267,57 +343,19 @@ impl Triage {
+         }
+         tx.commit().await?;
+         let mut decisions = Vec::new();
+-        for writing in writing.chunks(WRITING_BATCH_SIZE) {
+-            let mut writing = writing
+-                .iter()
+-                .map(|item| WritingItem {
+-                    id: item.id.clone(),
+-                    class: item.class,
+-                    text: item.text.clone(),
+-                })
+-                .collect::<Vec<_>>();
+-            while serde_json::to_string(&writing)
+-                .map_err(|error| OmonError::Config(error.to_string()))?
+-                .chars()
+-                .count()
+-                > 6000
+-            {
+-                for item in &mut writing {
+-                    item.text = item
+-                        .text
+-                        .chars()
+-                        .take(item.text.chars().count() / 2)
+-                        .collect();
+-                }
+-            }
+-            let raw = self.writer.write(&writing).await?;
+-            let value: serde_json::Value =
+-                serde_json::from_str(&raw).map_err(|error| OmonError::Config(error.to_string()))?;
+-            let rows = value
+-                .as_array()
+-                .ok_or_else(|| OmonError::Config("inbox response must be an array".into()))?;
+-            if rows.iter().any(|row| {
+-                !row.as_object()
+-                    .is_some_and(|o| o.contains_key("proposed_action"))
+-            }) {
+-                return Err(OmonError::Config(
+-                    "inbox response missing proposed_action".into(),
+-                ));
+-            }
+-            let parsed: Vec<WritingDecision> = serde_json::from_value(value)
+-                .map_err(|error| OmonError::Config(error.to_string()))?;
+-            let mut seen = HashSet::new();
+-            for row in &parsed {
+-                if !seen.insert(&row.id) || row.reason.trim().is_empty() {
+-                    return Err(OmonError::Config(
+-                        "duplicate inbox id or empty reason".into(),
+-                    ));
+-                }
+-                if !writing.iter().any(|item| item.id == row.id) {
+-                    tracing::warn!(item_id = %row.id, "unknown inbox triage response id ignored");
++        for chunk in writing.chunks(WRITING_BATCH_SIZE) {
++            match self.write_batch(chunk).await {
++                Ok(parsed) => decisions.extend(parsed),
++                Err(error) => {
++                    // Incident 2026-10-16: On 2026-10-15/16 the 180s writer turn timed out 10 times.
++                    // Propagating Err left items pending, re-running every 5m and paying jev + writer
++                    // each time. Catch errors here and fall back to storing jev classifications.
++                    tracing::warn!(
++                        %error,
++                        "inbox triage reason writer failed; falling back to jev classification"
++                    );
+                 }
+             }
+-            decisions.extend(parsed);
+         }
+         let proposals =
+             super::proposals::Proposals::new(self.pool.clone(), super::proposals::OWNER_ID).await?;
+@@ -325,17 +363,18 @@ impl Triage {
+         let mut stored = informational;
+         for (item, class, due_at) in classified {
+             let row = decisions.iter().find(|row| row.id == item.id);
++            // Incident 2026-10-16: If writer failed, timed out, or omitted this item,
++            // persist with fallback reason and model='jev' so the item leaves pending.
++            let fallback = row.is_none().then(|| fallback_reason(class));
+             let (reason, action, model) = match class {
+-                Class::Owner | Class::Bot => {
+-                    let Some(row) = row else {
+-                        continue;
+-                    };
+-                    (
++                Class::Owner | Class::Bot => match row {
++                    Some(row) => (
+                         row.reason.as_str(),
+                         row.proposed_action.as_deref(),
+                         self.writer.model(),
+-                    )
+-                }
++                    ),
++                    None => (fallback.as_deref().unwrap_or(""), None, "jev"),
++                },
+                 Class::Fyi | Class::Ignore => continue,
+             };
+             let inserted = sqlx::query("INSERT INTO inbox_decisions(item_id,class,reason,due_at,proposed_action,status,decided_at,model) VALUES(?,?,?,?,?,'open',?,?) ON CONFLICT(item_id) DO NOTHING")
+@@ -391,6 +430,10 @@ impl Triage {
+         }
+         // Recover durable pending work once on startup, including deduplicated collections.
+         if enabled() {
++            if let Err(error) = super::proposals::backfill_pending_inbox_proposals(&self.pool).await
++            {
++                tracing::warn!(%error, "inbox startup proposal ledger backfill failed");
++            }
+             match sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM inbox_items i LEFT JOIN inbox_decisions d ON d.item_id=i.id WHERE d.item_id IS NULL)")
+                 .fetch_one(&self.pool).await {
+                 Ok(true) => self.deadline = Some(Utc::now() + chrono::Duration::seconds(120)),
+@@ -402,9 +445,9 @@ impl Triage {
+             if *shutdown.borrow() {
+                 return;
+             }
+-            if enabled()
+-                && std::env::var("OMON_INBOX_AUTO_LOOKUP").is_ok_and(|value| value == "true")
+-            {
++            // Auto-lookup fetches links from other people's messages; it only runs under the
++            // approval-ledger kill switch.
++            if enabled() && crate::agent::agent_workspace::approval_ledger_enabled() {
+                 let result = async {
+                     let proposals = super::proposals::Proposals::new(
+                         self.pool.clone(),
+@@ -413,19 +456,17 @@ impl Triage {
+                     .await?;
+                     let lead = crate::SessionKey::from_storage_key(&self.lead)?;
+                     let pending = proposals.pending(&lead.channel_id).await?;
+-                    if pending
+-                        .iter()
+-                        .any(|p| p.action_json == "{\"kind\":\"lookup\"}")
+-                    {
++                    if !pending.is_empty() {
+                         let actions =
+                             super::proposals::GatewayActions::from_env(self.pool.clone())?;
++                        // Ledger routing: read lookups and exact-precedent drafts auto-run;
++                        // everything else stays pending for the owner's numbered reply.
+                         for proposal in pending {
+-                            // One failing proposal must not skip the rest of the loop.
+                             if let Err(error) = proposals
+-                                .auto_lookup(proposal.number, true, &actions)
++                                .evaluate_with_ledger(proposal.number, &actions, None, None)
+                                 .await
+                             {
+-                                tracing::warn!(%error, number = proposal.number, "inbox auto lookup proposal failed");
++                                tracing::warn!(%error, number = proposal.number, "inbox ledger proposal evaluation failed");
+                             }
+                         }
+                     }
+diff --git a/src/inbox/watchers.rs b/src/inbox/watchers.rs
+index 2368460..3c2887b 100644
+--- a/src/inbox/watchers.rs
++++ b/src/inbox/watchers.rs
+@@ -15,6 +15,7 @@ pub enum InboxWatcherEvent {
+     IMessage { rowid: Option<i64> },
+     Mail,
+     Periodic,
++    Github,
+ }
+ 
+ pub type InboxEventSender = tokio::sync::mpsc::Sender<InboxWatcherEvent>;
+@@ -62,6 +63,12 @@ pub async fn on_periodic(
+     sender.send(InboxWatcherEvent::Periodic).await
+ }
+ 
++pub async fn on_github_tick(
++    sender: &InboxEventSender,
++) -> std::result::Result<(), tokio::sync::mpsc::error::SendError<InboxWatcherEvent>> {
++    sender.send(InboxWatcherEvent::Github).await
++}
++
+ pub fn filter_sources_for_event<'a>(
+     sources: &[&'a dyn InboxSource],
+     event: &InboxWatcherEvent,
+@@ -71,7 +78,7 @@ pub fn filter_sources_for_event<'a>(
+         InboxWatcherEvent::GatewayMessage => sources
+             .iter()
+             .copied()
+-            .filter(|s| s.name() == InboxSourceKind::Discord)
++            .filter(|s| matches!(s.name(), InboxSourceKind::Discord | InboxSourceKind::Slack))
+             .collect(),
+         InboxWatcherEvent::IMessage { .. } => sources
+             .iter()
+@@ -88,6 +95,13 @@ pub fn filter_sources_for_event<'a>(
+             .copied()
+             .filter(|s| s.name() == InboxSourceKind::Kakao)
+             .collect(),
++        InboxWatcherEvent::Github => {
++            return sources
++                .iter()
++                .copied()
++                .filter(|s| s.name() == InboxSourceKind::Github)
++                .collect();
++        }
+     };
+     if matched.is_empty() {
+         sources.to_vec()
+@@ -261,6 +275,38 @@ pub async fn run_imessage_watch<F, Fut>(
+ mod nonblocking_tests {
+     use super::*;
+ 
++    struct Named(InboxSourceKind);
++
++    #[async_trait::async_trait]
++    impl InboxSource for Named {
++        fn name(&self) -> InboxSourceKind {
++            self.0
++        }
++        async fn fetch_since(
++            &self,
++            _: Option<&str>,
++        ) -> crate::Result<(Vec<super::super::InboxItem>, String)> {
++            Ok((Vec::new(), String::new()))
++        }
++    }
++
++    #[test]
++    fn gateway_message_collects_discord_and_slack_sources() {
++        let sources = [
++            Named(InboxSourceKind::Mail),
++            Named(InboxSourceKind::Discord),
++            Named(InboxSourceKind::Slack),
++        ];
++        let borrowed: Vec<&dyn InboxSource> =
++            sources.iter().map(|s| s as &dyn InboxSource).collect();
++        let picked: Vec<_> =
++            filter_sources_for_event(&borrowed, &InboxWatcherEvent::GatewayMessage)
++                .iter()
++                .map(|s| s.name())
++                .collect();
++        assert_eq!(picked, [InboxSourceKind::Discord, InboxSourceKind::Slack]);
++    }
++
+     #[tokio::test]
+     async fn on_gateway_message_returns_promptly_when_channel_full() {
+         let (tx, _rx) = event_channel(1);

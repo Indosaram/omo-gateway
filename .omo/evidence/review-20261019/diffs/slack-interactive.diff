@@ -1,0 +1,1967 @@
+diff --git a/src/slack/buttons.rs b/src/slack/buttons.rs
+new file mode 100644
+index 0000000..c82c79a
+--- /dev/null
++++ b/src/slack/buttons.rs
+@@ -0,0 +1,645 @@
++//! Slack side of the generic `omon:btn:<namespace>:<action>:<arg>` buttons. Parsing, the
++//! button-actions file and command execution are shared with Discord. Block Kit buttons cannot
++//! be disabled, so a locked button is removed and its label shown in a context block instead.
++
++use std::collections::{HashSet, VecDeque};
++use std::path::Path;
++use std::sync::LazyLock;
++use std::time::{Duration, Instant};
++
++use parking_lot::Mutex;
++use serde_json::{json, Value};
++use tokio::task::JoinHandle;
++
++use super::interactive::payload_channel;
++use super::{SlackApi, SlackConfig};
++use crate::discord::buttons::{
++    button_actions_path, load_button_action, parse_button_custom_id, reply_text, run_button_action,
++    ActionOutcome, BUTTON_PREFIX,
++};
++use crate::Result;
++
++const PENDING_LABEL: &str = "⏳ 처리 중…";
++const DEFAULT_DONE_LABEL: &str = "✓ 완료";
++const EXECUTED_ACTION_LIMIT: usize = 500;
++const NOT_AUTHORIZED: &str = "이 버튼을 누를 권한이 없습니다.";
++const ALREADY_RUNNING: &str = "이미 처리 중입니다.";
++const CONFIG_UNREADABLE: &str = "버튼 설정 파일을 읽지 못했습니다.";
++
++static IN_FLIGHT: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
++static EXECUTED_ACTIONS: LazyLock<Mutex<ActionLru>> =
++    LazyLock::new(|| Mutex::new(ActionLru::default()));
++
++#[derive(Default)]
++struct ActionLru {
++    ids: HashSet<String>,
++    order: VecDeque<String>,
++}
++
++impl ActionLru {
++    fn contains(&mut self, id: &str) -> bool {
++        if !self.ids.contains(id) {
++            return false;
++        }
++        self.order.retain(|existing| existing != id);
++        self.order.push_back(id.to_owned());
++        true
++    }
++
++    fn insert(&mut self, id: String) {
++        if self.ids.insert(id.clone()) {
++            self.order.push_back(id);
++            if self.order.len() > EXECUTED_ACTION_LIMIT {
++                if let Some(oldest) = self.order.pop_front() {
++                    self.ids.remove(&oldest);
++                }
++            }
++        }
++    }
++}
++
++struct ButtonMessage {
++    api: SlackApi,
++    channel: String,
++    ts: String,
++    thread_ts: String,
++    text: String,
++    blocks: Value,
++}
++
++impl ButtonMessage {
++    async fn set_blocks(&self, blocks: Option<Value>) {
++        let Some(blocks) = blocks else { return };
++        // A failed edit after a terminal action would leave the button clickable, so retry.
++        for attempt in 1..=3u32 {
++            match self
++                .api
++                .update_message(&self.channel, &self.ts, &self.text, Some(blocks.clone()))
++                .await
++            {
++                Ok(()) => return,
++                Err(error) => {
++                    tracing::warn!(%error, channel = %self.channel, ts = %self.ts, attempt, "failed to update slack button state");
++                    if attempt < 3 {
++                        tokio::time::sleep(Duration::from_millis(500)).await;
++                    }
++                }
++            }
++        }
++    }
++}
++
++/// Runs every `omon:btn:` action in a `block_actions` payload. Commands run in the background;
++/// the result is posted as a threaded reply under the button message.
++pub async fn handle_button_actions(
++    payload: &Value,
++    config: &SlackConfig,
++    api: &SlackApi,
++) -> Result<()> {
++    start_button_actions(payload, config, api, &button_actions_path())
++        .await
++        .map(drop)
++}
++
++async fn start_button_actions(
++    payload: &Value,
++    config: &SlackConfig,
++    api: &SlackApi,
++    actions_path: &Path,
++) -> Result<Vec<JoinHandle<()>>> {
++    if payload.get("type").and_then(Value::as_str) != Some("block_actions") {
++        return Ok(Vec::new());
++    }
++    let mut handles = Vec::new();
++    for action in payload
++        .get("actions")
++        .and_then(Value::as_array)
++        .into_iter()
++        .flatten()
++    {
++        let Some(value) = button_value(action) else {
++            continue;
++        };
++        if let Some(handle) = start_click(payload, action, value, config, api, actions_path).await?
++        {
++            handles.push(handle);
++        }
++    }
++    Ok(handles)
++}
++
++fn button_value(action: &Value) -> Option<&str> {
++    ["value", "action_id"]
++        .iter()
++        .filter_map(|key| action.get(*key).and_then(Value::as_str))
++        .find(|value| value.starts_with(BUTTON_PREFIX))
++}
++
++async fn start_click(
++    payload: &Value,
++    action: &Value,
++    value: &str,
++    config: &SlackConfig,
++    api: &SlackApi,
++    actions_path: &Path,
++) -> Result<Option<JoinHandle<()>>> {
++    let Some(click) = parse_button_custom_id(value) else {
++        tracing::warn!(value, "ignoring malformed Slack button value");
++        return Ok(None);
++    };
++    let user = payload
++        .pointer("/user/id")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++    let action_ts = action
++        .get("action_ts")
++        .or_else(|| payload.get("trigger_id"))
++        .and_then(Value::as_str)
++        .unwrap_or_default()
++        .to_owned();
++    if !action_ts.is_empty() && EXECUTED_ACTIONS.lock().contains(&action_ts) {
++        tracing::warn!(action_ts, value, "duplicate Slack button action ignored");
++        return Ok(None);
++    }
++    let channel = payload_channel(payload);
++    if !config.is_allowed(user) {
++        tracing::warn!(user, value, "unauthorized Slack button click");
++        if let Some(channel) = channel {
++            api.post_ephemeral(channel, user, NOT_AUTHORIZED).await?;
++        }
++        return Ok(None);
++    }
++    let Some(channel) = channel else {
++        tracing::warn!(value, "Slack button click without a channel");
++        return Ok(None);
++    };
++    let Some(message_ts) = payload
++        .pointer("/container/message_ts")
++        .or_else(|| payload.pointer("/message/ts"))
++        .and_then(Value::as_str)
++    else {
++        tracing::warn!(value, "Slack button click without a message ts");
++        return Ok(None);
++    };
++    let action_config = match load_button_action(actions_path, &click.namespace) {
++        Ok(Some(action_config)) => action_config,
++        Ok(None) => {
++            let content = format!("`{}` 버튼 동작이 설정되어 있지 않습니다.", click.namespace);
++            api.post_ephemeral(channel, user, &content).await?;
++            return Ok(None);
++        }
++        Err(error) => {
++            tracing::warn!(%error, "button actions config is unreadable");
++            api.post_ephemeral(channel, user, CONFIG_UNREADABLE).await?;
++            return Ok(None);
++        }
++    };
++
++    let lock = format!("{channel}:{message_ts}");
++    if !IN_FLIGHT.lock().insert(lock.clone()) {
++        api.post_ephemeral(channel, user, ALREADY_RUNNING).await?;
++        return Ok(None);
++    }
++    if !action_ts.is_empty() {
++        EXECUTED_ACTIONS.lock().insert(action_ts);
++    }
++
++    let message = ButtonMessage {
++        api: api.clone(),
++        channel: channel.to_owned(),
++        ts: message_ts.to_owned(),
++        thread_ts: payload
++            .pointer("/message/thread_ts")
++            .and_then(Value::as_str)
++            .unwrap_or(message_ts)
++            .to_owned(),
++        text: payload
++            .pointer("/message/text")
++            .and_then(Value::as_str)
++            .unwrap_or_default()
++            .to_owned(),
++        blocks: payload
++            .pointer("/message/blocks")
++            .cloned()
++            .unwrap_or(Value::Null),
++    };
++    message
++        .set_blocks(rebuild_blocks(
++            &message.blocks,
++            value,
++            Some(PENDING_LABEL),
++            true,
++        ))
++        .await;
++
++    let extra_env = vec![
++        ("OMON_BUTTON_USER_ID".to_owned(), user.to_owned()),
++        ("OMON_BUTTON_CHANNEL_ID".to_owned(), message.channel.clone()),
++        ("OMON_BUTTON_MESSAGE_ID".to_owned(), message.ts.clone()),
++        (
++            "OMON_BUTTON_PLATFORM".to_owned(),
++            super::PLATFORM.to_owned(),
++        ),
++    ];
++    tracing::info!(user, namespace = %click.namespace, action = %click.action, arg = %click.arg, "running slack button action");
++    let clicked = value.to_owned();
++    Ok(Some(tokio::spawn(async move {
++        let started = Instant::now();
++        let outcome = run_button_action(&action_config, &click, &extra_env)
++            .await
++            .unwrap_or_else(|error| ActionOutcome {
++                success: false,
++                code: None,
++                stdout: String::new(),
++                stderr: format!("failed to start command: {error}"),
++                timed_out: false,
++            });
++        tracing::info!(
++            namespace = %click.namespace,
++            action = %click.action,
++            success = outcome.success,
++            code = ?outcome.code,
++            elapsed_ms = started.elapsed().as_millis() as u64,
++            "slack button action finished"
++        );
++        let blocks = if outcome.success {
++            let label = action_config
++                .done_labels
++                .get(&click.action)
++                .map_or(DEFAULT_DONE_LABEL, String::as_str);
++            rebuild_blocks(
++                &message.blocks,
++                &clicked,
++                Some(label),
++                !action_config.nonterminal_actions.contains(&click.action),
++            )
++        } else {
++            message.blocks.as_array().map(|_| message.blocks.clone())
++        };
++        message.set_blocks(blocks).await;
++        if let Err(error) = message
++            .api
++            .post_message(
++                &message.channel,
++                &escape(&reply_text(&outcome)),
++                Some(&message.thread_ts),
++                None,
++            )
++            .await
++        {
++            tracing::warn!(%error, channel = %message.channel, ts = %message.ts, "failed to post slack button action result");
++        }
++        IN_FLIGHT.lock().remove(&lock);
++    })))
++}
++
++/// `locked` removes every action button (link buttons stay) and shows `label` in a context
++/// block after the clicked button's row; otherwise the clicked button is relabelled in place.
++/// `None` when the message carried no blocks.
++fn rebuild_blocks(
++    blocks: &Value,
++    clicked: &str,
++    label: Option<&str>,
++    locked: bool,
++) -> Option<Value> {
++    let blocks = blocks.as_array()?;
++    let mut out = Vec::with_capacity(blocks.len() + 1);
++    for block in blocks {
++        if block.get("type").and_then(Value::as_str) != Some("actions") {
++            out.push(block.clone());
++            continue;
++        }
++        let elements = block
++            .get("elements")
++            .and_then(Value::as_array)
++            .cloned()
++            .unwrap_or_default();
++        let holds_clicked = elements.iter().any(|element| is_clicked(element, clicked));
++        let kept: Vec<Value> = elements
++            .into_iter()
++            .filter_map(|mut element| {
++                let action_button = element.get("type").and_then(Value::as_str) == Some("button")
++                    && element.get("url").is_none();
++                if !action_button {
++                    return Some(element);
++                }
++                if locked {
++                    return None;
++                }
++                if let Some(label) = label.filter(|_| is_clicked(&element, clicked)) {
++                    element["text"] = json!({ "type": "plain_text", "text": label, "emoji": true });
++                }
++                Some(element)
++            })
++            .collect();
++        if !kept.is_empty() {
++            let mut block = block.clone();
++            block["elements"] = Value::Array(kept);
++            out.push(block);
++        }
++        if let Some(label) = label.filter(|_| locked && holds_clicked) {
++            out.push(json!({
++                "type": "context",
++                "elements": [{ "type": "mrkdwn", "text": escape(label) }],
++            }));
++        }
++    }
++    Some(Value::Array(out))
++}
++
++fn is_clicked(element: &Value, clicked: &str) -> bool {
++    ["value", "action_id"]
++        .iter()
++        .any(|key| element.get(*key).and_then(Value::as_str) == Some(clicked))
++}
++
++fn escape(text: &str) -> String {
++    text.replace('&', "&amp;")
++        .replace('<', "&lt;")
++        .replace('>', "&gt;")
++}
++
++#[cfg(test)]
++mod tests {
++    use std::path::PathBuf;
++    use std::sync::Arc;
++
++    use super::*;
++
++    const OWNER: &str = "UOWNER";
++    const PUBLISH: &str = "omon:btn:content-intel:publish:86";
++    const PREVIEW: &str = "omon:btn:content-intel:preview:86";
++
++    struct Fake {
++        api: SlackApi,
++        requests: Arc<Mutex<Vec<(String, Value)>>>,
++    }
++
++    impl Fake {
++        fn requests(&self) -> Vec<(String, Value)> {
++            self.requests.lock().clone()
++        }
++    }
++
++    async fn fake() -> Fake {
++        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let base = format!("http://{}", listener.local_addr().unwrap());
++        let requests = Arc::new(Mutex::new(Vec::<(String, Value)>::new()));
++        let recorded = requests.clone();
++        let app = axum::Router::new().fallback(move |req: axum::extract::Request| {
++            let recorded = recorded.clone();
++            async move {
++                let path = req.uri().path().trim_start_matches('/').to_owned();
++                let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
++                    .await
++                    .unwrap();
++                let body = serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null);
++                recorded.lock().push((path.clone(), body));
++                let reply = match path.as_str() {
++                    "chat.postMessage" => json!({ "ok": true, "ts": "200.0001" }),
++                    _ => json!({ "ok": true }),
++                };
++                axum::Json(reply)
++            }
++        });
++        tokio::spawn(async move { axum::serve(listener, app).await });
++        Fake {
++            api: SlackApi::with_base_url("xoxb-test".into(), base),
++            requests,
++        }
++    }
++
++    fn config() -> SlackConfig {
++        SlackConfig {
++            allowed_users: vec![OWNER.into()],
++            ..SlackConfig::test_default()
++        }
++    }
++
++    fn actions_file(dir: &Path, body: &str) -> PathBuf {
++        let script = dir.join("action.sh");
++        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
++        let path = dir.join("button-actions.json");
++        let config = json!({
++            "content-intel": {
++                "command": ["/bin/sh", script.to_string_lossy()],
++                "timeout_secs": 30,
++                "done_labels": { "publish": "✓ 발행됨" },
++                "nonterminal_actions": ["preview"],
++            }
++        });
++        std::fs::write(&path, config.to_string()).unwrap();
++        path
++    }
++
++    fn message_blocks() -> Value {
++        json!([
++            { "type": "section", "text": { "type": "mrkdwn", "text": "draft 86" } },
++            {
++                "type": "actions",
++                "elements": [
++                    { "type": "button", "text": { "type": "plain_text", "text": "발행" }, "action_id": PUBLISH, "value": PUBLISH },
++                    { "type": "button", "text": { "type": "plain_text", "text": "미리보기" }, "action_id": PREVIEW, "value": PREVIEW },
++                    { "type": "button", "text": { "type": "plain_text", "text": "대시보드" }, "url": "http://127.0.0.1:4321" },
++                ],
++            },
++        ])
++    }
++
++    fn click(user: &str, channel: &str, value: &str, action_ts: &str) -> Value {
++        json!({
++            "type": "block_actions",
++            "user": { "id": user },
++            "channel": { "id": channel },
++            "container": { "channel_id": channel, "message_ts": "100.0001" },
++            "message": { "ts": "100.0001", "text": "draft 86", "blocks": message_blocks() },
++            "actions": [{ "action_id": value, "value": value, "action_ts": action_ts }],
++        })
++    }
++
++    async fn run(payload: &Value, fake: &Fake, path: &Path) -> usize {
++        let handles = start_button_actions(payload, &config(), &fake.api, path)
++            .await
++            .unwrap();
++        let count = handles.len();
++        for handle in handles {
++            handle.await.unwrap();
++        }
++        count
++    }
++
++    fn element_texts(blocks: &Value) -> Vec<String> {
++        blocks
++            .as_array()
++            .unwrap()
++            .iter()
++            .flat_map(|block| block["elements"].as_array().cloned().unwrap_or_default())
++            .map(|element| {
++                element["text"]["text"]
++                    .as_str()
++                    .or_else(|| element["text"].as_str())
++                    .unwrap_or_default()
++                    .to_owned()
++            })
++            .collect()
++    }
++
++    #[test]
++    fn button_value_reads_value_or_action_id_with_prefix() {
++        assert_eq!(button_value(&json!({ "value": PUBLISH })), Some(PUBLISH));
++        assert_eq!(
++            button_value(&json!({ "value": "x", "action_id": PUBLISH })),
++            Some(PUBLISH)
++        );
++        assert_eq!(
++            button_value(&json!({ "value": "omon:approval:1:once" })),
++            None
++        );
++    }
++
++    #[test]
++    fn locked_rebuild_keeps_links_and_shows_label() {
++        let pending =
++            rebuild_blocks(&message_blocks(), PUBLISH, Some(PENDING_LABEL), true).unwrap();
++        assert_eq!(element_texts(&pending), ["대시보드", PENDING_LABEL]);
++        assert_eq!(pending[1]["elements"][0]["url"], "http://127.0.0.1:4321");
++        assert_eq!(pending[2]["type"], "context");
++        assert_eq!(pending[0], message_blocks()[0]);
++    }
++
++    #[test]
++    fn nonterminal_rebuild_relabels_clicked_button_in_place() {
++        let done = rebuild_blocks(&message_blocks(), PREVIEW, Some("✓ Preview"), false).unwrap();
++        assert_eq!(element_texts(&done), ["발행", "✓ Preview", "대시보드"]);
++        assert_eq!(done[1]["elements"][1]["value"], PREVIEW);
++        assert!(rebuild_blocks(&Value::Null, PREVIEW, None, true).is_none());
++    }
++
++    #[test]
++    fn executed_action_lru_deduplicates_and_evicts_oldest() {
++        let mut lru = ActionLru::default();
++        lru.insert("41.1".into());
++        assert!(lru.contains("41.1"));
++        for id in 0..EXECUTED_ACTION_LIMIT - 1 {
++            lru.insert(format!("{id}.0"));
++        }
++        assert!(lru.contains("41.1"));
++        lru.insert("last".into());
++        assert!(lru.contains("41.1"));
++        assert!(!lru.contains("0.0"));
++    }
++
++    #[tokio::test]
++    async fn owner_click_runs_command_marks_done_and_replies_in_thread_once() {
++        let fake = fake().await;
++        let dir = tempfile::tempdir().unwrap();
++        let path = actions_file(
++            dir.path(),
++            r#"echo "argv=$1,$2 user=$OMON_BUTTON_USER_ID platform=$OMON_BUTTON_PLATFORM <!here>""#,
++        );
++        let payload = click(OWNER, "CBTN1", PUBLISH, "1700.111");
++
++        assert_eq!(run(&payload, &fake, &path).await, 1);
++        let requests = fake.requests();
++        let paths: Vec<&str> = requests.iter().map(|(path, _)| path.as_str()).collect();
++        assert_eq!(paths, ["chat.update", "chat.update", "chat.postMessage"]);
++        assert_eq!(requests[0].1["channel"], "CBTN1");
++        assert_eq!(requests[0].1["ts"], "100.0001");
++        assert_eq!(
++            element_texts(&requests[0].1["blocks"]),
++            ["대시보드", PENDING_LABEL]
++        );
++        assert_eq!(
++            element_texts(&requests[1].1["blocks"]),
++            ["대시보드", "✓ 발행됨"]
++        );
++        assert_eq!(requests[2].1["thread_ts"], "100.0001");
++        assert_eq!(
++            requests[2].1["text"],
++            "argv=publish,86 user=UOWNER platform=slack &lt;!here&gt;"
++        );
++        assert!(!IN_FLIGHT.lock().contains("CBTN1:100.0001"));
++
++        assert_eq!(run(&payload, &fake, &path).await, 0);
++        assert_eq!(fake.requests().len(), 3);
++    }
++
++    #[tokio::test]
++    async fn failed_command_restores_buttons_and_reports_retry() {
++        let fake = fake().await;
++        let dir = tempfile::tempdir().unwrap();
++        let path = actions_file(dir.path(), "echo 'token expired'; exit 3");
++
++        run(&click(OWNER, "CBTN2", PUBLISH, "1700.222"), &fake, &path).await;
++
++        let requests = fake.requests();
++        assert_eq!(requests[1].0, "chat.update");
++        assert_eq!(requests[1].1["blocks"], message_blocks());
++        let reply = requests[2].1["text"].as_str().unwrap();
++        assert!(
++            reply.contains("exit 3") && reply.contains("token expired"),
++            "{reply}"
++        );
++    }
++
++    #[tokio::test]
++    async fn nonterminal_action_keeps_buttons_clickable() {
++        let fake = fake().await;
++        let dir = tempfile::tempdir().unwrap();
++        let path = actions_file(dir.path(), "echo ok");
++
++        run(&click(OWNER, "CBTN3", PREVIEW, "1700.333"), &fake, &path).await;
++
++        let requests = fake.requests();
++        assert_eq!(
++            element_texts(&requests[1].1["blocks"]),
++            ["발행", DEFAULT_DONE_LABEL, "대시보드"]
++        );
++    }
++
++    #[tokio::test]
++    async fn unauthorized_unconfigured_and_in_flight_clicks_do_not_run() {
++        let fake = fake().await;
++        let dir = tempfile::tempdir().unwrap();
++        let marker = dir.path().join("ran");
++        let path = actions_file(dir.path(), &format!("touch {}", marker.display()));
++
++        run(
++            &click("USTRANGER", "CBTN4", PUBLISH, "1700.401"),
++            &fake,
++            &path,
++        )
++        .await;
++        run(
++            &click(OWNER, "CBTN4", "omon:btn:other:publish:86", "1700.402"),
++            &fake,
++            &path,
++        )
++        .await;
++        IN_FLIGHT.lock().insert("CBTN4:100.0001".into());
++        run(&click(OWNER, "CBTN4", PUBLISH, "1700.403"), &fake, &path).await;
++        IN_FLIGHT.lock().remove("CBTN4:100.0001");
++
++        assert!(!marker.exists());
++        let requests = fake.requests();
++        let texts: Vec<&str> = requests
++            .iter()
++            .map(|(path, body)| {
++                assert_eq!(path, "chat.postEphemeral");
++                body["text"].as_str().unwrap()
++            })
++            .collect();
++        assert_eq!(
++            texts,
++            [
++                NOT_AUTHORIZED,
++                "`other` 버튼 동작이 설정되어 있지 않습니다.",
++                ALREADY_RUNNING,
++            ]
++        );
++        assert_eq!(requests[0].1["user"], "USTRANGER");
++
++        run(&click(OWNER, "CBTN4", PUBLISH, "1700.404"), &fake, &path).await;
++        assert!(marker.exists());
++    }
++}
+diff --git a/src/slack/interactive.rs b/src/slack/interactive.rs
+new file mode 100644
+index 0000000..fc8260c
+--- /dev/null
++++ b/src/slack/interactive.rs
+@@ -0,0 +1,322 @@
++use serde_json::Value;
++use uuid::Uuid;
++
++use super::{SlackApi, SlackConfig, SlackEgress};
++use crate::{parse_custom_id, ApprovalDecision, Result, SmartApprovalGuard};
++
++const APPROVAL_PREFIX: &str = "omon:approval:";
++const NOT_AUTHORIZED: &str = "You are not authorized to answer this approval request.";
++const STALE_APPROVAL: &str =
++    "이 승인 요청은 이미 처리됐거나 만료됐어요. 다시 누르지 않으셔도 돼요.";
++
++pub async fn handle_block_actions(
++    payload: &Value,
++    config: &SlackConfig,
++    approvals: &SmartApprovalGuard,
++    egress: &SlackEgress,
++    api: &SlackApi,
++) -> Result<()> {
++    for (request_id, label) in resolve_approvals(payload, config, approvals, api).await? {
++        egress.mark_approval_decided(request_id, &label).await?;
++    }
++    super::buttons::handle_button_actions(payload, config, api).await
++}
++
++async fn resolve_approvals(
++    payload: &Value,
++    config: &SlackConfig,
++    approvals: &SmartApprovalGuard,
++    api: &SlackApi,
++) -> Result<Vec<(Uuid, String)>> {
++    if payload.get("type").and_then(Value::as_str) != Some("block_actions") {
++        return Ok(Vec::new());
++    }
++    let values = approval_values(payload);
++    if values.is_empty() {
++        return Ok(Vec::new());
++    }
++    let user = payload
++        .pointer("/user/id")
++        .and_then(Value::as_str)
++        .unwrap_or_default();
++    if user.is_empty() || user != config.owner_id() || !config.is_allowed(user) {
++        tracing::warn!(user, "rejected Slack approval click from unauthorized user");
++        if let Some(channel) = payload_channel(payload) {
++            api.post_ephemeral(channel, user, NOT_AUTHORIZED).await?;
++        }
++        return Ok(Vec::new());
++    }
++    let mut decided = Vec::new();
++    for value in values {
++        let Some((request_id, decision)) = parse_custom_id(value) else {
++            tracing::warn!(value, "ignoring malformed Slack approval value");
++            continue;
++        };
++        if approvals.resolve_custom_id(value).await {
++            decided.push((request_id, decision_label(&decision, user)));
++        } else {
++            tracing::info!(%request_id, "Slack approval click for an unknown or expired request");
++            // The card still shows buttons that can no longer do anything (decided elsewhere,
++            // expired, or lost to a restart): replace them so the owner is not left clicking.
++            if let (Some(channel), Some(ts)) =
++                (payload_channel(payload), payload_message_ts(payload))
++            {
++                if let Err(error) = api
++                    .update_message(channel, ts, STALE_APPROVAL, Some(stale_blocks()))
++                    .await
++                {
++                    tracing::warn!(%request_id, %error, "failed to clear a stale Slack approval card");
++                }
++            }
++        }
++    }
++    Ok(decided)
++}
++
++fn approval_values(payload: &Value) -> Vec<&str> {
++    payload
++        .get("actions")
++        .and_then(Value::as_array)
++        .map(|actions| {
++            actions
++                .iter()
++                .filter_map(|action| action.get("value").and_then(Value::as_str))
++                .filter(|value| value.starts_with(APPROVAL_PREFIX))
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++pub(super) fn payload_channel(payload: &Value) -> Option<&str> {
++    payload
++        .pointer("/channel/id")
++        .or_else(|| payload.pointer("/container/channel_id"))
++        .and_then(Value::as_str)
++}
++
++fn payload_message_ts(payload: &Value) -> Option<&str> {
++    payload
++        .pointer("/container/message_ts")
++        .or_else(|| payload.pointer("/message/ts"))
++        .and_then(Value::as_str)
++}
++
++fn stale_blocks() -> Value {
++    serde_json::json!([{ "type": "section", "text": { "type": "mrkdwn", "text": STALE_APPROVAL } }])
++}
++
++fn decision_label(decision: &ApprovalDecision, user: &str) -> String {
++    let label = match decision {
++        ApprovalDecision::Once => "✅ Approved once",
++        ApprovalDecision::Session => "✅ Approved for this session",
++        ApprovalDecision::Always => "✅ Always approved",
++        ApprovalDecision::Deny { .. } => "❌ Denied",
++    };
++    format!("{label} by <@{user}>")
++}
++
++#[cfg(test)]
++mod tests {
++    use std::sync::Arc;
++
++    use axum::body::Body;
++    use axum::extract::Request;
++    use axum::response::Response;
++    use parking_lot::Mutex;
++    use serde_json::json;
++
++    use super::*;
++
++    const OWNER: &str = "UOWNER";
++
++    fn config() -> SlackConfig {
++        SlackConfig {
++            allowed_users: vec![OWNER.into()],
++            ..SlackConfig::test_default()
++        }
++    }
++
++    fn click(user: &str, values: &[String]) -> Value {
++        json!({
++            "type": "block_actions",
++            "user": { "id": user },
++            "channel": { "id": "C1" },
++            "container": { "channel_id": "C1", "message_ts": "1.2" },
++            "actions": values
++                .iter()
++                .map(|value| json!({ "action_id": "approval", "value": value }))
++                .collect::<Vec<_>>(),
++        })
++    }
++
++    async fn fake_slack() -> (SlackApi, Arc<Mutex<Vec<(String, Value)>>>) {
++        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let base = format!("http://{}", listener.local_addr().unwrap());
++        let calls = Arc::new(Mutex::new(Vec::new()));
++        let recorded = calls.clone();
++        let app = axum::Router::new().fallback(move |req: Request| {
++            let recorded = recorded.clone();
++            async move {
++                let path = req.uri().path().to_owned();
++                let body = axum::body::to_bytes(req.into_body(), usize::MAX)
++                    .await
++                    .unwrap();
++                recorded
++                    .lock()
++                    .push((path, serde_json::from_slice(&body).unwrap_or(Value::Null)));
++                Response::builder()
++                    .status(200)
++                    .header("content-type", "application/json")
++                    .body(Body::from(json!({ "ok": true }).to_string()))
++                    .unwrap()
++            }
++        });
++        tokio::spawn(async move { axum::serve(listener, app).await });
++        (
++            SlackApi::with_base_url("xoxb-test".into(), format!("{base}/api")),
++            calls,
++        )
++    }
++
++    #[test]
++    fn approval_values_keep_only_approval_buttons() {
++        let id = Uuid::new_v4();
++        let payload = json!({
++            "actions": [
++                { "value": format!("omon:approval:{id}:once") },
++                { "value": "something:else" },
++                { "action_id": "no-value" },
++            ],
++        });
++        assert_eq!(
++            approval_values(&payload),
++            vec![format!("omon:approval:{id}:once")]
++        );
++        assert!(approval_values(&json!({})).is_empty());
++    }
++
++    #[test]
++    fn decision_labels_cover_every_choice() {
++        assert_eq!(
++            decision_label(&ApprovalDecision::Once, "U1"),
++            "✅ Approved once by <@U1>"
++        );
++        assert_eq!(
++            decision_label(&ApprovalDecision::Session, "U1"),
++            "✅ Approved for this session by <@U1>"
++        );
++        assert_eq!(
++            decision_label(&ApprovalDecision::Always, "U1"),
++            "✅ Always approved by <@U1>"
++        );
++        assert_eq!(
++            decision_label(&ApprovalDecision::deny(None), "U2"),
++            "❌ Denied by <@U2>"
++        );
++    }
++
++    #[test]
++    fn payload_channel_falls_back_to_container() {
++        assert_eq!(
++            payload_channel(&json!({ "channel": { "id": "C9" } })),
++            Some("C9")
++        );
++        assert_eq!(
++            payload_channel(&json!({ "container": { "channel_id": "D3" } })),
++            Some("D3")
++        );
++        assert_eq!(payload_channel(&json!({})), None);
++    }
++
++    #[tokio::test]
++    async fn owner_click_resolves_pending_approval() {
++        let guard = SmartApprovalGuard::new();
++        let prompt = guard.request().await;
++        let request_id = prompt.request_id;
++        let (api, calls) = fake_slack().await;
++
++        let payload = click(OWNER, &[format!("omon:approval:{request_id}:session")]);
++        let decided = resolve_approvals(&payload, &config(), &guard, &api)
++            .await
++            .unwrap();
++
++        assert_eq!(
++            decided,
++            vec![(
++                request_id,
++                format!("✅ Approved for this session by <@{OWNER}>")
++            )]
++        );
++        assert_eq!(guard.pending_count().await, 0);
++        assert!(calls.lock().is_empty());
++
++        let again = resolve_approvals(&payload, &config(), &guard, &api)
++            .await
++            .unwrap();
++        assert!(again.is_empty());
++        drop(prompt);
++    }
++
++    #[tokio::test]
++    async fn unauthorized_click_posts_ephemeral_and_keeps_request_pending() {
++        let guard = SmartApprovalGuard::new();
++        let prompt = guard.request().await;
++        let request_id = prompt.request_id;
++        let (api, calls) = fake_slack().await;
++
++        let payload = click("USTRANGER", &[format!("omon:approval:{request_id}:once")]);
++        let decided = resolve_approvals(&payload, &config(), &guard, &api)
++            .await
++            .unwrap();
++
++        assert!(decided.is_empty());
++        assert_eq!(guard.pending_count().await, 1);
++        let calls = calls.lock().clone();
++        assert_eq!(calls.len(), 1);
++        assert_eq!(calls[0].0, "/api/chat.postEphemeral");
++        assert_eq!(calls[0].1["user"], "USTRANGER");
++        assert_eq!(calls[0].1["channel"], "C1");
++        assert_eq!(calls[0].1["text"], NOT_AUTHORIZED);
++        drop(prompt);
++    }
++
++    #[tokio::test]
++    async fn malformed_unknown_and_non_approval_actions_are_ignored() {
++        let guard = SmartApprovalGuard::new();
++        let (api, calls) = fake_slack().await;
++        let unknown = Uuid::new_v4();
++        let payload = click(
++            OWNER,
++            &[
++                "omon:approval:not-a-uuid:once".to_owned(),
++                format!("omon:approval:{unknown}:bogus"),
++                format!("omon:approval:{unknown}:deny"),
++            ],
++        );
++        assert!(resolve_approvals(&payload, &config(), &guard, &api)
++            .await
++            .unwrap()
++            .is_empty());
++        // The well-formed but unknown click gets its dead buttons replaced; nothing else is sent.
++        {
++            let calls = calls.lock();
++            assert_eq!(calls.len(), 1);
++            assert_eq!(calls[0].0, "/api/chat.update");
++            assert_eq!(calls[0].1["ts"], "1.2");
++            assert_eq!(calls[0].1["text"], STALE_APPROVAL);
++        }
++        calls.lock().clear();
++
++        let mut other = click("USTRANGER", &["other:button".to_owned()]);
++        assert!(resolve_approvals(&other, &config(), &guard, &api)
++            .await
++            .unwrap()
++            .is_empty());
++        other["type"] = json!("view_submission");
++        assert!(resolve_approvals(&other, &config(), &guard, &api)
++            .await
++            .unwrap()
++            .is_empty());
++        assert!(calls.lock().is_empty());
++    }
++}
+diff --git a/src/tools/cron.rs b/src/tools/cron.rs
+index 3d2fae2..3754fdf 100644
+--- a/src/tools/cron.rs
++++ b/src/tools/cron.rs
+@@ -311,6 +311,19 @@ impl Tool for CronTool {
+                     }
+                     args["_session_key"] = Value::String(session.storage_key());
+                 }
++                if session.platform.eq_ignore_ascii_case("slack")
++                    && (args.get("deliver").is_none()
++                        || args.get("deliver").and_then(Value::as_str) == Some("local"))
++                {
++                    args["deliver"] = Value::String(match &session.thread_id {
++                        Some(thread) => format!("slack:{}:{thread}", session.channel_id),
++                        None => format!("slack:{}", session.channel_id),
++                    });
++                    if let Some(ref bid) = session.bot_id {
++                        args["bot_id"] = Value::String(bid.clone());
++                    }
++                    args["_session_key"] = Value::String(session.storage_key());
++                }
+             }
+         }
+         self.execute(args).await
+diff --git a/src/tools/message_context.rs b/src/tools/message_context.rs
+index 531cc18..55326e1 100644
+--- a/src/tools/message_context.rs
++++ b/src/tools/message_context.rs
+@@ -125,7 +125,7 @@ impl MessageContextRequest {
+         })
+     }
+ 
+-    fn apply_policy_limits(&mut self, policy: &MessageContextPolicyMatrix) {
++    pub(crate) fn apply_policy_limits(&mut self, policy: &MessageContextPolicyMatrix) {
+         match self.operation {
+             MessageContextOperation::Recent => self.limit = self.limit.min(policy.limits.recent),
+             MessageContextOperation::Search => {
+@@ -1152,7 +1152,9 @@ fn search_document_from_message(
+     }
+ }
+ 
+-fn message_from_search_document(document: MessageSearchDocument) -> MessageContextMessage {
++pub(super) fn message_from_search_document(
++    document: MessageSearchDocument,
++) -> MessageContextMessage {
+     let attachments = document
+         .metadata
+         .get("attachments")
+diff --git a/src/tools/message_context_slack.rs b/src/tools/message_context_slack.rs
+new file mode 100644
+index 0000000..7e9300b
+--- /dev/null
++++ b/src/tools/message_context_slack.rs
+@@ -0,0 +1,922 @@
++use std::collections::HashSet;
++
++use async_trait::async_trait;
++use chrono::{DateTime, Utc};
++use serde_json::{json, Value};
++use sqlx::SqlitePool;
++
++use super::message_context::{
++    message_from_search_document, MessageContextAttachment, MessageContextConversationMetadata,
++    MessageContextMessage, MessageContextOperation, MessageContextProvider, MessageContextRequest,
++    MessageContextResult,
++};
++use crate::slack::SlackApi;
++use crate::storage::{MessageSearchDocument, MessageSearchIndex, MessengerPolicyStore};
++use crate::{neutralize_untrusted_inline_text, MessageContextPolicyMatrix, OmonError, SessionKey};
++
++const PLATFORM: &str = "slack";
++const PAGE_LIMIT: usize = 200;
++const MAX_CONTENT_CHARS: usize = 2_000;
++const MAX_NAME_CHARS: usize = 128;
++const MAX_ATTACHMENT_NAME_CHARS: usize = 256;
++const HARD_SEARCH_POOL: usize = 500;
++
++pub struct SlackMessageContextProvider {
++    api: SlackApi,
++    policy_store: MessengerPolicyStore,
++    search_index: MessageSearchIndex,
++    base_matrix: MessageContextPolicyMatrix,
++    allowed_cross_channels: HashSet<String>,
++    ignored_channels: HashSet<String>,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++struct Conversation {
++    channel: String,
++    thread_ts: Option<String>,
++}
++
++impl Conversation {
++    fn index_key(&self) -> &str {
++        self.thread_ts.as_deref().unwrap_or(&self.channel)
++    }
++}
++
++impl SlackMessageContextProvider {
++    pub fn new(api: SlackApi, pool: SqlitePool) -> Self {
++        Self {
++            api,
++            policy_store: MessengerPolicyStore::new(pool.clone()),
++            search_index: MessageSearchIndex::new(pool),
++            base_matrix: MessageContextPolicyMatrix::from_environment().normalized(),
++            allowed_cross_channels: slack_channels_from_env("SLACK_ALLOWED_CHANNELS"),
++            ignored_channels: slack_channels_from_env("SLACK_IGNORED_CHANNELS"),
++        }
++    }
++
++    pub fn with_channels(
++        mut self,
++        allowed_cross_channels: impl IntoIterator<Item = String>,
++        ignored_channels: impl IntoIterator<Item = String>,
++    ) -> Self {
++        self.allowed_cross_channels = allowed_cross_channels.into_iter().collect();
++        self.ignored_channels = ignored_channels.into_iter().collect();
++        self
++    }
++
++    fn authorize(
++        &self,
++        session: &SessionKey,
++        requested: Option<&str>,
++        matrix: &MessageContextPolicyMatrix,
++    ) -> Result<Conversation, OmonError> {
++        if !matrix.inherit_session_authorization {
++            return Err(denied("policy disables inherited session authorization"));
++        }
++        let target = requested.unwrap_or(&session.channel_id).trim();
++        validate_slack_channel(target)?;
++        if self.ignored_channels.contains(target) {
++            return Err(denied(&format!("channel {target} is ignored by policy")));
++        }
++        if target == session.channel_id {
++            if !matrix.allow_current_conversation_reads {
++                return Err(denied("current-conversation reads are disabled"));
++            }
++            if session.guild_id.is_none() && !matrix.allow_dm_reads {
++                return Err(denied("direct-message reads are disabled"));
++            }
++            return Ok(Conversation {
++                channel: target.to_owned(),
++                thread_ts: requested
++                    .is_none()
++                    .then(|| session.thread_id.clone())
++                    .flatten(),
++            });
++        }
++        if session.guild_id.is_none() {
++            return Err(denied(
++                "cross-channel reads are not allowed from direct-message sessions",
++            ));
++        }
++        if !matrix.allow_cross_channel_reads {
++            return Err(denied("cross-channel reads are disabled by policy"));
++        }
++        if !self.allowed_cross_channels.contains(target) {
++            return Err(denied(&format!(
++                "cross-channel target {target} is not explicitly listed in SLACK_ALLOWED_CHANNELS"
++            )));
++        }
++        Ok(Conversation {
++            channel: target.to_owned(),
++            thread_ts: None,
++        })
++    }
++
++    async fn metadata(
++        &self,
++        session: &SessionKey,
++        conversation: &Conversation,
++    ) -> Option<MessageContextConversationMetadata> {
++        let info = self
++            .api
++            .conversations_info(&conversation.channel)
++            .await
++            .ok()?;
++        let kind = if info["is_im"].as_bool() == Some(true) {
++            "im"
++        } else if info["is_mpim"].as_bool() == Some(true) {
++            "mpim"
++        } else if info["is_private"].as_bool() == Some(true) {
++            "private_channel"
++        } else {
++            "channel"
++        };
++        let text = |value: &Value, max| {
++            value
++                .as_str()
++                .filter(|text| !text.trim().is_empty())
++                .map(|text| neutralize_untrusted_inline_text(text, max))
++        };
++        let name = text(&info["name"], MAX_NAME_CHARS);
++        let topic = text(&info["topic"]["value"], MAX_CONTENT_CHARS);
++        let guild_id = (kind != "im").then(|| session.guild_id.clone()).flatten();
++        Some(match &conversation.thread_ts {
++            Some(thread_ts) => MessageContextConversationMetadata {
++                channel_id: thread_ts.clone(),
++                channel_name: None,
++                channel_kind: "thread".into(),
++                guild_id,
++                topic: None,
++                parent_channel_id: Some(conversation.channel.clone()),
++                parent_channel_name: name,
++                parent_channel_kind: Some(kind.into()),
++                parent_topic: topic,
++                is_thread: true,
++                is_forum_post: false,
++            },
++            None => MessageContextConversationMetadata {
++                channel_id: conversation.channel.clone(),
++                channel_name: name,
++                channel_kind: kind.into(),
++                guild_id,
++                topic,
++                parent_channel_id: None,
++                parent_channel_name: None,
++                parent_channel_kind: None,
++                parent_topic: None,
++                is_thread: false,
++                is_forum_post: false,
++            },
++        })
++    }
++
++    async fn page(
++        &self,
++        conversation: &Conversation,
++        before: Option<&str>,
++        limit: usize,
++    ) -> Result<Vec<MessageContextMessage>, OmonError> {
++        let limit = limit.clamp(1, PAGE_LIMIT) as u32;
++        let raw = match &conversation.thread_ts {
++            Some(thread_ts) => {
++                let mut replies = self
++                    .api
++                    .conversations_replies(
++                        &conversation.channel,
++                        thread_ts,
++                        None,
++                        PAGE_LIMIT as u32,
++                    )
++                    .await?;
++                replies.retain(|message| {
++                    before.is_none_or(|before| ts_less(str_field(message, "ts"), before))
++                });
++                replies.reverse();
++                replies.truncate(limit as usize);
++                replies
++            }
++            None => {
++                self.api
++                    .conversations_history(&conversation.channel, None, before, limit)
++                    .await?
++            }
++        };
++        Ok(raw
++            .iter()
++            .filter_map(|message| normalize(message, &conversation.channel))
++            .collect())
++    }
++
++    async fn index(
++        &self,
++        session: &SessionKey,
++        conversation: &Conversation,
++        messages: &[MessageContextMessage],
++    ) -> Result<usize, OmonError> {
++        let documents = messages
++            .iter()
++            .map(|message| document(session, conversation, message))
++            .collect::<Vec<_>>();
++        self.search_index.upsert_many(&documents).await
++    }
++
++    async fn recent(
++        &self,
++        session: &SessionKey,
++        conversation: &Conversation,
++        metadata: Option<MessageContextConversationMetadata>,
++        request: &MessageContextRequest,
++    ) -> Result<MessageContextResult, OmonError> {
++        let messages = self
++            .page(
++                conversation,
++                request.before_message_id.as_deref(),
++                request.limit,
++            )
++            .await?;
++        let indexed = self.index(session, conversation, &messages).await?;
++        Ok(result(
++            request,
++            conversation.index_key(),
++            Counts {
++                scanned: messages.len(),
++                indexed,
++                truncated: messages.len() == request.limit,
++            },
++            None,
++            metadata,
++            messages,
++        ))
++    }
++
++    async fn get_message(
++        &self,
++        session: &SessionKey,
++        conversation: &Conversation,
++        metadata: Option<MessageContextConversationMetadata>,
++        request: &MessageContextRequest,
++    ) -> Result<MessageContextResult, OmonError> {
++        let ts = required_ts(request)?;
++        let message = self
++            .api
++            .conversations_replies(&conversation.channel, ts, None, 1)
++            .await?
++            .iter()
++            .find(|message| str_field(message, "ts") == ts)
++            .and_then(|message| normalize(message, &conversation.channel))
++            .ok_or_else(|| {
++                OmonError::ToolExecution(format!("message_context: Slack message {ts} not found"))
++            })?;
++        let messages = vec![message];
++        let indexed = self.index(session, conversation, &messages).await?;
++        Ok(result(
++            request,
++            conversation.index_key(),
++            Counts {
++                scanned: 1,
++                indexed,
++                truncated: false,
++            },
++            None,
++            metadata,
++            messages,
++        ))
++    }
++
++    async fn replies(
++        &self,
++        session: &SessionKey,
++        conversation: &Conversation,
++        request: &MessageContextRequest,
++    ) -> Result<MessageContextResult, OmonError> {
++        let thread = Conversation {
++            channel: conversation.channel.clone(),
++            thread_ts: Some(required_ts(request)?.to_owned()),
++        };
++        let metadata = self.metadata(session, &thread).await;
++        let mut messages = self
++            .page(&thread, request.before_message_id.as_deref(), PAGE_LIMIT)
++            .await?;
++        messages.retain(|message| Some(message.id.as_str()) != thread.thread_ts.as_deref());
++        let scanned = messages.len();
++        let indexed = self.index(session, &thread, &messages).await?;
++        let truncated = messages.len() > request.limit;
++        messages.truncate(request.limit);
++        let next = truncated
++            .then(|| messages.last().map(|m| m.id.clone()))
++            .flatten();
++        Ok(result(
++            request,
++            thread.index_key(),
++            Counts {
++                scanned,
++                indexed,
++                truncated,
++            },
++            next,
++            metadata,
++            messages,
++        ))
++    }
++
++    async fn search(
++        &self,
++        session: &SessionKey,
++        conversation: &Conversation,
++        metadata: Option<MessageContextConversationMetadata>,
++        request: &MessageContextRequest,
++    ) -> Result<MessageContextResult, OmonError> {
++        let query = request.query.as_deref().ok_or_else(|| {
++            OmonError::ToolExecution("message_context search requires a query".into())
++        })?;
++        MessageSearchIndex::validate_query(query)?;
++        let mut before = request.before_message_id.clone();
++        let mut scanned = 0usize;
++        let mut indexed = 0usize;
++        let mut exhausted = false;
++        while scanned < request.scan_limit {
++            let page_limit = (request.scan_limit - scanned).min(PAGE_LIMIT);
++            let page = self
++                .page(conversation, before.as_deref(), page_limit)
++                .await?;
++            let page_len = page.len();
++            scanned += page_len;
++            indexed += self.index(session, conversation, &page).await?;
++            before = page.last().map(|message| message.id.clone()).or(before);
++            if page_len < page_limit || conversation.thread_ts.is_some() {
++                exhausted = true;
++                break;
++            }
++        }
++        let cutoff = request.before_message_id.as_deref();
++        let messages = self
++            .search_index
++            .search(
++                PLATFORM,
++                conversation.index_key(),
++                query,
++                None,
++                HARD_SEARCH_POOL,
++            )
++            .await?
++            .into_iter()
++            .filter(|hit| cutoff.is_none_or(|cutoff| ts_less(&hit.document.message_id, cutoff)))
++            .take(request.limit)
++            .map(|hit| message_from_search_document(hit.document))
++            .collect();
++        let mut out = result(
++            request,
++            conversation.index_key(),
++            Counts {
++                scanned,
++                indexed,
++                truncated: !exhausted && scanned >= request.scan_limit,
++            },
++            before,
++            metadata,
++            messages,
++        );
++        out.query = Some(query.to_owned());
++        out.search_source = Some("sqlite_fts5+slack_history_backfill".into());
++        Ok(out)
++    }
++}
++
++#[async_trait]
++impl MessageContextProvider for SlackMessageContextProvider {
++    fn platform(&self) -> &str {
++        PLATFORM
++    }
++
++    async fn query(
++        &self,
++        session: &SessionKey,
++        request: &MessageContextRequest,
++    ) -> Result<MessageContextResult, OmonError> {
++        if !session.platform.eq_ignore_ascii_case(PLATFORM) {
++            return Err(OmonError::ToolExecution(format!(
++                "Slack message context provider cannot serve platform '{}'",
++                session.platform
++            )));
++        }
++        if let Some(before) = request.before_message_id.as_deref() {
++            validate_ts(before, "before_message_id")?;
++        }
++        if let Some(ts) = request.message_id.as_deref() {
++            validate_ts(ts, "message_id")?;
++        }
++        let matrix = self
++            .policy_store
++            .effective(PLATFORM, &self.base_matrix)
++            .await?;
++        let mut request = request.clone();
++        request.apply_policy_limits(&matrix);
++        let conversation = self.authorize(session, request.channel_id.as_deref(), &matrix)?;
++        match request.operation {
++            MessageContextOperation::Recent => {
++                let metadata = self.metadata(session, &conversation).await;
++                self.recent(session, &conversation, metadata, &request)
++                    .await
++            }
++            MessageContextOperation::Search => {
++                let metadata = self.metadata(session, &conversation).await;
++                self.search(session, &conversation, metadata, &request)
++                    .await
++            }
++            MessageContextOperation::GetMessage => {
++                let metadata = self.metadata(session, &conversation).await;
++                self.get_message(session, &conversation, metadata, &request)
++                    .await
++            }
++            MessageContextOperation::Replies => {
++                self.replies(session, &conversation, &request).await
++            }
++        }
++    }
++}
++
++struct Counts {
++    scanned: usize,
++    indexed: usize,
++    truncated: bool,
++}
++
++fn result(
++    request: &MessageContextRequest,
++    channel_id: &str,
++    Counts {
++        scanned,
++        indexed,
++        truncated,
++    }: Counts,
++    next: Option<String>,
++    conversation: Option<MessageContextConversationMetadata>,
++    messages: Vec<MessageContextMessage>,
++) -> MessageContextResult {
++    let next_before_message_id = next.or_else(|| {
++        (truncated && request.operation == MessageContextOperation::Recent)
++            .then(|| messages.last().map(|message| message.id.clone()))
++            .flatten()
++    });
++    MessageContextResult {
++        platform: PLATFORM.into(),
++        operation: request.operation.as_str().into(),
++        channel_id: channel_id.to_owned(),
++        query: None,
++        scanned,
++        indexed,
++        truncated,
++        next_before_message_id,
++        search_source: None,
++        conversation,
++        messages,
++    }
++}
++
++fn denied(reason: &str) -> OmonError {
++    OmonError::ToolExecution(format!("message_context access denied: {reason}"))
++}
++
++fn required_ts(request: &MessageContextRequest) -> Result<&str, OmonError> {
++    request.message_id.as_deref().ok_or_else(|| {
++        OmonError::ToolExecution(format!(
++            "message_context {} requires message_id",
++            request.operation.as_str()
++        ))
++    })
++}
++
++fn validate_slack_channel(value: &str) -> Result<(), OmonError> {
++    let mut chars = value.chars();
++    let valid = matches!(chars.next(), Some('C' | 'D' | 'G'))
++        && value.len() >= 2
++        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit());
++    if valid {
++        Ok(())
++    } else {
++        Err(OmonError::ToolExecution(
++            "message_context 'channel_id' must be a Slack conversation id (C…, D… or G…)".into(),
++        ))
++    }
++}
++
++fn validate_ts(value: &str, field: &str) -> Result<(), OmonError> {
++    if ts_parts(value).is_some() {
++        Ok(())
++    } else {
++        Err(OmonError::ToolExecution(format!(
++            "message_context '{field}' must be a Slack message ts like 1700000000.000100"
++        )))
++    }
++}
++
++fn ts_parts(value: &str) -> Option<(u64, u64)> {
++    let (secs, frac) = value.split_once('.')?;
++    if secs.is_empty() || frac.is_empty() || frac.len() > 6 {
++        return None;
++    }
++    let secs = secs.parse().ok()?;
++    let frac = format!("{frac:0<6}").parse().ok()?;
++    Some((secs, frac))
++}
++
++fn ts_less(left: &str, right: &str) -> bool {
++    matches!((ts_parts(left), ts_parts(right)), (Some(l), Some(r)) if l < r)
++}
++
++fn ts_to_rfc3339(ts: &str) -> String {
++    ts_parts(ts)
++        .and_then(|(secs, micros)| DateTime::from_timestamp(secs as i64, (micros * 1_000) as u32))
++        .unwrap_or_else(Utc::now)
++        .to_rfc3339()
++}
++
++fn str_field<'a>(value: &'a Value, field: &str) -> &'a str {
++    value.get(field).and_then(Value::as_str).unwrap_or_default()
++}
++
++fn normalize(message: &Value, channel: &str) -> Option<MessageContextMessage> {
++    let ts = str_field(message, "ts");
++    ts_parts(ts)?;
++    let bot_id = str_field(message, "bot_id");
++    let user = str_field(message, "user");
++    let author_id = if user.is_empty() { bot_id } else { user };
++    let profile = &message["user_profile"];
++    let author_name = [
++        str_field(profile, "display_name"),
++        str_field(profile, "real_name"),
++        str_field(message, "username"),
++        author_id,
++    ]
++    .into_iter()
++    .find(|name| !name.trim().is_empty())
++    .unwrap_or_default();
++    let thread_ts = str_field(message, "thread_ts");
++    Some(MessageContextMessage {
++        id: ts.to_owned(),
++        channel_id: channel.to_owned(),
++        author_id: author_id.to_owned(),
++        author_name: neutralize_untrusted_inline_text(author_name, MAX_NAME_CHARS),
++        author_is_bot: !bot_id.is_empty() || str_field(message, "subtype") == "bot_message",
++        content: neutralize_untrusted_inline_text(str_field(message, "text"), MAX_CONTENT_CHARS),
++        timestamp: ts_to_rfc3339(ts),
++        attachments: message["files"]
++            .as_array()
++            .map(|files| {
++                files
++                    .iter()
++                    .map(|file| MessageContextAttachment {
++                        id: str_field(file, "id").to_owned(),
++                        filename: neutralize_untrusted_inline_text(
++                            str_field(file, "name"),
++                            MAX_ATTACHMENT_NAME_CHARS,
++                        ),
++                        url: str_field(file, "url_private").to_owned(),
++                        content_type: file["mimetype"].as_str().map(str::to_owned),
++                        size_bytes: file["size"].as_u64().unwrap_or(0),
++                    })
++                    .collect()
++            })
++            .unwrap_or_default(),
++        referenced_message_id: (!thread_ts.is_empty() && thread_ts != ts)
++            .then(|| thread_ts.to_owned()),
++    })
++}
++
++fn document(
++    session: &SessionKey,
++    conversation: &Conversation,
++    message: &MessageContextMessage,
++) -> MessageSearchDocument {
++    MessageSearchDocument {
++        platform: PLATFORM.into(),
++        guild_id: session.guild_id.clone(),
++        channel_id: conversation.index_key().to_owned(),
++        thread_id: conversation.thread_ts.clone(),
++        message_id: message.id.clone(),
++        author_id: message.author_id.clone(),
++        author_name: message.author_name.clone(),
++        content: message.content.clone(),
++        attachment_names: message
++            .attachments
++            .iter()
++            .map(|attachment| attachment.filename.clone())
++            .collect(),
++        timestamp: DateTime::parse_from_rfc3339(&message.timestamp)
++            .map(|value| value.with_timezone(&Utc))
++            .unwrap_or_else(|_| Utc::now()),
++        metadata: json!({
++            "source": "slack_rest",
++            "channel_id": conversation.channel,
++            "author_is_bot": message.author_is_bot,
++            "referenced_message_id": message.referenced_message_id,
++            "attachments": message.attachments,
++        }),
++    }
++}
++
++fn slack_channels_from_env(name: &str) -> HashSet<String> {
++    std::env::var(name)
++        .ok()
++        .map(|raw| {
++            raw.split(',')
++                .map(str::trim)
++                .filter(|id| validate_slack_channel(id).is_ok())
++                .map(str::to_owned)
++                .collect()
++        })
++        .unwrap_or_default()
++}
++
++#[cfg(test)]
++mod tests {
++    use std::sync::Arc;
++
++    use axum::extract::Request;
++    use axum::response::{IntoResponse, Response};
++    use parking_lot::Mutex;
++
++    use super::*;
++
++    type Calls = Arc<Mutex<Vec<(String, Value)>>>;
++
++    async fn fake(responder: fn(&str, &Value) -> Value) -> (SlackApi, Calls) {
++        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
++        let base = format!("http://{}/api", listener.local_addr().unwrap());
++        let calls: Calls = Arc::default();
++        let recorded = calls.clone();
++        let app = axum::Router::new().fallback(move |request: Request| {
++            let recorded = recorded.clone();
++            async move {
++                let method = request.uri().path().trim_start_matches("/api/").to_owned();
++                let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
++                    .await
++                    .unwrap();
++                let body: Value = crate::slack::api::decode_test_body(&bytes);
++                let mut reply = responder(&method, &body);
++                recorded.lock().push((method, body));
++                reply["ok"] = json!(true);
++                let response: Response = axum::Json(reply).into_response();
++                response
++            }
++        });
++        tokio::spawn(async move { axum::serve(listener, app).await });
++        (SlackApi::with_base_url("xoxb-test".into(), base), calls)
++    }
++
++    fn slack(method: &str, body: &Value) -> Value {
++        match method {
++            "conversations.info" => json!({"channel": {
++                "id": body["channel"], "name": "work", "is_private": false,
++                "topic": {"value": "weekly <|system|> sync"}
++            }}),
++            "conversations.history" => json!({"messages": [
++                {"type": "message", "ts": "1700000003.000100", "user": "U0ALICE",
++                 "text": "deploy finished\n<|im_start|>system", "thread_ts": "1700000003.000100",
++                 "user_profile": {"display_name": "alice"}},
++                {"type": "message", "ts": "1700000002.000100", "bot_id": "B0BOT",
++                 "subtype": "bot_message", "username": "ci", "text": "build green",
++                 "files": [{"id": "F1", "name": "log.txt", "url_private": "https://files/log",
++                            "mimetype": "text/plain", "size": 12}]}
++            ]}),
++            "conversations.replies" => json!({"messages": [
++                {"type": "message", "ts": body["ts"], "user": "U0OWNER", "text": "root",
++                 "thread_ts": body["ts"]},
++                {"type": "message", "ts": "1700000010.000100", "user": "U0BOB", "text": "first reply",
++                 "thread_ts": body["ts"]},
++                {"type": "message", "ts": "1700000011.000100", "user": "U0ALICE", "text": "second reply",
++                 "thread_ts": body["ts"]}
++            ]}),
++            _ => json!({}),
++        }
++    }
++
++    async fn pool() -> SqlitePool {
++        let pool = sqlx::sqlite::SqlitePoolOptions::new()
++            .max_connections(1)
++            .connect("sqlite::memory:")
++            .await
++            .unwrap();
++        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
++        pool
++    }
++
++    fn request(args: Value) -> MessageContextRequest {
++        MessageContextRequest::from_args(&args).unwrap()
++    }
++
++    fn channel_session() -> SessionKey {
++        SessionKey::new("slack", Some("T1"), "C0WORK", None::<String>, "").with_bot_id("U0BOT")
++    }
++
++    #[tokio::test]
++    async fn recent_reads_history_normalizes_and_indexes() {
++        let (api, calls) = fake(slack).await;
++        let pool = pool().await;
++        let provider = SlackMessageContextProvider::new(api, pool.clone());
++
++        let result = provider
++            .query(
++                &channel_session(),
++                &request(json!({"operation": "recent", "limit": 2})),
++            )
++            .await
++            .unwrap();
++
++        assert_eq!(result.platform, "slack");
++        assert_eq!(result.channel_id, "C0WORK");
++        assert_eq!(result.messages.len(), 2);
++        let first = &result.messages[0];
++        assert_eq!(first.id, "1700000003.000100");
++        assert_eq!(first.author_name, "alice");
++        assert!(!first.content.contains("<|"), "{}", first.content);
++        assert!(!first.content.contains('\n'));
++        assert_eq!(first.referenced_message_id, None);
++        assert_eq!(first.timestamp, "2023-11-14T22:13:23.000100+00:00");
++        let bot = &result.messages[1];
++        assert!(bot.author_is_bot);
++        assert_eq!(bot.author_id, "B0BOT");
++        assert_eq!(bot.attachments[0].filename, "log.txt");
++        assert_eq!(result.indexed, 2);
++        assert!(result.truncated);
++        assert_eq!(
++            result.next_before_message_id.as_deref(),
++            Some("1700000002.000100")
++        );
++        let conversation = result.conversation.unwrap();
++        assert_eq!(conversation.channel_name.as_deref(), Some("work"));
++        assert_eq!(conversation.guild_id.as_deref(), Some("T1"));
++        assert!(!conversation.topic.unwrap().contains("<|"));
++
++        let history = calls
++            .lock()
++            .iter()
++            .find(|(method, _)| method == "conversations.history")
++            .cloned()
++            .unwrap();
++        assert_eq!(history.1["channel"], "C0WORK");
++        assert_eq!(history.1["limit"], "2");
++        let stored: i64 = MessageSearchIndex::new(pool)
++            .count("slack", "C0WORK")
++            .await
++            .unwrap();
++        assert_eq!(stored, 2);
++    }
++
++    #[tokio::test]
++    async fn search_backfills_history_then_queries_fts() {
++        let (api, _) = fake(slack).await;
++        let provider = SlackMessageContextProvider::new(api, pool().await);
++
++        let result = provider
++            .query(
++                &channel_session(),
++                &request(json!({"operation": "search", "query": "deploy"})),
++            )
++            .await
++            .unwrap();
++
++        assert_eq!(
++            result.search_source.as_deref(),
++            Some("sqlite_fts5+slack_history_backfill")
++        );
++        assert_eq!(result.scanned, 2);
++        assert_eq!(result.messages.len(), 1);
++        assert_eq!(result.messages[0].id, "1700000003.000100");
++        assert!(!result.truncated);
++
++        let none = provider
++            .query(
++                &channel_session(),
++                &request(json!({"operation": "search", "query": "deploy",
++                                "before_message_id": "1700000003.000100"})),
++            )
++            .await
++            .unwrap();
++        assert!(none.messages.is_empty());
++    }
++
++    #[tokio::test]
++    async fn replies_and_thread_session_read_conversations_replies_without_root() {
++        let (api, calls) = fake(slack).await;
++        let provider = SlackMessageContextProvider::new(api, pool().await);
++
++        let replies = provider
++            .query(
++                &channel_session(),
++                &request(
++                    json!({"operation": "replies", "message_id": "1700000009.000100", "limit": 1}),
++                ),
++            )
++            .await
++            .unwrap();
++        assert_eq!(replies.channel_id, "1700000009.000100");
++        assert_eq!(replies.messages.len(), 1);
++        assert_eq!(replies.messages[0].content, "second reply");
++        assert_eq!(
++            replies.messages[0].referenced_message_id.as_deref(),
++            Some("1700000009.000100")
++        );
++        assert!(replies.truncated);
++        assert!(replies.conversation.unwrap().is_thread);
++
++        let thread_session =
++            SessionKey::new("slack", Some("T1"), "C0WORK", Some("1700000009.000100"), "");
++        let recent = provider
++            .query(&thread_session, &request(json!({"operation": "recent"})))
++            .await
++            .unwrap();
++        let ids: Vec<_> = recent.messages.iter().map(|m| m.id.as_str()).collect();
++        assert_eq!(
++            ids,
++            [
++                "1700000011.000100",
++                "1700000010.000100",
++                "1700000009.000100"
++            ]
++        );
++        let last = calls.lock().last().cloned().unwrap();
++        assert_eq!(last.0, "conversations.replies");
++        assert_eq!(last.1["channel"], "C0WORK");
++        assert_eq!(last.1["ts"], "1700000009.000100");
++
++        let one = provider
++            .query(
++                &channel_session(),
++                &request(json!({"operation": "get_message", "message_id": "1700000009.000100"})),
++            )
++            .await
++            .unwrap();
++        assert_eq!(one.messages[0].content, "root");
++    }
++
++    #[tokio::test]
++    async fn ids_and_cross_channel_access_are_validated() {
++        let (api, calls) = fake(slack).await;
++        let provider = SlackMessageContextProvider::new(api, pool().await)
++            .with_channels(["C0ALLOWED".to_owned()], ["C0IGNORED".to_owned()]);
++        let dm = SessionKey::new(
++            "slack",
++            None::<String>,
++            "D0OWNER",
++            None::<String>,
++            "U0OWNER",
++        );
++        let error =
++            |result: Result<MessageContextResult, OmonError>| result.unwrap_err().to_string();
++
++        for (session, args, expected) in [
++            (
++                channel_session(),
++                json!({"channel_id": "123456"}),
++                "Slack conversation id",
++            ),
++            (
++                channel_session(),
++                json!({"channel_id": "c0lower"}),
++                "Slack conversation id",
++            ),
++            (
++                channel_session(),
++                json!({"channel_id": "C0IGNORED"}),
++                "ignored by policy",
++            ),
++            (
++                channel_session(),
++                json!({"channel_id": "C0OTHER"}),
++                "SLACK_ALLOWED_CHANNELS",
++            ),
++            (
++                dm.clone(),
++                json!({"channel_id": "C0ALLOWED"}),
++                "direct-message sessions",
++            ),
++            (
++                channel_session(),
++                json!({"operation": "get_message", "message_id": "123"}),
++                "Slack message ts",
++            ),
++        ] {
++            let message = error(provider.query(&session, &request(args)).await);
++            assert!(message.contains(expected), "{message}");
++        }
++        assert!(
++            calls.lock().is_empty(),
++            "rejected requests must not reach Slack"
++        );
++
++        let discord = SessionKey::new("discord", None::<String>, "1", None::<String>, "1");
++        assert!(error(provider.query(&discord, &request(json!({}))).await).contains("platform"));
++
++        provider
++            .query(
++                &channel_session(),
++                &request(json!({"channel_id": "C0ALLOWED"})),
++            )
++            .await
++            .unwrap();
++        let ok = provider.query(&dm, &request(json!({}))).await.unwrap();
++        assert_eq!(ok.channel_id, "D0OWNER");
++        assert_eq!(provider.platform(), "slack");
++    }
++}
+diff --git a/src/tools/mod.rs b/src/tools/mod.rs
+index 7a696f1..cfe2287 100644
+--- a/src/tools/mod.rs
++++ b/src/tools/mod.rs
+@@ -4,6 +4,7 @@ mod file;
+ mod mcp;
+ mod message_context;
+ mod message_context_lazy;
++pub mod message_context_slack;
+ mod skills;
+ mod terminal;
+ mod web;

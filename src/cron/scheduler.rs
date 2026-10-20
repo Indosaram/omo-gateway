@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -2396,6 +2397,10 @@ impl CronScheduler {
                 .get("direct_delivery")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
+            && payload
+                .get("ack_command")
+                .and_then(Value::as_str)
+                .is_none_or(|command| command.trim().is_empty())
     }
 
     /// Hands a cron result to the bot conversation of its destination as a lane event; the
@@ -2410,7 +2415,7 @@ impl CronScheduler {
         let lead = review_session(&self.pool, destination)
             .await?
             .ok_or_else(|| OmonError::Config("no bot conversation for cron review".into()))?;
-        let dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        let dir = PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
             .join(".omon")
             .join("cron-reports");
         tokio::fs::create_dir_all(&dir)
@@ -2421,17 +2426,28 @@ impl CronScheduler {
             job.id,
             (self.clock)().format("%Y%m%dT%H%M%S%.3f")
         ));
-        tokio::fs::write(&path, content)
+        tokio::fs::write(&path, redact_owner_tokens(content))
             .await
             .map_err(|error| OmonError::ToolExecution(format!("cron report file: {error}")))?;
+        prune_cron_reports(&dir).await;
         let outcome = if succeeded { "끝남" } else { "실패" };
         let body = format!(
             "크론 {} {outcome}. 전체 출력: {} . 이 출력을 그대로 옮기지 말 것. 직접 읽고 실제 결과(종료 코드, 건수, 로그, 수신 증거)를 확인해서 한국어로 짧게 보고할 것. 실패나 이상이 있으면 원인을 조사하고 할 수 있는 조치를 먼저 한 뒤, 사용자가 직접 해야 하는 일이 있으면 무엇을 왜 해야 하는지 분명히 요청할 것. 알릴 가치가 없으면 [SILENT].",
             job.id,
             path.display()
         );
-        crate::storage::lanes::enqueue_lane_event(&self.pool, None, &lead, "cron_report", &body)
-            .await?;
+        let report_key = format!(
+            "cron:{}:{}:{}",
+            job.id, destination.platform, destination.chat_id
+        );
+        crate::storage::lanes::enqueue_lane_event(
+            &self.pool,
+            Some(&report_key),
+            &lead,
+            "cron_report",
+            &body,
+        )
+        .await?;
         Ok(())
     }
 
@@ -2635,7 +2651,8 @@ async fn review_session(
 ) -> Result<Option<String>> {
     let home = std::env::var("OMON_LANE_DEFAULT_LEAD")
         .ok()
-        .filter(|lead| !lead.trim().is_empty());
+        .filter(|lead| !lead.trim().is_empty())
+        .or_else(|| Some(crate::lanes::kibitzer::DEFAULT_LEAD.to_owned()));
     if !destination.platform.eq_ignore_ascii_case("slack") || destination.chat_id.starts_with('D') {
         return Ok(home);
     }
@@ -2663,6 +2680,55 @@ async fn review_session(
         .with_bot_id(bot)
         .storage_key(),
     ))
+}
+
+async fn prune_cron_reports(dir: &Path) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::debug!(%error, path = %dir.display(), "failed to read cron reports directory for pruning");
+            return;
+        }
+    };
+    let cutoff =
+        match std::time::SystemTime::now().checked_sub(Duration::from_secs(7 * 24 * 60 * 60)) {
+            Some(cutoff) => cutoff,
+            None => return,
+        };
+    loop {
+        match entries.next_entry().await {
+            Ok(Some(entry)) => {
+                let path = entry.path();
+                let metadata = match entry.metadata().await {
+                    Ok(meta) => meta,
+                    Err(error) => {
+                        tracing::debug!(%error, path = %path.display(), "failed to read metadata for cron report");
+                        continue;
+                    }
+                };
+                if !metadata.is_file() {
+                    continue;
+                }
+                let modified = match metadata.modified() {
+                    Ok(mod_time) => mod_time,
+                    Err(error) => {
+                        tracing::debug!(%error, path = %path.display(), "failed to read modified time for cron report");
+                        continue;
+                    }
+                };
+                if modified < cutoff {
+                    if let Err(error) = tokio::fs::remove_file(&path).await {
+                        tracing::debug!(%error, path = %path.display(), "failed to remove expired cron report");
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(error) => {
+                tracing::debug!(%error, path = %dir.display(), "failed to iterate cron reports directory for pruning");
+                break;
+            }
+        }
+    }
 }
 
 pub fn delivery_destinations(payload: &Value) -> Result<Vec<crate::HermesOrigin>> {
@@ -4026,6 +4092,162 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read_to_string(path).unwrap(), "raw report");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn two_different_jobs_queued_for_review_have_different_lane_keys() {
+        let database = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let pool = database.pool();
+        std::env::set_var(
+            "OMON_LANE_DEFAULT_LEAD",
+            SessionKey::new("slack", None::<String>, "DHOME", None::<String>, "UOWNER")
+                .with_bot_id("UBOT")
+                .storage_key(),
+        );
+        let channel = SessionKey::new("slack", Some("TTEAM"), "CWORK", None::<String>, "")
+            .with_bot_id("UBOT");
+        insert_session(pool, &channel).await;
+        sqlx::query("UPDATE sessions SET guild_id = 'TTEAM' WHERE session_key = ?")
+            .bind(channel.storage_key())
+            .execute(pool)
+            .await
+            .unwrap();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let scheduler = CronScheduler::with_dispatcher(
+            pool.clone(),
+            Arc::new(SilentExecutor(Some(
+                "output with --owner-token SECRET999".into(),
+            ))),
+            Arc::new(RecordingDispatcher {
+                sessions: sent.clone(),
+            }),
+        )
+        .with_output_review();
+
+        let job1 = CronJob {
+            id: "job-alpha".into(),
+            session_key: None,
+            expression: "interval:1h".into(),
+            payload_json: serde_json::json!({"deliver": "slack:CWORK"}).to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: String::new(),
+        };
+        let job2 = CronJob {
+            id: "job-beta".into(),
+            session_key: None,
+            expression: "interval:1h".into(),
+            payload_json: serde_json::json!({"deliver": "slack:CWORK"}).to_string(),
+            enabled: true,
+            next_run_at: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            authority: String::new(),
+        };
+
+        scheduler.execute_job(&job1).await.unwrap();
+        scheduler.execute_job(&job2).await.unwrap();
+
+        let rows: Vec<(Option<String>, String, String)> = sqlx::query_as(
+            "SELECT lane_key, lead_session_key, body FROM lane_events ORDER BY id ASC",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, channel.storage_key());
+        assert_eq!(rows[1].1, channel.storage_key());
+        assert_eq!(rows[0].0.as_deref(), Some("cron:job-alpha:slack:CWORK"));
+        assert_eq!(rows[1].0.as_deref(), Some("cron:job-beta:slack:CWORK"));
+        assert_ne!(rows[0].0, rows[1].0);
+
+        for row in rows {
+            if let Some(path) = row
+                .2
+                .split("전체 출력: ")
+                .nth(1)
+                .and_then(|s| s.split(' ').next())
+            {
+                let file_content = std::fs::read_to_string(path).unwrap();
+                assert!(
+                    file_content.contains("--owner-token <redacted>"),
+                    "owner token must be redacted in stored report file"
+                );
+                assert!(
+                    !file_content.contains("SECRET999"),
+                    "unredacted secret must not appear in stored report file"
+                );
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reviews_before_delivery_respects_ack_command() {
+        let database = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let pool = database.pool();
+        let scheduler = CronScheduler::with_dispatcher(
+            pool.clone(),
+            Arc::new(SilentExecutor(None)),
+            Arc::new(SilentDispatcher),
+        )
+        .with_output_review();
+
+        let payload_with_ack = serde_json::json!({
+            "ack_command": "curl -X POST https://example.com/ack"
+        });
+        assert!(
+            !scheduler.reviews_before_delivery(&payload_with_ack),
+            "job with non-empty ack_command must bypass review before delivery"
+        );
+
+        let payload_empty_ack = serde_json::json!({
+            "ack_command": ""
+        });
+        assert!(
+            scheduler.reviews_before_delivery(&payload_empty_ack),
+            "job with empty ack_command should review before delivery"
+        );
+
+        let payload_blank_ack = serde_json::json!({
+            "ack_command": "   \t\n "
+        });
+        assert!(
+            scheduler.reviews_before_delivery(&payload_blank_ack),
+            "job with whitespace-only ack_command should review before delivery"
+        );
+
+        let payload_no_ack = serde_json::json!({
+            "deliver": "slack:C123"
+        });
+        assert!(
+            scheduler.reviews_before_delivery(&payload_no_ack),
+            "job without ack_command should review before delivery"
+        );
+
+        let payload_direct = serde_json::json!({
+            "direct_delivery": true
+        });
+        assert!(
+            !scheduler.reviews_before_delivery(&payload_direct),
+            "direct_delivery=true must bypass review"
+        );
+
+        let scheduler_no_review = CronScheduler::with_dispatcher(
+            pool.clone(),
+            Arc::new(SilentExecutor(None)),
+            Arc::new(SilentDispatcher),
+        );
+        assert!(
+            !scheduler_no_review.reviews_before_delivery(&payload_no_ack),
+            "scheduler without review_output enabled must return false"
+        );
     }
 
     async fn insert_session(pool: &SqlitePool, key: &SessionKey) {

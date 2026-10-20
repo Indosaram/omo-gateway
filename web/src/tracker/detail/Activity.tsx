@@ -21,6 +21,7 @@ import {
   User as UserIcon,
 } from 'lucide-react'
 import { trackerApi } from '../api'
+import { hrefFor } from '../router'
 import { fullDate, relativeTime } from '../format'
 import { useTracker } from '../store'
 import type { TrackerState } from '../store'
@@ -243,7 +244,12 @@ function CommentItem({
             label="Copy link to comment"
             icon={<Copy size={14} />}
             size="sm"
-            onClick={() => void copyText(`${window.location.href.split('#comment-')[0]}#comment-${comment.id}`, 'Comment link copied')}
+            onClick={() => {
+              // Link to the issue itself: the hash router has no place for a second fragment.
+              const issue = t.issuesById.get(comment.issue_id)
+              const target = issue ? hrefFor({ name: 'issue', identifier: issue.identifier }) : window.location.hash
+              void copyText(`${window.location.origin}${window.location.pathname}${target}`, 'Comment link copied')
+            }}
           />
           {mine && (
             <>

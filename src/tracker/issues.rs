@@ -453,6 +453,13 @@ pub async fn apply_patch(
     let current = load_issue(pool, issue_id).await?;
     let mut touched = false;
 
+    if current.session_ref.is_some() && (patch.title.is_some() || patch.description.is_some()) {
+        return Err(TrackerError::conflict(
+            "session issues mirror the live session title and description",
+            "session_state_managed",
+        ));
+    }
+
     if let Some(team_id) = patch
         .team_id
         .as_deref()
@@ -981,5 +988,95 @@ pub fn row_count_error(rows: u64, what: &str) -> ApiResult<()> {
         Err(TrackerError::not_found(what))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+    use crate::tracker::seed::{ensure_seeded, ensure_sessions_team};
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn patch_title_on_session_issue_returns_conflict_and_leaves_db_unchanged() {
+        std::env::set_var(sessions::SYNC_ENV, "0");
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        ensure_seeded(db.pool()).await.unwrap();
+        let ses_team_id = ensure_sessions_team(db.pool()).await.unwrap();
+
+        let (state_id,): (String,) = sqlx::query_as(
+            "SELECT id FROM tracker_states WHERE team_id = ? AND session_state = 'working'",
+        )
+        .bind(&ses_team_id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+
+        let issue_id = new_id();
+        let now = now_utc();
+        let original_title = "Original Session Title";
+        let original_description = "Original Session Description";
+        let session_reference = "local:session-test";
+
+        // Insert using the same SQL the sessions sync uses (src/tracker/sessions.rs upsert insert)
+        sqlx::query(
+            "INSERT INTO tracker_issues (id, team_id, number, identifier, title, description, state_id, priority,
+                estimate, assignee_id, creator_id, project_id, milestone_id, cycle_id, parent_id, due_date,
+                sort_order, lane_key, session_ref, created_at, updated_at, started_at, completed_at, canceled_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, 0.0, NULL, ?, ?, ?, ?, ?, NULL)",
+        )
+        .bind(&issue_id)
+        .bind(&ses_team_id)
+        .bind(1i64)
+        .bind("SES-1")
+        .bind(original_title)
+        .bind(original_description)
+        .bind(&state_id)
+        .bind("me")
+        .bind("me")
+        .bind(session_reference)
+        .bind(&now)
+        .bind(&now)
+        .bind(Some(&now))
+        .bind(Option::<String>::None)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let patch = IssuePatch {
+            title: Some("User-edited title".into()),
+            ..Default::default()
+        };
+
+        let result = apply_patch(db.pool(), &issue_id, "me", patch).await;
+        assert!(
+            result.is_err(),
+            "patching title on a session issue must fail"
+        );
+
+        let err = result.unwrap_err();
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["code"], "session_state_managed");
+        assert_eq!(
+            body["error"],
+            "session issues mirror the live session title and description"
+        );
+
+        let (title_in_db, description_in_db): (String, String) =
+            sqlx::query_as("SELECT title, description FROM tracker_issues WHERE id = ?")
+                .bind(&issue_id)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+
+        assert_eq!(title_in_db, original_title);
+        assert_eq!(description_in_db, original_description);
     }
 }

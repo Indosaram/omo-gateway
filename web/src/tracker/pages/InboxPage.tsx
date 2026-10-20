@@ -353,7 +353,7 @@ function NotificationTarget({ notification: n }: { notification: Notification })
   const t = useTracker()
   if (n.issue_id) {
     const issue = t.issuesById.get(n.issue_id)
-    return <IssuePage key={n.issue_id} idOrIdentifier={issue?.identifier ?? n.issue_id} />
+    return <IssuePage key={n.issue_id} idOrIdentifier={issue?.identifier ?? n.issue_id} embedded />
   }
   const project = n.project_id ? t.projectsById.get(n.project_id) : undefined
   return (

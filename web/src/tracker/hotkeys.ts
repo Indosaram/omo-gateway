@@ -84,6 +84,27 @@ function scopeAllows(opts: HotkeyOptions): boolean {
 function onKeyDown(event: KeyboardEvent) {
   if (event.defaultPrevented) return
   const editable = isEditableTarget(event.target)
+
+  if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && buffer.length > 0) {
+    const key = eventKey(event)
+    if (key.length === 1) {
+      const candidate = [...buffer, key]
+      const orderedSeq = [...sequences].sort((a, b) => b.order - a.order)
+      for (const seq of orderedSeq) {
+        if (seq.opts.enabled === false || !scopeAllows(seq.opts)) continue
+        if (seq.keys.length === 2) {
+          const tail = candidate.slice(-seq.keys.length)
+          if (tail.length === seq.keys.length && tail.every((k, i) => k === seq.keys[i])) {
+            if (seq.opts.preventDefault !== false) event.preventDefault()
+            buffer = []
+            seq.handler()
+            return
+          }
+        }
+      }
+    }
+  }
+
   const ordered = [...bindings].sort((a, b) => b.order - a.order)
   for (const binding of ordered) {
     if (binding.opts.enabled === false) continue
@@ -109,7 +130,7 @@ function onKeyDown(event: KeyboardEvent) {
     if (seq.opts.enabled === false || !scopeAllows(seq.opts)) continue
     const tail = buffer.slice(-seq.keys.length)
     if (tail.length === seq.keys.length && tail.every((k, i) => k === seq.keys[i])) {
-      event.preventDefault()
+      if (seq.opts.preventDefault !== false) event.preventDefault()
       buffer = []
       seq.handler()
       return
@@ -146,20 +167,20 @@ export function useSequence(keys: string[], handler: () => void, opts: HotkeyOpt
   const handlerRef = useRef(handler)
   handlerRef.current = handler
   const signature = keys.join(' ')
-  const { enabled, scope } = opts
+  const { enabled, scope, preventDefault } = opts
   useEffect(() => {
     install()
     const entry = {
       keys: signature.split(' '),
       handler: () => handlerRef.current(),
-      opts: { enabled, scope },
+      opts: { enabled, scope, preventDefault },
       order: ++counter,
     }
     sequences.add(entry)
     return () => {
       sequences.delete(entry)
     }
-  }, [signature, enabled, scope])
+  }, [signature, enabled, scope, preventDefault])
 }
 
 export function useHotkeyScope(scope: string, active: boolean) {

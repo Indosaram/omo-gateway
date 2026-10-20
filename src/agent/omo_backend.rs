@@ -917,6 +917,7 @@ impl OmoBackend {
         effective_total_timeout: Duration,
         model_override: Option<&str>,
         fallback_eligible: &mut bool,
+        side_effects: &mut bool,
         briefings: Option<&crate::mirror::CronBriefings>,
     ) -> Result<()> {
         let mut user_prompt = render_user_prompt(&event);
@@ -1102,10 +1103,6 @@ impl OmoBackend {
         let mut messages_delivered: usize = 0;
         let mut last_relay_at: Option<tokio::time::Instant> = None;
         // The agent already produced a message: it is composing, so no more progress steers.
-        let mut agent_message_seen = false;
-        let steer_quiet_threshold = Duration::from_secs(12);
-        let mut steer_request_id: u64 = 9_100;
-        let mut last_steer_at = tokio::time::Instant::now();
 
         let started_at = tokio::time::Instant::now();
         let mut turn_id: Option<String> = None;
@@ -1392,30 +1389,6 @@ impl OmoBackend {
                 next_timeout = next_timeout.min(prompt_started_at + initial_response_timeout);
             }
 
-            // Progress watchdog: if the agent has been quiet without delivering any
-            // message to the user for longer than steer_quiet_threshold, inject a steering RPC
-            // to prompt the agent to give an immediate progress brief to Discord.
-            if !is_cron_session && !is_lane && messages_delivered == 0 && !agent_message_seen {
-                if let Some(current_turn_id) = &turn_id {
-                    if now.duration_since(prompt_started_at) >= steer_quiet_threshold
-                        && now.duration_since(last_steer_at) >= steer_quiet_threshold
-                    {
-                        let steer_msg = turn_steer_request(
-                            steer_request_id,
-                            &thread_id,
-                            current_turn_id,
-                            "[시스템 알림: 사용자가 답변을 기다리고 있습니다. 현재까지 확인된 상황과 지금 진행 중인 작업을 1~2줄로 요약하여 먼저 사용자에게 보고하세요.]",
-                        );
-                        let _ = ws.send(steer_msg).await;
-                        steer_request_id = steer_request_id.saturating_add(1);
-                        last_steer_at = now;
-                    } else {
-                        let next_steer_at = last_steer_at + steer_quiet_threshold;
-                        next_timeout = next_timeout.min(next_steer_at);
-                    }
-                }
-            }
-
             let msg = tokio::select! {
                 biased;
                 Some((req_id, tool_id, ask_started, resolution)) = approval_rx.recv() => {
@@ -1428,7 +1401,6 @@ impl OmoBackend {
                     work_deadline += waited;
                     prompt_started_at += waited;
                     last_activity_at = tokio::time::Instant::now();
-                    last_steer_at = last_activity_at;
                     match resolution {
                         crate::autonomy::AskResolution::Allow => {
                             let _ = ws.send(approval_allow_response(&req_id)).await;
@@ -1597,7 +1569,6 @@ impl OmoBackend {
                 turn_id = Some(turn_id_str);
                 turn_started_ack = true;
                 prompt_started_at = tokio::time::Instant::now();
-                last_steer_at = prompt_started_at;
                 // The prompt carrying the cron briefings was accepted: only now are they consumed.
                 if let (Some(briefings), Some(pool)) = (briefings, &self.pool) {
                     if let Err(error) =
@@ -1957,6 +1928,7 @@ impl OmoBackend {
                                     self.active_turns.lock().remove(&session.key.storage_key());
                                     return Err(error);
                                 }
+                                *side_effects = true;
                                 sequence = sequence.saturating_add(1);
                             }
                         }
@@ -2022,6 +1994,8 @@ impl OmoBackend {
                                 .map(str::to_string);
                         }
                         if !matches!(item_type, "agentMessage" | "userMessage" | "reasoning" | "") {
+                            // A started tool may already have changed the world: never resubmit.
+                            *side_effects = true;
                             open_tool_ids.insert(item_id.to_string());
                             if let Some(active) =
                                 self.active_turns.lock().get_mut(&session.key.storage_key())
@@ -2054,6 +2028,7 @@ impl OmoBackend {
                                     // does not disarm the progress steer.
                                     if self.relay_status(session, scrubbed, reply_to.clone()).await
                                     {
+                                        *side_effects = true;
                                         messages_delivered += 1;
                                         last_relay_at = Some(tokio::time::Instant::now());
                                         full_content.clear();
@@ -2082,7 +2057,6 @@ impl OmoBackend {
                             if let Some(text) = item.get("text").and_then(Value::as_str) {
                                 full_content.clear();
                                 full_content.push_str(text);
-                                agent_message_seen = true;
 
                                 if is_lane {
                                     if let Err(error) = self
@@ -2494,6 +2468,8 @@ impl AgentBackend for OmoBackend {
             .or(self.config.default_model.as_deref())
             .map(str::to_owned);
         let mut fallback_eligible = false;
+        // Set once a tool started or a message reached the user: such a turn is never resubmitted.
+        let mut side_effects = false;
         let turn_started = std::time::Instant::now();
         let mut result = self
             .execute_turn(
@@ -2505,6 +2481,7 @@ impl AgentBackend for OmoBackend {
                 effective_total_timeout,
                 None,
                 &mut fallback_eligible,
+                &mut side_effects,
                 briefings.as_ref(),
             )
             .await;
@@ -2539,20 +2516,22 @@ impl AgentBackend for OmoBackend {
                     effective_total_timeout,
                     None,
                     &mut fallback_eligible,
+                    &mut side_effects,
                     briefings.as_ref(),
                 )
                 .await;
         }
         if !retried
+            && !side_effects
             && result.as_ref().is_err_and(is_transport_reset)
             && crate::agent::forced_restart_since(&self.config.appserver_url, turn_started)
         {
             // Incident 2026-10-16: when a stalled turn in another session triggers a forced
             // restart of the owned omo app-server, concurrent turns in flight are terminated
             // by SIGKILL and fail with a transport reset (e.g. "ws streaming error: Connection reset").
-            // Resubmitting here is safe because the daemon instance that held the turn was killed,
-            // so duplicate execution cannot occur. Wait until the replacement daemon answers
-            // readyz, then retry the turn once.
+            // The killed daemon cannot finish the turn, but tools it already ran and messages
+            // already relayed stay done, so only a turn with no side effects yet is resubmitted.
+            // Wait until the replacement daemon answers readyz, then retry the turn once.
             if crate::agent::wait_owned_daemon_ready(
                 &self.config.appserver_url,
                 Duration::from_secs(60),
@@ -2579,6 +2558,7 @@ impl AgentBackend for OmoBackend {
                         effective_total_timeout,
                         None,
                         &mut fallback_eligible,
+                        &mut side_effects,
                         briefings.as_ref(),
                     )
                     .await;
@@ -2609,6 +2589,7 @@ impl AgentBackend for OmoBackend {
                     effective_total_timeout,
                     Some(fallback_model.as_str()),
                     &mut fallback_eligible,
+                    &mut side_effects,
                     briefings.as_ref(),
                 )
                 .await;

@@ -1,0 +1,1191 @@
+diff --git a/src/cron/executor.rs b/src/cron/executor.rs
+index a746275..bc5f8b0 100644
+--- a/src/cron/executor.rs
++++ b/src/cron/executor.rs
+@@ -288,7 +288,7 @@ impl CronTaskExecutor for AgentCronExecutor {
+             .as_ref()
+             .map(|target| {
+                 SessionKey::new(
+-                    "discord",
++                    target.platform.to_ascii_lowercase(),
+                     None::<String>,
+                     target.chat_id.clone(),
+                     target.thread_id.clone(),
+@@ -486,7 +486,14 @@ pub async fn execute_native_cron(
+                 OmonError::ToolExecution(format!("failed to spawn cron script: {error}"))
+             })?;
+             let _pid = child.id();
+-            let res = tokio::time::timeout(timeout, child.wait_with_output()).await;
++            // Kill the tree while the child is still owned: `timeout` would drop the wait future
++            // first, and kill_on_drop then kills the root before its descendants are found.
++            let wait = child.wait_with_output();
++            tokio::pin!(wait);
++            let res = tokio::select! {
++                out = &mut wait => Ok(out),
++                () = tokio::time::sleep(timeout) => Err(()),
++            };
+             let out = match res {
+                 Ok(Ok(out)) => out,
+                 Ok(Err(err)) => {
+@@ -497,9 +504,7 @@ pub async fn execute_native_cron(
+                 Err(_) => {
+                     #[cfg(unix)]
+                     if let Some(pid) = _pid {
+-                        unsafe {
+-                            libc::kill(-(pid as i32), libc::SIGKILL);
+-                        }
++                        kill_process_tree(pid);
+                     }
+                     return Err(OmonError::ToolExecution(format!(
+                         "cron script timed out for {}",
+@@ -577,21 +582,7 @@ pub async fn execute_native_cron(
+             threats.join("; ")
+         )));
+     }
+-    let channel = payload
+-        .get("deliver")
+-        .and_then(serde_json::Value::as_str)
+-        .and_then(|value| value.strip_prefix("discord:"));
+-    let session_key = SessionKey::new(
+-        if channel.is_some() {
+-            "discord"
+-        } else {
+-            "local"
+-        },
+-        None::<String>,
+-        channel.unwrap_or(&job.id),
+-        None::<String>,
+-        format!("cron:{}", job.id),
+-    );
++    let session_key = payload_session_key(payload, &job.id);
+     let mut session = SessionContext::new(session_key.clone());
+     session
+         .state
+@@ -642,6 +633,28 @@ pub async fn execute_native_cron(
+ /// When it will not deliver (no destination, or the content is empty or a
+ /// silence token), no delivery can fail, so the ack is run here once the agent
+ /// run produced a result.
++fn payload_session_key(payload: &serde_json::Value, job_id: &str) -> SessionKey {
++    let deliver = payload
++        .get("deliver")
++        .and_then(serde_json::Value::as_str)
++        .unwrap_or_default();
++    let (platform, channel, thread) =
++        if let Some(slack) = super::store::slack_destination(deliver, None) {
++            ("slack", slack.chat_id, slack.thread_id)
++        } else if let Some(channel) = deliver.strip_prefix("discord:") {
++            ("discord", channel.to_owned(), None)
++        } else {
++            ("local", job_id.to_owned(), None)
++        };
++    SessionKey::new(
++        platform,
++        None::<String>,
++        channel,
++        thread,
++        format!("cron:{job_id}"),
++    )
++}
++
+ async fn ack_unless_scheduler_delivers(
+     ack_command: Option<&str>,
+     has_destination: bool,
+@@ -1010,7 +1023,13 @@ pub async fn run_cron_script(
+                 OmonError::ToolExecution(format!("failed to spawn {}: {error}", path.display()))
+             })?;
+         let _pid = child.id();
+-        let res = tokio::time::timeout(timeout, child.wait_with_output()).await;
++        // See execute_native_cron: the tree must be killed before the child is dropped.
++        let wait = child.wait_with_output();
++        tokio::pin!(wait);
++        let res = tokio::select! {
++            out = &mut wait => Ok(out),
++            () = tokio::time::sleep(timeout) => Err(()),
++        };
+         let out = match res {
+             Ok(Ok(out)) => out,
+             Ok(Err(err)) => {
+@@ -1022,9 +1041,7 @@ pub async fn run_cron_script(
+             Err(_) => {
+                 #[cfg(unix)]
+                 if let Some(pid) = _pid {
+-                    unsafe {
+-                        libc::kill(-(pid as i32), libc::SIGKILL);
+-                    }
++                    kill_process_tree(pid);
+                 }
+                 return Err(OmonError::ToolExecution(format!(
+                     "Hermes cron script timed out: {}",
+@@ -1132,6 +1149,211 @@ pub fn resolve_workspace_instructions(workdir: &Path) -> Option<String> {
+     None
+ }
+ 
++/// Collects all descendant process IDs for the given `root` process.
++///
++/// Executes `ps -A -o pid=,ppid=` to capture a snapshot of the process tree.
++/// Parses the output into a parent-to-children map and performs a breadth-first search
++/// starting from `root`.
++#[cfg(unix)]
++fn collect_descendant_pids(root: i32) -> Vec<i32> {
++    if root <= 1 {
++        return Vec::new();
++    }
++
++    // Try `ps` in PATH first, falling back to `/bin/ps` if standard PATH lookup fails.
++    let output = std::process::Command::new("ps")
++        .args(["-A", "-o", "pid=,ppid="])
++        .output()
++        .or_else(|_| {
++            std::process::Command::new("/bin/ps")
++                .args(["-A", "-o", "pid=,ppid="])
++                .output()
++        });
++
++    let Ok(output) = output else {
++        return Vec::new();
++    };
++
++    if !output.status.success() {
++        return Vec::new();
++    }
++
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    let mut parent_to_children: std::collections::HashMap<i32, Vec<i32>> =
++        std::collections::HashMap::new();
++
++    for line in stdout.lines() {
++        let mut parts = line.split_whitespace();
++        if let (Some(pid_str), Some(ppid_str)) = (parts.next(), parts.next()) {
++            if let (Ok(pid), Ok(ppid)) = (pid_str.parse::<i32>(), ppid_str.parse::<i32>()) {
++                parent_to_children.entry(ppid).or_default().push(pid);
++            }
++        }
++    }
++
++    let mut descendants = Vec::new();
++    let mut queue = std::collections::VecDeque::new();
++    let mut visited = std::collections::HashSet::new();
++
++    queue.push_back(root);
++    visited.insert(root);
++
++    while let Some(parent) = queue.pop_front() {
++        if let Some(children) = parent_to_children.get(&parent) {
++            for &child in children {
++                if visited.insert(child) {
++                    descendants.push(child);
++                    queue.push_back(child);
++                }
++            }
++        }
++    }
++
++    descendants
++}
++
++/// Kills the entire process tree rooted at `root_pid`, including descendants that moved
++/// into their own process groups (incident 2026-10-16).
++///
++/// Incident context: VPN-Mall script (bash) used `set -m` so its `omo` child ran in a
++/// separate process group; the gateway's previous group-only SIGKILL (`kill(-pid, SIGKILL)`)
++/// killed bash, but `omo` survived 22 more minutes in its own process group, leaving orphaned
++/// state.
++///
++/// Root fix: Snapshot the parent->child tree first via `ps -A -o pid=,ppid=`, SIGKILL each
++/// descendant and its process group BEFORE killing the root. This guarantees descendants are
++/// not reparented to init/launchd before their PIDs are discovered and signaled.
++#[cfg(unix)]
++pub fn kill_process_tree(root_pid: u32) {
++    if root_pid <= 1 {
++        return;
++    }
++    let root = root_pid as i32;
++    let descendants = collect_descendant_pids(root);
++
++    // Kill descendants leaves-first, signaling both individual PID and any process group
++    // headed by the descendant (or reported via getpgid) before touching the root.
++    for &pid in descendants.iter().rev() {
++        if pid > 1 {
++            // SAFETY: libc::getpgid takes a process ID by value.
++            let pgid = unsafe { libc::getpgid(pid) };
++            if pgid > 1 && pgid != root {
++                // SAFETY: libc::kill with negative pid signals the process group whose pgid equals `pgid`.
++                unsafe {
++                    libc::kill(-pgid, libc::SIGKILL);
++                }
++            }
++            // SAFETY: libc::kill accepts process ID and signal number by value.
++            // When subshells or background jobs run with job control enabled (e.g. bash `set -m`),
++            // the job leader's pid becomes its process group id, so signaling -pid terminates the group.
++            // Signaling positive pid terminates the individual process.
++            unsafe {
++                if pid != root {
++                    libc::kill(-pid, libc::SIGKILL);
++                }
++                libc::kill(pid, libc::SIGKILL);
++            }
++        }
++    }
++
++    // Finally kill the root process group and the root process itself.
++    // SAFETY: libc::kill accepts process ID and signal number by value.
++    // -root signals the root's process group; root signals the root process itself.
++    unsafe {
++        libc::kill(-root, libc::SIGKILL);
++        libc::kill(root, libc::SIGKILL);
++    }
++}
++
++#[cfg(not(unix))]
++pub fn kill_process_tree(_root_pid: u32) {
++    // Windows process cleanup is handled via Job Objects or kill_on_drop.
++}
++
++#[cfg(test)]
++mod slack_session_tests {
++    use super::payload_session_key;
++
++    #[test]
++    fn payload_session_platform_follows_the_deliver_prefix() {
++        let slack = payload_session_key(
++            &serde_json::json!({"deliver": "slack:C0WORK:1700.0001"}),
++            "j",
++        );
++        assert_eq!(slack.platform, "slack");
++        assert_eq!(slack.channel_id, "C0WORK");
++        assert_eq!(slack.thread_id.as_deref(), Some("1700.0001"));
++        assert_eq!(slack.user_id, "cron:j");
++
++        let discord = payload_session_key(&serde_json::json!({"deliver": "discord:42"}), "j");
++        assert_eq!(
++            (discord.platform.as_str(), discord.channel_id.as_str()),
++            ("discord", "42")
++        );
++        assert_eq!(discord.thread_id, None);
++
++        let local = payload_session_key(&serde_json::json!({"deliver": "local"}), "j");
++        assert_eq!(
++            (local.platform.as_str(), local.channel_id.as_str()),
++            ("local", "j")
++        );
++    }
++    struct RecordingBackend(std::sync::Mutex<Vec<crate::SessionKey>>);
++
++    #[async_trait::async_trait]
++    impl crate::agent::AgentBackend for RecordingBackend {
++        async fn run(
++            &self,
++            session: &mut crate::SessionContext,
++            _event: crate::InboundEvent,
++        ) -> crate::Result<()> {
++            self.0.lock().unwrap().push(session.key.clone());
++            Ok(())
++        }
++    }
++
++    #[tokio::test]
++    async fn hermes_agent_session_uses_the_destination_platform() {
++        use crate::CronTaskExecutor;
++        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
++        let temp = tempfile::tempdir().unwrap();
++        let backend = std::sync::Arc::new(RecordingBackend(Default::default()));
++        let executor = super::AgentCronExecutor {
++            backend: backend.clone(),
++            workspace_root: temp.path().to_path_buf(),
++            pool: database.pool().clone(),
++            cron_script_timeout_secs: 30,
++        };
++        for (deliver, platform, channel) in [
++            ("slack:C0WORK", "slack", "C0WORK"),
++            ("discord:42", "discord", "42"),
++        ] {
++            let job = crate::CronJob {
++                id: "hermes_job".into(),
++                session_key: None,
++                expression: "0 9 * * *".into(),
++                payload_json: serde_json::json!({
++                    "id": "hermes_job", "prompt": "report",
++                    "schedule": {"kind": "cron", "expr": "0 9 * * *"},
++                    "deliver": deliver
++                })
++                .to_string(),
++                enabled: true,
++                next_run_at: None,
++                created_at: chrono::Utc::now(),
++                updated_at: chrono::Utc::now(),
++                authority: "omon_owned".into(),
++            };
++            executor.execute(&job).await.unwrap();
++            let key = backend.0.lock().unwrap().pop().unwrap();
++            assert_eq!(
++                (key.platform.as_str(), key.channel_id.as_str()),
++                (platform, channel)
++            );
++        }
++    }
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::collect_notepads;
+diff --git a/src/cron/scheduler.rs b/src/cron/scheduler.rs
+index e9bbfc7..6053a19 100644
+--- a/src/cron/scheduler.rs
++++ b/src/cron/scheduler.rs
+@@ -410,7 +410,7 @@ impl CronJob {
+         }
+         if let Some(key) = &self.session_key {
+             let parts: Vec<&str> = key.split(':').collect();
+-            if parts.len() >= 2 && !parts[1].is_empty() && parts[0] == "discord" {
++            if parts.len() >= 2 && !parts[1].is_empty() && matches!(parts[0], "discord" | "slack") {
+                 return parts[1].to_string();
+             }
+         }
+@@ -588,6 +588,7 @@ pub struct CronScheduler {
+     state: Arc<SchedulerState>,
+     clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
+     pre_retire_gate: Option<(Arc<Notify>, Arc<Notify>)>,
++    review_output: bool,
+ }
+ 
+ #[derive(Clone)]
+@@ -706,6 +707,7 @@ impl CronScheduler {
+             poll_interval,
+             clock: Arc::new(Utc::now),
+             pre_retire_gate: None,
++            review_output: false,
+             state: Arc::new(SchedulerState {
+                 shutdown,
+                 task: Mutex::new(None),
+@@ -714,6 +716,13 @@ impl CronScheduler {
+         }
+     }
+ 
++    /// Routes cron output and failures through the bot conversation of each destination
++    /// instead of posting them verbatim (see `queue_review`).
++    pub fn with_output_review(mut self) -> Self {
++        self.review_output = true;
++        self
++    }
++
+     pub fn with_hermes_sync(mut self, synchronizer: HermesStoreSynchronizer) -> Self {
+         self.hermes_sync = Some(Arc::new(synchronizer));
+         self
+@@ -1436,15 +1445,26 @@ impl CronScheduler {
+                             else {
+                                 return Ok(None);
+                             };
+-                            if let Err(error) = health::record_missed_occurrence(
+-                                &self.pool,
+-                                id,
+-                                next_run,
+-                                next_future,
++                            // A next_run computed under an older weekday mapping (or before an
++                            // expression edit) is not an occurrence of the current expression;
++                            // moving it forward is a reschedule, not a missed run.
++                            let is_occurrence = next_run_tz(
++                                &expression,
++                                next_run - TimeDelta::seconds(1),
++                                timezone,
+                             )
+-                            .await
+-                            {
+-                                tracing::error!(%error, job_id = id, "failed to record out-of-window missed occurrence");
++                            .is_ok_and(|occurrence| occurrence == next_run);
++                            if is_occurrence {
++                                if let Err(error) = health::record_missed_occurrence(
++                                    &self.pool,
++                                    id,
++                                    next_run,
++                                    next_future,
++                                )
++                                .await
++                                {
++                                    tracing::error!(%error, job_id = id, "failed to record out-of-window missed occurrence");
++                                }
+                             }
+                             sqlx::query(
+                                 "UPDATE cron_jobs SET next_run_at = ?, updated_at = ? WHERE id = ? AND next_run_at = ?",
+@@ -2199,16 +2219,24 @@ impl CronScheduler {
+         let destinations = delivery_destination(&payload)?;
+ 
+         if self.dispatcher.is_none() {
+-            let has_explicit_discord =
+-                if let Ok(hermes) = serde_json::from_value::<crate::HermesJob>(payload.clone()) {
+-                    hermes.has_explicit_discord_destination()
+-                } else {
+-                    false
++            let explicit_transport =
++                match serde_json::from_value::<crate::HermesJob>(payload.clone()) {
++                    Ok(hermes) if hermes.has_explicit_discord_destination() => Some("discord"),
++                    Ok(hermes) if hermes.has_explicit_slack_destination() => Some("slack"),
++                    _ => payload
++                        .get("deliver")
++                        .and_then(Value::as_str)
++                        .is_some_and(|deliver| {
++                            deliver.split(',').any(|part| {
++                                super::store::slack_destination(part.trim(), None).is_some()
++                            })
++                        })
++                        .then_some("slack"),
+                 };
+ 
+-            if has_explicit_discord {
++            if let Some(transport) = explicit_transport {
+                 return Err(OmonError::Config(format!(
+-                    "unconfigured delivery transport: discord for job {}",
++                    "unconfigured delivery transport: {transport} for job {}",
+                     job.id
+                 )));
+             }
+@@ -2240,8 +2268,12 @@ impl CronScheduler {
+                         {
+                             let mut delivery_errors = Vec::new();
+                             for destination in &destinations {
+-                                if let Err(err) = self.deliver(job, destination, content_str).await
+-                                {
++                                let sent = if self.reviews_before_delivery(&payload) {
++                                    self.queue_review(job, destination, content_str, true).await
++                                } else {
++                                    self.deliver(job, destination, content_str).await
++                                };
++                                if let Err(err) = sent {
+                                     *delivery_failed = true;
+                                     delivery_errors.push(err);
+                                 }
+@@ -2324,10 +2356,16 @@ impl CronScheduler {
+                     };
+                     if !failure_destinations.is_empty() {
+                         let content = format!("Cron job {} failed: {error}", job.id);
++                        let review = job
++                            .payload()
++                            .is_ok_and(|payload| self.reviews_before_delivery(&payload));
+                         for destination in &failure_destinations {
+-                            if let Err(delivery_error) =
++                            let sent = if review {
++                                self.queue_review(job, destination, &content, false).await
++                            } else {
+                                 self.deliver(job, destination, &content).await
+-                            {
++                            };
++                            if let Err(delivery_error) = sent {
+                                 tracing::error!(
+                                     %delivery_error,
+                                     job_id = %job.id,
+@@ -2348,38 +2386,95 @@ impl CronScheduler {
+         }
+     }
+ 
++    /// Cron output is never relayed to a messenger verbatim: the bot reads it first, checks
++    /// the real outcome, works on a failure, and then reports. `"direct_delivery": true` keeps
++    /// the raw relay for a job whose output is already the final message.
++    fn reviews_before_delivery(&self, payload: &Value) -> bool {
++        self.review_output
++            && self.dispatcher.is_some()
++            && !payload
++                .get("direct_delivery")
++                .and_then(Value::as_bool)
++                .unwrap_or(false)
++    }
++
++    /// Hands a cron result to the bot conversation of its destination as a lane event; the
++    /// bot's reply, not the raw output, is what reaches the destination.
++    async fn queue_review(
++        &self,
++        job: &CronJob,
++        destination: &crate::HermesOrigin,
++        content: &str,
++        succeeded: bool,
++    ) -> Result<()> {
++        let lead = review_session(&self.pool, destination)
++            .await?
++            .ok_or_else(|| OmonError::Config("no bot conversation for cron review".into()))?;
++        let dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
++            .join(".omon")
++            .join("cron-reports");
++        tokio::fs::create_dir_all(&dir)
++            .await
++            .map_err(|error| OmonError::ToolExecution(format!("cron report dir: {error}")))?;
++        let path = dir.join(format!(
++            "{}-{}.txt",
++            job.id,
++            (self.clock)().format("%Y%m%dT%H%M%S%.3f")
++        ));
++        tokio::fs::write(&path, content)
++            .await
++            .map_err(|error| OmonError::ToolExecution(format!("cron report file: {error}")))?;
++        let outcome = if succeeded { "끝남" } else { "실패" };
++        let body = format!(
++            "크론 {} {outcome}. 전체 출력: {} . 이 출력을 그대로 옮기지 말 것. 직접 읽고 실제 결과(종료 코드, 건수, 로그, 수신 증거)를 확인해서 한국어로 짧게 보고할 것. 실패나 이상이 있으면 원인을 조사하고 할 수 있는 조치를 먼저 한 뒤, 사용자가 직접 해야 하는 일이 있으면 무엇을 왜 해야 하는지 분명히 요청할 것. 알릴 가치가 없으면 [SILENT].",
++            job.id,
++            path.display()
++        );
++        crate::storage::lanes::enqueue_lane_event(&self.pool, None, &lead, "cron_report", &body)
++            .await?;
++        Ok(())
++    }
++
+     async fn deliver(
+         &self,
+         job: &CronJob,
+         destination: &crate::HermesOrigin,
+         content: &str,
+     ) -> Result<()> {
+-        let channel_id = destination.chat_id.parse::<u64>().map_err(|_| {
+-            OmonError::Config(format!(
+-                "invalid Discord channel ID: {}",
+-                destination.chat_id
+-            ))
+-        })?;
+-        let notification = CronNotification {
+-            job_id: job.id.clone(),
+-            channel_id,
+-            content: content.to_string(),
+-            triggered_at: (self.clock)(),
++        let platform = if destination.platform.eq_ignore_ascii_case("slack") {
++            "slack"
++        } else {
++            "discord"
+         };
+-        let _ = self.notifications.send(notification);
++        if platform == "discord" {
++            let channel_id = destination.chat_id.parse::<u64>().map_err(|_| {
++                OmonError::Config(format!(
++                    "invalid Discord channel ID: {}",
++                    destination.chat_id
++                ))
++            })?;
++            let notification = CronNotification {
++                job_id: job.id.clone(),
++                channel_id,
++                content: content.to_string(),
++                triggered_at: (self.clock)(),
++            };
++            let _ = self.notifications.send(notification);
++        }
+         let profile = job.profile();
+         let mut session = job
+             .session_key
+             .as_deref()
+             .and_then(|key| SessionKey::from_storage_key(key).ok())
+             .filter(|parsed| {
+-                parsed.channel_id == destination.chat_id
++                parsed.platform == platform
++                    && parsed.channel_id == destination.chat_id
+                     && parsed.thread_id.as_deref() == destination.thread_id.as_deref()
+                     && (destination.bot_id.is_none() || parsed.bot_id == destination.bot_id)
+             })
+             .unwrap_or_else(|| {
+                 let session = SessionKey::new(
+-                    "discord",
++                    platform,
+                     None::<String>,
+                     destination.chat_id.clone(),
+                     destination.thread_id.clone(),
+@@ -2393,7 +2488,7 @@ impl CronScheduler {
+                     None => session,
+                 }
+             });
+-        if session.bot_id.is_none() && !profile.is_empty() {
++        if platform == "discord" && session.bot_id.is_none() && !profile.is_empty() {
+             session = session.with_bot_id(profile);
+         }
+ 
+@@ -2532,6 +2627,44 @@ pub async fn mirror_cron_delivery_to_session(
+     crate::mirror::mirror_to_session(pool, &key, "assistant", content, Some(&label)).await
+ }
+ 
++/// The bot conversation that posts into `destination`: a Slack channel (or thread) session
++/// in the workspace the bot already talks in, else the owner home.
++async fn review_session(
++    pool: &SqlitePool,
++    destination: &crate::HermesOrigin,
++) -> Result<Option<String>> {
++    let home = std::env::var("OMON_LANE_DEFAULT_LEAD")
++        .ok()
++        .filter(|lead| !lead.trim().is_empty());
++    if !destination.platform.eq_ignore_ascii_case("slack") || destination.chat_id.starts_with('D') {
++        return Ok(home);
++    }
++    let bot = home
++        .as_deref()
++        .and_then(|lead| SessionKey::from_storage_key(lead).ok())
++        .and_then(|key| key.bot_id);
++    let team: Option<String> = sqlx::query_scalar(
++        "SELECT guild_id FROM sessions WHERE platform = 'slack' AND guild_id IS NOT NULL
++         ORDER BY updated_at DESC LIMIT 1",
++    )
++    .fetch_optional(pool)
++    .await?;
++    let (Some(bot), Some(team)) = (bot, team) else {
++        return Ok(home);
++    };
++    Ok(Some(
++        SessionKey::new(
++            "slack",
++            Some(team),
++            destination.chat_id.clone(),
++            destination.thread_id.clone(),
++            "",
++        )
++        .with_bot_id(bot)
++        .storage_key(),
++    ))
++}
++
+ pub fn delivery_destinations(payload: &Value) -> Result<Vec<crate::HermesOrigin>> {
+     if payload.get("schedule").is_some() {
+         let job: HermesJob = serde_json::from_value(payload.clone())
+@@ -2575,12 +2708,60 @@ pub fn delivery_destinations(payload: &Value) -> Result<Vec<crate::HermesOrigin>
+             if part.is_empty() || part == "local" {
+                 continue;
+             }
++            if let Some(slack) = super::store::slack_destination(part, None) {
++                let key = (
++                    "slack".to_string(),
++                    slack.chat_id.clone(),
++                    slack.thread_id.clone(),
++                );
++                if seen.insert(key) {
++                    destinations.push(slack);
++                }
++                continue;
++            }
++            if part == "slack" {
++                let origin = payload
++                    .get("origin")
++                    .and_then(|value| {
++                        serde_json::from_value::<crate::HermesOrigin>(value.clone()).ok()
++                    })
++                    .filter(|origin| {
++                        origin.platform.eq_ignore_ascii_case("slack") && !origin.chat_id.is_empty()
++                    });
++                let target = origin.or_else(|| {
++                    std::env::var("SLACK_HOME_CHANNEL")
++                        .ok()
++                        .and_then(|home| {
++                            home.split(',')
++                                .map(str::trim)
++                                .find(|id| !id.is_empty())
++                                .map(str::to_owned)
++                        })
++                        .map(|chat_id| crate::HermesOrigin {
++                            platform: "slack".into(),
++                            chat_id,
++                            ..crate::HermesOrigin::default()
++                        })
++                });
++                if let Some(target) = target {
++                    let key = (
++                        "slack".to_string(),
++                        target.chat_id.clone(),
++                        target.thread_id.clone(),
++                    );
++                    if seen.insert(key) {
++                        destinations.push(target);
++                    }
++                }
++                continue;
++            }
+             if part == "origin" || part == "all" || part == "discord" {
+                 if let Some(origin_val) = payload.get("origin") {
+                     if let Ok(origin) =
+                         serde_json::from_value::<crate::HermesOrigin>(origin_val.clone())
+                     {
+-                        if origin.platform.eq_ignore_ascii_case("discord")
++                        if (origin.platform.eq_ignore_ascii_case("discord")
++                            || origin.platform.eq_ignore_ascii_case("slack"))
+                             && !origin.chat_id.is_empty()
+                         {
+                             let key = (
+@@ -3787,6 +3968,66 @@ mod tests {
+         }
+     }
+ 
++    #[tokio::test]
++    async fn reviewed_cron_output_reaches_the_bot_instead_of_the_channel() {
++        let database = crate::storage::Database::connect("sqlite::memory:")
++            .await
++            .unwrap();
++        let pool = database.pool();
++        std::env::set_var(
++            "OMON_LANE_DEFAULT_LEAD",
++            SessionKey::new("slack", None::<String>, "DHOME", None::<String>, "UOWNER")
++                .with_bot_id("UBOT")
++                .storage_key(),
++        );
++        let channel = SessionKey::new("slack", Some("TTEAM"), "CWORK", None::<String>, "")
++            .with_bot_id("UBOT");
++        insert_session(pool, &channel).await;
++        sqlx::query("UPDATE sessions SET guild_id = 'TTEAM' WHERE session_key = ?")
++            .bind(channel.storage_key())
++            .execute(pool)
++            .await
++            .unwrap();
++        let sent = Arc::new(Mutex::new(Vec::new()));
++        let scheduler = CronScheduler::with_dispatcher(
++            pool.clone(),
++            Arc::new(SilentExecutor(Some("raw report".into()))),
++            Arc::new(RecordingDispatcher {
++                sessions: sent.clone(),
++            }),
++        )
++        .with_output_review();
++        let job = CronJob {
++            id: "reviewed".into(),
++            session_key: None,
++            expression: "interval:1h".into(),
++            payload_json: serde_json::json!({"deliver": "slack:CWORK"}).to_string(),
++            enabled: true,
++            next_run_at: None,
++            created_at: Utc::now(),
++            updated_at: Utc::now(),
++            authority: String::new(),
++        };
++        scheduler.execute_job(&job).await.unwrap();
++        assert!(sent.lock().await.is_empty(), "raw output was relayed");
++        let (lead, kind, body): (String, String, String) =
++            sqlx::query_as("SELECT lead_session_key, kind, body FROM lane_events")
++                .fetch_one(pool)
++                .await
++                .unwrap();
++        assert_eq!(lead, channel.storage_key());
++        assert_eq!(kind, "cron_report");
++        let path = body
++            .split("전체 출력: ")
++            .nth(1)
++            .unwrap()
++            .split(' ')
++            .next()
++            .unwrap();
++        assert_eq!(std::fs::read_to_string(path).unwrap(), "raw report");
++        std::fs::remove_file(path).unwrap();
++    }
++
+     async fn insert_session(pool: &SqlitePool, key: &SessionKey) {
+         let now = Utc::now();
+         sqlx::query(
+@@ -4010,6 +4251,42 @@ mod tests {
+         assert_eq!(rows, 1, "a delivered change is committed");
+     }
+ 
++    #[tokio::test]
++    async fn stale_next_run_off_the_schedule_is_rescheduled_not_reported_missed() {
++        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
++        let pool = database.pool();
++        // Sunday 2026-10-18: a Monday-only job whose stored next run predates the weekday fix.
++        let now = utc("2026-10-18T00:00:30Z");
++        let scheduler = CronScheduler::new(pool.clone(), Arc::new(SilentExecutor(None)))
++            .with_clock(move || now);
++        let job = scheduler
++            .register(CronJobSpec::new(
++                "0 0 * * 1",
++                serde_json::json!({"channel_id": "test"}),
++            ))
++            .await
++            .unwrap();
++        sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = ?")
++            .bind(utc("2026-10-18T00:00:00Z"))
++            .bind(&job.id)
++            .execute(pool)
++            .await
++            .unwrap();
++        assert!(scheduler
++            .claim_job(&job.id, true, true)
++            .await
++            .unwrap()
++            .is_none());
++        let rescheduled = scheduler.get(&job.id).await.unwrap().unwrap();
++        assert_eq!(rescheduled.next_run_at, Some(utc("2026-10-19T00:00:00Z")));
++        let missed: i64 =
++            sqlx::query_scalar("SELECT COUNT(*) FROM cron_problems WHERE kind = 'missed'")
++                .fetch_one(pool)
++                .await
++                .unwrap();
++        assert_eq!(missed, 0);
++    }
++
+     #[tokio::test]
+     async fn backoff_retry_of_cron_expression_job_is_not_a_missed_occurrence() {
+         let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+@@ -4654,6 +4931,79 @@ mod tests {
+         );
+     }
+ 
++    #[tokio::test]
++    async fn explicit_slack_destination_without_dispatcher_fails_instead_of_succeeding() {
++        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
++        let scheduler = CronScheduler::new(
++            database.pool().clone(),
++            Arc::new(SilentExecutor(Some("report".into()))),
++        );
++        for payload in [
++            serde_json::json!({"deliver": "slack:C0WORK"}),
++            serde_json::json!({
++                "id": "h", "prompt": "p", "deliver": "slack:C0WORK:1700.0001",
++                "schedule": {"kind": "cron", "expr": "0 * * * *"}
++            }),
++        ] {
++            let job = scheduler
++                .register(CronJobSpec::new("interval:1h", payload))
++                .await
++                .unwrap();
++            let error = scheduler.execute_job(&job).await.unwrap_err().to_string();
++            assert!(
++                error.contains("unconfigured delivery transport: slack"),
++                "{error}"
++            );
++        }
++    }
++
++    #[tokio::test]
++    async fn slack_destination_dispatches_slack_session_with_thread() {
++        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
++        let dispatched = Arc::new(Mutex::new(Vec::new()));
++        let scheduler = CronScheduler::with_dispatcher(
++            database.pool().clone(),
++            Arc::new(SilentExecutor(Some("report".into()))),
++            Arc::new(RecordingDispatcher {
++                sessions: dispatched.clone(),
++            }),
++        );
++        let job = scheduler
++            .register(CronJobSpec::new(
++                "interval:1h",
++                serde_json::json!({
++                    "deliver": "slack",
++                    "origin": {"platform": "slack", "chat_id": "D0OWNER", "thread_id": "1700.0001"}
++                }),
++            ))
++            .await
++            .unwrap();
++
++        scheduler.execute_job(&job).await.unwrap();
++
++        let sessions = dispatched.lock().await;
++        assert_eq!(sessions.len(), 1);
++        assert_eq!(sessions[0].platform, "slack");
++        assert_eq!(sessions[0].channel_id, "D0OWNER");
++        assert_eq!(sessions[0].thread_id.as_deref(), Some("1700.0001"));
++    }
++
++    #[test]
++    fn slack_session_key_yields_profile() {
++        let job = CronJob {
++            id: "j".into(),
++            session_key: Some("slack:U0BOT:cron:j".into()),
++            expression: "interval:1h".into(),
++            payload_json: "{}".into(),
++            enabled: true,
++            next_run_at: None,
++            created_at: Utc::now(),
++            updated_at: Utc::now(),
++            authority: String::new(),
++        };
++        assert_eq!(job.profile(), "U0BOT");
++    }
++
+     #[test]
+     fn interval_arithmetic_does_not_panic_on_overflow() {
+         assert!(next_run("interval:100000000d", Utc::now()).is_err());
+diff --git a/src/cron/store.rs b/src/cron/store.rs
+index 885c149..05a1b40 100644
+--- a/src/cron/store.rs
++++ b/src/cron/store.rs
+@@ -568,6 +568,40 @@ impl HermesJob {
+         None
+     }
+ 
++    pub fn configured_slack_home(&self) -> Option<(String, Option<String>)> {
++        self.slack_home_or(std::env::var("SLACK_HOME_CHANNEL").ok())
++    }
++
++    fn slack_home_or(&self, env_home: Option<String>) -> Option<(String, Option<String>)> {
++        let text = |v: &Value| {
++            v.as_str()
++                .map(|s| s.trim().trim_start_matches('#').to_owned())
++                .filter(|s| !s.is_empty())
++        };
++        if let Some(channel) = self.extra.get("slack_home_channel").and_then(text) {
++            let thread = self.extra.get("slack_home_thread").and_then(text);
++            return Some((channel, thread));
++        }
++        if let Some(slack) = self.extra.get("slack").and_then(Value::as_object) {
++            let channel = slack
++                .get("channel")
++                .or_else(|| slack.get("home_channel"))
++                .or_else(|| slack.get("channel_id"))
++                .and_then(text);
++            if let Some(channel) = channel {
++                let thread = slack
++                    .get("thread_ts")
++                    .or_else(|| slack.get("thread_id"))
++                    .and_then(text);
++                return Some((channel, thread));
++            }
++        }
++        env_home
++            .as_deref()
++            .and_then(|value| value.split(',').map(str::trim).find(|id| !id.is_empty()))
++            .map(|channel| (channel.to_owned(), None))
++    }
++
+     pub fn failure_destinations(&self) -> Result<Vec<HermesOrigin>> {
+         if let Some(ref failure_deliver) = self.failure_deliver {
+             let mut clone = self.clone();
+@@ -619,7 +653,23 @@ impl HermesJob {
+         check_targets(&self.deliver) || check_targets(&self.failure_deliver)
+     }
+ 
++    pub fn has_explicit_slack_destination(&self) -> bool {
++        let check = |list: &Option<Vec<String>>| {
++            list.iter()
++                .flatten()
++                .any(|target| slack_destination(target.trim(), None).is_some())
++        };
++        check(&self.deliver) || check(&self.failure_deliver)
++    }
++
+     pub fn discord_destinations(&self) -> Result<Vec<HermesOrigin>> {
++        self.destinations_with_slack_home(self.configured_slack_home())
++    }
++
++    fn destinations_with_slack_home(
++        &self,
++        slack_home: Option<(String, Option<String>)>,
++    ) -> Result<Vec<HermesOrigin>> {
+         let targets = match &self.deliver {
+             Some(list) if !list.is_empty() => list.clone(),
+             _ => vec!["origin".to_string()],
+@@ -645,10 +695,50 @@ impl HermesJob {
+                 continue;
+             }
+ 
++            if let Some(slack) = slack_destination(trimmed, bot_id.as_ref()) {
++                let key = (
++                    "slack".to_string(),
++                    slack.chat_id.clone(),
++                    slack.thread_id.clone(),
++                );
++                if seen.insert(key) {
++                    destinations.push(slack);
++                }
++                continue;
++            }
++
+             let is_discord_prefixed = trimmed
+                 .get(..8)
+                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case("discord:"));
+ 
++            if trimmed.eq_ignore_ascii_case("slack") {
++                let origin = self.origin.as_ref().filter(|origin| {
++                    origin.platform.eq_ignore_ascii_case("slack") && !origin.chat_id.is_empty()
++                });
++                let target = origin.cloned().or_else(|| {
++                    slack_home.as_ref().map(|(channel, thread)| HermesOrigin {
++                        platform: "slack".into(),
++                        chat_id: channel.clone(),
++                        thread_id: thread.clone(),
++                        user_id: None,
++                        chat_name: None,
++                        bot_id: bot_id.clone(),
++                        extra: HashMap::new(),
++                    })
++                });
++                if let Some(target) = target {
++                    let key = (
++                        "slack".to_string(),
++                        target.chat_id.clone(),
++                        target.thread_id.clone(),
++                    );
++                    if seen.insert(key) {
++                        destinations.push(target);
++                    }
++                }
++                continue;
++            }
++
+             if is_discord_prefixed {
+                 let rest = trimmed[8..].trim();
+                 if !rest.is_empty() {
+@@ -719,10 +809,12 @@ impl HermesJob {
+             {
+                 let mut resolved = false;
+                 if let Some(ref origin) = self.origin {
+-                    if origin.platform.eq_ignore_ascii_case("discord") && !origin.chat_id.is_empty()
++                    if (origin.platform.eq_ignore_ascii_case("discord")
++                        || origin.platform.eq_ignore_ascii_case("slack"))
++                        && !origin.chat_id.is_empty()
+                     {
+                         let key = (
+-                            "discord".to_string(),
++                            origin.platform.to_ascii_lowercase(),
+                             origin.chat_id.clone(),
+                             origin.thread_id.clone(),
+                         );
+@@ -750,6 +842,25 @@ impl HermesJob {
+                                 extra: HashMap::new(),
+                             });
+                         }
++                    } else if let Some((ref home_channel, ref home_thread)) = slack_home {
++                        if !trimmed.eq_ignore_ascii_case("discord") {
++                            let key = (
++                                "slack".to_string(),
++                                home_channel.clone(),
++                                home_thread.clone(),
++                            );
++                            if seen.insert(key) {
++                                destinations.push(HermesOrigin {
++                                    platform: "slack".into(),
++                                    chat_id: home_channel.clone(),
++                                    thread_id: home_thread.clone(),
++                                    user_id: None,
++                                    chat_name: None,
++                                    bot_id: bot_id.clone(),
++                                    extra: HashMap::new(),
++                                });
++                            }
++                        }
+                     }
+                 }
+             } else if trimmed.contains(':') {
+@@ -807,6 +918,35 @@ impl HermesJob {
+     }
+ }
+ 
++/// `slack:<channel>` or `slack:<channel>:<thread_ts>`; Slack ids are not numeric, so this must
++/// run before the Discord parsers that treat `a:b` as numeric channel and thread ids.
++pub(crate) fn slack_destination(target: &str, bot_id: Option<&String>) -> Option<HermesOrigin> {
++    let rest = target
++        .get(..6)
++        .filter(|prefix| prefix.eq_ignore_ascii_case("slack:"))
++        .map(|_| target[6..].trim())?;
++    let (chat_id, thread_id) = match rest.split_once(':') {
++        Some((channel, thread)) => (
++            channel.trim(),
++            Some(thread.trim()).filter(|t| !t.is_empty()),
++        ),
++        None => (rest, None),
++    };
++    let chat_id = chat_id.trim_start_matches('#');
++    if chat_id.is_empty() {
++        return None;
++    }
++    Some(HermesOrigin {
++        platform: "slack".into(),
++        chat_id: chat_id.to_owned(),
++        thread_id: thread_id.map(str::to_owned),
++        user_id: None,
++        chat_name: None,
++        bot_id: bot_id.cloned(),
++        extra: HashMap::new(),
++    })
++}
++
+ #[derive(Clone, Debug)]
+ pub struct HermesStore {
+     profile: String,
+@@ -1767,6 +1907,103 @@ mod tests {
+         tokio::fs::remove_dir_all(root).await.unwrap();
+     }
+ 
++    #[test]
++    fn slack_home_from_payload_keys_object_or_env() {
++        let keyed = job(json!({
++            "id": "a", "schedule": {"kind": "cron", "expr": "0 * * * *"},
++            "slack_home_channel": "#C0HOME", "slack_home_thread": "1700.0001"
++        }));
++        assert_eq!(
++            keyed.slack_home_or(Some("C0ENV".into())),
++            Some(("C0HOME".into(), Some("1700.0001".into())))
++        );
++        let nested = job(json!({
++            "id": "b", "schedule": {"kind": "cron", "expr": "0 * * * *"},
++            "slack": {"channel": "C0NEST"}
++        }));
++        assert_eq!(nested.slack_home_or(None), Some(("C0NEST".into(), None)));
++        let bare = job(json!({"id": "c", "schedule": {"kind": "cron", "expr": "0 * * * *"}}));
++        assert_eq!(
++            bare.slack_home_or(Some(" , C0ENV,C0X".into())),
++            Some(("C0ENV".into(), None))
++        );
++        assert_eq!(bare.slack_home_or(None), None);
++    }
++
++    #[test]
++    fn origin_without_discord_home_falls_back_to_slack_home_and_bare_slack_token_resolves() {
++        let home = Some(("C0HOME".to_owned(), None));
++        let origin_job = job(json!({
++            "id": "o", "schedule": {"kind": "cron", "expr": "0 * * * *"},
++            "deliver": "origin", "bot_id": "U0BOT"
++        }));
++        let targets = origin_job
++            .destinations_with_slack_home(home.clone())
++            .unwrap();
++        assert_eq!(targets.len(), 1);
++        assert_eq!(targets[0].platform, "slack");
++        assert_eq!(targets[0].chat_id, "C0HOME");
++        assert_eq!(targets[0].bot_id.as_deref(), Some("U0BOT"));
++
++        let bare_slack = job(json!({
++            "id": "s", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "slack"
++        }));
++        let targets = bare_slack
++            .destinations_with_slack_home(home.clone())
++            .unwrap();
++        assert_eq!(
++            (targets[0].platform.as_str(), targets[0].chat_id.as_str()),
++            ("slack", "C0HOME")
++        );
++        assert!(bare_slack
++            .destinations_with_slack_home(None)
++            .unwrap()
++            .is_empty());
++
++        let slack_origin = job(json!({
++            "id": "so", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "slack",
++            "origin": {"platform": "slack", "chat_id": "D0OWNER"}
++        }));
++        let targets = slack_origin
++            .destinations_with_slack_home(home.clone())
++            .unwrap();
++        assert_eq!(targets[0].chat_id, "D0OWNER");
++
++        let discord_home = job(json!({
++            "id": "d", "schedule": {"kind": "cron", "expr": "0 * * * *"},
++            "deliver": "origin", "home_channel": "42"
++        }));
++        let targets = discord_home
++            .destinations_with_slack_home(home.clone())
++            .unwrap();
++        assert_eq!(
++            (targets[0].platform.as_str(), targets[0].chat_id.as_str()),
++            ("discord", "42")
++        );
++
++        let bare_discord = job(json!({
++            "id": "bd", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "discord"
++        }));
++        assert!(bare_discord
++            .destinations_with_slack_home(home)
++            .unwrap()
++            .is_empty());
++    }
++
++    #[test]
++    fn explicit_slack_destination_detection() {
++        let explicit = job(json!({
++            "id": "e", "schedule": {"kind": "cron", "expr": "0 * * * *"},
++            "deliver": "local", "failure_deliver": "slack:C0ALERT"
++        }));
++        assert!(explicit.has_explicit_slack_destination());
++        assert!(!explicit.has_explicit_discord_destination());
++        let none = job(json!({
++            "id": "n", "schedule": {"kind": "cron", "expr": "0 * * * *"}, "deliver": "slack:"
++        }));
++        assert!(!none.has_explicit_slack_destination());
++    }
++
+     #[test]
+     fn discord_delivery_uses_profile_home() {
+         let job_json = json!({
