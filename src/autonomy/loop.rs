@@ -1101,6 +1101,10 @@ async fn scan_unseen_candidates(
              WHERE d.class IN ('bot', 'owner')
                AND NOT EXISTS (SELECT 1 FROM action_loop_seen s WHERE s.item_key = 'inbox:' || d.item_id)
                AND NOT EXISTS (SELECT 1 FROM action_loop_outcomes o WHERE o.item_key = 'inbox:' || d.item_id)
+               -- A GitHub item taken before triage keeps its `github:` key; triage must not
+               -- surface it again under `inbox:` (2026-10-20 13:43Z, ferryx#12 twice).
+               AND NOT EXISTS (SELECT 1 FROM action_loop_seen s WHERE s.item_key = 'github:' || d.item_id)
+               AND NOT EXISTS (SELECT 1 FROM action_loop_outcomes o WHERE o.item_key = 'github:' || d.item_id)
                AND NOT EXISTS (SELECT 1 FROM inbox_proposals p WHERE p.item_id = d.item_id)
                AND NOT EXISTS (
                    SELECT 1 FROM lane_events e
@@ -2126,5 +2130,37 @@ mod tests {
         let items = scan_unseen_candidates(&pool, LEAD).await.unwrap();
         let keys: Vec<&str> = items.iter().map(|i| i.item_key.as_str()).collect();
         assert_eq!(keys, vec!["inbox:gh-1", "github:gh-2"]);
+    }
+
+    #[tokio::test]
+    async fn github_item_taken_before_triage_is_not_taken_again_after_triage() {
+        // given: an untriaged GitHub item emitted under its github: key
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let now = daytime_utc();
+        insert_item(&pool, "gh-3", "github", None, now).await;
+        let worker = ActionLoop::new(pool.clone(), LEAD);
+        assert!(worker.flush_coalesced(now).await.unwrap().is_some());
+
+        // when: triage later classifies the same item
+        sqlx::query(
+            "INSERT INTO inbox_decisions (item_id, class, reason, status, decided_at, model)
+             VALUES ('gh-3', 'owner', 'review', 'open', ?, 'jev')",
+        )
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // then: it is not surfaced a second time under inbox:
+        let keys: Vec<String> = scan_unseen_candidates(&pool, LEAD)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|item| item.item_key)
+            .collect();
+        assert!(
+            keys.is_empty(),
+            "already-taken GitHub item resurfaced: {keys:?}"
+        );
     }
 }
