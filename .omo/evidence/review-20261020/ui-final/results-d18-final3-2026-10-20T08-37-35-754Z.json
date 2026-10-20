@@ -1,0 +1,42 @@
+{
+ "authoritative": true,
+ "stamp": "2026-10-20T08-37-35-754Z",
+ "token": "st_01a1582e-11030-2026-10-20T08-37-35-754Z",
+ "item": "D18",
+ "mode": "fresh page per case, single server owner",
+ "tree": {
+  "descriptionDraft.ts": "6685:ed1c1c63be5b35dd",
+  "Editors.tsx": "8012:93703609741dd5a3"
+ },
+ "verdict": "PASS (A, B, C)",
+ "results": [
+  {
+   "id": "D18",
+   "check": "case A (fresh page): a delayed failed save keeps the draft through close/reopen",
+   "ok": true,
+   "detail": "freshPage=true firstHeld=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=1 notSavedIn=45ms closedIn=5ms retryHeld=true retryReleased=1 quiesced=true reopenedIn=1ms firstFrame=\"Draft kept across a failed save\" firstBars=1 after400=\"Draft kept across a failed save\" bars=1",
+   "phase": "final"
+  },
+  {
+   "id": "D18",
+   "check": "case B (fresh page, trusted click): Retry saves the retained draft exactly once",
+   "ok": true,
+   "detail": "freshPage=true barsBeforeClick=1 viewBefore=\"Draft kept across a failed save\" trustedClick=true patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} barClearedIn=30ms stored=\"Draft kept across a failed save\" trace=[{\"k\":\"click\",\"trusted\":true},{\"k\":\"fetch\",\"m\":\"PATCH\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"k\":\"fetch\",\"m\":\"GET\",\"u\":\"/api/tracker/issues/iss-draft\"}]",
+   "phase": "final"
+  },
+  {
+   "id": "D18",
+   "check": "case C (fresh page): reopening while the retry PATCH is in flight keeps the draft",
+   "ok": true,
+   "detail": "freshPage=true retryStillInFlightAtReopen=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] firstFrame=\"Draft kept across a failed save\" firstBars=1 releasedAfterReopen=1 quiesced=true afterSettle=\"Draft kept across a failed save\" bars=1 stored=\"Original draft description\"",
+   "phase": "final"
+  },
+  {
+   "id": "SETUP",
+   "check": "tree unchanged during the run",
+   "ok": true,
+   "detail": "{\"descriptionDraft.ts\":\"6685:ed1c1c63be5b35dd\",\"Editors.tsx\":\"8012:93703609741dd5a3\"}",
+   "phase": "setup-ok"
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "goal": {
+    "id": "34361dd3-ad10-45ce-8a8d-06d7acb40513",
+    "threadId": "01a1581a-a659-7e0f-b699-8a4a5d9e7513",
+    "objective": "probe registration binding C",
+    "status": "complete",
+    "tokensUsed": 1768,
+    "timeUsedSeconds": 19,
+    "createdAt": 1792479514,
+    "updatedAt": 1792479532,
+    "completedAt": 1792479529
+  }
+}

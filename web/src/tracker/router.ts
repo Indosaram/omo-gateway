@@ -36,10 +36,20 @@ export function currentPath(): string {
   return rest === '' ? '/' : rest
 }
 
+// A truncated or hand-edited link such as `#/tracker/issue/%E0` makes decodeURIComponent throw a
+// URIError; decoding inside the useRoute state initializer would unmount the whole app.
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
 export function parseRoute(path: string): Route {
   const [pathname, query = ''] = path.split('?')
   const params = new URLSearchParams(query)
-  const parts = pathname.split('/').filter(Boolean).map(decodeURIComponent)
+  const parts = pathname.split('/').filter(Boolean).map(safeDecode)
   const [head, a, b] = parts
   switch (head) {
     case 'inbox':

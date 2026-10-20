@@ -1,0 +1,110 @@
+[
+ {
+  "id": "D11",
+  "check": "navigation clears the focused issue so the palette has no stale target",
+  "ok": true,
+  "detail": "rowsIn=344ms focusedIn=6ms chipBefore=\"OMO-101 Watched only by subscription\" statusCmdBefore=true | projectsIn=52ms chipAfter=\"\" statusCmdAfter=false"
+ },
+ {
+  "id": "D11",
+  "check": "mobile 390px: navigation clears the focused issue, no horizontal overflow",
+  "ok": true,
+  "detail": "rowsIn=8ms chipBefore=\"OMO-101 Watched only by subscription\" chipAfter=\"\" overflow={\"scrollW\":390,\"clientW\":390}"
+ },
+ {
+  "id": "D12",
+  "check": "leg A: no issues read is issued while a write is in flight (poll tick crossed)",
+  "ok": true,
+  "detail": "propReady=149ms patchPending=[\"patch={\\\"priority\\\":2}\"] patchDone=yes lastRead=-92ms(before patch) tickDue=+9908ms windowEnd=+12408ms readsDuringWrite=none released=1 priority=\"Priority High\""
+ },
+ {
+  "id": "D12",
+  "check": "leg B: a stale list read that lands after the write is discarded",
+  "ok": true,
+  "detail": "gatedRead=[\"snapshot@1792483602291\"] urgentShownIn=2ms writeDone=patch={\"priority\":1} releasedRead=1 beforeRelease=\"Priority Urgent\" afterStaleLanded=\"Priority Urgent\" mockPriority=1"
+ },
+ {
+  "id": "D14",
+  "check": "malformed %E0 in the issue route does not blank the app",
+  "ok": true,
+  "detail": "shellIn=109ms rootClass=\"ls-root\" bodyChars=63 text=\"O | Omon | Inbox | My issues | Workspace | Projects | Views | Your teams | Me | ?\" uriErrors=[]"
+ },
+ {
+  "id": "D15",
+  "check": "leaving the tracker restores the dashboard tab title",
+  "ok": true,
+  "detail": "trackerTitle=\"My issues - Omon\" restoredIn=6ms dashboardTitle=\"omon gateway dashboard\" dashboardMounted=true backTitle=\"My issues - Omon\""
+ },
+ {
+  "id": "D18",
+  "check": "case A: a delayed failed save keeps the draft through close/reopen",
+  "ok": true,
+  "detail": "peekIn=19ms failedPending=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] notSavedIn=32ms retryShown=true keptInEditor=\"Draft kept across a failed save\" closedIn=3ms retryPending=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=1 quiesced=true retained@settled=\"Draft kept across a failed save\" reopened=7ms firstFrame=\"Draft kept across a failed save\" firstBars=1 after400ms=\"Draft kept across a failed save\" pendingBars=1"
+ },
+ {
+  "id": "D18",
+  "check": "case B: Retry after recovery saves the retained draft exactly once",
+  "ok": false,
+  "detail": "click=clicked patch=undefined patchCount=0 pendingClearedIn=-1ms stored=\"Original draft description\" retainedAfterRetry=\"Draft kept across a failed save\" toasts=[]"
+ },
+ {
+  "id": "D18",
+  "check": "case C: reopening while the retry PATCH is in flight keeps the draft",
+  "ok": false,
+  "detail": "retryStillPending=undefined firstFrame=\"Draft kept across a failed save\" retained@firstFrame=null | afterSettle=\"Draft kept across a failed save\" retained@settle=null pendingBars=0"
+ },
+ {
+  "id": "D19",
+  "check": "system-only workspace: issue creation is blocked with an actionable notice",
+  "ok": true,
+  "detail": "modalIn=3ms notice=\"Every team here is a system team (the Sessions mirror), so there is nowhere to file an issue yet. Create a regular team first, then press c again.\" createDisabled=true teamLabel=\"Team\" createPosts=0"
+ },
+ {
+  "id": "D19",
+  "check": "mobile 390px: the notice is visible without horizontal overflow",
+  "ok": true,
+  "detail": "noticeChars=146 overflow={\"scrollW\":390,\"clientW\":390}"
+ },
+ {
+  "id": "D19",
+  "check": "mixed workspace: opening create from the Sessions team seeds a regular team",
+  "ok": true,
+  "detail": "modalIn=101ms team=\"O\nOMO\" notice=false"
+ },
+ {
+  "id": "D26",
+  "check": "Subscribed tab filters on the backend subscriber_ids field",
+  "ok": true,
+  "detail": "subscribedRows=[\"OMO-101\",\"OMO-103\",\"OMO-104\"] createdIn=1ms createdRows=[\"OMO-102\"] payloadCarriesSubscriberIds=true"
+ },
+ {
+  "id": "D27",
+  "check": "lane_not_verified 409 raises exactly one actionable toast (no duplicate generic one)",
+  "ok": true,
+  "detail": "menuIn=3ms patchDone=true toastIn=8ms toasts=[{\"text\":\"lane must be verified before closing; use force close Force close\",\"role\":\"alert\"}]"
+ },
+ {
+  "id": "D27",
+  "check": "Force close retries once with force_note and raises no second toast",
+  "ok": true,
+  "detail": "patch=patch={\"state_id\":\"cf69a982-fd3c-4a62-8f42-eb131473c451\",\"force_note\":\"closed from tracker\"} storedState=cf69a982-fd3c-4a62-8f42-eb131473c451 toasts=0"
+ },
+ {
+  "id": "D27",
+  "check": "a plain 500 still shows exactly one generic toast",
+  "ok": true,
+  "detail": "toasts=[\"tracker unavailable\"]"
+ },
+ {
+  "id": "D24",
+  "check": "System theme follows a live prefers-color-scheme change without a reload",
+  "ok": true,
+  "detail": "radiosIn=1428ms startTheme=dark systemCheckedIn=1ms stored=\"system\" lightIn=99ms darkIn=230ms finalTheme=dark systemStillChecked=true"
+ },
+ {
+  "id": "D24",
+  "check": "an explicit Light choice ignores the OS change",
+  "ok": true,
+  "detail": "explicitLightIn=4ms themeAfterOsFlipToDark=light"
+ }
+]

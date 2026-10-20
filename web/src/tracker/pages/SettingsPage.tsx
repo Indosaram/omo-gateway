@@ -118,7 +118,6 @@ function AccountSection() {
 
 function PreferencesSection() {
   const t = useTracker()
-  const system = typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
   return (
     <>
       <h1 className="ls-h1">Preferences</h1>
@@ -127,13 +126,13 @@ function PreferencesSection() {
       <div className="ls-card">
         <Row title="Interface theme" desc="Select or customize your interface color scheme.">
           <div className="ls-seg" role="radiogroup" aria-label="Interface theme">
-            <button type="button" role="radio" aria-checked={false} onClick={() => t.setTheme(system)}>
+            <button type="button" role="radio" aria-checked={t.themePreference === 'system'} className={t.themePreference === 'system' ? 'is-on' : ''} onClick={() => t.setTheme('system')}>
               <Monitor size={13} /> System
             </button>
-            <button type="button" role="radio" aria-checked={t.theme === 'light'} className={t.theme === 'light' ? 'is-on' : ''} onClick={() => t.setTheme('light')}>
+            <button type="button" role="radio" aria-checked={t.themePreference === 'light'} className={t.themePreference === 'light' ? 'is-on' : ''} onClick={() => t.setTheme('light')}>
               <Sun size={13} /> Light
             </button>
-            <button type="button" role="radio" aria-checked={t.theme === 'dark'} className={t.theme === 'dark' ? 'is-on' : ''} onClick={() => t.setTheme('dark')}>
+            <button type="button" role="radio" aria-checked={t.themePreference === 'dark'} className={t.themePreference === 'dark' ? 'is-on' : ''} onClick={() => t.setTheme('dark')}>
               <Moon size={13} /> Dark
             </button>
           </div>

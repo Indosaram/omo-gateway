@@ -1298,6 +1298,16 @@ pub(crate) struct ChatRequest {
     pub(crate) message: String,
 }
 
+/// Author id the session-status checks expect for this session's platform. Slack compares against
+/// the Slack owner id; every other platform keeps the Discord owner id.
+fn status_reply_author(key: &SessionKey, owner: &str) -> String {
+    if key.platform == omon_gateway::slack::PLATFORM {
+        omon_gateway::slack::owner_id()
+    } else {
+        owner.to_owned()
+    }
+}
+
 async fn post_chat(
     State(state): State<DashboardState>,
     AxumPath(id): AxumPath<String>,
@@ -1321,10 +1331,13 @@ async fn post_chat(
     let mut event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), message);
     event.author_id = omon_gateway::context::owner_author_for(&key);
     let owner = omon_gateway::sessions::status_reply::owner_id();
-    let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
+    // The status-reply checks compare the author against the platform's own owner id, so a Slack
+    // session must see the Slack owner; every other platform keeps the Discord owner id.
+    let author = status_reply_author(&key, &owner);
+    let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &author, &owner);
     let private_owner = private_owner
         || (omon_gateway::sessions::status_reply::matches_intent(message)
-            && omon_gateway::sessions::status_reply::owner_thread(&key, &owner, &owner)
+            && omon_gateway::sessions::status_reply::owner_thread(&key, &author, &owner)
             && mux.owner_thread_is_private(&key).await);
     if mux
         .intercept_session_status(&event, private_owner)
@@ -1434,9 +1447,12 @@ async fn handle_session_socket(
                                 let mut event = InboundEvent::message(key.clone(), Uuid::new_v4().to_string(), content);
                                 event.author_id = omon_gateway::context::owner_author_for(&key);
                                 let owner = omon_gateway::sessions::status_reply::owner_id();
-                                let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &owner, &owner);
+                                // The status-reply checks compare the author against the platform's own
+                                // owner id, so a Slack session must see the Slack owner.
+                                let author = status_reply_author(&key, &owner);
+                                let private_owner = omon_gateway::sessions::status_reply::owner_dm(&key, &author, &owner);
                                 let private_owner = private_owner || (omon_gateway::sessions::status_reply::matches_intent(content)
-                                    && omon_gateway::sessions::status_reply::owner_thread(&key, &owner, &owner)
+                                    && omon_gateway::sessions::status_reply::owner_thread(&key, &author, &owner)
                                     && mux.owner_thread_is_private(&key).await);
                                 match mux.intercept_session_status(&event, private_owner).await {
                                     Ok(true) => {

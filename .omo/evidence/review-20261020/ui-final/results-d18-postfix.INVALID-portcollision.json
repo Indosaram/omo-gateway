@@ -1,0 +1,26 @@
+[
+ {
+  "id": "D18",
+  "check": "case A: a delayed failed save keeps the draft through close/reopen",
+  "ok": false,
+  "detail": "peekIn=-1ms patchHeld=undefined released=0 notSavedIn=-1ms retryShown=false keptInEditor=\"\" closedIn=2ms closeRetryHeld=false closeRetryReleased=0 quiesced=true retained@settled=null reopened=1ms firstFrame=\"Original draft description\" firstBars=0 after400ms=\"Original draft description\" bars=0",
+  "phase": "invalid-setup",
+  "invalid_reason": "Mock/Vite on 9131/5299 were not owned by this run (concurrent harness); case A never opened the peek (peekIn=-1) and case B saw patchCount=1 with no Retry button, so the setup failed before any assertion was meaningful. Not an app result."
+ },
+ {
+  "id": "D18",
+  "check": "case B: Retry after recovery saves the retained draft exactly once",
+  "ok": false,
+  "detail": "click=no-button patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} pendingClearedIn=8ms stored=\"Original draft description\" retainedAfterRetry=null toasts=[]",
+  "phase": "invalid-setup",
+  "invalid_reason": "Mock/Vite on 9131/5299 were not owned by this run (concurrent harness); case A never opened the peek (peekIn=-1) and case B saw patchCount=1 with no Retry button, so the setup failed before any assertion was meaningful. Not an app result."
+ },
+ {
+  "id": "D18",
+  "check": "case C: reopening while the retry PATCH is in flight keeps the draft",
+  "ok": true,
+  "detail": "firstSavePatch=2 closedIn=128ms retryStillPending=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=3 quiesced=true firstFrame=\"Draft kept across a failed save\" retained@first=\"Draft kept across a failed save\" | afterSettle=\"Draft kept across a failed save\" retained@settle=\"Draft kept across a failed save\" bars=1 stored=\"Original draft description\"",
+  "phase": "invalid-setup",
+  "invalid_reason": "Mock/Vite on 9131/5299 were not owned by this run (concurrent harness); case A never opened the peek (peekIn=-1) and case B saw patchCount=1 with no Retry button, so the setup failed before any assertion was meaningful. Not an app result."
+ }
+]

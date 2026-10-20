@@ -987,6 +987,49 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn proposal_lifecycle_drop_cleans_pending_and_expires_the_card() {
+        // Given: observer subscribed before requesting, exactly as AP08 does for the
+        // session-approval path; the proposal path is a separate requester entry point.
+        let guard = SmartApprovalGuard::new();
+        let requester = DiscordApprovalRequester::new(guard.clone(), Duration::from_secs(60));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        requester
+            .set_dispatcher(Arc::new(LifecycleDispatcher(tx)))
+            .await;
+        let session = SessionKey::new("discord", None::<String>, "42", None::<String>, "7");
+        let mut request = Box::pin(requester.request_for_proposal(
+            &session,
+            7,
+            "git push origin main",
+            "engine asked",
+        ));
+        let action = tokio::select! {
+            result = &mut request => panic!("unexpected completion {result:?}"),
+            action = rx.recv() => action.unwrap(),
+        };
+        let OutboundAction::ApprovalRequest { request_id, .. } = action else {
+            panic!("approval request expected");
+        };
+        // When: the caller's turn ends and drops the request future.
+        drop(request);
+        // Then: pending ownership is released and the visible card is expired, not left up.
+        assert_eq!(guard.pending_count().await, 0);
+        let expiry = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("the dropped requester must still dispatch its expiry");
+        assert!(matches!(
+            expiry,
+            Some(OutboundAction::ExpireApproval { request_id: expired }) if expired == request_id
+        ));
+        // And a late click on the retired card resolves nothing.
+        assert!(
+            !guard
+                .resolve_custom_id(&format!("omon:approval:{request_id}:once"))
+                .await
+        );
+    }
+
     #[test]
     fn test_is_approval_custom_id() {
         let id = Uuid::new_v4();

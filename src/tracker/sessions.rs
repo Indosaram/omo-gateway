@@ -29,16 +29,26 @@ pub const PREVIEW_CHARS: usize = 400;
 pub const SYNC_ENV: &str = "OMON_TRACKER_SESSION_SYNC";
 
 struct Collected {
+    /// When the collection that produced this entry started; later starts win a tie.
+    started: Instant,
     at: Instant,
     overview: Arc<Overview>,
     board: Value,
 }
 
-type Cached = Mutex<Option<Collected>>;
+#[derive(Default)]
+struct CacheSlot {
+    collected: Option<Collected>,
+    /// Bumped by `invalidate`; a collection that started under an older generation is
+    /// returned to its caller but never stored, so it cannot undo the invalidation.
+    generation: u64,
+}
+
+type Cached = Mutex<CacheSlot>;
 
 fn cache() -> &'static Cached {
     static CACHE: OnceLock<Cached> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(None))
+    CACHE.get_or_init(|| Mutex::new(CacheSlot::default()))
 }
 
 /// Latest known live sessions keyed by session_ref; machines that failed keep their previous entries.
@@ -89,28 +99,77 @@ fn live_session(reference: &str) -> Option<LiveSession> {
 }
 
 async fn current(refresh: bool) -> ApiResult<(Arc<Overview>, Value)> {
-    let mut cached = cache().lock().await;
-    if !refresh {
-        if let Some(collected) = cached.as_ref() {
-            if collected.at.elapsed() < CACHE_TTL {
-                return Ok((collected.overview.clone(), collected.board.clone()));
+    let (generation, started) = {
+        let slot = cache().lock().await;
+        if !refresh {
+            if let Some(collected) = slot.collected.as_ref() {
+                if collected.at.elapsed() < CACHE_TTL {
+                    return Ok((collected.overview.clone(), collected.board.clone()));
+                }
             }
         }
-    }
+        (slot.generation, Instant::now())
+    };
+    // The ssh collection runs without the cache lock so send/answer/interrupt never wait on it.
     let control = control()?;
     let overview = Arc::new(overview::collect(&control, TEXT_LIMIT).await);
     let board = shape(&overview, Utc::now());
-    remember(&overview);
-    *cached = Some(Collected {
-        at: Instant::now(),
-        overview: overview.clone(),
-        board: board.clone(),
-    });
+    store(generation, started, overview.clone(), board.clone()).await;
     Ok((overview, board))
 }
 
+/// Publishes a collection unless `invalidate` ran after it started or a collection that began
+/// later already published. The cache entry and the live session map are written under the one
+/// cache lock, so an accepted-but-slow collection can never rewrite `live_map` after a newer one
+/// published. Lock order is always cache -> live_map; nothing takes them the other way round.
+async fn store(generation: u64, started: Instant, overview: Arc<Overview>, board: Value) {
+    let mut slot = cache().lock().await;
+    if slot.generation != generation {
+        return;
+    }
+    if slot
+        .collected
+        .as_ref()
+        .is_some_and(|existing| existing.started > started)
+    {
+        return;
+    }
+    slot.collected = Some(Collected {
+        started,
+        at: Instant::now(),
+        overview: overview.clone(),
+        board,
+    });
+    // Synchronous and bounded (an in-memory map swap, no ssh); still under the lock so both
+    // publications commit or neither does.
+    remember(&overview);
+}
+
 async fn invalidate() {
-    *cache().lock().await = None;
+    let mut slot = cache().lock().await;
+    slot.collected = None;
+    slot.generation = slot.generation.wrapping_add(1);
+}
+
+const TOMBSTONE_PREFIX: &str = "session_tombstone:";
+
+/// Marks a session issue as deleted so sync does not re-create it while the session lives.
+/// Takes a connection so the tombstone can share the delete's transaction.
+pub async fn tombstone(conn: &mut sqlx::SqliteConnection, reference: &str) -> Result<()> {
+    sqlx::query("INSERT INTO tracker_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(format!("{TOMBSTONE_PREFIX}{reference}"))
+        .bind(seed::now_utc())
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+async fn is_tombstoned(conn: &mut sqlx::SqliteConnection, reference: &str) -> Result<bool> {
+    let found: Option<i64> = sqlx::query_scalar("SELECT 1 FROM tracker_meta WHERE key = ?")
+        .bind(format!("{TOMBSTONE_PREFIX}{reference}"))
+        .fetch_optional(&mut *conn)
+        .await?;
+    Ok(found.is_some())
 }
 
 fn state_name(state: SessionState) -> &'static str {
@@ -472,6 +531,8 @@ async fn sync_locked(pool: &SqlitePool) {
 
 struct SyncContext {
     team_id: String,
+    /// Identifier prefix: the Sessions team's key (normally "SES").
+    team_key: String,
     /// session_state -> (state id, state type)
     states: HashMap<String, (String, String)>,
     /// state id -> session_state
@@ -665,17 +726,24 @@ async fn upsert(
         return Ok(());
     };
     let agent = ensure_machine_user(pool, machine).await?;
-    let number: i64 = sqlx::query_scalar(
-        "UPDATE tracker_teams SET issue_seq = issue_seq + 1 WHERE id = ? RETURNING issue_seq",
-    )
-    .bind(&ctx.team_id)
-    .fetch_one(pool)
-    .await?;
-    let identifier = format!("SES-{number}");
     let id = Uuid::new_v4().to_string();
     let started_at =
         matches!(state_type.as_str(), "started" | "completed").then(|| now.to_string());
     let completed_at = (state_type == "completed").then(|| now.to_string());
+    // The tombstone check and the insert share one write transaction, so a delete that runs
+    // concurrently either lands before (this insert sees the tombstone) or after (the delete
+    // removes the row by session_ref).
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    if is_tombstoned(&mut tx, reference).await? {
+        return Ok(());
+    }
+    let number: i64 = sqlx::query_scalar(
+        "UPDATE tracker_teams SET issue_seq = issue_seq + 1 WHERE id = ? RETURNING issue_seq",
+    )
+    .bind(&ctx.team_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let identifier = format!("{}-{number}", ctx.team_key);
     sqlx::query(
         "INSERT INTO tracker_issues (id, team_id, number, identifier, title, description, state_id, priority,
             estimate, assignee_id, creator_id, project_id, milestone_id, cycle_id, parent_id, due_date,
@@ -696,8 +764,9 @@ async fn upsert(
     .bind(now)
     .bind(&started_at)
     .bind(&completed_at)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     for user in std::iter::once(agent.as_str()).chain(ctx.me.as_deref()) {
         sqlx::query(
             "INSERT INTO tracker_subscribers (issue_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
@@ -759,8 +828,13 @@ pub async fn sync_from_overview(
         sqlx::query_scalar("SELECT id FROM tracker_users WHERE is_me = 1 LIMIT 1")
             .fetch_optional(pool)
             .await?;
+    let team_key: String = sqlx::query_scalar("SELECT key FROM tracker_teams WHERE id = ?")
+        .bind(&team_id)
+        .fetch_one(pool)
+        .await?;
     let ctx = SyncContext {
         team_id,
+        team_key,
         states,
         by_state_id,
         me,
@@ -801,6 +875,23 @@ pub async fn sync_from_overview(
         // A partial answer cannot tell a finished session from an unreachable endpoint.
         if !snapshot.errors.is_empty() {
             continue;
+        }
+        // Tombstones only need to outlive their session.
+        let machine_prefix = format!("{TOMBSTONE_PREFIX}{machine}:");
+        let tombstones: Vec<String> =
+            sqlx::query_scalar("SELECT key FROM tracker_meta WHERE substr(key, 1, ?) = ?")
+                .bind(machine_prefix.chars().count() as i64)
+                .bind(&machine_prefix)
+                .fetch_all(pool)
+                .await?;
+        for key in tombstones {
+            let reference = &key[TOMBSTONE_PREFIX.len()..];
+            if !present.contains(reference) {
+                sqlx::query("DELETE FROM tracker_meta WHERE key = ?")
+                    .bind(&key)
+                    .execute(pool)
+                    .await?;
+            }
         }
         let tracked: Vec<String> = sqlx::query_scalar(
             "SELECT session_ref FROM tracker_issues WHERE session_ref IS NOT NULL",
@@ -849,4 +940,96 @@ pub async fn manual_state_move(
         "session issues follow the live session state; only Ended on a streaming session (interrupt) is allowed",
         "session_state_managed",
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sessions::registry::SessionList;
+
+    fn overview_with_session(machine: &str, session_id: &str) -> Arc<Overview> {
+        Arc::new(Overview {
+            list: SessionList {
+                sessions: Vec::new(),
+                errors: Vec::new(),
+                stale: Vec::new(),
+                exit_code: 0,
+            },
+            snapshots: vec![(
+                machine.to_string(),
+                Ok(MachineSnapshot {
+                    machine: machine.to_string(),
+                    sessions: vec![LiveSession {
+                        machine: machine.to_string(),
+                        session_id: session_id.to_string(),
+                        routing_id: session_id.to_string(),
+                        ..LiveSession::default()
+                    }],
+                    errors: Vec::new(),
+                }),
+            )],
+        })
+    }
+
+    /// The cache lock is released before `collect` runs, so a collection can finish after
+    /// `invalidate`, and two collections of one generation can finish out of order. Only an
+    /// accepted collection may reach the cache or the live session map.
+    ///
+    /// Both phases share the process-wide cache and live map, so they run in one test.
+    #[tokio::test]
+    async fn stale_and_out_of_order_collections_never_publish() {
+        // Phase 1: a collection that started before invalidate.
+        let stale_generation = cache().lock().await.generation;
+        let stale_start = Instant::now();
+        invalidate().await;
+        store(
+            stale_generation,
+            stale_start,
+            overview_with_session("stale-machine", "s1"),
+            json!({"which": "stale"}),
+        )
+        .await;
+        assert!(
+            cache().lock().await.collected.is_none(),
+            "a collection started before invalidate must not be stored"
+        );
+        assert!(
+            live_session("stale-machine:s1").is_none(),
+            "a rejected collection must not publish live session state either"
+        );
+
+        // Phase 2: same generation, the older collection finishes last.
+        let generation = cache().lock().await.generation;
+        let older_start = Instant::now();
+        let newer_start = older_start + Duration::from_millis(10);
+        store(
+            generation,
+            newer_start,
+            overview_with_session("newer-machine", "s1"),
+            json!({"which": "newer"}),
+        )
+        .await;
+        store(
+            generation,
+            older_start,
+            overview_with_session("older-machine", "s1"),
+            json!({"which": "older"}),
+        )
+        .await;
+
+        let board = cache()
+            .lock()
+            .await
+            .collected
+            .as_ref()
+            .map(|collected| collected.board.clone())
+            .expect("the newer collection stays cached");
+        assert_eq!(board, json!({"which": "newer"}));
+        assert!(live_session("newer-machine:s1").is_some());
+        assert!(
+            live_session("older-machine:s1").is_none(),
+            "a superseded collection must not republish live session state"
+        );
+        invalidate().await;
+    }
 }

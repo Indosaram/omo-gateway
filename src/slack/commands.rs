@@ -32,6 +32,8 @@ const OWNER_ONLY: &str = "이 명령은 소유자만 사용할 수 있어요.";
 const THREAD_ONLY: &str =
     "이 명령은 대화 스레드 안에서 실행해 주세요. 채널 최상위에서는 새 채널 세션을 만들지 않습니다.";
 const THREAD_ROOT_PREFIX: &str = "🧵 *";
+/// Slack slash payloads carry no `thread_ts`, so `/omo-title` must be told its thread explicitly.
+const TITLE_NO_THREAD: &str = "❌ `/omo-title` cannot tell which thread you mean: Slack sends no `thread_ts` with a slash command, even inside a thread. Run `/omo-title <thread link or timestamp> <title>`.";
 const PENDING_WRITES_FILE: &str = "pending-writes.json";
 
 /// Every `/omo-*` command registered in `docs/slack-app-manifest.json`, with its usage.
@@ -49,7 +51,7 @@ pub const COMMANDS: [(&str, &str); 19] = [
     ("undo", "/omo-undo"),
     ("retry", "/omo-retry"),
     ("compress", "/omo-compress"),
-    ("title", "/omo-title <text>"),
+    ("title", "/omo-title [<thread link or timestamp>] <text>"),
     ("thread", "/omo-thread <name> [| first message]"),
     ("deny", "/omo-deny [reason]"),
     ("yolo", "/omo-yolo [on|off]"),
@@ -487,6 +489,43 @@ fn command_error(error: CommandError) -> OmonError {
 
 fn thread_root_text(name: &str) -> String {
     format!("{THREAD_ROOT_PREFIX}{name}*")
+}
+
+/// Reads the leading `<thread link or timestamp>` of `/omo-title` text.
+///
+/// Accepts a bare Slack ts (`1700000000.000100`) or a channel permalink
+/// (`https://<workspace>.slack.com/archives/<channel>/p1700000000000100`).
+fn explicit_thread(text: &str, channel: &str) -> Option<(String, String)> {
+    let (target, title) = text.trim().split_once(char::is_whitespace)?;
+    let target = target.trim_start_matches('<').trim_end_matches('>');
+    let target = target.split('|').next()?;
+    let timestamp = if target.starts_with("https://") {
+        let (_, path) = target.split_once("://")?.1.split_once('/')?;
+        let path = path.split(['?', '#']).next()?;
+        let parts: Vec<&str> = path.split('/').collect();
+        if parts.len() != 3 || parts[0] != "archives" || parts[1] != channel {
+            return None;
+        }
+        let digits = parts[2].strip_prefix('p')?;
+        if digits.len() <= 6 || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        let (seconds, micros) = digits.split_at(digits.len() - 6);
+        format!("{seconds}.{micros}")
+    } else {
+        let (seconds, fraction) = target.split_once('.')?;
+        if seconds.is_empty()
+            || fraction.is_empty()
+            || !seconds
+                .bytes()
+                .chain(fraction.bytes())
+                .all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        target.to_owned()
+    };
+    Some((timestamp, title.trim().to_owned()))
 }
 
 fn escape_mrkdwn(text: &str) -> String {
@@ -1119,18 +1158,23 @@ impl SlackCommands {
     }
 
     /// Renames a thread created by `/omo-thread` by editing its bot-authored root message.
+    ///
+    /// Slack slash payloads carry no `thread_ts` (even when typed inside a thread), so the
+    /// thread may also be named explicitly: `/omo-title <thread link or ts> <text>`.
     async fn title(&self, invocation: &SlashInvocation, text: &str) -> Result<Reply> {
-        let Some(thread_ts) = invocation.thread_ts.as_deref() else {
-            return Ok(Reply::private(
-                "❌ `/omo-title` can only be used inside a thread created by `/omo-thread`.",
-            ));
+        let explicit = explicit_thread(text, &invocation.channel_id)
+            .filter(|(_, title)| !title.trim().is_empty());
+        let (thread_ts, text): (String, &str) = match (&invocation.thread_ts, &explicit) {
+            (Some(thread_ts), _) => (thread_ts.clone(), text),
+            (None, Some((thread_ts, title))) => (thread_ts.clone(), title.as_str()),
+            (None, None) => return Ok(Reply::private(TITLE_NO_THREAD)),
         };
         let root = self
             .api
-            .conversations_replies(&invocation.channel_id, thread_ts, None, 1)
+            .conversations_replies(&invocation.channel_id, &thread_ts, None, 1)
             .await?;
         let created_by_thread = root.first().is_some_and(|message| {
-            message["ts"].as_str() == Some(thread_ts)
+            message["ts"].as_str() == Some(thread_ts.as_str())
                 && message["user"].as_str() == Some(self.bot_user_id.as_str())
                 && message["text"]
                     .as_str()
@@ -1145,7 +1189,7 @@ impl SlackCommands {
         self.api
             .update_message(
                 &invocation.channel_id,
-                thread_ts,
+                &thread_ts,
                 &thread_root_text(title),
                 None,
             )
@@ -2122,7 +2166,7 @@ mod tests {
         assert!(requests[0].1["text"]
             .as_str()
             .unwrap()
-            .contains("inside a thread"));
+            .contains("<thread link or timestamp>"));
         assert_eq!(requests[1].0, "/api/conversations.replies");
         assert_eq!(requests[1].1["ts"], "1700.5");
         assert_eq!(requests[2].0, "/api/chat.update");
@@ -2138,6 +2182,63 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn explicit_thread_accepts_ts_and_permalinks() {
+        assert_eq!(
+            explicit_thread("1700000000.000100 Renamed", "C1"),
+            Some(("1700000000.000100".into(), "Renamed".into()))
+        );
+        assert_eq!(
+            explicit_thread(
+                "<https://acme.slack.com/archives/C1/p1700000000000100> Renamed",
+                "C1"
+            ),
+            Some(("1700000000.000100".into(), "Renamed".into()))
+        );
+        assert_eq!(
+            explicit_thread(
+                "https://acme.slack.com/archives/C1/p1700000000000100?thread_ts=1 Renamed",
+                "C1"
+            ),
+            Some(("1700000000.000100".into(), "Renamed".into()))
+        );
+        assert_eq!(explicit_thread("Renamed", "C1"), None);
+        assert_eq!(
+            explicit_thread(
+                "https://acme.slack.com/archives/C2/p1700000000000100 X",
+                "C1"
+            ),
+            None
+        );
+        assert_eq!(explicit_thread("1700.1 ", "C1"), None);
+    }
+
+    #[tokio::test]
+    async fn title_without_thread_ts_names_the_thread_explicitly() {
+        let fake = fake_slack().await;
+        let commands = commands(&fake).await;
+        fake.replies
+            .lock()
+            .push(json!({ "ts": "1700.5", "user": "UBOT", "text": "🧵 *Old*" }));
+
+        // Slack sends no `thread_ts` on a slash payload, even when typed inside a thread.
+        commands
+            .handle(&with_response_url(
+                invocation("/omo-title", "1700.5 New", "UOWNER", "C1"),
+                &fake,
+            ))
+            .await
+            .unwrap();
+
+        let requests = fake.requests.lock().clone();
+        assert_eq!(requests[0].0, "/api/conversations.replies");
+        assert_eq!(requests[0].1["ts"], "1700.5");
+        assert_eq!(requests[1].0, "/api/chat.update");
+        assert_eq!(requests[1].1["ts"], "1700.5");
+        assert_eq!(requests[1].1["text"], "🧵 *New*");
+        assert_eq!(requests[2].1["response_type"], "in_channel");
     }
 
     #[tokio::test]

@@ -1,0 +1,433 @@
+# ============================================================================
+# a12-render.patch - A12 render-pipeline validation hunks (owned hunks only)
+# ============================================================================
+# Owner : senpi-task child st_01a15828 (hephaestus), lane a12-final
+# Status: EVIDENCE ARTIFACT. Not a commit. Not applied to the gateway repo.
+#
+# WHY THIS FILE EXISTS
+# The A12 fix belongs to a different repository than the one holding this evidence
+# tree, so it cannot ride a single omon-gateway commit. This patch preserves exactly
+# the hunks written by st_01a15828 so they can be reviewed and carried over intact.
+#
+# TARGET REPO (NOT the gateway repo):
+#   /Users/indo/code/project/content-intel-dashboard
+#
+#   base commit (HEAD, untouched by this lane)
+#     cf15fcb9555698d641f090459e5400954bb79d17
+#
+#   FROM state = other-agent worktree state this patch applies to
+#     scripts/render-open-design-artifact.py
+#       git blob 608cc0aa2915f2dc63caa5adae6288a439088120
+#       sha256   3df7c6af2d981ef6098790679503a027f83a6358abbf4d00476388779b783948
+#     tests/test_render_layout_audit.py   (untracked; authored by the other agent)
+#       git blob f40de19cc660222ecfe3d3fe1bed9902f216fd7d
+#       sha256   e369c2ff3df3b6386d3b9d23c4ff7d2db96675f07b1a7dd82566dafbf8a9a3ab
+#
+#   TO state = worktree state after applying this patch
+#     scripts/render-open-design-artifact.py
+#       git blob 315dab9bfc6a9f3d31650e5848ed3249ae260cab
+#       sha256   ed87c32a3c793d946045e57912b247064a76f8d19ecc46a4a21749c33cf2901c
+#     tests/test_render_layout_audit.py
+#       git blob 4ae465e4fb7427a2bd3d0872fdc0609560bee34c
+#       sha256   ba495405cbe4f9514901d5b8f44ad5d7c5c0c220bc188b9a14e2cc0bbe9f25f7
+#
+#   for reference, the pre-A12 renderer blob at HEAD
+#     git blob 88757e66fd6c3cf5731eb4866e1b3cad9903087c
+#
+# WHAT IS IN THIS PATCH (owned hunks only, 8 + 2 hunks)
+#   scripts/render-open-design-artifact.py
+#     - from PIL import ... (full-image decode dependency)
+#     - TEARDOWN_EXIT_CODE / TEARDOWN_STDERR_MARKER constants
+#     - artifact_state, decoded_png_size, screenshot_exit_problem, require_screenshot
+#     - screenshot(): drop check=True, return the completed process
+#     - measure_layout(): drop check=True, harden absent/unparseable/no-violations failures
+#     - main(): validate each card and the contact sheet against the real artifact
+#   tests/test_render_layout_audit.py
+#     - ChromeResult / TEARDOWN_STDERR / write_png helpers
+#     - ScreenshotPostconditionTest (13 tests incl. truncated-PNG regressions)
+#     - LayoutMeasurementTest (4 tests)
+#
+# WHAT IS DELIBERATELY NOT IN THIS PATCH
+#   The A12 layout correction itself, which is another agent's work and is a
+#   PREREQUISITE for this patch to mean anything. See DEPENDENCY below.
+#
+# DEPENDENCY (preexisting, other-agent, NOT included here)
+#   1. lib/open-design-orchestration.ts  - the typography-only-card rule on
+#      > [data-zone="visual"] changed position:static!important ->
+#      position:relative!important. This is the actual cause and fix of topic #96.
+#   2. lib/card-news-layout-audit.ts     - readLayoutAudit / parseLayoutAudit /
+#      applyLayoutAudit, wired into renderAndReview() so measured overlap outranks
+#      the LLM contact-sheet verdict.
+#   3. scripts/render-open-design-artifact.py - the LAYOUT_AUDIT_SCRIPT, its
+#      constants (PANEL_COVER_RATIO / TEXT_COVER_RATIO / LAYOUT_AUDIT_*), the
+#      measure_layout() function this patch only edits, the od-layout-audit.json
+#      output, and the images.json fields. Those hunks are the other agent's and
+#      are already present in the FROM state above.
+#
+#   Consequence, verified: this patch does NOT apply to content-intel-dashboard
+#   HEAD. Against the HEAD renderer, 5 of 8 hunks fail ("No such line 255 in
+#   input file"), because the audit code it edits does not exist at HEAD yet.
+#
+# HOW TO APPLY (only once the other-agent hunks are present)
+#   cd /Users/indo/code/project/content-intel-dashboard
+#   patch -p1 --dry-run -i a12-render.patch && patch -p1 -i a12-render.patch
+#   python3.12 -m pytest tests/test_render_layout_audit.py tests/test_render_open_design_artifact.py -q
+#
+# DEPLOY SCOPE - read this before assuming a push does anything
+#   Pushing the omon-gateway repository does NOT deploy, build, install, or
+#   otherwise propagate this patch. The gateway tree is evidence storage only.
+#   content-intel-dashboard is a separate repository with its own checkout, and
+#   nothing in the gateway's publish/deploy path touches it. Landing this work
+#   requires committing it in content-intel-dashboard.
+# ============================================================================
+diff --git a/scripts/render-open-design-artifact.py b/scripts/render-open-design-artifact.py
+index 608cc0a..315dab9 100644
+--- a/scripts/render-open-design-artifact.py
++++ b/scripts/render-open-design-artifact.py
+@@ -10,6 +10,8 @@ from html import unescape
+ from html.parser import HTMLParser
+ from pathlib import Path
+ 
++from PIL import Image, UnidentifiedImageError
++
+ WIDTH = 1080
+ HEIGHT = 1080
+ # Webfonts (Caveat brush display) load over the network; without a virtual-time budget Chrome
+@@ -22,6 +24,10 @@ LAYOUT_AUDIT_FILE = "od-layout-audit.json"
+ PANEL_COVER_RATIO = 0.18
+ TEXT_COVER_RATIO = 0.25
+ MAX_AUDIT_VIOLATIONS_PER_CARD = 8
++# The only tolerated non-zero exit: Chrome writes the screenshot, then its teardown watchdog
++# expires. Both the code and that exact message must be present; anything else stays fatal.
++TEARDOWN_EXIT_CODE = 2
++TEARDOWN_STDERR_MARKER = "Teardown watchdog expired"
+ VOID_ELEMENTS = {
+     "area",
+     "base",
+@@ -257,6 +263,8 @@ def layout_audit_script(card_index: int) -> str:
+ 
+ 
+ def measure_layout(browser: str, page: Path) -> dict:
++    # Same teardown exit 2 as the screenshot path: the dumped DOM carrying the audit attribute
++    # is the postcondition, and an absent or unparseable report is still a hard failure.
+     result = subprocess.run(
+         [
+             browser,
+@@ -267,14 +275,21 @@ def measure_layout(browser: str, page: Path) -> dict:
+             "--dump-dom",
+             page.as_uri(),
+         ],
+-        check=True,
+         stdout=subprocess.PIPE,
+         stderr=subprocess.PIPE,
+     )
+     match = re.search(rf'{LAYOUT_AUDIT_ATTRIBUTE}="([^"]*)"', result.stdout.decode("utf-8", "replace"))
+     if not match:
+-        raise RuntimeError("Layout audit did not report measurements")
+-    return json.loads(unescape(match.group(1)))
++        raise RuntimeError(f"Layout audit did not report measurements for {page.name} (exit {result.returncode})")
++    try:
++        audit = json.loads(unescape(match.group(1)))
++    except json.JSONDecodeError as error:
++        raise RuntimeError(
++            f"Layout audit report for {page.name} is not parseable (exit {result.returncode}): {error}"
++        ) from error
++    if not isinstance(audit, dict) or not isinstance(audit.get("violations"), list):
++        raise RuntimeError(f"Layout audit report for {page.name} has no violations list (exit {result.returncode})")
++    return audit
+ 
+ 
+ def rendered_html(head: str | None, card: str, base_url: str | None = None, card_index: int = 1) -> str:
+@@ -297,8 +312,73 @@ def rendered_html(head: str | None, card: str, base_url: str | None = None, card
+     )
+ 
+ 
+-def screenshot(browser: str, source: Path, output: Path, width: int, height: int) -> None:
+-    subprocess.run(
++# Chrome on this machine writes the screenshot and then exits 2 while its teardown watchdog
++# expires. That one exit is tolerated only with its exact stderr message; the postcondition is
++# still the artifact: the PNG this run was asked to write, written now, fully decoded by Pillow,
++# at the requested size. Every other exit code stays fatal.
++def artifact_state(path: Path) -> tuple[int, int] | None:
++    try:
++        status = path.stat()
++    except FileNotFoundError:
++        return None
++    return (status.st_size, status.st_mtime_ns)
++
++def decoded_png_size(path: Path) -> tuple[int, int] | None:
++    try:
++        with Image.open(path) as image:
++            image.verify()
++        with Image.open(path) as image:
++            image.load()
++            return image.size
++    except (UnidentifiedImageError, OSError, ValueError):
++        return None
++
++def screenshot_exit_problem(result: object) -> str | None:
++    code = getattr(result, "returncode", None)
++    if code == 0:
++        return None
++    stderr = (getattr(result, "stderr", None) or b"").decode("utf-8", "replace")
++    if code == TEARDOWN_EXIT_CODE and TEARDOWN_STDERR_MARKER in stderr:
++        return None
++    return f"Chrome exited {code} without the {TEARDOWN_STDERR_MARKER!r} teardown message"
++
++def require_screenshot(
++    output: Path,
++    width: int,
++    height: int,
++    previous: tuple[int, int] | None,
++    result: object,
++    source: Path,
++) -> None:
++    exit_code = getattr(result, "returncode", None)
++    stderr = getattr(result, "stderr", None) or b""
++    state = artifact_state(output)
++    problems: list[str] = []
++    exit_problem = screenshot_exit_problem(result)
++    if exit_problem:
++        problems.append(exit_problem)
++    if state is None:
++        problems.append(f"{output.name} was not written")
++    elif state == previous:
++        problems.append(f"{output.name} was not rewritten by this run")
++    elif state[0] == 0:
++        problems.append(f"{output.name} is empty")
++    else:
++        dimensions = decoded_png_size(output)
++        if dimensions is None:
++            problems.append(f"{output.name} is not a fully decodable PNG")
++        elif dimensions != (width, height):
++            problems.append(f"{output.name} is {dimensions[0]}x{dimensions[1]}, expected {width}x{height}")
++    if not problems:
++        return
++    message = f"Chrome produced no usable screenshot for {source.name} (exit {exit_code}): " + "; ".join(problems)
++    tail = stderr.decode("utf-8", "replace").strip().splitlines()[-3:]
++    if tail:
++        message += " | " + " / ".join(tail)
++    raise RuntimeError(message)
++
++def screenshot(browser: str, source: Path, output: Path, width: int, height: int) -> object:
++    return subprocess.run(
+         [
+             browser,
+             "--headless=new",
+@@ -309,7 +389,6 @@ def screenshot(browser: str, source: Path, output: Path, width: int, height: int
+             f"--screenshot={output}",
+             source.as_uri(),
+         ],
+-        check=True,
+         stdout=subprocess.PIPE,
+         stderr=subprocess.PIPE,
+     )
+@@ -344,7 +423,9 @@ def main() -> None:
+             image = output_directory / f"od-card-{index:02d}.png"
+             head_str = head_match.group(0) if head_match else None
+             page.write_text(rendered_html(head_str, card, base_url, index), encoding="utf-8")
+-            screenshot(browser, page, image, WIDTH, HEIGHT)
++            previous_image = artifact_state(image)
++            image_result = screenshot(browser, page, image, WIDTH, HEIGHT)
++            require_screenshot(image, WIDTH, HEIGHT, previous_image, image_result, page)
+             audit = measure_layout(browser, page)
+             for violation in audit.get("violations", []):
+                 violation["cardIndex"] = index
+@@ -352,8 +433,11 @@ def main() -> None:
+             images.append(image)
+         contact_source = temporary_directory / "contact-sheet.html"
+         contact_sheet = output_directory / "od-contact-sheet.png"
++        contact_height = 270 * ((len(images) + 3) // 4)
+         contact_source.write_text(contact_sheet_html(images), encoding="utf-8")
+-        screenshot(browser, contact_source, contact_sheet, WIDTH, 270 * ((len(images) + 3) // 4))
++        previous_sheet = artifact_state(contact_sheet)
++        sheet_result = screenshot(browser, contact_source, contact_sheet, WIDTH, contact_height)
++        require_screenshot(contact_sheet, WIDTH, contact_height, previous_sheet, sheet_result, contact_source)
+         (output_directory / LAYOUT_AUDIT_FILE).write_text(
+             json.dumps({"violations": violations}, indent=2),
+             encoding="utf-8",
+diff --git a/tests/test_render_layout_audit.py b/tests/test_render_layout_audit.py
+index f40de19..4ae465e 100644
+--- a/tests/test_render_layout_audit.py
++++ b/tests/test_render_layout_audit.py
+@@ -2,8 +2,11 @@ import importlib.util
+ import json
+ import tempfile
+ import unittest
++from html import escape
+ from pathlib import Path
+ 
++from PIL import Image
++
+ RENDERER_PATH = Path(__file__).parents[1] / "scripts" / "render-open-design-artifact.py"
+ SPEC = importlib.util.spec_from_file_location("render_open_design_artifact_audit", RENDERER_PATH)
+ if SPEC is None or SPEC.loader is None:
+@@ -57,5 +60,168 @@ class BrowserPathTest(unittest.TestCase):
+                 RENDERER.os.environ["OPEN_DESIGN_BROWSER"] = previous
+ 
+ 
++class ChromeResult:
++    def __init__(self, returncode: int, stdout: bytes = b"", stderr: bytes = b"") -> None:
++        self.returncode = returncode
++        self.stdout = stdout
++        self.stderr = stderr
++
++
++TEARDOWN_STDERR = b"Teardown watchdog expired; recording dump and terminating."
++
++
++def write_png(path: Path, width: int, height: int) -> None:
++    Image.new("RGB", (width, height), (20, 20, 24)).save(path, format="PNG")
++
++
++class ScreenshotPostconditionTest(unittest.TestCase):
++    def setUp(self) -> None:
++        self._directory = tempfile.TemporaryDirectory()
++        self.addCleanup(self._directory.cleanup)
++        self.output = Path(self._directory.name) / "od-card-01.png"
++        self.source = Path(self._directory.name) / "card-01.html"
++
++    def validate(self, result: ChromeResult, previous: tuple[int, int] | None = None) -> None:
++        RENDERER.require_screenshot(self.output, RENDERER.WIDTH, RENDERER.HEIGHT, previous, result, self.source)
++
++    def test_accepts_a_fresh_valid_screenshot_written_before_a_teardown_exit_2(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, RENDERER.HEIGHT)
++
++        self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR))
++
++    def test_accepts_a_clean_exit_that_wrote_a_valid_screenshot(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, RENDERER.HEIGHT)
++
++        self.validate(ChromeResult(0))
++
++    def test_rejects_a_nonzero_exit_that_is_not_the_known_teardown(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, RENDERER.HEIGHT)
++
++        for exit_code in (1, 134, 139):
++            with self.subTest(exit_code=exit_code):
++                with self.assertRaises(RuntimeError) as caught:
++                    self.validate(ChromeResult(exit_code, stderr=b"Segmentation fault: 11"))
++
++                self.assertIn(f"Chrome exited {exit_code}", str(caught.exception))
++
++    def test_rejects_a_teardown_exit_code_without_its_watchdog_message(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, RENDERER.HEIGHT)
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=b"GPU process crashed"))
++
++        self.assertIn("Chrome exited 2", str(caught.exception))
++
++    def test_rejects_a_run_that_wrote_nothing_even_when_chrome_exits_zero(self) -> None:
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(0))
++
++        self.assertIn("was not written", str(caught.exception))
++
++    def test_rejects_a_stale_screenshot_left_by_an_earlier_run(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, RENDERER.HEIGHT)
++        previous = RENDERER.artifact_state(self.output)
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR), previous)
++
++        self.assertIn("was not rewritten by this run", str(caught.exception))
++
++    def test_rejects_an_empty_file(self) -> None:
++        self.output.write_bytes(b"")
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR))
++
++        self.assertIn("is empty", str(caught.exception))
++
++    def test_rejects_a_non_png_payload(self) -> None:
++        self.output.write_text("not a png at all, just text bytes", encoding="utf-8")
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR))
++
++        self.assertIn("is not a fully decodable PNG", str(caught.exception))
++
++    def test_rejects_a_truncated_file_that_has_a_valid_png_header(self) -> None:
++        self.output.write_bytes(
++            b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\x0d" + b"IHDR" + b"\x00\x00\x04\x38" * 2
++        )
++        self.assertEqual(24, self.output.stat().st_size)
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR))
++
++        self.assertIn("is not a fully decodable PNG", str(caught.exception))
++
++    def test_rejects_a_png_truncated_after_a_partial_pixel_stream(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, RENDERER.HEIGHT)
++        complete = self.output.read_bytes()
++        self.output.write_bytes(complete[: len(complete) // 2])
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR))
++
++        self.assertIn("is not a fully decodable PNG", str(caught.exception))
++
++    def test_rejects_a_screenshot_at_the_wrong_size(self) -> None:
++        write_png(self.output, RENDERER.WIDTH, 270)
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=TEARDOWN_STDERR))
++
++        self.assertIn(
++            f"is {RENDERER.WIDTH}x270, expected {RENDERER.WIDTH}x{RENDERER.HEIGHT}",
++            str(caught.exception),
++        )
++
++    def test_reports_the_exit_code_and_stderr_tail_for_diagnosis(self) -> None:
++        with self.assertRaises(RuntimeError) as caught:
++            self.validate(ChromeResult(2, stderr=b"line a\nline b\n" + TEARDOWN_STDERR))
++
++        message = str(caught.exception)
++        self.assertIn("exit 2", message)
++        self.assertIn("Teardown watchdog expired", message)
++
++
++class LayoutMeasurementTest(unittest.TestCase):
++    def measure(self, stdout: bytes, returncode: int = 2) -> dict:
++        original = RENDERER.subprocess.run
++        RENDERER.subprocess.run = lambda *_, **__: ChromeResult(returncode, stdout=stdout, stderr=b"")
++        try:
++            return RENDERER.measure_layout("chrome", Path("/tmp/card-01.html"))
++        finally:
++            RENDERER.subprocess.run = original
++
++    def test_parses_the_audit_report_from_a_dump_that_exits_2(self) -> None:
++        report = {"cardIndex": 3, "violations": [{"kind": "text-over-panel", "ratio": 0.42}]}
++        dom = f'<body {RENDERER.LAYOUT_AUDIT_ATTRIBUTE}="{escape(json.dumps(report), quote=True)}"></body>'.encode()
++
++        self.assertEqual(report, self.measure(dom))
++
++    def test_fails_when_the_dump_carries_no_audit_attribute(self) -> None:
++        with self.assertRaises(RuntimeError) as caught:
++            self.measure(b"<body></body>")
++
++        self.assertIn("did not report measurements", str(caught.exception))
++        self.assertIn("exit 2", str(caught.exception))
++
++    def test_fails_when_the_audit_attribute_is_not_parseable_json(self) -> None:
++        dom = f'<body {RENDERER.LAYOUT_AUDIT_ATTRIBUTE}="{{not json"></body>'.encode()
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.measure(dom)
++
++        self.assertIn("is not parseable", str(caught.exception))
++
++    def test_fails_when_the_audit_report_has_no_violations_list(self) -> None:
++        dom = f'<body {RENDERER.LAYOUT_AUDIT_ATTRIBUTE}="{{&quot;cardIndex&quot;:1}}"></body>'.encode()
++
++        with self.assertRaises(RuntimeError) as caught:
++            self.measure(dom)
++
++        self.assertIn("has no violations list", str(caught.exception))
++
++
+ if __name__ == "__main__":
+     unittest.main()

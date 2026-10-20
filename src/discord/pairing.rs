@@ -338,20 +338,25 @@ impl PairingStore {
             .execute(&mut **tx)
             .await?;
 
-        // 3. Enforce bounded pending count, propagating count error
-        let active_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM pairing_codes WHERE expires_at > ?")
-                .bind(now)
-                .fetch_one(&mut **tx)
-                .await?;
+        // 3. Enforce bounded pending count per platform, propagating count error. The table is
+        // shared with Slack (`slack:` user keys), so a global cap let a flood of Slack strangers
+        // evict a pending Discord code; capacity is counted and evicted for this platform only.
+        let scope = pending_scope_clause(user_id_str);
+        let active_count: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM pairing_codes WHERE expires_at > ? AND {scope}"
+        ))
+        .bind(now)
+        .fetch_one(&mut **tx)
+        .await?;
 
         if active_count as usize >= MAX_PENDING_CODES {
             let to_evict = (active_count as usize - MAX_PENDING_CODES + 1) as i64;
-            sqlx::query(
+            sqlx::query(&format!(
                 "DELETE FROM pairing_codes WHERE code IN (
-                    SELECT code FROM pairing_codes WHERE expires_at > ? ORDER BY created_at ASC LIMIT ?
-                )",
-            )
+                    SELECT code FROM pairing_codes WHERE expires_at > ? AND {scope}
+                    ORDER BY created_at ASC LIMIT ?
+                )"
+            ))
             .bind(now)
             .bind(to_evict)
             .execute(&mut **tx)
@@ -583,6 +588,17 @@ pub const SLACK_PLATFORM_KEY: &str = "slack";
 /// Prefix for Slack user ids in the shared `pairing_codes`/`pairing_notifications` tables, so
 /// they never collide with Discord snowflakes and Discord `/pair` never accepts them.
 const SLACK_USER_PREFIX: &str = "slack:";
+
+/// `pairing_codes` holds Discord snowflakes and `slack:`-prefixed Slack ids side by side, so the
+/// pending-code capacity must be counted and evicted per platform: a global cap let unpaired
+/// Slack strangers evict a pending Discord user's code.
+fn pending_scope_clause(user_id_str: &str) -> &'static str {
+    if user_id_str.starts_with(SLACK_USER_PREFIX) {
+        "user_id LIKE 'slack:%'"
+    } else {
+        "user_id NOT LIKE 'slack:%'"
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SlackPairingOutcome {
@@ -1337,6 +1353,54 @@ mod tests {
         assert!(
             total_pending as usize <= MAX_PENDING_CODES,
             "active pending count must not exceed capacity {MAX_PENDING_CODES}, got {total_pending}"
+        );
+    }
+
+    #[tokio::test]
+    async fn slack_flood_does_not_evict_pending_discord_codes() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let discord = PairingStore::new(pool.clone());
+        discord.init_cache().await.unwrap();
+        let slack = SlackPairingStore::new(pool.clone());
+
+        let t0 = Utc::now();
+        let discord_user = 777_000_111_u64;
+        discord
+            .request_pairing_code_at(discord_user, t0)
+            .await
+            .unwrap();
+
+        // Far more unpaired Slack strangers than the pending cap, all in the Slack bucket.
+        for i in 0..(MAX_PENDING_CODES + 20) {
+            slack
+                .request_pairing_code_at(&format!("USLACK{i}"), t0)
+                .await
+                .unwrap();
+        }
+
+        let discord_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pairing_codes WHERE user_id = ? AND expires_at > ?",
+        )
+        .bind(discord_user.to_string())
+        .bind(t0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            discord_rows, 1,
+            "a Slack flood must not evict a pending Discord pairing code"
+        );
+
+        let slack_rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pairing_codes WHERE user_id LIKE 'slack:%' AND expires_at > ?",
+        )
+        .bind(t0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            slack_rows as usize <= MAX_PENDING_CODES,
+            "the Slack bucket is still bounded, got {slack_rows}"
         );
     }
 

@@ -1,0 +1,165 @@
+diff --git a/scripts/publish-ready-digest.ts b/scripts/publish-ready-digest.ts
+index 18982aa..45aa83c 100644
+--- a/scripts/publish-ready-digest.ts
++++ b/scripts/publish-ready-digest.ts
+@@ -371,6 +384,30 @@ export function dashboardUrl(topicId: number): string {
+   return `${base.replace(/\/+$/, "")}/assets?topic=${topicId}`;
+ }
+ 
++const DISCORD_CUSTOM_ID_LIMIT = 100;
++const COMPACT_VERSION = "v1";
++const COMPACT_PART_MARKER = "b64-";
++const HEX_SHA256_CHARS = 64;
++
++function compactTokenPart(part: string): string {
++  if (part.length !== HEX_SHA256_CHARS || !/^[0-9a-fA-F]+$/.test(part)) return part;
++  const bytes = Buffer.from(part, "hex");
++  if (bytes.length !== 32) return part;
++  return `${COMPACT_PART_MARKER}${bytes.toString("base64url")}`;
++}
++
++/** Wire format paired with `discordCustomId` in omon-gateway `src/discord/buttons.rs`. */
++export function discordCustomId(customId: string): string {
++  if (customId.length <= DISCORD_CUSTOM_ID_LIMIT) return customId;
++  const parts = customId.split(":");
++  if (parts.length !== 6) return customId;
++  const token = parts[5]!
++    .split(".")
++    .map(compactTokenPart)
++    .join(".");
++  return [...parts.slice(0, 5), COMPACT_VERSION, token].join(":");
++}
++
+ export function buttonComponents(
+   topicId: number,
+   previewedAssetIds: readonly number[],
+@@ -383,7 +420,12 @@ export function buttonComponents(
+     {
+       type: 1,
+       components: [
+-        { type: 2, style: 3, label: "발행", custom_id: `${id("publish")}:${token}` },
++        {
++          type: 2,
++          style: 3,
++          label: "발행",
++          custom_id: discordCustomId(`${id("publish")}:${token}`),
++        },
+         { type: 2, style: 2, label: "미리보기", custom_id: id("preview") },
+         { type: 2, style: 4, label: "패스", custom_id: id("pass") },
+         { type: 2, style: 5, label: "대시보드", url: dashboardUrl(topicId) },
+diff --git a/tests/unit/publish-button-action.test.ts b/tests/unit/publish-button-action.test.ts
+index d6a8ae5..bae8554 100644
+--- a/tests/unit/publish-button-action.test.ts
++++ b/tests/unit/publish-button-action.test.ts
+@@ -21,12 +21,28 @@ import {
+   cardImagePaths,
+   cardRenderIsVerified,
+   dashboardUrl,
++  discordCustomId,
+   ensureReviewSnapshot,
+   rankReadyTopics,
+   selectPreviewFiles,
+   selectReadyTopicForTest,
+ } from "../../scripts/publish-ready-digest";
+ 
++/** Mirrors the gateway's decoder in omon-gateway `src/discord/buttons.rs`. */
++function expandGatewayCustomId(customId: string): string {
++  const parts = customId.split(":");
++  if (parts.length !== 7 || parts[5] !== "v1") return customId;
++  const token = parts[6]!
++    .split(".")
++    .map((part) =>
++      part.startsWith("b64-") ? Buffer.from(part.slice(4), "base64url").toString("hex") : part,
++    )
++    .join(".");
++  return [...parts.slice(0, 5), token].join(":");
++}
++
++const COMPACTED_SHA256_A = `v1:4.b64-${Buffer.from("a".repeat(64), "hex").toString("base64url")}.2`;
++
+ const dirs: string[] = [];
+ function tempDir(): string {
+   const dir = mkdtempSync(join(tmpdir(), "publish-button-"));
+@@ -70,7 +86,8 @@ describe("button argv", () => {
+     ];
+     const customId = row.components[0]?.["custom_id"];
+     expect(typeof customId).toBe("string");
+-    const gatewayArgv = (customId as string).split(":").slice(3);
++    expect((customId as string).length).toBeLessThanOrEqual(100);
++    const gatewayArgv = expandGatewayCustomId(customId as string).split(":").slice(3);
+     expect(gatewayArgv).toEqual(["publish", "98-411-412", `4.${"a".repeat(64)}.2`]);
+     expect(parseArgs(gatewayArgv)).toEqual({
+       action: "publish",
+@@ -140,7 +157,7 @@ describe("digest message", () => {
+       draftRevision: 2,
+     }) as [{ components: Record<string, unknown>[] }];
+     expect(row.components.map((c) => c["custom_id"] ?? c["url"])).toEqual([
+-      `omon:btn:content-intel:publish:86:4.${"a".repeat(64)}.2`,
++      `omon:btn:content-intel:publish:86:${COMPACTED_SHA256_A}`,
+       "omon:btn:content-intel:preview:86",
+       "omon:btn:content-intel:pass:86",
+       dashboardUrl(86),
+@@ -225,6 +242,36 @@ describe("digest message", () => {
+ });
+ 
+ describe("button binding", () => {
++  test("Given a full sha256 binding, then the custom_id fits Discord and round-trips to the same token", () => {
++    const sha = "3f".repeat(32);
++    const original = `omon:btn:content-intel:publish:96-417-435:4.${sha}.2`;
++    const sent = discordCustomId(original);
++
++    expect(original.length).toBeGreaterThan(100);
++    expect(sent.length).toBeLessThanOrEqual(100);
++    expect(sent).toBe(
++      "omon:btn:content-intel:publish:96-417-435:v1:4.b64-Pz8_Pz8_Pz8_Pz8_Pz8_Pz8_Pz8_Pz8_Pz8_Pz8_Pz8.2",
++    );
++    expect(expandGatewayCustomId(sent)).toBe(original);
++
++    const [row] = buttonComponents(96, [417, 435], {
++      id: 4,
++      payloadSha256: sha,
++      draftRevision: 2,
++    }) as [{ components: Record<string, unknown>[] }];
++    const customId = row.components[0]?.["custom_id"] as string;
++    expect(customId.length).toBeLessThanOrEqual(100);
++    expect(parseArgs(expandGatewayCustomId(customId).split(":").slice(3))).toEqual({
++      action: "publish",
++      topicId: 96,
++      assetIds: [417, 435],
++      snapshotToken: { snapshotId: 4, payloadSha256: sha, draftRevision: 2 },
++    });
++    expect(discordCustomId("omon:btn:content-intel:preview:96-417-435")).toBe(
++      "omon:btn:content-intel:preview:96-417-435",
++    );
++  });
++
+   test("Given previewed asset ids, then every action button carries them", () => {
+     const [row] = buttonComponents(98, [411, 412], {
+       id: 4,
+@@ -232,7 +279,7 @@ describe("button binding", () => {
+       draftRevision: 2,
+     }) as [{ components: Record<string, unknown>[] }];
+     expect(row.components.slice(0, 3).map((c) => c["custom_id"])).toEqual([
+-      `omon:btn:content-intel:publish:98-411-412:4.${"a".repeat(64)}.2`,
++      `omon:btn:content-intel:publish:98-411-412:${COMPACTED_SHA256_A}`,
+       "omon:btn:content-intel:preview:98-411-412",
+       "omon:btn:content-intel:pass:98-411-412",
+     ]);
+@@ -408,7 +455,7 @@ describe("script approval gate", () => {
+     }) as [{ components: Record<string, unknown>[] }];
+     const customId = row.components[0]?.["custom_id"];
+     if (typeof customId !== "string") throw new Error("PUBLISH custom_id missing");
+-    const args = parseArgs(customId.split(":").slice(3));
++    const args = parseArgs(expandGatewayCustomId(customId).split(":").slice(3));
+     if (!args?.snapshotToken) throw new Error("Gateway PUBLISH argv did not parse");
+     process.env["CONTENT_INTEL_DISTRIBUTION_CHANNELS_JSON"] = JSON.stringify([
+       {
+@@ -447,7 +494,7 @@ describe("script approval gate", () => {
+       db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM publication_approvals").get()
+         ?.count,
+     ).toBe(1);
+-    const tamperedArgv = customId.split(":").slice(3);
++    const tamperedArgv = expandGatewayCustomId(customId).split(":").slice(3);
+     tamperedArgv[2] = `${snapshot.id}.${"f".repeat(64)}.${snapshot.draft_revision}`;
+     const tamperedArgs = parseArgs(tamperedArgv);
+     if (!tamperedArgs?.snapshotToken)

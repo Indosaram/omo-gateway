@@ -56,6 +56,7 @@ impl InboxSource for SlackSource {
                           ) \
                           AND parent.message_id <> d.message_id \
                       ) THEN 'owner_reply' \
+                      WHEN instr(d.content, ?) > 0 THEN 'mention' \
                       ELSE 'channel' \
                     END AS calculated_room_type \
              FROM message_search_documents d \
@@ -82,6 +83,9 @@ impl InboxSource for SlackSource {
              ORDER BY d.rowid",
         )
         .bind(&self.owner_id)
+        // The room type above is decided on the full content, not the capped snippet, so a
+        // mention past MAX_SNIPPET_CHARS still arrives as 'mention' for the prefilter.
+        .bind(format!("<@{}>", self.owner_id))
         .bind(after_rowid)
         .bind(&self.owner_id)
         .bind(&self.bot_id)
@@ -274,7 +278,7 @@ mod tests {
             .iter()
             .all(|item| item.source == InboxSourceKind::Slack));
         assert_eq!(items[0].room_type.as_deref(), Some("dm"));
-        assert_eq!(items[1].room_type.as_deref(), Some("channel"));
+        assert_eq!(items[1].room_type.as_deref(), Some("mention"));
         assert_eq!(items[2].room_type.as_deref(), Some("owner_reply"));
         assert_eq!(
             items[0].link.as_deref(),
@@ -327,6 +331,48 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn long_channel_message_mentioning_owner_past_snippet_cap_is_collected() {
+        let pool = pool().await;
+        let index = MessageSearchIndex::new(pool.clone());
+        // The owner mention sits past MAX_SNIPPET_CHARS, so the stored snippet cannot show it and
+        // the prefilter must rely on the room type the source derived from the full content.
+        let content = format!(
+            "{}<@{}> please review this",
+            "x".repeat(crate::inbox::MAX_SNIPPET_CHARS),
+            OWNER
+        );
+        index
+            .upsert(&doc(
+                Some("T1"),
+                "C1",
+                None,
+                "1700000002.000100",
+                "U0ALICE",
+                &content,
+            ))
+            .await
+            .unwrap();
+        let source = SlackSource::new(pool.clone(), OWNER.into(), BOT.into());
+        let rules = crate::inbox::prefilter::PrefilterRules {
+            owner_slack_id: OWNER.into(),
+            bot_slack_id: Some(BOT.into()),
+            ..Default::default()
+        };
+
+        let (items, _) = source.fetch_since(None).await.unwrap();
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].snippet.contains(&format!("<@{OWNER}>")));
+        assert_eq!(items[0].room_type.as_deref(), Some("mention"));
+        assert_eq!(rules.drop_reason(&items[0]), None);
+
+        let results =
+            crate::inbox::collect_all(&pool, &[&source as &dyn InboxSource], &rules).await;
+        assert_eq!(results[0].error, None);
+        assert_eq!(results[0].stats.inserted, 1);
+        assert_eq!(results[0].stats.dropped, 0);
     }
 
     #[tokio::test]

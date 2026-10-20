@@ -780,8 +780,7 @@ fn hermes_skill_dirs(hermes_root: &Path, home: &Path) -> Vec<PathBuf> {
 /// (`OMON_HOME_PLATFORM=slack` or no Discord), boot publishes the Slack owner DM there
 /// before any lead consumer starts (see `boot_slack`).
 fn default_lead() -> String {
-    std::env::var("OMON_LANE_DEFAULT_LEAD")
-        .unwrap_or_else(|_| omon_gateway::lanes::kibitzer::DEFAULT_LEAD.to_owned())
+    omon_gateway::runtime_config::default_lead()
 }
 
 /// Slack identity resolved once at boot, before any owner-lead consumer starts.
@@ -856,7 +855,9 @@ async fn boot_slack(
         optional_env("OMON_SLACK_PERSONA_FROM").as_deref(),
     );
     match omon_gateway::slack::home::copy_persona(pool, &persona_source, &auth.user_id).await {
-        Ok(true) => info!(from = %persona_source, to = %auth.user_id, "copied bot persona to the Slack bot"),
+        Ok(true) => {
+            info!(from = %persona_source, to = %auth.user_id, "copied bot persona to the Slack bot")
+        }
         Ok(false) => {}
         Err(error) => warn!(%error, "could not copy bot persona to the Slack bot"),
     }
@@ -873,7 +874,7 @@ async fn boot_slack(
             Ok(key) => {
                 if optional_env("OMON_LANE_DEFAULT_LEAD").is_none() {
                     // Lanes, kibitzer, cron health, proposals and the actor read the lead here.
-                    env::set_var("OMON_LANE_DEFAULT_LEAD", key.storage_key());
+                    omon_gateway::runtime_config::set_default_lead(key.storage_key());
                 }
                 info!(lead = %default_lead(), "Slack owner DM is the owner home");
                 Some(key)
@@ -1114,6 +1115,90 @@ fn claim_fda_prompt(marker: &Path) -> bool {
         .is_ok()
 }
 
+/// One retention sweep with its own log line. Shared by the boot prune of both gateway modes and
+/// the daily task, so every mode reports the same fields.
+async fn prune_storage_once(pool: &SqlitePool, retention_days: i64, when: &str) {
+    match omon_gateway::storage::retention::prune_older_than(
+        pool,
+        retention_days,
+        chrono::Utc::now(),
+    )
+    .await
+    {
+        Ok(report) => info!(
+            total = report.total(),
+            turn_status = report.turn_status_messages,
+            action_loop = report.action_loop_seen,
+            outcomes = report.action_loop_outcomes,
+            notices = report.session_watch_notices,
+            claims = report.report_claims,
+            retention_days,
+            "storage retention prune: {when}"
+        ),
+        Err(error) => {
+            warn!(%error, retention_days, "storage retention prune failed: {when}")
+        }
+    }
+}
+
+/// How long shutdown waits for the daily retention task before aborting it.
+const RETENTION_JOIN_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Stops the daily retention task and waits for it, so it can never outlive the pool it uses.
+async fn join_retention_task(task: tokio::task::JoinHandle<()>) {
+    join_retention_task_within(task, RETENTION_JOIN_LIMIT).await;
+}
+
+/// Bounded join that really ends the task. The timeout borrows the handle rather than taking it:
+/// `timeout(limit, task)` would drop the handle on expiry, which only detaches the task, and a
+/// sweep still holding the pool can then race or block `pool.close()`. On expiry the task is
+/// aborted and awaited, so this returns only once the future has actually been dropped.
+async fn join_retention_task_within(
+    mut task: tokio::task::JoinHandle<()>,
+    limit: std::time::Duration,
+) {
+    match tokio::time::timeout(limit, &mut task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => warn!(%error, "storage retention task failed to join"),
+        Err(_) => {
+            warn!(
+                ?limit,
+                "storage retention task did not stop in time; aborting it"
+            );
+            task.abort();
+            match task.await {
+                Ok(()) => {}
+                // The abort we just requested: nothing is left running.
+                Err(error) if error.is_cancelled() => {}
+                Err(error) => warn!(%error, "aborted storage retention task failed"),
+            }
+        }
+    }
+}
+
+/// Spawns a daily background task that prunes completed ephemeral records older than
+/// `retention_days` from the database. The boot prune runs first, so a gateway that restarts
+/// more often than the period still sweeps.
+fn spawn_daily_retention_task(
+    pool: SqlitePool,
+    shutdown: tokio_util::sync::CancellationToken,
+    retention_days: i64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let period = std::time::Duration::from_secs(24 * 60 * 60);
+        let mut interval = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                _ = interval.tick() => {
+                    prune_storage_once(&pool, retention_days, "daily").await;
+                }
+            }
+        }
+    })
+}
+
 async fn run_gateway() -> Result<()> {
     run_gateway_with_dashboard(None).await
 }
@@ -1160,6 +1245,12 @@ async fn run_gateway_with_dashboard(
             .fetch_all(&pool)
             .await?;
         info!(databases = ?paths, "gateway database opened");
+        // Discord-free mode is a full gateway: it runs the inbox collector, lanes and the action
+        // loop against the same database, so it needs the same retention as the Discord/Slack
+        // path instead of returning before that setup.
+        let storage_retention_days =
+            omon_gateway::storage::retention::retention_days_from_environment()?;
+        prune_storage_once(&pool, storage_retention_days, "headless boot").await;
         let shutdown = tokio_util::sync::CancellationToken::new();
         let workspace = env::var_os("OMON_WORKSPACE_ROOT")
             .map(PathBuf::from)
@@ -1252,6 +1343,8 @@ async fn run_gateway_with_dashboard(
         });
         let (inbox_shutdown, inbox_shutdown_rx) = tokio::sync::watch::channel(false);
         let mut inbox = spawn_inbox_collector(&pool, inbox_shutdown_rx, None)?;
+        let retention_task =
+            spawn_daily_retention_task(pool.clone(), shutdown.clone(), storage_retention_days);
         info!(
             "headless gateway lead runtime ready; output delivery is local transcript acceptance"
         );
@@ -1261,6 +1354,8 @@ async fn run_gateway_with_dashboard(
             _ = terminate.recv() => Ok(()),
         };
         shutdown.cancel();
+        // Before `pool.close()`: the task holds a pool handle and must stop first.
+        join_retention_task(retention_task).await;
         scheduler.shutdown().await;
         stop_inbox_collector(&mut inbox, inbox_shutdown).await;
         let cleanup = stop_lead_runtime(&multiplexer, &mut lanes).await;
@@ -1289,11 +1384,18 @@ async fn run_gateway_with_dashboard(
     let loaded_yolo = approval_guard.load_persisted_yolo().await?;
     info!(loaded_yolo, "loaded persisted yolo sessions");
     if omon_gateway::report::claims::report_claims_enabled() {
-        let _ = omon_gateway::report::claims::recover_stale_report_claims(
-            &pool,
-            chrono::Utc::now(),
-        )
-        .await;
+        // Boot only: this sweep resolves every pending claim, so it must finish before any turn
+        // can post a new one. A failed sweep leaves the claims pending and says so in the log.
+        match omon_gateway::report::claims::recover_stale_report_claims(&pool, chrono::Utc::now())
+            .await
+        {
+            Ok(0) => {}
+            Ok(recovered) => info!(
+                recovered,
+                "recovered pending report claims left over from a previous process"
+            ),
+            Err(error) => warn!(%error, "failed to recover pending report claims on startup"),
+        }
     }
     let _ = omon_gateway::inbox::proposals::backfill_pending_inbox_proposals(&pool).await;
     if omon_gateway::agent::agent_workspace::approval_ledger_enabled() {
@@ -1369,14 +1471,17 @@ async fn run_gateway_with_dashboard(
             .with_pool(pool.clone()),
     );
     if let (Some(slack), Some(boot)) = (&slack_config, &slack_boot) {
-        let mut message_context = omon_gateway::MessageContextTool::from_environment(pool.clone())
-            .unwrap_or_default();
+        let mut message_context =
+            omon_gateway::MessageContextTool::from_environment(pool.clone()).unwrap_or_default();
         message_context.register_provider(
             omon_gateway::tools::message_context_slack::SlackMessageContextProvider::new(
                 boot.api.clone(),
                 pool.clone(),
             )
-            .with_channels(slack.allowed_channels.clone(), slack.ignored_channels.clone()),
+            .with_channels(
+                slack.allowed_channels.clone(),
+                slack.ignored_channels.clone(),
+            ),
         );
         tools.register(message_context);
     }
@@ -1499,13 +1604,15 @@ async fn run_gateway_with_dashboard(
     let slack_dispatcher = slack_egress
         .clone()
         .map(|egress| egress as Arc<dyn OutboundDispatcher>);
-    let platform_router =
-        omon_gateway::multiplexer::PlatformRouter::for_transports(discord_dispatcher, slack_dispatcher)
-            .ok_or_else(|| {
-                OmonError::Config("no Discord or Slack transport could be started".into())
-            })?;
+    let platform_router = omon_gateway::multiplexer::PlatformRouter::for_transports(
+        discord_dispatcher,
+        slack_dispatcher,
+    )
+    .ok_or_else(|| OmonError::Config("no Discord or Slack transport could be started".into()))?;
     let discord_egress_dispatcher: Arc<dyn OutboundDispatcher> = Arc::new(platform_router);
-    shared_dispatcher.set(discord_egress_dispatcher.clone()).await;
+    shared_dispatcher
+        .set(discord_egress_dispatcher.clone())
+        .await;
     approval_requester
         .set_dispatcher(discord_egress_dispatcher.clone())
         .await;
@@ -1516,6 +1623,10 @@ async fn run_gateway_with_dashboard(
     let retention_days = cron_runs_retention_days_from_environment()?;
     let pruned = prune_terminal_cron_runs(&pool, retention_days, chrono::Utc::now()).await?;
     info!(pruned, retention_days, "pruned old terminal cron runs");
+
+    let storage_retention_days =
+        omon_gateway::storage::retention::retention_days_from_environment()?;
+    prune_storage_once(&pool, storage_retention_days, "boot").await;
 
     let cron_sync = HermesStoreSynchronizer::from_environment(pool.clone())?;
     let imported = cron_sync.sync().await?;
@@ -1800,8 +1911,12 @@ async fn run_gateway_with_dashboard(
         Ok(count) => info!(count, "re-escalated stale cron remediations"),
         Err(error) => warn!(%error, "failed to sweep stale cron remediations"),
     }
-    let mut lane_tasks =
-        spawn_lane_service(&pool, &lane_shutdown, kibitzer, Some(approval_requester.clone()))?;
+    let mut lane_tasks = spawn_lane_service(
+        &pool,
+        &lane_shutdown,
+        kibitzer,
+        Some(approval_requester.clone()),
+    )?;
     lane_tasks.spawn(omon_gateway::cron::report::serve_native(
         pool.clone(),
         scheduler.clone(),
@@ -1883,6 +1998,8 @@ async fn run_gateway_with_dashboard(
             lane_shutdown.clone(),
         ));
     }
+    let retention_task =
+        spawn_daily_retention_task(pool.clone(), lane_shutdown.clone(), storage_retention_days);
 
     let mut join_set = tokio::task::JoinSet::new();
     for mut client in clients {
@@ -1962,6 +2079,8 @@ async fn run_gateway_with_dashboard(
         let _ = server.await;
     }
     stop_inbox_collector(&mut inbox, inbox_shutdown).await;
+    // Before `pool.close()`: the task holds a pool handle and must stop first.
+    join_retention_task(retention_task).await;
     scheduler.shutdown().await;
     scale_to_zero.shutdown().await;
     let cleanup = stop_lead_runtime(&multiplexer, &mut lane_tasks).await;
@@ -2021,13 +2140,24 @@ mod headless_tests {
             SessionKey::new("slack", None::<String>, "DOWNER", None::<String>, "UOWNER")
                 .with_bot_id("UBOT")
                 .storage_key();
-        assert_eq!(digest_owner(&slack_lead, Some(&slack), Some("999")), "UOWNER");
         assert_eq!(
-            digest_owner(omon_gateway::lanes::kibitzer::DEFAULT_LEAD, Some(&slack), None),
+            digest_owner(&slack_lead, Some(&slack), Some("999")),
+            "UOWNER"
+        );
+        assert_eq!(
+            digest_owner(
+                omon_gateway::lanes::kibitzer::DEFAULT_LEAD,
+                Some(&slack),
+                None
+            ),
             omon_gateway::inbox::proposals::OWNER_ID
         );
         assert_eq!(
-            digest_owner(omon_gateway::lanes::kibitzer::DEFAULT_LEAD, None, Some("42")),
+            digest_owner(
+                omon_gateway::lanes::kibitzer::DEFAULT_LEAD,
+                None,
+                Some("42")
+            ),
             "42"
         );
     }
@@ -2049,10 +2179,19 @@ mod headless_tests {
         assert!(auth.is_authorized(&dm));
         let paired = SessionKey::new("slack", Some("T1"), "CALLOWED", None::<String>, "");
         assert!(auth.is_authorized_actor(&paired, Some("UPAIRED")));
-        assert!(!auth.is_authorized(&paired), "a channel session key carries no actor");
+        assert!(
+            !auth.is_authorized(&paired),
+            "a channel session key carries no actor"
+        );
         let outside = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
         assert!(!auth.is_authorized(&outside));
-        let ignored = SessionKey::new("slack", None::<String>, "DIGNORED", None::<String>, "UOWNER");
+        let ignored = SessionKey::new(
+            "slack",
+            None::<String>,
+            "DIGNORED",
+            None::<String>,
+            "UOWNER",
+        );
         assert!(!auth.is_authorized(&ignored));
         let stranger = SessionKey::new("slack", None::<String>, "DX", None::<String>, "42");
         assert!(!auth.is_authorized(&stranger));
@@ -2070,6 +2209,96 @@ mod headless_tests {
         assert_eq!(
             inbox_sources(&pool, Some(("UOWNER".into(), "UBOT".into()))).len(),
             5
+        );
+    }
+
+    /// libtest names a test by `module_path!()` with the crate root segment removed, and `--exact`
+    /// matches that same name, so the selector must strip exactly one leading segment.
+    ///
+    /// Measured with an isolated `rustc --test` fixture (`mod legacy { include!(...) }`): the
+    /// module path is `bin_entry::legacy::headless_tests` and
+    /// `test_review_dashboard::legacy::headless_tests`, while `--list` prints
+    /// `legacy::headless_tests::probe_target` for both. Selecting the unstripped path, or a
+    /// hardcoded `headless_tests::...`, runs 0 tests and still exits 0 — which is how the gate saw
+    /// `child ran no test` at src/main.rs:2240.
+    fn child_test_selector(test: &str) -> String {
+        let module = module_path!();
+        let path = module.split_once("::").map_or(module, |(_, rest)| rest);
+        format!("{path}::{test}")
+    }
+
+    #[test]
+    fn test_default_lead_runtime_config_delegation() {
+        const CHILD: &str = "OMON_MAIN_RUNTIME_CONFIG_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // boot_slack seeds the runtime config instead of mutating the environment, so a
+            // child process is the only way to observe the OnceLock without racing other tests.
+            assert!(omon_gateway::runtime_config::set_default_lead(
+                "slack:owner-dm"
+            ));
+            assert_eq!(default_lead(), "slack:owner-dm");
+            return;
+        }
+        let selector = child_test_selector("test_default_lead_runtime_config_delegation");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &selector])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // `--exact` with a wrong path exits 0 having run nothing, so the count is the real guard.
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("1 passed"),
+            "child ran no test for `{selector}`: {stdout}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_daily_retention_task_cancels_cleanly() {
+        let pool = SqlitePool::connect_lazy("sqlite::memory:").unwrap();
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let handle = spawn_daily_retention_task(
+            pool,
+            shutdown.clone(),
+            omon_gateway::storage::retention::DEFAULT_RETENTION_DAYS,
+        );
+        shutdown.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+        assert!(
+            result.is_ok(),
+            "retention task did not shut down cleanly on cancellation"
+        );
+    }
+
+    /// A sweep blocked inside the pool never observes the shutdown token, so only the abort can end
+    /// it. The task never resolves, so the bounded join always takes the expiry path: this asserts
+    /// the future is dropped (reaped) rather than detached, which is what `pool.close()` needs.
+    #[tokio::test]
+    async fn join_retention_task_aborts_and_reaps_a_task_that_ignores_shutdown() {
+        struct Dropped(std::sync::Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let task = tokio::spawn(async move {
+            let _guard = guard;
+            std::future::pending::<()>().await;
+        });
+
+        join_retention_task_within(task, std::time::Duration::from_millis(50)).await;
+
+        assert!(
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+            "the task must be aborted and reaped, not detached"
         );
     }
 
@@ -2879,11 +3108,9 @@ fn inbox_sources(
         )),
     ];
     if let Some((owner, bot)) = slack {
-        sources.push(Box::new(omon_gateway::inbox::sources::slack::SlackSource::new(
-            pool.clone(),
-            owner,
-            bot,
-        )));
+        sources.push(Box::new(
+            omon_gateway::inbox::sources::slack::SlackSource::new(pool.clone(), owner, bot),
+        ));
     }
     sources
 }
@@ -2936,7 +3163,6 @@ async fn run_kakao_event_timer(
         }
     }
 }
-
 
 /// How one watcher child lifetime ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3107,7 +3333,10 @@ async fn supervise_watcher_with_health<F, Fut>(
             WatcherExit::Stop => return,
             WatcherExit::Completed => {
                 last_fda_error = None;
-                (omon_gateway::inbox::health::WatcherRun::Completed, String::new())
+                (
+                    omon_gateway::inbox::health::WatcherRun::Completed,
+                    String::new(),
+                )
             }
             WatcherExit::Failed { stderr_tail } => {
                 if name == "imsg"
@@ -3308,7 +3537,10 @@ async fn record_watcher_health(
         HealthAction::Dead => health::report_dead(pool, name, tail, lead, chrono::Utc::now()).await,
     };
     match result {
-        Ok(true) => warn!(watcher = name, "source auth is dead; owner notified once for today"),
+        Ok(true) => warn!(
+            watcher = name,
+            "source auth is dead; owner notified once for today"
+        ),
         Ok(false) => {}
         Err(error) => warn!(watcher = name, %error, "could not record inbox source health"),
     }

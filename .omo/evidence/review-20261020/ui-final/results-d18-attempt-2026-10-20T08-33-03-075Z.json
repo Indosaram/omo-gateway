@@ -1,0 +1,46 @@
+{
+ "token": "st_01a1582e-58881-2026-10-20T08-33-03-075Z",
+ "stamp": "2026-10-20T08-33-03-075Z",
+ "tree": {
+  "descriptionDraft.ts": "6685:ed1c1c63be5b35dd",
+  "Editors.tsx": "8012:93703609741dd5a3"
+ },
+ "setupPassed": true,
+ "results": [
+  {
+   "id": "D18",
+   "check": "case A: a delayed failed save keeps the draft through close/reopen",
+   "ok": true,
+   "detail": "peekIn=1ms held=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=1 notSavedIn=104ms retryShown=true keptInEditor=\"Draft kept across a failed save\" closedIn=5ms closeRetryHeld=true quiesced=true [observation: retainedDraft@settled=null moduleUrls=[\"http://127.0.0.1:5299/src/tracker/detail/descriptionDraft.ts?t=1792484949583\",\"http://127.0.0.1:5299/src/tracker/detail/descriptionDraft.ts\"]] reopened=1ms firstFrame=\"Draft kept across a failed save\" firstBars=1 after400ms=\"Draft kept across a failed save\" bars=1",
+   "phase": "attempt"
+  },
+  {
+   "id": "D18",
+   "check": "case B: Retry after recovery saves the retained draft exactly once",
+   "ok": true,
+   "detail": "instr=instrumented click=clicked patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} pendingClearedIn=4ms stored=\"Draft kept across a failed save\" retainedAfterRetry=null",
+   "phase": "attempt"
+  },
+  {
+   "id": "D18-TRACE",
+   "check": "event trace for the Retry click",
+   "ok": true,
+   "detail": "[{\"t\":0,\"k\":\"node\",\"tag\":\"BUTTON\",\"cls\":\"ld-tab\",\"rect\":[890,184,47,24],\"disabled\":false,\"pointerEvents\":\"auto\"},{\"t\":0,\"k\":\"hit-test\",\"at\":[913,196],\"hitTag\":\"BUTTON\",\"hitCls\":\"ld-tab\",\"hitIsButton\":true},{\"t\":0,\"k\":\"parent\",\"tag\":\"DIV\",\"cls\":\"ld-desc-pending\",\"parentPointerEvents\":\"auto\"},{\"t\":1,\"k\":\"listener:click\",\"trusted\":false,\"target\":\"BUTTON\"},{\"t\":2,\"k\":\"fetch\",\"m\":\"PATCH\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"t\":7,\"k\":\"fetch\",\"m\":\"GET\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"t\":15,\"k\":\"bar-mutation\",\"bars\":0}]",
+   "phase": "attempt"
+  },
+  {
+   "id": "D18",
+   "check": "case C: reopening while the retry PATCH is in flight keeps the draft",
+   "ok": true,
+   "detail": "held=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=1 closedIn=7ms retryHeld=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] reopened=2ms released2=1 quiesced=true firstFrame=\"Draft kept across a failed save\" [observation: retainedDraft@first=null] | afterSettle=\"Draft kept across a failed save\" bars=1 [observation: retainedDraft@settle=null]",
+   "phase": "attempt"
+  },
+  {
+   "id": "SETUP",
+   "check": "tree unchanged during the run",
+   "ok": true,
+   "detail": "fingerprints={\"descriptionDraft.ts\":\"6685:ed1c1c63be5b35dd\",\"Editors.tsx\":\"8012:93703609741dd5a3\"}",
+   "phase": "setup-ok"
+  }
+ ]
+}

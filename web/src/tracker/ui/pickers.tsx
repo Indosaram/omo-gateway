@@ -37,6 +37,8 @@ function errorMessage(error: unknown): string {
 
 function useApply(issueIds: string[]) {
   const { updateIssues } = useTracker()
+  // updateIssues already reports failures through the store's lastError toast, so only the
+  // lane_not_verified case adds its own toast (for the Force close action).
   return (patch: IssuePatch) => {
     updateIssues(issueIds, patch).catch((error: unknown) => {
       if (error instanceof TrackerApiError && error.code === 'lane_not_verified' && patch.state_id) {
@@ -45,15 +47,11 @@ function useApply(issueIds: string[]) {
           action: {
             label: 'Force close',
             onClick: () => {
-              updateIssues(issueIds, { ...patch, force_note: 'closed from tracker' }).catch((retry: unknown) =>
-                toast.error(errorMessage(retry)),
-              )
+              updateIssues(issueIds, { ...patch, force_note: 'closed from tracker' }).catch(() => undefined)
             },
           },
         })
-        return
       }
-      toast.error(errorMessage(error))
     })
   }
 }

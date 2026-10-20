@@ -93,7 +93,9 @@ impl SlackConfig {
     ///
     /// Behavior flags read `SLACK_<NAME>` and fall back to `DISCORD_<NAME>`. Id-valued settings
     /// (users, channels, home channel) are Slack-only: a Discord snowflake never names a Slack
-    /// conversation, and an inherited channel allowlist would silence every Slack channel.
+    /// conversation, and an inherited channel allowlist would silence every Slack channel. Access
+    /// scoping (`SLACK_ALLOW_ALL_USERS`) is Slack-only too: opening Discord must never open the
+    /// Slack workspace.
     pub fn from_env(workspace_root: &std::path::Path) -> Option<Self> {
         if std::env::var("OMON_SLACK_ENABLED")
             .is_ok_and(|value| matches!(value.trim(), "0" | "false" | "no" | "off"))
@@ -164,7 +166,11 @@ impl SlackConfig {
             runtime_footer: flag(lookup, "RUNTIME_FOOTER", false),
             missed_backfill: flag(lookup, "MISSED_BACKFILL", true),
             destructive_slash_confirm: parse_flag(destructive_slash_confirm.as_deref(), true),
-            allow_all_users: flag(lookup, "ALLOW_ALL_USERS", false),
+            // Access scoping is Slack-only: opening Discord must never open the Slack workspace.
+            allow_all_users: parse_flag(
+                non_empty(lookup("SLACK_ALLOW_ALL_USERS")).as_deref(),
+                false,
+            ),
         }
     }
 
@@ -329,6 +335,12 @@ mod tests {
         assert!(config.ignored_channels.is_empty());
         assert_eq!(config.home_channel, None);
         assert_eq!(config.allowed_users, [DEFAULT_OWNER_ID]);
+    }
+
+    #[test]
+    fn allow_all_users_never_inherits_the_discord_flag() {
+        assert!(!config_from(&[("DISCORD_ALLOW_ALL_USERS", "true")]).allow_all_users);
+        assert!(config_from(&[("SLACK_ALLOW_ALL_USERS", "true")]).allow_all_users);
     }
 
     #[test]

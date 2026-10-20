@@ -116,3 +116,35 @@ fn zele_auth_errors_are_detected() {
     ));
     assert!(!health::is_auth_failure("ECONNRESET while fetching"));
 }
+
+#[test]
+fn token_refresh_that_dies_on_dns_is_not_an_auth_failure() {
+    // zele stderr from the 2026-10-20 02:10Z DNS outage that raised a false "auth is dead".
+    let tail = "Token expired, refreshing...\nWatch failed: API call failed: Error: request to \
+                https://oauth2.googleapis.com/token failed, reason: getaddrinfo ENOTFOUND \
+                oauth2.googleapis.com";
+    assert!(health::is_network_failure(tail));
+    assert!(!health::is_auth_failure(tail));
+    assert!(health::is_auth_failure(
+        "Token expired, refreshing...\ninvalid_grant"
+    ));
+}
+
+#[test]
+fn a_credential_verdict_outranks_a_network_error_in_the_same_tail() {
+    // The reverse mistake matters more: a revoked refresh token that also logs a timeout must
+    // still reach the owner, or mail silently stops for good.
+    assert!(health::is_auth_failure(
+        "Token expired, refreshing...\ninvalid_grant: Token has been expired or revoked\n\
+         request timed out"
+    ));
+    assert!(health::is_auth_failure(
+        "Error: 401 Unauthorized (ECONNRESET while retrying)"
+    ));
+    assert!(health::is_auth_failure("Not logged in. Try: zele login"));
+    // A plain network failure stays a network failure.
+    assert!(!health::is_auth_failure(
+        "fetch failed: getaddrinfo EAI_AGAIN oauth2.googleapis.com"
+    ));
+    assert!(!health::is_network_failure("invalid_grant"));
+}

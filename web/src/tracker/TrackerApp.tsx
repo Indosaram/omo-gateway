@@ -60,10 +60,12 @@ function NotFound({ message }: { message: string }) {
 
 function RouteView({ route }: { route: Route }) {
   const t = useTracker()
-  const hasSessionsTeam = t.teamsByKey.has('SES')
+  // The Sessions team's key is only a label (SES, or SES1..SES99 when a user team owns SES), so
+  // resolve the team itself rather than testing the key.
+  const sessionsTeamKey = t.sessionsTeam?.key ?? null
   useEffect(() => {
-    if (route.name === 'home') navigate(hasSessionsTeam ? '/team/SES/all' : '/my-issues/assigned', { replace: true })
-  }, [route.name, hasSessionsTeam])
+    if (route.name === 'home') navigate(sessionsTeamKey ? `/team/${sessionsTeamKey}/all` : '/my-issues/assigned', { replace: true })
+  }, [route.name, sessionsTeamKey])
 
   switch (route.name) {
     case 'home':
@@ -132,14 +134,17 @@ function Shell() {
   const [width, setWidth] = useSidebarWidth()
   const [headers, setHeaders] = useState(0)
   const registerHeader = useCallback((delta: number) => setHeaders((n) => n + delta), [])
-  const { setMobileNavOpen, mobileNavOpen, setPeekIssueId, setSelection } = t
+  const { setMobileNavOpen, mobileNavOpen, setPeekIssueId, setSelection, setFocusedIssueId } = t
   const key = useMemo(() => routeKey(route), [route])
 
   useEffect(() => {
     setMobileNavOpen(false)
     setPeekIssueId(null)
     setSelection(new Set())
-  }, [key, setMobileNavOpen, setPeekIssueId, setSelection])
+    // The focused issue comes from hovering a row in a list that is now unmounted; leaving it set
+    // would make the command palette act on an issue that is not on the page.
+    setFocusedIssueId(null)
+  }, [key, setMobileNavOpen, setPeekIssueId, setSelection, setFocusedIssueId])
 
   useEffect(() => {
     if (t.lastError) toast(t.lastError.message)
@@ -160,6 +165,15 @@ function Shell() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [mobileNavOpen, setMobileNavOpen])
+
+  useEffect(() => {
+    const previousTitle = document.title
+    return () => {
+      // The tracker owns document.title while it is mounted; the dashboard does not set one, so
+      // without this the tab keeps the last tracker title after "Back to dashboard".
+      document.title = previousTitle
+    }
+  }, [])
 
   useEffect(() => {
     const title = (() => {

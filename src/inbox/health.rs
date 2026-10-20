@@ -95,23 +95,57 @@ impl Backoff {
     }
 }
 
+/// Signs that a run failed on the network rather than on credentials. zele logs "Token expired,
+/// refreshing" before every refresh, so a refresh that dies on DNS would otherwise look like a
+/// dead login (2026-10-20 02:10Z false alarm during a DNS outage).
+const NETWORK_FAILURE_MARKERS: [&str; 10] = [
+    "enotfound",
+    "getaddrinfo",
+    "econnrefused",
+    "econnreset",
+    "etimedout",
+    "eai_again",
+    "fetch failed",
+    "unable to connect",
+    "network is unreachable",
+    "timed out",
+];
+
+/// A credential verdict: the provider only says these once the refresh token itself is dead, so
+/// they win even when the same tail also mentions a network error.
+const AUTH_FAILURE_MARKERS: [&str; 10] = [
+    "auth_expired",
+    "invalid_grant",
+    "unauthorized",
+    "unauthenticated",
+    "not authenticated",
+    "not logged in",
+    "login required",
+    "zele login",
+    "invalid credentials",
+    "credentials expired",
+];
+
+pub fn is_network_failure(output_tail: &str) -> bool {
+    let lower = output_tail.to_ascii_lowercase();
+    NETWORK_FAILURE_MARKERS
+        .iter()
+        .any(|needle| lower.contains(needle))
+}
+
 pub fn is_auth_failure(output_tail: &str) -> bool {
     let lower = output_tail.to_ascii_lowercase();
-    [
-        "auth_expired",
-        "token expired",
-        "invalid_grant",
-        "unauthorized",
-        "unauthenticated",
-        "not authenticated",
-        "not logged in",
-        "login required",
-        "zele login",
-        "invalid credentials",
-        "credentials expired",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    if AUTH_FAILURE_MARKERS
+        .iter()
+        .any(|needle| lower.contains(needle))
+    {
+        return true;
+    }
+    // A refresh preamble is not a credential verdict, even when the transport failure uses
+    // wording we have not seen before. Accept a standalone HTTP 401, not a substring of an ID.
+    lower
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|token| token == "401")
 }
 
 pub fn notice_text(source: &str) -> String {
@@ -200,4 +234,43 @@ pub async fn clear(pool: &SqlitePool, source: &str) -> Result<()> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_preamble_requires_a_credential_verdict() {
+        for tail in [
+            "Token expired, refreshing...",
+            "Token expired, refreshing...\ngetaddrinfo ENOTFOUND oauth2.googleapis.com",
+            "Token expired, refreshing...\nconnect failed",
+            "Token expired, refreshing...\nrequest timeout",
+            "request 1401 failed",
+        ] {
+            assert!(!is_auth_failure(tail), "{tail}");
+            let mut backoff = Backoff::default();
+            for _ in 0..4 {
+                let run = if is_auth_failure(tail) {
+                    WatcherRun::AuthFailed
+                } else {
+                    WatcherRun::Failed
+                };
+                assert_eq!(
+                    backoff.step(run, Duration::ZERO).health,
+                    HealthAction::Degraded
+                );
+            }
+        }
+        for tail in [
+            "HTTP 401",
+            "status=401; request timed out",
+            "invalid_grant",
+            "Unauthorized",
+            "invalid credentials",
+        ] {
+            assert!(is_auth_failure(tail), "{tail}");
+        }
+    }
 }

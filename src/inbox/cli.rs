@@ -102,6 +102,26 @@ pub async fn execute(pool: &SqlitePool, args: InboxArgs) -> CliOutput {
     }
 }
 
+struct PrePolledSource {
+    source: super::InboxSourceKind,
+    items: Vec<super::InboxItem>,
+    cursor: String,
+}
+
+#[async_trait::async_trait]
+impl InboxSource for PrePolledSource {
+    fn name(&self) -> super::InboxSourceKind {
+        self.source
+    }
+
+    async fn fetch_since(
+        &self,
+        _cursor: Option<&str>,
+    ) -> crate::Result<(Vec<super::InboxItem>, String)> {
+        Ok((self.items.clone(), self.cursor.clone()))
+    }
+}
+
 pub async fn collect_github(
     pool: &SqlitePool,
     source: &GithubSource,
@@ -119,9 +139,14 @@ pub async fn collect_github(
         .map_err(|e| e.to_string())?;
     let mut stored = None;
     if !dry_run {
+        let pre_polled = PrePolledSource {
+            source: super::InboxSourceKind::Github,
+            items: poll.items.clone(),
+            cursor: poll.cursor.clone(),
+        };
         let results = super::collect_all(
             pool,
-            &[source as &dyn InboxSource],
+            &[&pre_polled as &dyn InboxSource],
             &super::prefilter::PrefilterRules::default(),
         )
         .await;
@@ -185,4 +210,110 @@ pub async fn run(args: InboxArgs) -> i32 {
         eprintln!("{}", output.stderr);
     }
     output.code
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn collect_github_polls_once_and_prints_stored_changes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // Given a local gh fixture that records every API request, without network access.
+        let dir = tempfile::tempdir().unwrap();
+        let gh = dir.path().join("gh");
+        std::fs::write(
+            &gh,
+            r#"#!/bin/sh
+printf 'call\n' >> "$0.calls"
+case "$2" in
+  notifications*) printf '%s\n' '[{"id":"note-1","updated_at":"2026-10-20T00:00:00Z","reason":"mention","subject":{"title":"Needs review","url":"https://api.github.com/repos/o/r/pulls/1"},"repository":{"full_name":"o/r"}}]' ;;
+  graphql) printf '%s\n' '{"data":{"search":{"nodes":[]}}}' ;;
+  *) exit 1 ;;
+esac
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO inbox_cursors(source, cursor, updated_at) VALUES('github', '{}', '2026-10-20T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let source = GithubSource::with_gh_bin(gh.as_os_str());
+
+        // When the real CLI collection path stores and renders the fetched changes.
+        let output = collect_github(&pool, &source, false, true).await.unwrap();
+
+        // Then one poll makes two gh requests and its printed change is the stored row.
+        let calls = std::fs::read_to_string(dir.path().join("gh.calls")).unwrap();
+        assert_eq!(calls.lines().count(), 2);
+        let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["stored"], 1);
+        assert_eq!(output["changes"].as_array().unwrap().len(), 1);
+        let stored: (String, String) =
+            sqlx::query_as("SELECT source_ref, snippet FROM inbox_items WHERE source = 'github'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(output["changes"][0]["id"], stored.0);
+        assert_eq!(output["changes"][0]["snippet"], stored.1);
+    }
+
+    #[tokio::test]
+    async fn pre_polled_source_commits_without_repolling() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let item = crate::inbox::InboxItem::new(
+            crate::inbox::InboxSourceKind::Github,
+            "gh:https://github.com/o/r/pull/1:2026-10-20T00:00:00Z:ci_failed",
+            "[CI failed] o/r#1: test pr",
+            chrono::Utc::now(),
+        );
+
+        let pre_polled = PrePolledSource {
+            source: crate::inbox::InboxSourceKind::Github,
+            items: vec![item],
+            cursor: "test_cursor".into(),
+        };
+
+        let results = crate::inbox::collect_all(
+            &pool,
+            &[&pre_polled as &dyn InboxSource],
+            &crate::inbox::prefilter::PrefilterRules::default(),
+        )
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].error.is_none());
+        assert_eq!(results[0].stats.inserted, 1);
+
+        let stored_cursor: String =
+            sqlx::query_scalar("SELECT cursor FROM inbox_cursors WHERE source = 'github'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored_cursor, "test_cursor");
+
+        let stored_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM inbox_items WHERE source = 'github'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored_count, 1);
+    }
 }

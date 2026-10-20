@@ -800,13 +800,25 @@ impl SessionActor {
                     };
                     drop(run);
 
+                    // Tool activity is per turn: clear it even when no status driver ran (status
+                    // messages disabled, a non-owner session, or a system-origin turn), so a
+                    // stale tool name can never be shown by a later turn's status edit.
+                    crate::report::status::clear_tool_activity(&turn_context.key);
+
+                    // The status message shows only the owner-facing reason, never the raw error
+                    // (which the reply next to it promises stays in the logs).
                     if let Some(driver) = status_driver.take() {
                         match &outcome {
                             TurnOutcome::Completed(Ok(())) => {
                                 driver.finish(Utc::now(), Ok(())).await
                             }
                             TurnOutcome::Completed(Err(error)) => {
-                                driver.finish(Utc::now(), Err(error.to_string())).await
+                                driver
+                                    .finish(
+                                        Utc::now(),
+                                        Err(owner_failure_reason(&error.to_string()).to_string()),
+                                    )
+                                    .await
                             }
                             TurnOutcome::Stopped(_) => {
                                 driver
@@ -1370,8 +1382,7 @@ impl SessionActor {
     }
 
     fn is_kibitzer_lead(&self) -> bool {
-        let lead = std::env::var("OMON_LANE_DEFAULT_LEAD")
-            .unwrap_or_else(|_| crate::lanes::kibitzer::DEFAULT_LEAD.to_string());
+        let lead = crate::runtime_config::default_lead();
         SessionKey::from_storage_key(lead.trim())
             .is_ok_and(|lead| lead.storage_key() == self.context.key.storage_key())
     }
@@ -1445,8 +1456,17 @@ const QUEUED_NOTICE_TEXT: &str = "앞 작업이 끝나면 바로 이어서 할�
 
 /// Owner-facing Korean line for a failed turn; the raw error stays in the logs.
 fn owner_failure_text(error: &str) -> String {
+    format!(
+        "⚠️ 응답을 만들지 못했어요 ({}). 같은 메시지를 다시 보내 주시면 이어서 할게요.",
+        owner_failure_reason(error)
+    )
+}
+
+/// Short owner-facing reason for a failed turn. Shared with the status message, which must not
+/// leak the raw error text that `owner_failure_text` deliberately hides.
+fn owner_failure_reason(error: &str) -> &'static str {
     let lower = error.to_ascii_lowercase();
-    let reason = if [
+    if [
         "no output within",
         "turn interrupted",
         "timeout waiting for turn/start",
@@ -1462,8 +1482,7 @@ fn owner_failure_text(error: &str) -> String {
         "모델 사용량 한도에 걸렸어요"
     } else {
         "처리 중 오류가 났어요"
-    };
-    format!("⚠️ 응답을 만들지 못했어요 ({reason}). 같은 메시지를 다시 보내 주시면 이어서 할게요.")
+    }
 }
 
 fn is_owner_lead_session(key: &SessionKey, bot_name: Option<&str>) -> bool {
@@ -1774,6 +1793,25 @@ mod tests {
         let elsewhere = SessionKey::new("slack", Some("T1"), "COTHER", None::<String>, "UOWNER");
         assert!(!is_slack_owner_lead_session(&elsewhere, "UOWNER", &home));
         assert!(!is_slack_owner_lead_session(&home_thread, "UOWNER", &[]));
+    }
+
+    #[test]
+    fn status_failure_reason_never_leaks_the_raw_error() {
+        let raw = "LLM error: websocket closed: quota exhausted for account sk-live-abc";
+        let reason = owner_failure_reason(raw);
+        assert_eq!(reason, "모델 사용량 한도에 걸렸어요");
+        assert!(!reason.contains("sk-live-abc"));
+        // The status line the owner sees carries the reason only.
+        let status = format!("실패 · {reason}");
+        assert!(!status.contains("websocket closed"), "{status}");
+        assert_eq!(
+            owner_failure_reason("database is locked"),
+            "처리 중 오류가 났어요"
+        );
+        assert_eq!(
+            owner_failure_reason("agent produced no output within 45s"),
+            "모델이 응답하지 않았어요"
+        );
     }
 
     #[test]

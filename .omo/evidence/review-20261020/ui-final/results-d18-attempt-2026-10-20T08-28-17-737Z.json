@@ -1,0 +1,35 @@
+{
+ "token": "d18-96400-2026-10-20T08-28-17-737Z",
+ "stamp": "2026-10-20T08-28-17-737Z",
+ "results": [
+  {
+   "id": "D18",
+   "check": "case A: a delayed failed save keeps the draft through close/reopen",
+   "ok": true,
+   "detail": "peekIn=2ms held=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\",\"detail-snapshot@1792484899881\"] released=2 notSavedIn=63ms retryShown=true keptInEditor=\"Draft kept across a failed save\" closedIn=6ms closeRetryHeld=true quiesced=true retained@settled=\"Draft kept across a failed save\" reopened=2ms firstFrame=\"Draft kept across a failed save\" firstBars=1 after400ms=\"Draft kept across a failed save\" bars=1",
+   "phase": "attempt"
+  },
+  {
+   "id": "D18",
+   "check": "case B: Retry after recovery saves the retained draft exactly once",
+   "ok": true,
+   "detail": "instr=instrumented click=clicked patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} pendingClearedIn=28ms stored=\"Draft kept across a failed save\" retainedAfterRetry=null",
+   "phase": "attempt"
+  },
+  {
+   "id": "D18-TRACE",
+   "check": "event trace for the Retry click",
+   "ok": true,
+   "detail": "[{\"t\":1,\"k\":\"node\",\"tag\":\"BUTTON\",\"cls\":\"ld-tab\",\"rect\":[890,184,47,24],\"disabled\":false,\"pointerEvents\":\"auto\"},{\"t\":1,\"k\":\"hit-test\",\"at\":[913,196],\"hitTag\":\"BUTTON\",\"hitCls\":\"ld-tab\",\"hitIsButton\":true},{\"t\":1,\"k\":\"parent\",\"tag\":\"DIV\",\"cls\":\"ld-desc-pending\",\"parentPointerEvents\":\"auto\"},{\"t\":2,\"k\":\"listener:click\",\"trusted\":false,\"target\":\"BUTTON\"},{\"t\":2,\"k\":\"fetch\",\"m\":\"PATCH\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"t\":13,\"k\":\"bar-mutation\",\"bars\":0}]",
+   "phase": "attempt"
+  },
+  {
+   "id": "D18",
+   "check": "case C: reopening while the retry PATCH is in flight keeps the draft",
+   "ok": false,
+   "detail": "held=[\"detail-snapshot@1792484900803\",\"detail-snapshot@1792484900803\"] released=2 closedIn=1ms retryHeld=undefined reopened=3ms released2=2 quiesced=true firstFrame=\"Original draft description\" retained@first=null | afterSettle=\"Original draft description\" retained@settle=null bars=0",
+   "phase": "superseded",
+   "invalid_reason": "Harness artifact: the mock gate keys by path, so it also held the detail GET (/api/tracker/issues/iss-draft) and starved the peek of the detail it needed. The mock now gates writes only; see the 08-29-04 attempt."
+  }
+ ]
+}

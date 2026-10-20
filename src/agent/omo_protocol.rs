@@ -155,6 +155,21 @@ pub fn approval_allow_response(req_id: &Value) -> Message {
     )
 }
 
+pub fn user_input_cancellation(frame: &Value) -> Option<Message> {
+    if frame.get("method").and_then(Value::as_str) != Some("item/tool/requestUserInput") {
+        return None;
+    }
+    let id = frame.get("id")?;
+    Some(Message::text(
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": { "answers": {}, "cancelled": true }
+        })
+        .to_string(),
+    ))
+}
+
 pub fn is_approval_request(method: &str) -> bool {
     method.contains("Approval")
         || method.contains("requestApproval")

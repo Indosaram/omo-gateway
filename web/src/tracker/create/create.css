@@ -111,6 +111,17 @@
   color: var(--text-4);
 }
 
+.lin .ci-notice {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-ctl);
+  background: var(--bg-subtle);
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .lin .ci-chips {
   display: flex;
   flex-wrap: wrap;

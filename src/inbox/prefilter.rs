@@ -175,11 +175,13 @@ impl PrefilterRules {
                 {
                     return Some("slack_author_excluded");
                 }
+                // The Slack source classifies `mention` from the full message content, because the
+                // stored snippet is capped at MAX_SNIPPET_CHARS and can hide a mention past the cap.
                 let owner_mention = item
                     .snippet
                     .contains(&format!("<@{}>", self.owner_slack_id));
                 let room_type = item.room_type.as_deref().unwrap_or_default();
-                if !owner_mention && !matches!(room_type, "dm" | "owner_reply") {
+                if !owner_mention && !matches!(room_type, "dm" | "owner_reply" | "mention") {
                     return Some("slack_not_owner_mention_or_dm");
                 }
                 None
@@ -283,6 +285,29 @@ mod tests {
         assert_eq!(
             rules.drop_reason(&slack_item("U0BOT", "dm", "bot")),
             Some("slack_author_excluded")
+        );
+    }
+
+    #[test]
+    fn slack_keeps_mention_room_type_when_snippet_truncated() {
+        let rules = PrefilterRules {
+            owner_slack_id: "U0OWNER".into(),
+            bot_slack_id: Some("U0BOT".into()),
+            ..Default::default()
+        };
+        // A message longer than MAX_SNIPPET_CHARS with the owner mention past the cap: the source
+        // decides `mention` from the full content, so the prefilter must not re-test the snippet.
+        let content = format!(
+            "{}<@U0OWNER> can you take a look?",
+            "x".repeat(crate::inbox::MAX_SNIPPET_CHARS)
+        );
+        let item = slack_item("U0A", "mention", &content);
+        assert!(!item.snippet.contains("<@U0OWNER>"));
+        assert_eq!(rules.drop_reason(&item), None);
+        // A channel row without a visible mention stays dropped; classifying it is the source's job.
+        assert_eq!(
+            rules.drop_reason(&slack_item("U0A", "channel", &content)),
+            Some("slack_not_owner_mention_or_dm")
         );
     }
 

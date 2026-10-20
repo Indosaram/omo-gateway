@@ -88,7 +88,13 @@ export function dueState(due: string | null, completed: boolean): DueState {
 
 export function dueShortcuts(now = new Date()): { id: string; label: string; date: string }[] {
   const today = startOfDay(now)
-  const add = (days: number) => toDateOnly(new Date(today.getTime() + days * DAY))
+  // Calendar math, not `today.getTime() + days * DAY`: adding fixed 24h steps lands on 23:00 of
+  // the previous day whenever the range crosses a DST change, which shifts the date back a day.
+  const add = (days: number) => {
+    const target = new Date(today)
+    target.setDate(target.getDate() + days)
+    return toDateOnly(target)
+  }
   const endOfWeek = 5 - today.getDay()
   return [
     { id: 'today', label: 'Today', date: add(0) },

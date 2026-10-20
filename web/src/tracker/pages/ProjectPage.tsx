@@ -173,7 +173,8 @@ function Overview({
           value={project.name}
           placeholder="Project name"
           className="text-[26px] w-590 t-1"
-          onCommit={(name) => name.trim() && void onSave({ name: name.trim() })}
+          required
+          onCommit={(name) => void onSave({ name: name.trim() })}
         />
         <EditableText
           value={project.summary}
@@ -240,12 +241,14 @@ function EditableText({
   placeholder,
   className,
   multiline,
+  required,
   onCommit,
 }: {
   value: string
   placeholder: string
   className: string
   multiline?: boolean
+  required?: boolean
   onCommit: (value: string) => void
 }) {
   const [draft, setDraft] = useState(value)
@@ -255,6 +258,10 @@ function EditableText({
   }, [value])
   const commit = () => {
     focused.current = false
+    if (required && !draft.trim()) {
+      setDraft(value)
+      return
+    }
     if (draft !== value) onCommit(draft)
   }
   const common = {

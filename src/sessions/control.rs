@@ -57,6 +57,13 @@ impl FromStr for Target {
     }
 }
 
+/// A durable omo session id is a full UUID, which `resolve` would hand back unchanged; any
+/// other spelling (a short prefix, a host-local `rpc-N`) needs the listing to canonicalize.
+fn is_canonical_session_id(session: &str) -> bool {
+    let lengths: Vec<usize> = session.split('-').map(str::len).collect();
+    lengths == [8, 4, 4, 4, 12] && session.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 pub enum SendMode {
     #[default]
@@ -388,7 +395,14 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<Value, ControlError> {
-        let (resolved_target, _session) = self.resolve(target).await?;
+        // A canonical id needs no listing: `resolve` would spend a full `omo thread list`
+        // (ssh for a remote host) handing the id back unchanged, and a read is not a
+        // mutation, so nothing else depends on that listing.
+        let resolved_target = if is_canonical_session_id(target.session()) {
+            target.clone()
+        } else {
+            self.resolve(target).await?.0
+        };
         let mut words = vec![
             "omo".into(),
             "thread".into(),
@@ -414,10 +428,21 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
         if text.trim().is_empty() || text.contains('\0') {
             return Err(ControlError::InvalidText);
         }
-        let (resolved_target, session) = self.resolve(target).await?;
-        if !session.controls.iter().any(|c| c == "send") {
-            return Err(ControlError::Unsupported("send"));
-        }
+        // A canonical id needs no listing here either: callers that already resolved (the
+        // Discord/Slack commands) and the external lane's stored targets all pass one, and
+        // `resolve` would spend a second `omo thread list` (ssh for a remote host) only to
+        // hand the id back. The capability pre-check needs that listing, so it stays on the
+        // path that has to resolve anyway; `omo thread send` itself rejects a session that
+        // cannot take a send.
+        let resolved_target = if is_canonical_session_id(target.session()) {
+            target.clone()
+        } else {
+            let (resolved, session) = self.resolve(target).await?;
+            if !session.controls.iter().any(|c| c == "send") {
+                return Err(ControlError::Unsupported("send"));
+            }
+            resolved
+        };
         self.command(
             &resolved_target,
             &[
@@ -508,7 +533,7 @@ impl<R: CommandRunner + 'static> SessionControl<R> {
             }
         };
 
-        let answers = answers_for(&question, text);
+        let answers = answers_for(&question, text)?;
         probe
             .answer(
                 resolved_target.machine(),
@@ -596,6 +621,133 @@ mod tests {
         assert!(matches!(
             control.session(&target, "send").await,
             Err(ControlError::NotRunning)
+        ));
+    }
+
+    /// Answers a listing with one session and every other command with an empty page,
+    /// recording the argv of every call so a test can see which commands ran.
+    #[derive(Default)]
+    struct Recording {
+        calls: std::sync::Mutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl CommandRunner for Recording {
+        async fn run(&self, _machine: &str, argv: &[String]) -> Result<CommandOutput, String> {
+            self.calls.lock().unwrap().push(argv.to_vec());
+            let listing = argv.iter().any(|word| word.contains("list"));
+            Ok(CommandOutput {
+                code: 0,
+                stdout: if listing {
+                    br#"[{"sessionId":"01a1429e-8585-7e8a-b89b-2ea8458e4312","name":"qa"}]"#
+                        .to_vec()
+                } else {
+                    br#"{"items":[]}"#.to_vec()
+                },
+                stderr: Vec::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn canonical_read_skips_the_session_listing() {
+        let runner = Arc::new(Recording::default());
+        let control = SessionControl::new(runner.clone(), vec![]);
+        let target: Target = "local:01a1429e-8585-7e8a-b89b-2ea8458e4312"
+            .parse()
+            .unwrap();
+        control
+            .read(&target, 5, None)
+            .await
+            .expect("canonical read");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one read, no listing: {calls:?}");
+        assert!(
+            !calls[0].iter().any(|word| word.contains("list")),
+            "a canonical id must not be resolved through a listing: {:?}",
+            calls[0]
+        );
+        assert!(
+            calls[0].contains(&"01a1429e-8585-7e8a-b89b-2ea8458e4312".to_owned()),
+            "read must address the canonical id: {:?}",
+            calls[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn prefix_read_still_resolves_through_the_listing() {
+        let runner = Arc::new(Recording::default());
+        let control = SessionControl::new(runner.clone(), vec![]);
+        let target: Target = "local:01a1429e".parse().unwrap();
+        control.read(&target, 5, None).await.expect("prefix read");
+
+        let calls = runner.calls.lock().unwrap();
+        assert!(
+            calls
+                .iter()
+                .any(|argv| argv.iter().any(|word| word.contains("list"))),
+            "a short prefix still needs the listing: {calls:?}"
+        );
+        let last = calls.last().expect("read ran");
+        assert!(
+            last.contains(&"01a1429e-8585-7e8a-b89b-2ea8458e4312".to_owned()),
+            "read must address the resolved id: {last:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn canonical_send_skips_the_session_listing() {
+        let runner = Arc::new(Recording::default());
+        let control = SessionControl::new(runner.clone(), vec![]);
+        let target: Target = "local:01a1429e-8585-7e8a-b89b-2ea8458e4312"
+            .parse()
+            .unwrap();
+        control
+            .send(&target, "hi", SendMode::Auto, uuid::Uuid::new_v4())
+            .await
+            .expect("canonical send");
+
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "one send, no listing: {calls:?}");
+        assert!(
+            calls[0].iter().any(|word| word == "send"),
+            "the send itself must run: {:?}",
+            calls[0]
+        );
+        assert!(
+            !calls[0].iter().any(|word| word.contains("list")),
+            "a canonical id must not be resolved through a listing: {:?}",
+            calls[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn prefix_send_still_checks_the_send_capability() {
+        // The pre-check needs the listing, so it survives on the path that must resolve.
+        struct NoSendControl;
+        #[async_trait]
+        impl CommandRunner for NoSendControl {
+            async fn run(&self, _machine: &str, argv: &[String]) -> Result<CommandOutput, String> {
+                assert!(
+                    argv.iter().any(|word| word == "list"),
+                    "only the listing may run: {argv:?}"
+                );
+                Ok(CommandOutput {
+                    code: 0,
+                    stdout: br#"[{"sessionId":"01a1429e-8585-7e8a-b89b-2ea8458e4312","controls":["read"]}]"#
+                        .to_vec(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+        let control = SessionControl::new(Arc::new(NoSendControl), vec![]);
+        let target: Target = "local:01a1429e".parse().unwrap();
+        assert!(matches!(
+            control
+                .send(&target, "hi", SendMode::Auto, uuid::Uuid::new_v4())
+                .await,
+            Err(ControlError::Unsupported("send"))
         ));
     }
 

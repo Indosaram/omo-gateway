@@ -106,27 +106,24 @@ pub fn strip_and_extract_claims(text: &str) -> (String, Vec<ExtractedClaim>) {
 
         let after_open = &text[start..];
         let Some(end_rel) = find_marker_end(after_open) else {
-            break;
+            cleaned.push_str(&text[start..start + 2]);
+            cursor = start + 2;
+            continue;
         };
         let marker_body = &after_open[2..end_rel - 2];
-        let sentence = extract_preceding_sentence(&cleaned);
-        if let Some((argv, expect_regex)) = parse_measure_marker(marker_body) {
-            claims.push(ExtractedClaim {
-                sentence,
+        match parse_measure_marker(marker_body) {
+            Some((argv, expect_regex)) => claims.push(ExtractedClaim {
+                sentence: extract_preceding_sentence(&cleaned),
                 argv,
                 expect_regex,
-            });
+            }),
+            None => cleaned.push_str(&text[start..start + end_rel]),
         }
         cursor = start + end_rel;
     }
 
     if cursor < text.len() {
-        let rem = &text[cursor..];
-        if let Some(unclosed) = rem.find("[[measure") {
-            cleaned.push_str(&rem[..unclosed]);
-        } else {
-            cleaned.push_str(rem);
-        }
+        cleaned.push_str(&text[cursor..]);
     }
 
     let normalized = collapse_double_spaces(&cleaned);
@@ -204,13 +201,33 @@ fn parse_measure_marker(body: &str) -> Option<(Vec<String>, String)> {
     let after_argv = rest[end..].trim();
     let after_expect = after_argv.strip_prefix("expect~")?.trim();
     let expect_regex: String = if after_expect.starts_with('"') {
-        serde_json::from_str(after_expect)
-            .ok()
-            .or_else(|| Some(after_expect.trim_matches('"').to_string()))?
+        quoted_expect_value(after_expect)?
     } else {
         after_expect.to_string()
     };
     Some((argv, expect_regex))
+}
+
+/// A quoted `expect~` value: strict JSON when the model escaped it, otherwise a single properly
+/// closed quoted span (`expect~"^\d+$"` is a valid regex but not valid JSON). Anything with text
+/// after the closing quote is malformed and yields no claim, so a broken marker is never turned
+/// into a garbage regex.
+fn quoted_expect_value(raw: &str) -> Option<String> {
+    if let Ok(value) = serde_json::from_str::<String>(raw) {
+        return Some(value);
+    }
+    let inner = raw.strip_prefix('"')?;
+    let mut chars = inner.char_indices();
+    while let Some((index, ch)) = chars.next() {
+        match ch {
+            '\\' => {
+                chars.next()?;
+            }
+            '"' => return (index + 1 == inner.len()).then(|| inner[..index].to_string()),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn extract_preceding_sentence(cleaned_so_far: &str) -> String {
@@ -486,16 +503,59 @@ async fn mark_claim_state(
 
 pub async fn recover_stale_report_claims(
     pool: &SqlitePool,
-    now: DateTime<Utc>,
+    _now: DateTime<Utc>,
 ) -> sqlx::Result<u64> {
-    let cutoff = now - chrono::Duration::seconds(STALE_CLAIM_AGE_SECS);
     let res = sqlx::query(
         "UPDATE report_claims
          SET state = 'unmeasurable', checked_at = CURRENT_TIMESTAMP
-         WHERE state = 'pending' AND julianday(created_at) <= julianday(?)",
+         WHERE state = 'pending'",
     )
-    .bind(cutoff)
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unclosed_measure_marker_keeps_rest_of_reply() {
+        let text = "Result is ready [[measure [\"echo\", \"test\"] expect~\"test\" but forgot closing. And more text.";
+        let (cleaned, claims) = strip_and_extract_claims(text);
+        assert!(cleaned.contains("And more text."));
+        assert!(cleaned.contains("[[measure"));
+        assert!(claims.is_empty());
+
+        let unbalanced = "Notice [[measure [\"echo\"] expect~\"say \"hi\"\" extra]] final words.";
+        let (cleaned_unbalanced, claims_unbalanced) = strip_and_extract_claims(unbalanced);
+        assert!(cleaned_unbalanced.contains("final words."));
+        assert!(claims_unbalanced.is_empty());
+    }
+
+    #[tokio::test]
+    async fn recover_stale_report_claims_sweeps_young_pending_claims_at_startup() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO report_claims (session_key, platform_message_id, sentence, argv_json, expect_regex, state, created_at)
+             VALUES ('s1', 'm1', 'sentence', '[\"echo\"]', 'regex', 'pending', CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let affected = recover_stale_report_claims(&pool, Utc::now())
+            .await
+            .unwrap();
+        assert_eq!(affected, 1);
+
+        let state: String =
+            sqlx::query_scalar("SELECT state FROM report_claims WHERE platform_message_id = 'm1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(state, "unmeasurable");
+    }
 }

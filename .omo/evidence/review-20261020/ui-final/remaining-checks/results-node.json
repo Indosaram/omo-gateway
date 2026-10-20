@@ -1,0 +1,96 @@
+{
+  "tz": "America/New_York",
+  "rows": [
+    {
+      "id": "D13",
+      "check": "plain-text 403 (host/origin guard)",
+      "ok": true,
+      "detail": "fixed={\"kind\":\"TrackerApiError\",\"status\":403,\"message\":\"origin not allowed\",\"code\":null}"
+    },
+    {
+      "id": "D13",
+      "check": "plain-text 403 (host/origin guard) - pre-fix counterfactual",
+      "ok": true,
+      "detail": "prefix={\"kind\":\"SyntaxError\",\"message\":\"JSON Parse error: Unexpected identifier \\\"origin\\\"\"}"
+    },
+    {
+      "id": "D13",
+      "check": "502 HTML from a proxy",
+      "ok": true,
+      "detail": "fixed={\"kind\":\"TrackerApiError\",\"status\":502,\"message\":\"<html><body>502 Bad Gateway</body></html>\",\"code\":null}"
+    },
+    {
+      "id": "D13",
+      "check": "502 HTML from a proxy - pre-fix counterfactual",
+      "ok": true,
+      "detail": "prefix={\"kind\":\"SyntaxError\",\"message\":\"JSON Parse error: Unrecognized token '<'\"}"
+    },
+    {
+      "id": "D13",
+      "check": "JSON 409 with code",
+      "ok": true,
+      "detail": "fixed={\"kind\":\"TrackerApiError\",\"status\":409,\"message\":\"lane must be verified before closing; use force close\",\"code\":\"lane_not_verified\"}"
+    },
+    {
+      "id": "D13",
+      "check": "JSON 409 with code - pre-fix counterfactual",
+      "ok": true,
+      "detail": "prefix={\"kind\":\"TrackerApiError\",\"status\":409,\"message\":\"lane must be verified before closing; use force close\",\"code\":\"lane_not_verified\"}"
+    },
+    {
+      "id": "D13",
+      "check": "JSON 500",
+      "ok": true,
+      "detail": "fixed={\"kind\":\"TrackerApiError\",\"status\":500,\"message\":\"tracker unavailable\",\"code\":null}"
+    },
+    {
+      "id": "D13",
+      "check": "JSON 500 - pre-fix counterfactual",
+      "ok": true,
+      "detail": "prefix={\"kind\":\"TrackerApiError\",\"status\":500,\"message\":\"tracker unavailable\",\"code\":null}"
+    },
+    {
+      "id": "D13",
+      "check": "empty 403 body keeps the status line",
+      "ok": true,
+      "detail": "fixed={\"kind\":\"TrackerApiError\",\"status\":403,\"message\":\"403 Forbidden\",\"code\":null}"
+    },
+    {
+      "id": "D13",
+      "check": "empty 403 body keeps the status line - pre-fix counterfactual",
+      "ok": true,
+      "detail": "prefix={\"kind\":\"TrackerApiError\",\"status\":403,\"message\":\"403 Forbidden\",\"code\":null}"
+    },
+    {
+      "id": "D13",
+      "check": "success path unchanged: JSON 200 resolves, non-JSON 200 throws SyntaxError, 204 resolves",
+      "ok": true,
+      "detail": "json200={\"kind\":\"resolved\"} nonJson200={\"kind\":\"SyntaxError\",\"message\":\"JSON Parse error: Unexpected identifier \\\"not\\\"\"} status204={\"kind\":\"resolved\"}"
+    },
+    {
+      "id": "D16",
+      "check": "dueShortcuts from 2026-10-28 (range crosses the 2026-11-01 fall-back)",
+      "ok": true,
+      "detail": "tz=America/New_York got={\"today\":\"2026-10-28\",\"tomorrow\":\"2026-10-29\",\"eow\":\"2026-10-30\",\"week\":\"2026-11-04\",\"two-weeks\":\"2026-11-11\",\"month\":\"2026-11-27\"} want={\"today\":\"2026-10-28\",\"tomorrow\":\"2026-10-29\",\"eow\":\"2026-10-30\",\"week\":\"2026-11-04\",\"two-weeks\":\"2026-11-11\",\"month\":\"2026-11-27\"}"
+    },
+    {
+      "id": "D16",
+      "check": "dueShortcuts from 2026-11-01 (the day of the fall-back)",
+      "ok": true,
+      "detail": "tz=America/New_York got={\"today\":\"2026-11-01\",\"tomorrow\":\"2026-11-02\",\"eow\":\"2026-11-06\",\"week\":\"2026-11-08\",\"two-weeks\":\"2026-11-15\",\"month\":\"2026-12-01\"} want={\"today\":\"2026-11-01\",\"tomorrow\":\"2026-11-02\",\"eow\":\"2026-11-06\",\"week\":\"2026-11-08\",\"two-weeks\":\"2026-11-15\",\"month\":\"2026-12-01\"}"
+    },
+    {
+      "id": "D16",
+      "check": "pre-fix formula (HEAD `today.getTime() + days*DAY`) lands a day early",
+      "ok": true,
+      "detail": "headFormula+7=2026-11-03 fixed+7=2026-11-04 (differs, assertion is load-bearing)"
+    },
+    {
+      "id": "D16",
+      "check": "due-this-week filter includes exactly today..today+7 calendar days",
+      "ok": true,
+      "detail": "tz=America/New_York clock=2026-10-28T04:30:00Z rows=[\"2026-10-28\",\"2026-11-03\",\"2026-11-04\"] headWeekAhead=2026-11-03 fixedWeekAhead=2026-11-04"
+    }
+  ],
+  "failed": 0
+}

@@ -208,8 +208,9 @@ impl SlackIngress {
             return Ok(());
         }
 
-        let private_owner = event_is_plain(&event)
-            && crate::sessions::status_reply::owner_dm(&inbound.session, &user, "");
+        let private_owner = self
+            .private_owner_conversation(&event, &inbound, &user)
+            .await;
         if s.multiplexer
             .intercept_session_status(&inbound, private_owner)
             .await?
@@ -260,6 +261,35 @@ impl SlackIngress {
         inbound.delivery_id = Some(delivery_id);
         self.debouncer.enqueue(inbound).await;
         Ok(())
+    }
+
+    /// Whether the owner is talking to the bot in a private owner conversation, which is what the
+    /// direct session-status reply is allowed in: their DM, or the Slack home channel. The home
+    /// channel only counts when the message asks for the session status and the channel is private
+    /// to the owner and this bot, so ordinary channel traffic still goes to the agent.
+    async fn private_owner_conversation(
+        &self,
+        event: &Value,
+        inbound: &InboundEvent,
+        user: &str,
+    ) -> bool {
+        if !event_is_plain(event) {
+            return false;
+        }
+        let s = &self.shared;
+        if crate::sessions::status_reply::owner_dm(&inbound.session, user, "") {
+            return true;
+        }
+        crate::sessions::status_reply::matches_intent(&inbound.content)
+            && crate::sessions::status_reply::slack_home_conversation(
+                &inbound.session,
+                user,
+                s.config.owner_id(),
+                s.config.home_channel.as_deref(),
+            )
+            && s.multiplexer
+                .owner_thread_is_private(&inbound.session)
+                .await
     }
 
     /// Owner DM inbox commands: "제안" lists pending proposals (each bound to the message that
@@ -1516,11 +1546,20 @@ mod tests {
     }
 
     async fn harness(config: SlackConfig, responder: Arc<Responder>) -> Harness {
+        harness_with(config, responder, None).await
+    }
+
+    async fn harness_with(
+        config: SlackConfig,
+        responder: Arc<Responder>,
+        dispatcher: Option<Arc<dyn crate::OutboundDispatcher>>,
+    ) -> Harness {
         let db = Database::connect("sqlite::memory:").await.unwrap();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        let multiplexer = SessionMultiplexer::new(
+        let multiplexer = SessionMultiplexer::with_dispatcher(
             db.pool().clone(),
             Arc::new(SignalRunner(tx)),
+            dispatcher,
             MultiplexerConfig::default(),
         );
         let (base, calls) = fake_slack(responder).await;
@@ -1926,5 +1965,73 @@ mod tests {
         assert_eq!(routed, 0, "a command answered live must not be replayed");
         ingress.flush().await;
         assert!(h.rx.try_recv().is_err());
+    }
+
+    struct HomeDispatcher(bool);
+
+    #[async_trait]
+    impl crate::OutboundDispatcher for HomeDispatcher {
+        async fn dispatch(&self, _: crate::OutboundAction) -> Result<()> {
+            Ok(())
+        }
+
+        async fn owner_thread_is_private(&self, _: &SessionKey) -> bool {
+            self.0
+        }
+    }
+
+    #[tokio::test]
+    async fn session_status_in_the_home_channel_is_a_private_owner_conversation() {
+        // `status_reply` resolves the Slack owner from the environment, so the admitted user is
+        // that same id here.
+        let owner = crate::slack::owner_id();
+        let mut cfg = config();
+        cfg.allowed_users = vec![owner.clone()];
+        cfg.home_channel = Some("CHOME".into());
+        cfg.free_response_channels.push("CHOME".into());
+        cfg.free_response_channels.push("COTHER".into());
+        let h = harness_with(cfg.clone(), ok(), Some(Arc::new(HomeDispatcher(true)))).await;
+
+        let status = json!({
+            "type": "message", "channel": "CHOME", "channel_type": "channel", "user": owner.clone(),
+            "text": "세션 상태", "ts": "1700000100.000100",
+        });
+        let inbound = map(&cfg, &status, true).unwrap();
+        assert!(
+            h.ingress
+                .private_owner_conversation(&status, &inbound, &owner)
+                .await,
+            "the home channel must reach the direct session-status reply"
+        );
+
+        // A home channel that is not private to the owner and the bot stays with the agent.
+        let shared = harness_with(cfg.clone(), ok(), Some(Arc::new(HomeDispatcher(false)))).await;
+        let inbound = map(&cfg, &status, true).unwrap();
+        assert!(
+            !shared
+                .ingress
+                .private_owner_conversation(&status, &inbound, &owner)
+                .await
+        );
+
+        // The intent gate keeps ordinary home-channel traffic with the agent.
+        let mut chat = status.clone();
+        chat["text"] = json!("check the invoice");
+        let inbound = map(&cfg, &chat, true).unwrap();
+        assert!(
+            !h.ingress
+                .private_owner_conversation(&chat, &inbound, &owner)
+                .await
+        );
+
+        // Only the configured home channel counts.
+        let mut elsewhere = status.clone();
+        elsewhere["channel"] = json!("COTHER");
+        let inbound = map(&cfg, &elsewhere, true).unwrap();
+        assert!(
+            !h.ingress
+                .private_owner_conversation(&elsewhere, &inbound, &owner)
+                .await
+        );
     }
 }

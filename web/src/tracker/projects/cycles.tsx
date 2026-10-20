@@ -162,6 +162,16 @@ export function CreateCycleDialog({
   const [endsAt, setEndsAt] = useState(() => toDateOnly(new Date(defaultStart.getTime() + (team.cycle_weeks || 2) * 7 * DAY)))
   const [saving, setSaving] = useState(false)
 
+  // The dialog stays mounted while closed, so re-seed the default range each time it opens.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) {
+      setStartsAt(toDateOnly(defaultStart))
+      setEndsAt(toDateOnly(new Date(defaultStart.getTime() + (team.cycle_weeks || 2) * 7 * DAY)))
+    }
+  }
+
   const valid = startsAt && endsAt && endsAt > startsAt
 
   const submit = async () => {

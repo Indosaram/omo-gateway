@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "goal": {
+    "id": "01a20c17-82d0-4ad5-95b6-430c40d9fca2",
+    "threadId": "01a15818-85eb-7727-8257-650b601b4254",
+    "objective": "probe registration binding A",
+    "status": "complete",
+    "tokensUsed": 1213,
+    "timeUsedSeconds": 14,
+    "consecutiveContinuations": 0,
+    "unattendedContinuations": 0,
+    "createdAt": 1792479383,
+    "updatedAt": 1792479396,
+    "completedAt": 1792479393
+  }
+}

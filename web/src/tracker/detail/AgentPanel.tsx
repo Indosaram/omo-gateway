@@ -20,13 +20,15 @@ const LANE_COLORS: Record<LaneStatus, string> = {
   failed: '#95a2b3',
 }
 
+// Mirrors the backend: Send needs working|blocked|not_done (src/lanes/cli.rs) and Object targets
+// NotDone, which is only reachable from DoneClaimed (src/lanes/state.rs).
 const ALLOWED: Record<LaneStatus, LaneAction[]> = {
-  queued: ['send', 'close'],
+  queued: ['close'],
   working: ['send', 'close'],
   blocked: ['send', 'close'],
-  done_claimed: ['object', 'send'],
+  done_claimed: ['object'],
   not_done: ['send', 'close'],
-  verified_done: ['close', 'object'],
+  verified_done: ['close'],
   closed: ['reopen'],
   failed: ['reopen'],
 }

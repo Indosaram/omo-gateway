@@ -6,7 +6,7 @@ import { useHotkey, useHotkeyScope } from '../hotkeys'
 import { navigate } from '../router'
 import { teamDefaultState, useTracker } from '../store'
 import type { CreateDraft } from '../store'
-import type { ID, IssueCreate, Priority } from '../types'
+import type { ID, IssueCreate, Priority, Team } from '../types'
 import { PRIORITY_LABELS } from '../types'
 import { Avatar, Button, IconButton, LabelDot, MenuList, Popover, toast } from '../ui'
 import type { MenuItem } from '../ui'
@@ -61,8 +61,15 @@ export function CreateIssueModal() {
   return <CreateIssueDialog draft={draft} />
 }
 
-function initialForm(draft: CreateDraft, t: ReturnType<typeof useTracker>, fallbackTeam: ID): Form {
-  const team_id = draft.team_id && t.teamsById.has(draft.team_id) ? draft.team_id : fallbackTeam
+function initialForm(
+  draft: CreateDraft,
+  t: ReturnType<typeof useTracker>,
+  fallbackTeam: ID,
+  selectableTeams: Team[],
+): Form {
+  // System teams (the Sessions mirror) reject creation server-side, so never preselect one.
+  const team_id =
+    draft.team_id && selectableTeams.some((candidate) => candidate.id === draft.team_id) ? draft.team_id : fallbackTeam
   const state = draft.state_id && t.statesById.get(draft.state_id)?.team_id === team_id ? draft.state_id : null
   return {
     team_id,
@@ -84,12 +91,10 @@ function initialForm(draft: CreateDraft, t: ReturnType<typeof useTracker>, fallb
 function CreateIssueDialog({ draft }: { draft: CreateDraft }) {
   const t = useTracker()
   const mobile = useIsMobile()
-  const selectableTeams = useMemo(() => {
-    const normal = t.teams.filter((team) => !team.system)
-    return normal.length > 0 ? normal : t.teams
-  }, [t.teams])
+  const selectableTeams = useMemo(() => t.teams.filter((team) => !team.system), [t.teams])
   const fallbackTeam = selectableTeams[0]?.id ?? ''
-  const [form, setForm] = useState<Form>(() => initialForm(draft, t, fallbackTeam))
+  const noTeam = selectableTeams.length === 0
+  const [form, setForm] = useState<Form>(() => initialForm(draft, t, fallbackTeam, selectableTeams))
   const [createMore, setCreateMore] = useState(readCreateMore)
   const [expanded, setExpanded] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -121,7 +126,11 @@ function CreateIssueDialog({ draft }: { draft: CreateDraft }) {
 
   const submit = async () => {
     const title = form.title.trim()
-    if (!title || busy || !form.team_id) {
+    if (!form.team_id) {
+      toast.error('Issues need a regular team: system teams (like Sessions) cannot hold them')
+      return
+    }
+    if (!title || busy) {
       titleRef.current?.focus()
       return
     }
@@ -209,6 +218,7 @@ function CreateIssueDialog({ draft }: { draft: CreateDraft }) {
             searchable
             placeholder="Switch team…"
             selectedIds={[form.team_id]}
+            emptyText="No regular team"
             items={selectableTeams.map((tm) => ({
               id: tm.id,
               label: tm.name,
@@ -405,6 +415,12 @@ function CreateIssueDialog({ draft }: { draft: CreateDraft }) {
             value={form.description}
             onChange={(e) => set({ description: e.target.value })}
           />
+          {noTeam && (
+            <p className="ci-notice" role="status">
+              Every team here is a system team (the Sessions mirror), so there is nowhere to file an issue yet. Create a
+              regular team first, then press <b>c</b> again.
+            </p>
+          )}
         </div>
 
         <div className="ci-chips">
@@ -455,7 +471,7 @@ function CreateIssueDialog({ draft }: { draft: CreateDraft }) {
             <span className="ci-switch" data-on={createMore} />
             Create more
           </button>
-          <Button variant="primary" size="md" disabled={!form.title.trim() || busy} onClick={() => void submit()}>
+          <Button variant="primary" size="md" disabled={!form.title.trim() || busy || noTeam} onClick={() => void submit()}>
             {busy ? 'Creating…' : 'Create issue'}
           </Button>
         </div>

@@ -20,6 +20,8 @@ const MAX_CONTENT_CHARS: usize = 2_000;
 const MAX_NAME_CHARS: usize = 128;
 const MAX_ATTACHMENT_NAME_CHARS: usize = 256;
 const HARD_SEARCH_POOL: usize = 500;
+/// Upper bound on `conversations.replies` pages walked for one thread read (200 messages each).
+const MAX_THREAD_PAGES: usize = 50;
 
 pub struct SlackMessageContextProvider {
     api: SlackApi,
@@ -28,6 +30,9 @@ pub struct SlackMessageContextProvider {
     base_matrix: MessageContextPolicyMatrix,
     allowed_cross_channels: HashSet<String>,
     ignored_channels: HashSet<String>,
+    /// Workspace team of the bot, resolved once: a channel read from a session key that lost its
+    /// team still has to record a truthful `guild_id`.
+    team_id: tokio::sync::OnceCell<Option<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +56,7 @@ impl SlackMessageContextProvider {
             base_matrix: MessageContextPolicyMatrix::from_environment().normalized(),
             allowed_cross_channels: slack_channels_from_env("SLACK_ALLOWED_CHANNELS"),
             ignored_channels: slack_channels_from_env("SLACK_IGNORED_CHANNELS"),
+            team_id: tokio::sync::OnceCell::new(),
         }
     }
 
@@ -139,7 +145,11 @@ impl SlackMessageContextProvider {
         };
         let name = text(&info["name"], MAX_NAME_CHARS);
         let topic = text(&info["topic"]["value"], MAX_CONTENT_CHARS);
-        let guild_id = (kind != "im").then(|| session.guild_id.clone()).flatten();
+        let guild_id = if kind == "im" {
+            None
+        } else {
+            self.conversation_guild(session, conversation).await
+        };
         Some(match &conversation.thread_ts {
             Some(thread_ts) => MessageContextConversationMetadata {
                 channel_id: thread_ts.clone(),
@@ -170,6 +180,154 @@ impl SlackMessageContextProvider {
         })
     }
 
+    /// The workspace a stored document belongs to is a property of the conversation being read,
+    /// never of the session that asked for it. The inbox classifies `guild_id IS NULL` as `dm`
+    /// (src/inbox/sources/slack.rs), so a channel read from a session key without a team must still
+    /// record the team, or its messages are filed as direct messages.
+    async fn conversation_guild(
+        &self,
+        session: &SessionKey,
+        conversation: &Conversation,
+    ) -> Option<String> {
+        if conversation.channel.starts_with('D') {
+            return None;
+        }
+        if let Some(team) = &session.guild_id {
+            return Some(team.clone());
+        }
+        // A session key can lack a team (owner DM key, cron or lane key) while the channel is
+        // known: recover the team from what is already stored for that channel, then from the
+        // bot's own workspace, which is the only workspace this gateway can read.
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT guild_id FROM sessions \
+             WHERE platform = 'slack' AND channel_id = ? AND guild_id IS NOT NULL AND guild_id <> '' \
+             LIMIT 1",
+        )
+        .bind(&conversation.channel)
+        .fetch_optional(self.search_index.pool())
+        .await
+        .ok()
+        .flatten();
+        if stored.is_some() {
+            return stored;
+        }
+        let stored: Option<String> = sqlx::query_scalar(
+            "SELECT guild_id FROM message_search_documents \
+             WHERE platform = 'slack' AND (channel_id = ? OR thread_id = ?) \
+               AND guild_id IS NOT NULL AND guild_id <> '' LIMIT 1",
+        )
+        .bind(&conversation.channel)
+        .bind(&conversation.channel)
+        .fetch_optional(self.search_index.pool())
+        .await
+        .ok()
+        .flatten();
+        if stored.is_some() {
+            return stored;
+        }
+        self.team_id
+            .get_or_init(|| async {
+                self.api
+                    .auth_test()
+                    .await
+                    .ok()
+                    .map(|info| info.team_id)
+                    .filter(|team| !team.trim().is_empty())
+            })
+            .await
+            .clone()
+    }
+
+    /// Reads a thread oldest-first, following Slack's `response_metadata.next_cursor`.
+    ///
+    /// `conversations.replies` repeats the thread parent on every page and may answer a full-size
+    /// request with a short page, so neither page length nor the parent's presence says whether
+    /// more remain: only the cursor does. A peer that sends no cursor advances `oldest` to the
+    /// newest ts seen and stops as soon as a page adds nothing new, which cannot loop. Stops early
+    /// once a page reaches `until`.
+    async fn thread_messages(
+        &self,
+        channel: &str,
+        thread_ts: &str,
+        until: Option<&str>,
+    ) -> Result<Vec<Value>, OmonError> {
+        let mut all: Vec<Value> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut cursor: Option<String> = None;
+        let mut oldest: Option<String> = None;
+        for _ in 0..MAX_THREAD_PAGES {
+            let page = self
+                .api
+                .conversations_replies_page(
+                    channel,
+                    thread_ts,
+                    cursor.as_deref(),
+                    if cursor.is_none() {
+                        oldest.as_deref()
+                    } else {
+                        None
+                    },
+                    PAGE_LIMIT as u32,
+                )
+                .await?;
+            let next_cursor = page.next_cursor;
+            let mut fresh = 0usize;
+            for message in page.messages {
+                let ts = str_field(&message, "ts").to_owned();
+                if ts_parts(&ts).is_none() || !seen.insert(ts.clone()) {
+                    continue;
+                }
+                if oldest.as_deref().is_none_or(|o| ts_less(o, &ts)) {
+                    oldest = Some(ts.clone());
+                }
+                fresh += 1;
+                all.push(message);
+            }
+            let reached = until.is_some_and(|until| {
+                oldest
+                    .as_deref()
+                    .is_some_and(|newest| !ts_less(newest, until))
+            });
+            if reached {
+                break;
+            }
+            match next_cursor {
+                Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+                // A repeated cursor would loop forever; Slack sends none once the thread ends.
+                Some(_) => break,
+                // The cursor series ended, so the thread is fully read.
+                None if cursor.is_some() => break,
+                None if fresh == 0 => break,
+                None => {}
+            }
+        }
+        all.sort_by_key(|message| ts_parts(str_field(message, "ts")));
+        Ok(all)
+    }
+
+    /// The thread root a `ts` belongs to. `conversations.replies` needs the parent ts: a reply's own
+    /// ts is not a valid root, so a reply is resolved through the indexed document that recorded
+    /// its thread. A ts with no recorded thread is its own root, which is exactly right for a
+    /// top-level message.
+    async fn thread_root(&self, ts: &str) -> Option<String> {
+        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT thread_id, json_extract(metadata_json, '$.referenced_message_id') \
+             FROM message_search_documents \
+             WHERE platform = 'slack' AND message_id = ? \
+             ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(ts)
+        .fetch_optional(self.search_index.pool())
+        .await
+        .ok()
+        .flatten();
+        match row {
+            Some((Some(thread), _)) if !thread.trim().is_empty() => Some(thread),
+            Some((_, Some(parent))) if !parent.trim().is_empty() => Some(parent),
+            _ => None,
+        }
+    }
+
     async fn page(
         &self,
         conversation: &Conversation,
@@ -180,13 +338,7 @@ impl SlackMessageContextProvider {
         let raw = match &conversation.thread_ts {
             Some(thread_ts) => {
                 let mut replies = self
-                    .api
-                    .conversations_replies(
-                        &conversation.channel,
-                        thread_ts,
-                        None,
-                        PAGE_LIMIT as u32,
-                    )
+                    .thread_messages(&conversation.channel, thread_ts, before)
                     .await?;
                 replies.retain(|message| {
                     before.is_none_or(|before| ts_less(str_field(message, "ts"), before))
@@ -213,9 +365,10 @@ impl SlackMessageContextProvider {
         conversation: &Conversation,
         messages: &[MessageContextMessage],
     ) -> Result<usize, OmonError> {
+        let guild = self.conversation_guild(session, conversation).await;
         let documents = messages
             .iter()
-            .map(|message| document(session, conversation, message))
+            .map(|message| document(&guild, conversation, message))
             .collect::<Vec<_>>();
         self.search_index.upsert_many(&documents).await
     }
@@ -257,15 +410,24 @@ impl SlackMessageContextProvider {
         request: &MessageContextRequest,
     ) -> Result<MessageContextResult, OmonError> {
         let ts = required_ts(request)?;
+        // `conversations.replies` needs the thread's parent ts: a reply's own ts is not a root.
+        // A thread conversation already knows its root; a channel request resolves it through the
+        // indexed document that recorded the reply's thread.
+        let root = match conversation.thread_ts.clone() {
+            Some(root) => root,
+            None => self.thread_root(ts).await.unwrap_or_else(|| ts.to_owned()),
+        };
         let message = self
-            .api
-            .conversations_replies(&conversation.channel, ts, None, 1)
+            .thread_messages(&conversation.channel, &root, Some(ts))
             .await?
             .iter()
             .find(|message| str_field(message, "ts") == ts)
             .and_then(|message| normalize(message, &conversation.channel))
             .ok_or_else(|| {
-                OmonError::ToolExecution(format!("message_context: Slack message {ts} not found"))
+                OmonError::ToolExecution(format!(
+                    "message_context: Slack message {ts} not found in thread {root}; if it is a \
+                     thread reply, read the thread with operation \"replies\" first"
+                ))
             })?;
         let messages = vec![message];
         let indexed = self.index(session, conversation, &messages).await?;
@@ -583,14 +745,16 @@ fn normalize(message: &Value, channel: &str) -> Option<MessageContextMessage> {
     })
 }
 
+/// The team a stored document belongs to is resolved by the caller from the conversation, not from
+/// the session that asked for it: the inbox classifies `guild_id IS NULL` as `dm`.
 fn document(
-    session: &SessionKey,
+    guild: &Option<String>,
     conversation: &Conversation,
     message: &MessageContextMessage,
 ) -> MessageSearchDocument {
     MessageSearchDocument {
         platform: PLATFORM.into(),
-        guild_id: session.guild_id.clone(),
+        guild_id: guild.clone(),
         channel_id: conversation.index_key().to_owned(),
         thread_id: conversation.thread_ts.clone(),
         message_id: message.id.clone(),
@@ -655,7 +819,10 @@ mod tests {
                 let body: Value = crate::slack::api::decode_test_body(&bytes);
                 let mut reply = responder(&method, &body);
                 recorded.lock().push((method, body));
-                reply["ok"] = json!(true);
+                // A responder may fail the call on purpose (a strict fake rejecting a bad root).
+                if reply.get("ok").is_none() {
+                    reply["ok"] = json!(true);
+                }
                 let response: Response = axum::Json(reply).into_response();
                 response
             }
@@ -850,6 +1017,132 @@ mod tests {
         assert_eq!(one.messages[0].content, "root");
     }
 
+    /// Replies per page. Deliberately shorter than `limit`, because Slack may answer a full-size
+    /// request with a short page that still carries `response_metadata.next_cursor`.
+    const PAGE_SIZE: u64 = 60;
+
+    /// The one thread this fake serves: 250 replies under a single root.
+    const ROOT: &str = "1700000000.000000";
+
+    fn reply(n: u64) -> Value {
+        json!({"type": "message", "ts": format!("{}.000000", 1_700_000_000u64 + n),
+               "user": "U0BOB", "text": format!("reply {n}"), "thread_ts": ROOT})
+    }
+
+    /// Slack `conversations.replies` as production behaves: `ts` must be the thread *root* - a
+    /// reply's own ts is rejected with `thread_not_found` - the parent is repeated as the first
+    /// message of every page, and paging is driven by `cursor`.
+    fn paged_thread(method: &str, body: &Value) -> Value {
+        if method != "conversations.replies" {
+            return slack(method, body);
+        }
+        if body["ts"].as_str() != Some(ROOT) {
+            return json!({ "ok": false, "error": "thread_not_found" });
+        }
+        let after = body["cursor"]
+            .as_str()
+            .and_then(|cursor| cursor.strip_prefix("at-"))
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0);
+        let page_end = 250.min(after + PAGE_SIZE);
+        let mut messages = vec![json!({"type": "message", "ts": ROOT, "user": "U0OWNER",
+                                       "text": "root", "thread_ts": ROOT})];
+        messages.extend((after + 1..=page_end).map(reply));
+        let next_cursor = if page_end < 250 {
+            format!("at-{page_end}")
+        } else {
+            String::new()
+        };
+        json!({
+            "messages": messages,
+            "response_metadata": { "next_cursor": next_cursor },
+        })
+    }
+
+    #[tokio::test]
+    async fn thread_reads_page_to_newest_and_get_message_finds_replies() {
+        let (api, _) = fake(paged_thread).await;
+        let provider = SlackMessageContextProvider::new(api, pool().await);
+
+        // Reading the thread indexes every reply with its parent, which is how a reply's root
+        // becomes known to a later channel-level get_message.
+        provider
+            .query(
+                &channel_session(),
+                &request(json!({"operation": "replies", "message_id": ROOT, "limit": 2})),
+            )
+            .await
+            .unwrap();
+
+        let thread_session = SessionKey::new("slack", Some("T1"), "C0WORK", Some(ROOT), "");
+        let recent = provider
+            .query(
+                &thread_session,
+                &request(json!({"operation": "recent", "limit": 2})),
+            )
+            .await
+            .unwrap();
+        let ids: Vec<_> = recent.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["1700000250.000000", "1700000249.000000"]);
+
+        let one = provider
+            .query(
+                &channel_session(),
+                &request(json!({"operation": "get_message", "message_id": "1700000230.000000"})),
+            )
+            .await
+            .unwrap();
+        assert_eq!(one.messages[0].content, "reply 230");
+    }
+
+    #[tokio::test]
+    async fn thread_reads_follow_slacks_cursor_past_short_pages() {
+        let (api, calls) = fake(paged_thread).await;
+        let provider = SlackMessageContextProvider::new(api, pool().await);
+
+        let thread_session = SessionKey::new("slack", Some("T1"), "C0WORK", Some(ROOT), "");
+        let recent = provider
+            .query(
+                &thread_session,
+                &request(json!({"operation": "recent", "limit": 2})),
+            )
+            .await
+            .unwrap();
+        let ids: Vec<_> = recent.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["1700000250.000000", "1700000249.000000"]);
+
+        // Five 60-reply pages, so the walk followed the cursor rather than page length.
+        let pages: Vec<_> = calls
+            .lock()
+            .iter()
+            .filter(|(method, _)| method == "conversations.replies")
+            .cloned()
+            .collect();
+        assert_eq!(pages.len(), 5, "expected cursor paging, got {pages:?}");
+        assert!(pages[0].1.get("cursor").is_none());
+        assert_eq!(pages[0].1["ts"], ROOT);
+        assert_eq!(pages[1].1["cursor"], "at-60");
+        assert_eq!(pages[4].1["cursor"], "at-240");
+    }
+
+    #[tokio::test]
+    async fn get_message_rejects_a_reply_ts_as_a_thread_root() {
+        let (api, _) = fake(paged_thread).await;
+        let provider = SlackMessageContextProvider::new(api, pool().await);
+
+        // Nothing indexed yet, so the reply's parent is unknown and the ts is tried as a root -
+        // which Slack rejects. The error must say so instead of pretending the message is absent.
+        let error = provider
+            .query(
+                &channel_session(),
+                &request(json!({"operation": "get_message", "message_id": "1700000230.000000"})),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("thread_not_found"), "{error}");
+    }
+
     #[tokio::test]
     async fn ids_and_cross_channel_access_are_validated() {
         let (api, calls) = fake(slack).await;
@@ -918,5 +1211,64 @@ mod tests {
         let ok = provider.query(&dm, &request(json!({}))).await.unwrap();
         assert_eq!(ok.channel_id, "D0OWNER");
         assert_eq!(provider.platform(), "slack");
+    }
+
+    /// A channel read must record the channel's real team even when the reading session key has no
+    /// `guild_id` (owner-DM, cron and lane keys can all carry a channel with no team). The inbox
+    /// classifies `guild_id IS NULL` as `dm`, so a NULL here files channel traffic as direct
+    /// messages.
+    #[tokio::test]
+    async fn channel_reads_from_teamless_sessions_record_the_channel_team() {
+        let (api, _) = fake(slack).await;
+        let pool = pool().await;
+        let provider = SlackMessageContextProvider::new(api, pool.clone());
+
+        // What production stores for a channel the bot already works in.
+        sqlx::query(
+            "INSERT INTO sessions (session_key, platform, guild_id, channel_id, thread_id, user_id) \
+             VALUES ('slack:T1:C0WORK::UBOT', 'slack', 'T1', 'C0WORK', NULL, '')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let teamless =
+            SessionKey::new("slack", None::<String>, "C0WORK", None::<String>, "U0OWNER");
+        provider
+            .query(&teamless, &request(json!({"limit": 1})))
+            .await
+            .unwrap();
+
+        let guild: Option<String> = sqlx::query_scalar(
+            "SELECT guild_id FROM message_search_documents \
+             WHERE platform = 'slack' AND channel_id = 'C0WORK' LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(guild.as_deref(), Some("T1"));
+
+        // A DM conversation stays NULL: it really is a direct message. Read it through its own DM
+        // session, the only supported way to read a DM (cross-channel reads are refused for DM
+        // sessions by `authorize`).
+        let dm = SessionKey::new(
+            "slack",
+            None::<String>,
+            "D0OWNER",
+            None::<String>,
+            "U0OWNER",
+        );
+        provider
+            .query(&dm, &request(json!({"limit": 1})))
+            .await
+            .unwrap();
+        let dm_guild: Option<String> = sqlx::query_scalar(
+            "SELECT guild_id FROM message_search_documents \
+             WHERE platform = 'slack' AND channel_id = 'D0OWNER' LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(dm_guild, None);
     }
 }

@@ -28,6 +28,14 @@ import type {
 import { DEFAULT_DISPLAY, PRIORITY_LABELS, STATE_TYPE_ORDER } from './types'
 
 export type Theme = 'dark' | 'light'
+/** Stored preference; 'system' follows prefers-color-scheme live. */
+export type ThemePreference = Theme | 'system'
+
+const LIGHT_SCHEME_QUERY = '(prefers-color-scheme: light)'
+
+function systemTheme(): Theme {
+  return typeof window !== 'undefined' && window.matchMedia(LIGHT_SCHEME_QUERY).matches ? 'light' : 'dark'
+}
 
 export interface CreateDraft extends Partial<IssueCreate> {
   team_id?: ID
@@ -53,6 +61,12 @@ export interface TrackerState {
   usersById: Map<ID, User>
   teamsById: Map<ID, Team>
   teamsByKey: Map<string, Team>
+  /**
+   * The system team that mirrors omo sessions. Identified the way the backend does it - a system
+   * team owning states with a `session_state` - because its key is only a label: the backend takes
+   * the first free candidate from SES, SES1..SES99, so a user team may own any of them.
+   */
+  sessionsTeam: Team | null
   statesById: Map<ID, WorkflowState>
   labelsById: Map<ID, Label>
   projectsById: Map<ID, Project>
@@ -61,8 +75,10 @@ export interface TrackerState {
   issuesByIdentifier: Map<string, Issue>
   teamStates: (teamId: ID) => WorkflowState[]
 
+  /** Resolved theme actually applied (system preference already resolved). */
   theme: Theme
-  setTheme: (theme: Theme) => void
+  themePreference: ThemePreference
+  setTheme: (theme: ThemePreference) => void
   sidebarCollapsed: boolean
   setSidebarCollapsed: (value: boolean) => void
   mobileNavOpen: boolean
@@ -130,6 +146,74 @@ function upsert<T extends { id: ID }>(items: T[], next: T): T[] {
   return copy
 }
 
+/**
+ * Coordinates the background poll with local writes.
+ *
+ * A read can return rows the database held before a write committed, and the response can arrive
+ * after that write already applied its result. Tracking only the write *start* is not enough: a
+ * poll issued while the write is in flight captures the same epoch, reads the pre-commit rows, and
+ * would then be accepted once the write settles.
+ *
+ * So the epoch moves twice per write - on start and on settlement - and reads are suppressed
+ * outright while any write is in flight:
+ *  - a read that starts mid-write would only return pre-commit rows, so it is not issued at all;
+ *  - a read issued earlier is discarded if a write started or settled while it was in flight.
+ */
+export class MutationGuard {
+  private pending = 0
+  private epoch = 0
+
+  /** A write is about to change data the poll reads. */
+  begin(): void {
+    this.pending += 1
+    this.epoch += 1
+  }
+
+  /**
+   * The write has settled (successfully or not). The epoch moves again because the rows a read in
+   * flight will return were produced before this settlement.
+   */
+  settle(): void {
+    this.pending = Math.max(0, this.pending - 1)
+    this.epoch += 1
+  }
+
+  /** A local write that is already complete; invalidates any read already in flight. */
+  touch(): void {
+    this.epoch += 1
+  }
+
+  get inFlight(): boolean {
+    return this.pending > 0
+  }
+
+  token(): number {
+    return this.epoch
+  }
+
+  /** True when no write started or settled since `token` was taken. */
+  canApply(token: number): boolean {
+    return this.pending === 0 && this.epoch === token
+  }
+}
+
+/**
+ * Runs a read and applies its result only if no write started or settled while it was in flight.
+ * Returns whether the result was applied.
+ */
+export async function readGuarded<T>(
+  guard: MutationGuard,
+  read: () => Promise<T>,
+  apply: (value: T) => void,
+): Promise<boolean> {
+  if (guard.inFlight) return false
+  const token = guard.token()
+  const value = await read()
+  if (!guard.canApply(token)) return false
+  apply(value)
+  return true
+}
+
 function readStorage<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
@@ -182,7 +266,8 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [error, setError] = useState<string | null>(null)
   const [lastError, setLastError] = useState<{ message: string; at: number } | null>(null)
-  const [theme, setThemeState] = useState<Theme>(() => readStorage<Theme>('tracker.theme', 'dark'))
+  const [themePreference, setThemeState] = useState<ThemePreference>(() => readStorage<ThemePreference>('tracker.theme', 'dark'))
+  const [osTheme, setOsTheme] = useState<Theme>(systemTheme)
   const [sidebarCollapsed, setSidebarCollapsedState] = useState<boolean>(() => readStorage('tracker.sidebarCollapsed', false))
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [peekIssueId, setPeekIssueId] = useState<ID | null>(null)
@@ -194,6 +279,8 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
   const [displays, setDisplays] = useState<Record<string, ViewDisplay>>(() => readStorage('tracker.displays', {}))
   const [filters, setFilters] = useState<Record<string, ViewFilters>>(() => readStorage('tracker.filters', {}))
   const loading = useRef(false)
+  // One guard for the provider's lifetime: the poll and every local write coordinate through it.
+  const [mutations] = useState(() => new MutationGuard())
 
   const reportError = useCallback((err: unknown) => {
     const message = err instanceof TrackerApiError || err instanceof Error ? err.message : String(err)
@@ -201,34 +288,42 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const refreshIssues = useCallback(async () => {
-    const result = await trackerApi.issues({ include_archived: true })
-    setIssues(result.items)
-  }, [])
+    await readGuarded(
+      mutations,
+      () => trackerApi.issues({ include_archived: true }),
+      (result) => setIssues(result.items),
+    )
+  }, [mutations])
 
   const refreshNotifications = useCallback(async () => {
-    const result = await trackerApi.notifications()
-    setNotifications(result.items)
-  }, [])
+    await readGuarded(mutations, () => trackerApi.notifications(), (result) => setNotifications(result.items))
+  }, [mutations])
 
   const refresh = useCallback(async () => {
     if (loading.current) return
     loading.current = true
     try {
-      const [boot, list, notes] = await Promise.all([
-        trackerApi.bootstrap(),
-        trackerApi.issues({ include_archived: true }),
-        trackerApi.notifications(),
-      ])
-      setData(boot)
-      setIssues(list.items)
-      setNotifications(notes.items)
-      setError(null)
+      await readGuarded(
+        mutations,
+        () =>
+          Promise.all([
+            trackerApi.bootstrap(),
+            trackerApi.issues({ include_archived: true }),
+            trackerApi.notifications(),
+          ]),
+        ([boot, list, notes]) => {
+          setData(boot)
+          setIssues(list.items)
+          setNotifications(notes.items)
+          setError(null)
+        },
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       loading.current = false
     }
-  }, [])
+  }, [mutations])
 
   useEffect(() => {
     void refresh()
@@ -238,7 +333,15 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
     return () => window.clearInterval(interval)
   }, [refresh])
 
-  const setTheme = useCallback((next: Theme) => {
+  useEffect(() => {
+    const mql = window.matchMedia(LIGHT_SCHEME_QUERY)
+    const onChange = () => setOsTheme(mql.matches ? 'light' : 'dark')
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+  const theme: Theme = themePreference === 'system' ? osTheme : themePreference
+
+  const setTheme = useCallback((next: ThemePreference) => {
     setThemeState(next)
     writeStorage('tracker.theme', next)
   }, [])
@@ -260,6 +363,13 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
   const usersById = useMemo(() => indexBy(users, (u) => u.id), [users])
   const teamsById = useMemo(() => indexBy(teams, (t) => t.id), [teams])
   const teamsByKey = useMemo(() => indexBy(teams, (t) => t.key), [teams])
+  const sessionsTeam = useMemo(
+    () =>
+      teams.find(
+        (team) => team.system && states.some((state) => state.team_id === team.id && state.session_state !== null),
+      ) ?? null,
+    [teams, states],
+  )
   const statesById = useMemo(() => indexBy(states, (s) => s.id), [states])
   const labelsById = useMemo(() => indexBy(labels, (l) => l.id), [labels])
   const projectsById = useMemo(() => indexBy(projects, (p) => p.id), [projects])
@@ -278,24 +388,40 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
     setData((current) => (current ? fn(current) : current))
   }, [])
 
-  const upsertIssue = useCallback((issue: Issue) => setIssues((current) => upsert(current, issue)), [])
+  const upsertIssue = useCallback(
+    (issue: Issue) => {
+      mutations.touch()
+      setIssues((current) => upsert(current, issue))
+    },
+    [mutations],
+  )
 
   const createIssue = useCallback(
     async (input: IssueCreate) => {
-      const issue = await trackerApi.createIssue(input)
-      setIssues((current) => upsert(current, issue))
-      patchData((d) => ({
-        ...d,
-        teams: d.teams.map((t) => (t.id === issue.team_id ? { ...t, issue_seq: Math.max(t.issue_seq, issue.number) } : t)),
-      }))
-      return issue
+      mutations.begin()
+      try {
+        const issue = await trackerApi.createIssue(input)
+        // Settlement moves the epoch before the completed rows are applied, so a read that was
+        // issued during the request can never land on top of them.
+        mutations.settle()
+        setIssues((current) => upsert(current, issue))
+        patchData((d) => ({
+          ...d,
+          teams: d.teams.map((t) => (t.id === issue.team_id ? { ...t, issue_seq: Math.max(t.issue_seq, issue.number) } : t)),
+        }))
+        return issue
+      } catch (err) {
+        mutations.settle()
+        throw err
+      }
     },
-    [patchData],
+    [patchData, mutations],
   )
 
   const updateIssues = useCallback(
     async (ids: ID[], patch: IssuePatch) => {
       if (ids.length === 0) return []
+      mutations.begin()
       const previous = new Map<ID, Issue>()
       setIssues((current) =>
         current.map((issue) => {
@@ -306,23 +432,34 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
       )
       try {
         const updated = ids.length === 1 ? [await trackerApi.updateIssue(ids[0], patch)] : (await trackerApi.batchUpdate(ids, patch)).items
+        // Settlement moves the epoch before the completed rows are applied, so a read that was
+        // issued during the request can never land on top of them.
+        mutations.settle()
         setIssues((current) => updated.reduce((acc, issue) => upsert(acc, issue), current))
         return updated
       } catch (err) {
+        mutations.settle()
         setIssues((current) => current.map((issue) => previous.get(issue.id) ?? issue))
-        reportError(err)
+        // Callers surface lane_not_verified with a "Force close" action toast, so reporting it here
+        // as well would show the same error twice.
+        if (!(err instanceof TrackerApiError && err.code === 'lane_not_verified')) reportError(err)
         throw err
       }
     },
-    [reportError],
+    [reportError, mutations],
   )
 
   const deleteIssue = useCallback(
     async (id: ID) => {
-      await trackerApi.deleteIssue(id)
+      mutations.begin()
+      try {
+        await trackerApi.deleteIssue(id)
+      } finally {
+        mutations.settle()
+      }
       setIssues((current) => current.filter((issue) => issue.id !== id))
     },
-    [],
+    [mutations],
   )
 
   const toggleFavorite = useCallback(
@@ -382,6 +519,7 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
     usersById,
     teamsById,
     teamsByKey,
+    sessionsTeam,
     statesById,
     labelsById,
     projectsById,
@@ -390,6 +528,7 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
     issuesByIdentifier,
     teamStates,
     theme,
+    themePreference,
     setTheme,
     sidebarCollapsed,
     setSidebarCollapsed,
@@ -433,7 +572,10 @@ export function TrackerProvider({ children }: { children: React.ReactNode }) {
     upsertState: (s) => patchData((d) => ({ ...d, states: upsert(d.states, s) })),
     removeState: (id) => patchData((d) => ({ ...d, states: d.states.filter((s) => s.id !== id) })),
     upsertUser: (user) => patchData((d) => ({ ...d, users: upsert(d.users, user) })),
-    upsertNotification: (n) => setNotifications((current) => upsert(current, n)),
+    upsertNotification: (n) => {
+      mutations.touch()
+      setNotifications((current) => upsert(current, n))
+    },
     reportError,
     lastError,
   }
@@ -449,7 +591,10 @@ export function useTracker(): TrackerState {
 
 export function applyFilters(issues: Issue[], filters: ViewFilters, t: Pick<TrackerState, 'statesById' | 'me' | 'cyclesById'>): Issue[] {
   const today = toDateOnly(new Date())
-  const weekAhead = toDateOnly(new Date(Date.now() + 7 * 86_400_000))
+  // Calendar math: `Date.now() + 7 * 86_400_000` drifts a day across a DST change.
+  const weekAheadDate = new Date()
+  weekAheadDate.setDate(weekAheadDate.getDate() + 7)
+  const weekAhead = toDateOnly(weekAheadDate)
   const text = filters.text?.trim().toLowerCase()
   return issues.filter((issue) => {
     const state = t.statesById.get(issue.state_id)

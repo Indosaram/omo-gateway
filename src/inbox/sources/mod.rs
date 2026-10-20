@@ -54,10 +54,15 @@ where
         .map_err(|error| OmonError::ToolExecution(format!("{program} could not start: {error}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.to_lowercase().contains("token expired") {
-            return Err(OmonError::ToolExecution(
-                "auth_expired: mail credentials expired".into(),
-            ));
+        // Keep `auth_expired` in the cursor error so the digest still flags a dead login, but only
+        // when the tail is a real credential verdict: zele prints "Token expired, refreshing"
+        // before every refresh, so a refresh that dies on DNS must stay a plain network error
+        // (2026-10-20 02:10Z).
+        if crate::inbox::health::is_auth_failure(&stderr) {
+            return Err(OmonError::ToolExecution(format!(
+                "auth_expired: {program} credentials expired: {}",
+                stderr.trim()
+            )));
         }
         return Err(OmonError::ToolExecution(format!(
             "{program} exited {}: {}",
@@ -105,6 +110,19 @@ pub(super) fn optional_string(value: &serde_json::Value, keys: &[&str]) -> Optio
 mod run_json_tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn failed_refresh_preserves_network_error_for_health_classification() {
+        let error = run_json(
+            "sh",
+            ["-c", "printf 'Token expired, refreshing\ngetaddrinfo ENOTFOUND oauth2.googleapis.com\n' >&2; exit 1"],
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(crate::inbox::health::is_network_failure(&error));
+        assert!(!crate::inbox::health::is_auth_failure(&error));
+    }
 
     /// Spawns a child that reports its pid through a FIFO and then sleeps for
     /// 300s, drops the `run_json` future (as the 60s timeout in `collect_all`

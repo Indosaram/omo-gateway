@@ -57,7 +57,9 @@ export function TimelineView({ groups, t }: { groups: IssueGroup[]; t: TrackerSt
   const months: { label: string; left: number }[] = []
   const ticks: { label: string; left: number; today: boolean; weekend: boolean }[] = []
   for (let i = 0; i < days; i++) {
-    const date = new Date(rangeStart + i * DAY)
+    // Step by calendar day, not by 24h: a DST fall-back would otherwise repeat the previous date.
+    const date = new Date(rangeStart)
+    date.setDate(date.getDate() + i)
     if (date.getDate() === 1 || i === 0) {
       months.push({ label: date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }), left: i * DAY_W })
     }

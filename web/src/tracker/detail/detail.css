@@ -183,6 +183,15 @@
   font-size: 12px;
 }
 
+.lin .ld-desc-pending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 0;
+  color: var(--text-4);
+  font-size: 12px;
+}
+
 .lin .ld-desc-textarea {
   width: 100%;
   resize: none;

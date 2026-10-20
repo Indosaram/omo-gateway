@@ -100,13 +100,13 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             return Err(invalid("lead must be a session storage key"));
         }
         parse_signals(done).map_err(invalid)?;
-        let (resolved, _) = self.control.resolve(target).await.map_err(invalid)?;
+        // One listing is enough: `resolve` already returned the session, and asking
+        // `session()` again would run a second, identical `omo thread list`.
+        let (resolved, session) = self.control.resolve(target).await.map_err(invalid)?;
+        if !session.controls.iter().any(|c| c == "send") {
+            return Err(invalid("session does not support send"));
+        }
         let target = &resolved;
-        let session = self
-            .control
-            .session(target, "send")
-            .await
-            .map_err(invalid)?;
         let cwd = session
             .cwd
             .ok_or_else(|| invalid("session cwd is required to verify Done signals"))?;
@@ -159,6 +159,28 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
                 .bind(target.to_string())
                 .fetch_optional(&mut *tx)
                 .await?;
+        // A released session has usually ended, so `resolve` could not canonicalize a short
+        // id; the stored target is the only record left. Compare the stored value directly
+        // instead of with LIKE, whose `_` and `%` would make a host name match another.
+        let lane = match lane {
+            Some(found) => Some(found),
+            None => {
+                let rows: Vec<(String, String, String)> = sqlx::query_as(
+                    "SELECT key,status,external_target FROM lanes WHERE external_target IS NOT NULL",
+                )
+                .fetch_all(&mut *tx)
+                .await?;
+                let prefix = target.to_string();
+                let mut matches = rows
+                    .into_iter()
+                    .filter(|(_, _, stored)| stored.starts_with(&prefix))
+                    .map(|(key, status, _)| (key, status));
+                match (matches.next(), matches.next()) {
+                    (Some(found), None) => Some(found),
+                    _ => None,
+                }
+            }
+        };
         let (key, status) = lane.ok_or_else(|| invalid("session is not adopted"))?;
         if !matches!(status.as_str(), "verified_done" | "closed" | "failed") {
             sqlx::query("UPDATE lanes SET status='closed',updated_at=? WHERE key=? AND status=?")
@@ -192,7 +214,8 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
         )
     }
 
-    async fn target(&self, key: &str) -> Result<Option<Target>> {
+    /// The canonical target a lane was adopted with, as stored in `lanes.external_target`.
+    pub async fn target(&self, key: &str) -> Result<Option<Target>> {
         let target: Option<String> =
             sqlx::query_scalar("SELECT external_target FROM lanes WHERE key=? AND kind='external'")
                 .bind(key)
@@ -631,14 +654,11 @@ fn entry_text(entry: &Value) -> Option<String> {
         .filter(|value| !value.is_null())
         .or_else(|| entry.get("content"))?;
     match content {
-        Value::String(text) => {
-            if let Ok(Value::Array(blocks)) = serde_json::from_str::<Value>(text) {
-                if let Some(extracted) = extract_blocks_text(&blocks) {
-                    return Some(extracted);
-                }
-            }
-            Some(text.clone())
-        }
+        Value::String(text) => match serde_json::from_str::<Value>(text) {
+            Ok(Value::Array(blocks)) => extract_blocks_text(&blocks),
+            Ok(Value::String(decoded)) => Some(decoded),
+            _ => Some(text.clone()),
+        },
         Value::Array(blocks) => extract_blocks_text(blocks),
         _ => None,
     }
@@ -771,5 +791,77 @@ mod tests {
             assistant_items(&before).unwrap()[0].0,
             assistant_items(&after).unwrap()[0].0
         );
+    }
+
+    #[test]
+    fn assistant_entries_with_only_tool_calls_as_json_string_are_skipped() {
+        let tool_call_str = serde_json::to_string(&json!([
+            {"type": "toolCall", "id": "call_123", "name": "bash", "arguments": {}}
+        ]))
+        .unwrap();
+
+        let page = json!({
+            "items": [
+                {"seq": 1, "role": "assistant", "content": tool_call_str},
+                {"seq": 2, "role": "assistant", "content": "actual message"}
+            ]
+        });
+
+        let items = assistant_items(&page).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].1, "actual message");
+    }
+
+    #[tokio::test]
+    async fn release_finds_the_adopted_target_by_unique_prefix() {
+        use super::super::registry::CommandOutput;
+        use crate::work_heartbeat::MockClock;
+        use async_trait::async_trait;
+
+        struct NoCommands;
+
+        #[async_trait]
+        impl CommandRunner for NoCommands {
+            async fn run(
+                &self,
+                _machine: &str,
+                argv: &[String],
+            ) -> std::result::Result<CommandOutput, String> {
+                Err(format!("release must not run a command: {argv:?}"))
+            }
+        }
+
+        let temp = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::connect(&format!(
+            "sqlite://{}?mode=rwc",
+            temp.path().join("release.db").display()
+        ))
+        .await
+        .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO lanes(key,title,lead_session_key,cwd,brief_path,session_key,omo_thread_id,status,done_signals,last_activity_at,kind,external_target) VALUES('ext-1','t','lead:c','/tmp','','','s','working','done','2026-10-12T00:00:00Z','external',?)",
+        )
+        .bind("omarchy:01a1429e-8585-7e8a-b89b-2ea8458e4312")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let driver = ExternalDriver::new(
+            pool.clone(),
+            SessionControl::new(Arc::new(NoCommands), vec!["omarchy".into()]),
+            Arc::new(MockClock::new(Utc::now())),
+        );
+        // The session ended before release, so `resolve` failed and the CLI kept the
+        // prefix the user typed; the stored target is the only record left.
+        let prefix: Target = "omarchy:01a1429e".parse().unwrap();
+        driver.release(&prefix).await.expect("prefix release");
+
+        let status: String = sqlx::query_scalar("SELECT status FROM lanes WHERE key='ext-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "closed");
+        pool.close().await;
     }
 }

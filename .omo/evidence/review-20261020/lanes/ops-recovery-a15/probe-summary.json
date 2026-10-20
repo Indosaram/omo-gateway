@@ -1,0 +1,95 @@
+{
+  "_redacted": "derived proof only; full session transcripts, message bodies, tool-hook records and extension install paths removed",
+  "probes": [
+    {
+      "variant": "A: --no-extensions -e omo-ai/plugin (SUPERSEDED as proof)",
+      "_source_sha256": "236cffde048adaecd3a888d96f0b027d3ed9369de235e31315b2d58b45f2c146",
+      "cwd": "/private/tmp/a15probe",
+      "toolCalls": {
+        "create_goal": 2,
+        "get_goal": 2,
+        "update_goal": 2
+      },
+      "piGoalMentionsInLog": 0,
+      "flags": "--no-extensions + explicit plugin"
+    },
+    {
+      "variant": "B: CODING_AGENT_DIR override (INVALID control)",
+      "_source_sha256": "cbd1a2bf974b4b4dc707211e275122f08a29160e2e1c42e4a3dfcab78cdd4e47",
+      "cwd": "/private/tmp/a15probe",
+      "toolCalls": {
+        "create_goal": 3,
+        "get_goal": 3,
+        "update_goal": 3
+      },
+      "piGoalMentionsInLog": 0,
+      "flags": "env redirect did not take effect"
+    },
+    {
+      "variant": "C: legacy pi-goal loaded via -e (shadow control)",
+      "_source_sha256": "bb206fe31c981d9e7d10461e7b1508dc7f0c1f1beec0079ccb444a51e9216122",
+      "cwd": "/private/tmp/a15probe",
+      "toolCalls": {
+        "create_goal": 2,
+        "get_goal": 2,
+        "update_goal": 2
+      },
+      "piGoalMentionsInLog": 3,
+      "flags": "-e legacy pi-goal"
+    },
+    {
+      "variant": "D: real settings, default discovery (PRIMARY PROOF)",
+      "_source_sha256": "171e391049a35548c6c237eea52d8fee6c7d112a1c664136c063896b130cb648",
+      "cwd": "/private/tmp/a15probe",
+      "toolCalls": {
+        "create_goal": 3,
+        "get_goal": 3,
+        "update_goal": 3
+      },
+      "piGoalMentionsInLog": 0,
+      "flags": "no -e, no --no-extensions"
+    }
+  ],
+  "stores": [
+    {
+      "variant": "A",
+      "stores": [
+        {
+          "store": "extensions/goal",
+          "goalFiles": [
+            "01a15818-85eb-7727-8257-650b601b4254.json"
+          ]
+        }
+      ],
+      "piGoalStoreCreated": false
+    },
+    {
+      "variant": "C",
+      "stores": [
+        {
+          "store": "extensions/goal",
+          "goalFiles": []
+        },
+        {
+          "store": "extensions/pi-goal",
+          "goalFiles": [
+            "01a1581a-a659-7e0f-b699-8a4a5d9e7513.json"
+          ]
+        }
+      ],
+      "piGoalStoreCreated": true
+    },
+    {
+      "variant": "D",
+      "stores": [
+        {
+          "store": "extensions/goal",
+          "goalFiles": [
+            "01a15824-4192-7f5c-9b56-e187bbd8cba1.json"
+          ]
+        }
+      ],
+      "piGoalStoreCreated": false
+    }
+  ]
+}

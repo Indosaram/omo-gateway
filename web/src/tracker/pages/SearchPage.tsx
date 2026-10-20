@@ -46,6 +46,7 @@ export function SearchPage({ q }: { q: string }) {
     const query = q.trim()
     if (!query) {
       setRemote(null)
+      setLoading(false)
       return
     }
     let cancelled = false

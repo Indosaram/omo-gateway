@@ -30,7 +30,7 @@ export function sessionKey(session: Pick<SessionDetail, 'machine' | 'session_id'
 
 function shortenPath(path: string | null): string {
   if (!path) return ''
-  return path.replace(/^\/Users\/indo(?=\/|$)/, '~')
+  return path.replace(/^\/(?:Users|home)\/[^/]+(?=\/|$)/, '~')
 }
 
 export function SessionAgentPanel({

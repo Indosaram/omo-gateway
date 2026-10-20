@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::agent_workspace::{agent_workspace_slug, resolve_workspace, AgentWorkspace};
@@ -21,7 +22,7 @@ use super::omo_config::OmoBackendConfig;
 use super::omo_protocol::{
     approval_allow_response, approval_denial_response, approval_denial_with_reason,
     initialize_request, is_approval_request, thread_resume_request, thread_start_request,
-    turn_start_request, turn_steer_request,
+    turn_start_request, turn_steer_request, user_input_cancellation,
 };
 use crate::models::{
     filter_intent_gate, filter_reasoning, is_explicit_silence, render_user_prompt, InboundEvent,
@@ -52,6 +53,151 @@ fn is_model_rejected_error(err: &str) -> bool {
         || lower.contains("unsupported model")
         || lower.contains("model_not_found")
         || lower.contains("thread/settings/update")
+}
+
+/// The engine refuses a turn/start while another turn is still processing on the thread
+/// (observed verbatim: "Agent is already processing. Specify streamingBehavior ...").
+/// A retry submitted in that window must wait for the running turn instead of failing.
+fn is_thread_busy_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    lower.contains("already processing")
+}
+
+/// Owner-facing note for a proposal whose turn ended before the owner answered anything: the
+/// card is retired, so saying "your answer arrived" would describe an answer that never happened.
+fn turn_ended_ask_notice(proposal_id: i64) -> String {
+    format!(
+        "proposal #{proposal_id}: that turn ended before you answered, so the action did not run. Ask again to re-issue it."
+    )
+}
+
+/// Owner-facing note for a proposal the owner did answer, but only after the turn that asked for
+/// it had already ended.
+fn late_ask_notice(proposal_id: i64) -> String {
+    format!(
+        "proposal #{proposal_id}: your answer arrived after that turn ended, so the action did not run. Ask again to re-issue it."
+    )
+}
+
+/// Turn-scoped ownership of the approval cards a turn opened. Dropping it — on every return
+/// path of `execute_turn`, including cancellation — cancels the token, so each spawned Ask
+/// task settles its card and expires its proposal instead of outliving the turn.
+struct TurnAskScope {
+    token: CancellationToken,
+}
+
+impl TurnAskScope {
+    fn new() -> Self {
+        Self {
+            token: CancellationToken::new(),
+        }
+    }
+
+    fn token(&self) -> CancellationToken {
+        self.token.clone()
+    }
+}
+
+impl Drop for TurnAskScope {
+    fn drop(&mut self) {
+        self.token.cancel();
+    }
+}
+
+/// Expires a proposal the turn abandoned, unless the owner already decided it. Returns whether
+/// the proposal was expired here. One conditional statement, never read-then-write: the owner's
+/// answer can land between a read and an update, and overwriting an approved proposal with
+/// `expired` would silently cancel an action the owner had just allowed.
+async fn expire_abandoned_proposal(
+    pool: &SqlitePool,
+    proposal_id: i64,
+) -> std::result::Result<bool, sqlx::Error> {
+    let expired = sqlx::query(
+        "UPDATE action_proposals
+         SET state = ?, decided_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND state = ?",
+    )
+    .bind(crate::autonomy::ProposalState::Expired.as_str())
+    .bind(proposal_id)
+    .bind(crate::autonomy::ProposalState::Pending.as_str())
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(expired == 1)
+}
+
+/// The turn id a frame is about, in either of the shapes the app-server uses.
+fn frame_turn_id(frame: &Value) -> Option<&str> {
+    frame
+        .pointer("/params/turnId")
+        .or_else(|| frame.pointer("/params/turn/id"))
+        .and_then(Value::as_str)
+}
+
+/// What the turn loop does next after a frame that arrived before `turn/start` was acknowledged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreAckAction {
+    /// Nothing to do; keep waiting for the acknowledgement.
+    Continue,
+    /// The refusal was for a thread that is now idle: submit the same prompt once more.
+    Resubmit,
+}
+
+/// Pre-acknowledgement protocol state: the turn boundaries seen on the thread, and whether a
+/// `turn/start` refusal is waiting for the thread to go idle. The refusal only clears on a
+/// terminal frame for *this* thread, and a completion already seen before the refusal counts,
+/// so a prompt refused while the engine was finishing never waits for a frame that will not come.
+#[derive(Default)]
+struct PreAckState {
+    /// turn/started and turn/completed frames, in arrival order, as (is_start, turn_id).
+    events: Vec<(bool, String)>,
+    /// A turn/start refusal asked this loop to wait for the thread to go idle.
+    awaiting_idle: bool,
+    /// The refusal was already answered with one resubmission.
+    resubmitted: bool,
+}
+
+impl PreAckState {
+    /// Folds a `turn/start` refusal. True when the loop must wait for the thread to go idle and
+    /// then resubmit instead of failing the turn; false for every other error and for a second
+    /// refusal of the same submission.
+    fn note_refusal(&mut self, error: &str) -> bool {
+        if self.resubmitted || !is_thread_busy_error(error) {
+            return false;
+        }
+        self.resubmitted = true;
+        self.awaiting_idle = true;
+        true
+    }
+
+    /// True when the thread was already idle when the refusal arrived: the last boundary seen
+    /// is a completion, so there is no running turn left to wait for.
+    fn idle_already(&self) -> bool {
+        self.awaiting_idle && self.events.last().is_some_and(|(is_start, _)| !is_start)
+    }
+
+    /// Folds one pre-acknowledgement frame and says whether the prompt must be submitted again.
+    /// Frames for another thread are ignored: only this thread's idle state matters.
+    fn observe(&mut self, frame: &Value, thread_id: &str) -> PreAckAction {
+        if frame.pointer("/params/threadId").and_then(Value::as_str) != Some(thread_id) {
+            return PreAckAction::Continue;
+        }
+        let Some(turn) = frame_turn_id(frame) else {
+            return PreAckAction::Continue;
+        };
+        match frame.get("method").and_then(Value::as_str).unwrap_or("") {
+            "turn/started" => self.events.push((true, turn.to_string())),
+            "turn/completed" => {
+                self.events.push((false, turn.to_string()));
+                if self.awaiting_idle {
+                    self.awaiting_idle = false;
+                    return PreAckAction::Resubmit;
+                }
+            }
+            _ => {}
+        }
+        PreAckAction::Continue
+    }
 }
 
 /// Extra slack beyond a turn's own total deadline before a refusal-guard entry
@@ -261,6 +407,19 @@ impl OmoBackend {
             .unwrap_or_else(crate::agent::agent_workspace::approval_ledger_enabled)
     }
 
+    /// Writes the workspace permission preset when the action ledger is on for *this* backend.
+    /// The backend's own flag decides — tests and embedded runtimes construct it with
+    /// `with_ledger_enabled`, so a second read of `OMON_APPROVAL_LEDGER_ENABLED` would ignore
+    /// their choice and leave the engine sending no approval frames to the ledger.
+    async fn ensure_workspace_preset(&self, settings_path: &std::path::Path) -> bool {
+        crate::agent::agent_workspace::ensure_workspace_permission_preset(
+            settings_path,
+            self.is_ledger_enabled(),
+            crate::agent::agent_workspace::WORKSPACE_PERMISSION_PRESET,
+        )
+        .await
+    }
+
     /// The owner granted every permission: engine approvals run as under YOLO (payments still ask).
     fn is_full_access(&self) -> bool {
         self.full_access
@@ -453,12 +612,8 @@ impl OmoBackend {
                 if slug.starts_with("bot-") {
                     let omo_dir = resolve_workspace(root, &slug).cwd.join(".omo");
                     if tokio::fs::create_dir_all(&omo_dir).await.is_ok() {
-                        crate::agent::agent_workspace::ensure_workspace_permission_preset(
-                            &omo_dir.join("settings.json"),
-                            crate::agent::agent_workspace::approval_ledger_enabled(),
-                            crate::agent::agent_workspace::WORKSPACE_PERMISSION_PRESET,
-                        )
-                        .await;
+                        self.ensure_workspace_preset(&omo_dir.join("settings.json"))
+                            .await;
                     }
                 }
             }
@@ -508,6 +663,12 @@ impl OmoBackend {
                 if let Message::Text(text) = message {
                     let response: Value = serde_json::from_str(text.as_str())
                         .map_err(|error| OmonError::Llm(format!("invalid json: {error}")))?;
+                    if let Some(reply) = user_input_cancellation(&response) {
+                        ws.send(reply).await.map_err(|error| {
+                            OmonError::Llm(format!("user input cancellation failed: {error}"))
+                        })?;
+                        continue;
+                    }
                     if response.get("id").and_then(Value::as_u64) == Some(2) {
                         if let Some(error) = response.get("error") {
                             let message = error
@@ -643,12 +804,8 @@ impl OmoBackend {
                 if is_cron {
                     ensure_cron_ttsr_disabled(&omo_dir.join("settings.json")).await;
                 } else if slug.starts_with("bot-") {
-                    crate::agent::agent_workspace::ensure_workspace_permission_preset(
-                        &omo_dir.join("settings.json"),
-                        crate::agent::agent_workspace::approval_ledger_enabled(),
-                        crate::agent::agent_workspace::WORKSPACE_PERMISSION_PRESET,
-                    )
-                    .await;
+                    self.ensure_workspace_preset(&omo_dir.join("settings.json"))
+                        .await;
                 }
                 Some(ws)
             } else {
@@ -918,6 +1075,7 @@ impl OmoBackend {
         model_override: Option<&str>,
         fallback_eligible: &mut bool,
         side_effects: &mut bool,
+        last_turn: &mut Option<String>,
         briefings: Option<&crate::mirror::CronBriefings>,
     ) -> Result<()> {
         let mut user_prompt = render_user_prompt(&event);
@@ -939,16 +1097,15 @@ impl OmoBackend {
         if let Some(briefings) = briefings {
             user_prompt = format!("{}\n{user_prompt}", briefings.text);
         }
-        let model = model_override.or(session
-            .state
-            .active_model
-            .as_deref()
-            .or(self.config.default_model.as_deref()));
+        let model = model_override
+            .map(str::to_owned)
+            .or_else(|| session.state.active_model.clone())
+            .or_else(|| self.config.default_model.clone());
         // Invariant: model changes flow only via active_model / turn/start params / thread/settings/update.
         // omo_config reads global omo.json but never writes it.
         // thread/start misses custom providers and turn/start may ignore model.
         // Await the custom-provider-aware settings RPC on every turn.
-        if let Some(model) = model {
+        if let Some(model) = model.as_deref() {
             let effort = std::env::var("OMON_DEFAULT_EFFORT")
                 .or_else(|_| std::env::var("DEFAULT_EFFORT"))
                 .ok()
@@ -976,6 +1133,12 @@ impl OmoBackend {
                     let response: Value = serde_json::from_str(&text).map_err(|e| {
                         OmonError::Llm(format!("invalid model update response: {e}"))
                     })?;
+                    if let Some(reply) = user_input_cancellation(&response) {
+                        ws.send(reply).await.map_err(|error| {
+                            OmonError::Llm(format!("user input cancellation failed: {error}"))
+                        })?;
+                        continue;
+                    }
                     if response.get("method").is_none()
                         && response.get("id").and_then(Value::as_u64) == Some(4)
                     {
@@ -1050,7 +1213,11 @@ impl OmoBackend {
             );
         }
         if let Err(e) = ws
-            .send(turn_start_request(&thread_id, &user_prompt, model))
+            .send(turn_start_request(
+                &thread_id,
+                &user_prompt,
+                model.as_deref(),
+            ))
             .await
         {
             // The submission never reached the peer, so ownership ends here and
@@ -1114,9 +1281,12 @@ impl OmoBackend {
         let mut prompt_started_at = started_at;
         // First agent output for our prompt; disarms the initial-response interrupt.
         let mut first_progress_at: Option<tokio::time::Instant> = None;
-        // turn/started and turn/completed frames seen before the acknowledgement,
-        // in arrival order, as (is_start, turn_id).
-        let mut pre_ack_turn_events: Vec<(bool, String)> = Vec::new();
+        // turn/started and turn/completed frames seen before the acknowledgement, plus whether a
+        // turn/start refusal is waiting for this thread to go idle (see `PreAckState`).
+        let mut pre_ack = PreAckState::default();
+        // Bounded wait for that idle boundary: a thread that never reports one fails the turn
+        // instead of holding it until the acknowledgement deadline.
+        let mut idle_wait_deadline: Option<tokio::time::Instant> = None;
         // Our acknowledged turn id was completed by the run our prompt was queued
         // behind; the next turn that starts on the thread is processing our prompt.
         let mut awaiting_successor_turn = false;
@@ -1143,12 +1313,27 @@ impl OmoBackend {
         };
         let mut work_deadline = deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
 
+        // The turn's approval cards die with it: this scope's Drop cancels every spawned Ask task.
+        let ask_scope = TurnAskScope::new();
+
         loop {
             let now = tokio::time::Instant::now();
+            if let Some(wait_until) = idle_wait_deadline {
+                if now >= wait_until {
+                    // The refusal cannot be retried safely: the peer may still be executing the
+                    // running turn, and resubmitting now is exactly the collision this waits for.
+                    self.active_turns.lock().remove(&session.key.storage_key());
+                    return Err(OmonError::Llm(
+                        "turn/start refused: the thread is still processing another turn; not resubmitted"
+                            .into(),
+                    ));
+                }
+            }
             if !turn_started_ack && now >= ack_deadline {
-                self.active_turns.lock().remove(&session.key.storage_key());
+                // The peer can still execute this queued submission. Keep ownership
+                // so cancellation can reconcile it; never treat it as rejected.
                 return Err(OmonError::Llm(
-                    "timeout waiting for turn/start acknowledgement from omo app-server".into(),
+                    "timeout waiting for turn/start acknowledgement from omo app-server; submission outcome unknown, do not resubmit".into(),
                 ));
             }
 
@@ -1510,8 +1695,47 @@ impl OmoBackend {
                 && !turn_started_ack
             {
                 if let Some(error) = val.get("error") {
-                    self.active_turns.lock().remove(&session.key.storage_key());
                     let err_str = error.to_string();
+                    // A retry (model fallback, restart recovery) submitted while the engine is
+                    // still processing another turn is refused outright. Wait for that turn's
+                    // terminal frame on this already-subscribed connection, then submit once more,
+                    // so the retry never collides with a running engine turn. Ownership is kept
+                    // meanwhile, so cancel() can still reconcile the submission.
+                    if pre_ack.note_refusal(&err_str) {
+                        tracing::warn!(
+                            session = %session.key,
+                            %thread_id,
+                            "turn/start refused: the thread is still processing; waiting for it to go idle, then submitting once more"
+                        );
+                        if pre_ack.idle_already() {
+                            // The running turn finished while the refusal was in flight, so the
+                            // idle boundary will not be replayed: submit again right away.
+                            if let Err(e) = ws
+                                .send(turn_start_request(
+                                    &thread_id,
+                                    &user_prompt,
+                                    model.as_deref(),
+                                ))
+                                .await
+                            {
+                                self.active_turns.lock().remove(&session.key.storage_key());
+                                return Err(OmonError::Llm(format!(
+                                    "failed to send turn/start: {e}"
+                                )));
+                            }
+                            last_activity_at = tokio::time::Instant::now();
+                            // The replaced submission's turn boundaries no longer describe our prompt.
+                            pre_ack.events.clear();
+                            continue;
+                        }
+                        idle_wait_deadline = Some(
+                            last_activity_at
+                                + ack_window
+                                    .min(deadline.saturating_duration_since(last_activity_at)),
+                        );
+                        continue;
+                    }
+                    self.active_turns.lock().remove(&session.key.storage_key());
                     if is_model_rejected_error(&err_str) {
                         *fallback_eligible = true;
                     }
@@ -1529,17 +1753,18 @@ impl OmoBackend {
                 // A turn/completed for our id before the acknowledgement means the run
                 // our prompt was queued behind finished under it. A turn that started
                 // after that is the one processing our prompt.
-                let taken_over_at = pre_ack_turn_events
+                let taken_over_at = pre_ack
+                    .events
                     .iter()
                     .position(|(is_start, tid)| !is_start && *tid == acked_turn);
                 let successor = taken_over_at.and_then(|at| {
-                    pre_ack_turn_events[at + 1..]
+                    pre_ack.events[at + 1..]
                         .iter()
                         .rev()
                         .find(|(is_start, tid)| *is_start && *tid != acked_turn)
                         .map(|(_, tid)| tid.clone())
                 });
-                pre_ack_turn_events.clear();
+                pre_ack.events.clear();
                 if taken_over_at.is_some() {
                     tracing::info!(
                         %thread_id,
@@ -1566,6 +1791,7 @@ impl OmoBackend {
                         },
                     );
                 }
+                *last_turn = Some(turn_id_str.clone());
                 turn_id = Some(turn_id_str);
                 turn_started_ack = true;
                 prompt_started_at = tokio::time::Instant::now();
@@ -1584,6 +1810,15 @@ impl OmoBackend {
             if let (Some(req_id), Some(method)) =
                 (val.get("id"), val.get("method").and_then(Value::as_str))
             {
+                // Messenger clients cannot answer the engine's interactive form.
+                // Explicit cancellation lets the agent ask in ordinary chat rather
+                // than blocking the thread queue for the form's 30-minute timeout.
+                if let Some(reply) = user_input_cancellation(&val) {
+                    ws.send(reply).await.map_err(|error| {
+                        OmonError::Llm(format!("user input cancellation failed: {error}"))
+                    })?;
+                    continue;
+                }
                 if is_approval_request(method) {
                     // A toolset restriction denies even under YOLO, and counts toward the
                     // denial-loop guard like any other policy denial.
@@ -1749,16 +1984,63 @@ impl OmoBackend {
                                         );
                                         let cmd_display = classification.summary.clone();
                                         let tx = approval_tx.clone();
+                                        let ask_dispatcher = self.dispatcher.clone();
+                                        let turn_end = ask_scope.token();
                                         tokio::spawn(async move {
-                                            let res = requester
-                                                .request_for_proposal(
+                                            // The turn's scope owns this card. When the turn ends on
+                                            // any path (owner cancel, a new message preempting it, the
+                                            // work deadline) the token fires, the pending prompt is
+                                            // dropped — which removes it from the guard and expires the
+                                            // owner's card — and the proposal is expired here instead
+                                            // of staying approvable for an action nothing will run.
+                                            let asked = tokio::select! {
+                                                biased;
+                                                res = requester.request_for_proposal(
                                                     &ask_session,
                                                     proposal_id,
                                                     &cmd_display,
                                                     &card_reason,
+                                                ) => Some(res.map(|(_, decision)| decision)),
+                                                _ = turn_end.cancelled() => None,
+                                            };
+                                            let Some(res) = asked else {
+                                                tracing::info!(
+                                                    proposal_id,
+                                                    "the turn ended before the owner answered; expired the approval card"
+                                                );
+                                                let _ = expire_abandoned_proposal(
+                                                    &pool_clone,
+                                                    proposal_id,
                                                 )
-                                                .await
-                                                .map(|(_, d)| d);
+                                                .await;
+                                                let notice = turn_ended_ask_notice(proposal_id);
+                                                let _ = ask_dispatcher
+                                                    .dispatch(OutboundAction::SendMessage {
+                                                        session: ask_session.clone(),
+                                                        content: notice,
+                                                        reply_to: None,
+                                                    })
+                                                    .await;
+                                                return;
+                                            };
+                                            // The answer arrived, but the turn that asked may still have
+                                            // ended first: the same rule applies.
+                                            if tx.is_closed() {
+                                                let _ = expire_abandoned_proposal(
+                                                    &pool_clone,
+                                                    proposal_id,
+                                                )
+                                                .await;
+                                                let notice = late_ask_notice(proposal_id);
+                                                let _ = ask_dispatcher
+                                                    .dispatch(OutboundAction::SendMessage {
+                                                        session: ask_session.clone(),
+                                                        content: notice,
+                                                        reply_to: None,
+                                                    })
+                                                    .await;
+                                                return;
+                                            }
                                             let resolution = crate::autonomy::finalize_ask_result(
                                                 &pool_clone,
                                                 proposal_id,
@@ -1904,16 +2186,30 @@ impl OmoBackend {
                     // while it works, record its turn boundaries, and relay its
                     // finished messages instead of dropping them.
                     ack_deadline = ack_deadline.max((last_activity_at + ack_window).min(deadline));
-                    if let Some(frame_turn) = frame_turn_id {
-                        match method.as_str() {
-                            "turn/started" => {
-                                pre_ack_turn_events.push((true, frame_turn.to_string()))
-                            }
-                            "turn/completed" => {
-                                pre_ack_turn_events.push((false, frame_turn.to_string()))
-                            }
-                            _ => {}
+                    if pre_ack.observe(&val, &thread_id) == PreAckAction::Resubmit {
+                        idle_wait_deadline = None;
+                        if let Err(e) = ws
+                            .send(turn_start_request(
+                                &thread_id,
+                                &user_prompt,
+                                model.as_deref(),
+                            ))
+                            .await
+                        {
+                            self.active_turns.lock().remove(&session.key.storage_key());
+                            return Err(OmonError::Llm(format!("failed to send turn/start: {e}")));
                         }
+                        last_activity_at = tokio::time::Instant::now();
+                        ack_deadline = last_activity_at
+                            + ack_window.min(deadline.saturating_duration_since(last_activity_at));
+                        // The replaced submission's turn boundaries no longer describe our prompt.
+                        pre_ack.events.clear();
+                        tracing::info!(
+                            session = %session.key,
+                            %thread_id,
+                            "thread went idle; resubmitted the prompt that turn/start refused"
+                        );
+                        continue;
                     }
                     if !is_cron_session && !is_lane {
                         if let Some(text) = completed_agent_message_text(&method, &val) {
@@ -1954,6 +2250,7 @@ impl OmoBackend {
                         {
                             active.turn_id = Some(successor.clone());
                         }
+                        *last_turn = Some(successor.clone());
                         turn_id = Some(successor);
                         awaiting_successor_turn = false;
                     }
@@ -2471,6 +2768,8 @@ impl AgentBackend for OmoBackend {
         // Set once a tool started or a message reached the user: such a turn is never resubmitted.
         let mut side_effects = false;
         let turn_started = std::time::Instant::now();
+        // The engine turn id this run owned last: the follower must not re-deliver its reply.
+        let mut last_turn: Option<String> = None;
         let mut result = self
             .execute_turn(
                 ws,
@@ -2482,6 +2781,7 @@ impl AgentBackend for OmoBackend {
                 None,
                 &mut fallback_eligible,
                 &mut side_effects,
+                &mut last_turn,
                 briefings.as_ref(),
             )
             .await;
@@ -2517,6 +2817,7 @@ impl AgentBackend for OmoBackend {
                     None,
                     &mut fallback_eligible,
                     &mut side_effects,
+                    &mut last_turn,
                     briefings.as_ref(),
                 )
                 .await;
@@ -2559,6 +2860,7 @@ impl AgentBackend for OmoBackend {
                         None,
                         &mut fallback_eligible,
                         &mut side_effects,
+                        &mut last_turn,
                         briefings.as_ref(),
                     )
                     .await;
@@ -2590,6 +2892,7 @@ impl AgentBackend for OmoBackend {
                     Some(fallback_model.as_str()),
                     &mut fallback_eligible,
                     &mut side_effects,
+                    &mut last_turn,
                     briefings.as_ref(),
                 )
                 .await;
@@ -2601,7 +2904,7 @@ impl AgentBackend for OmoBackend {
                 .get("omo_thread_id")
                 .and_then(Value::as_str)
             {
-                self.follow_thread(session, thread_id.to_owned());
+                self.follow_thread(session, thread_id.to_owned(), last_turn.clone());
             }
         }
         result
@@ -3090,5 +3393,212 @@ mod fixr5_agent_tests {
         assert!(!is_transport_reset(&OmonError::Llm(
             "invalid prompt argument".into()
         )));
+    }
+}
+
+#[cfg(test)]
+mod review_20261020_agent_tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+
+    use super::{
+        expire_abandoned_proposal, is_thread_busy_error, OmoBackend, PreAckAction, PreAckState,
+        TurnAskScope,
+    };
+    use crate::agent::agent_workspace::WORKSPACE_PERMISSION_PRESET;
+    use crate::agent::omo_config::OmoBackendConfig;
+    use crate::autonomy::{
+        insert_proposal, Classification, Effect, NewProposal, ProposalOrigin, ProposalState,
+    };
+    use crate::models::OutboundAction;
+    use crate::{OutboundDispatcher, Result};
+
+    struct NullDispatcher;
+
+    #[async_trait::async_trait]
+    impl OutboundDispatcher for NullDispatcher {
+        async fn dispatch(&self, _action: OutboundAction) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn backend(ledger_enabled: bool) -> OmoBackend {
+        OmoBackend::new(OmoBackendConfig::default(), Arc::new(NullDispatcher))
+            .with_ledger_enabled(ledger_enabled)
+    }
+
+    #[test]
+    fn a_busy_thread_rejection_is_told_apart_from_a_real_turn_start_failure() {
+        // The exact rejection the app-server returns while another turn is processing.
+        assert!(is_thread_busy_error(
+            r#"{"code":-32603,"message":"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."}"#
+        ));
+        assert!(!is_thread_busy_error("model rejected"));
+        assert!(!is_thread_busy_error(
+            "turn exceeded total deadline of 1800s; turn/interrupt sent"
+        ));
+    }
+
+    #[test]
+    fn a_busy_refusal_waits_for_the_same_thread_to_go_idle_and_then_resubmits_once() {
+        // given: a refusal for a thread whose running turn is still open
+        let mut state = PreAckState::default();
+        let busy = json!({"code":-32603,"message":"Agent is already processing."}).to_string();
+        assert!(state.note_refusal(&busy));
+        assert!(
+            !state.idle_already(),
+            "a running turn is still open: must wait"
+        );
+
+        // when: progress for that turn, then a completion for another thread
+        let started =
+            json!({"method":"turn/started","params":{"threadId":"th1","turn":{"id":"t-run"}}});
+        assert_eq!(state.observe(&started, "th1"), PreAckAction::Continue);
+        let foreign = json!({"method":"turn/completed","params":{"threadId":"th-other","turn":{"id":"t-run"}}});
+
+        // then: another thread's idle state never triggers our resubmission
+        assert_eq!(state.observe(&foreign, "th1"), PreAckAction::Continue);
+
+        // when: the turn that blocked us completes on our thread
+        let done =
+            json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"t-run"}}});
+
+        // then: exactly one resubmission is requested
+        assert_eq!(state.observe(&done, "th1"), PreAckAction::Resubmit);
+        assert!(!state.note_refusal(&busy), "a second refusal must not loop");
+        assert_eq!(state.observe(&done, "th1"), PreAckAction::Continue);
+    }
+
+    #[test]
+    fn a_turn_that_finished_before_the_refusal_is_resubmitted_immediately() {
+        // given: the running turn completed while our refusal was in flight
+        let mut state = PreAckState::default();
+        let done =
+            json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"t-run"}}});
+        assert_eq!(state.observe(&done, "th1"), PreAckAction::Continue);
+
+        // when: the refusal arrives afterwards
+        let busy = json!({"code":-32603,"message":"Agent is already processing."}).to_string();
+        assert!(state.note_refusal(&busy));
+
+        // then: the thread is already idle, so no further frame will ever arrive
+        assert!(
+            state.idle_already(),
+            "a completion seen before the refusal means the thread is idle now"
+        );
+    }
+
+    #[test]
+    fn a_turn_ending_cancels_its_approval_scope() {
+        // given
+        let token = {
+            let scope = TurnAskScope::new();
+            let token = scope.token();
+            assert!(!token.is_cancelled());
+            token
+        };
+
+        // then: dropping the scope on any return path of the turn cancels every Ask task
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn a_turn_ending_expires_its_pending_approval_instead_of_leaving_it_approvable() {
+        // given: a pending proposal a turn opened
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let classification = Classification::new(
+            Effect::VcsRemote,
+            "git push",
+            "origin/main",
+            "git push origin main",
+        );
+        let pending = insert_proposal(
+            pool,
+            &NewProposal {
+                origin: ProposalOrigin::EngineApproval,
+                session_key: "slack:T1:C1::U1".into(),
+                signature: classification.signature.clone(),
+                effect: classification.effect,
+                target: classification.target.clone(),
+                summary: classification.summary.clone(),
+                payload_json: "{}".into(),
+                tainted: false,
+                state: ProposalState::Pending,
+                precedent_id: None,
+                owner_words: None,
+                platform_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // when: the turn that asked ends without an answer
+        assert!(expire_abandoned_proposal(pool, pending).await.unwrap());
+
+        // then: the card can no longer be approved for an action nothing will run
+        let stored = crate::autonomy::get_proposal(pool, pending)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.state, ProposalState::Expired.as_str());
+        assert!(stored.decided_at.is_some());
+        // and the conditional update is idempotent: a second turn end changes nothing
+        assert!(!expire_abandoned_proposal(pool, pending).await.unwrap());
+
+        // and an already decided proposal is never rewritten, which is what makes the
+        // conditional UPDATE (not a read followed by an unconditional write) the safe shape:
+        // an owner's approval landing at the same moment must survive the turn's expiry.
+        let approved = insert_proposal(
+            pool,
+            &NewProposal {
+                origin: ProposalOrigin::EngineApproval,
+                session_key: "slack:T1:C1::U1".into(),
+                signature: classification.signature.clone(),
+                effect: classification.effect,
+                target: classification.target.clone(),
+                summary: classification.summary.clone(),
+                payload_json: "{}".into(),
+                tainted: false,
+                state: ProposalState::Approved,
+                precedent_id: None,
+                owner_words: None,
+                platform_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!expire_abandoned_proposal(pool, approved).await.unwrap());
+        let stored = crate::autonomy::get_proposal(pool, approved)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.state, ProposalState::Approved.as_str());
+        assert!(
+            stored.decided_at.is_some(),
+            "the approval's decision timestamp must not be replaced"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_preset_provisioning_follows_the_backend_ledger_override() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let enabled_path = dir.path().join("enabled.json");
+        assert!(backend(true).ensure_workspace_preset(&enabled_path).await);
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&enabled_path).unwrap()).unwrap();
+        assert_eq!(
+            written["permissionPreset"],
+            json!(WORKSPACE_PERMISSION_PRESET)
+        );
+
+        let disabled_path = dir.path().join("disabled.json");
+        assert!(!backend(false).ensure_workspace_preset(&disabled_path).await);
+        assert!(
+            !disabled_path.exists(),
+            "a backend with the ledger off must not provision the preset even when the env var says on"
+        );
     }
 }

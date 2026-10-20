@@ -2,6 +2,7 @@ mod db;
 pub mod lanes;
 mod message_search;
 mod messenger_policy;
+pub mod retention;
 
 use sqlx::SqlitePool;
 
@@ -25,6 +26,7 @@ pub use lanes::{
 };
 pub use message_search::{MessageSearchDocument, MessageSearchHit, MessageSearchIndex};
 pub use messenger_policy::MessengerPolicyStore;
+pub use retention::{prune, prune_older_than, PruneReport, DEFAULT_RETENTION_DAYS};
 
 pub async fn init_pool(database_url: &str) -> Result<SqlitePool> {
     Ok(Database::connect(database_url).await?.pool().clone())

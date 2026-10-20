@@ -1449,12 +1449,8 @@ impl CronScheduler {
                             // A next_run computed under an older weekday mapping (or before an
                             // expression edit) is not an occurrence of the current expression;
                             // moving it forward is a reschedule, not a missed run.
-                            let is_occurrence = next_run_tz(
-                                &expression,
-                                next_run - TimeDelta::seconds(1),
-                                timezone,
-                            )
-                            .is_ok_and(|occurrence| occurrence == next_run);
+                            let is_occurrence =
+                                is_scheduled_occurrence(&expression, next_run, timezone)?;
                             if is_occurrence {
                                 if let Err(error) = health::record_missed_occurrence(
                                     &self.pool,
@@ -2649,8 +2645,7 @@ async fn review_session(
     pool: &SqlitePool,
     destination: &crate::HermesOrigin,
 ) -> Result<Option<String>> {
-    let home = std::env::var("OMON_LANE_DEFAULT_LEAD")
-        .ok()
+    let home = Some(crate::runtime_config::default_lead())
         .filter(|lead| !lead.trim().is_empty())
         .or_else(|| Some(crate::lanes::kibitzer::DEFAULT_LEAD.to_owned()));
     if !destination.platform.eq_ignore_ascii_case("slack") || destination.chat_id.starts_with('D') {
@@ -2943,6 +2938,26 @@ pub fn next_run_tz(
         .next()
         .map(|instant| instant.with_timezone(&Utc))
         .ok_or_else(|| OmonError::Config(format!("cron expression `{expression}` has no next run")))
+}
+
+/// True when `next_run` is an actual occurrence of `expression`, i.e. the schedule itself
+/// would have produced exactly this instant.
+///
+/// Interval and one-shot expressions have no cron grid to check against: their stored
+/// `next_run` is the occurrence by construction, so it always counts. Treating them as
+/// off-schedule would drop real missed runs whenever the catch-up window is exceeded.
+fn is_scheduled_occurrence(
+    expression: &str,
+    next_run: DateTime<Utc>,
+    timezone: Option<&str>,
+) -> Result<bool> {
+    if parse_interval(expression)?.is_some() || expression.starts_with("once:") {
+        return Ok(true);
+    }
+    Ok(
+        next_run_tz(expression, next_run - TimeDelta::seconds(1), timezone)
+            .is_ok_and(|occurrence| occurrence == next_run),
+    )
 }
 
 pub fn newest_missed_occurrence(
@@ -4507,6 +4522,65 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(missed, 0);
+    }
+
+    #[test]
+    fn interval_and_oneshot_next_runs_are_occurrences() {
+        let next_run = utc("2026-10-13T00:00:00Z");
+        // Interval and one-shot schedules have no cron grid: the stored next_run is the
+        // occurrence itself, even when it falls outside the catch-up window.
+        assert!(is_scheduled_occurrence("interval:1d", next_run, None).unwrap());
+        assert!(is_scheduled_occurrence("once:2026-10-13T00:00:00Z", next_run, None).unwrap());
+        // A cron grid instant counts only when the expression produces it.
+        assert!(is_scheduled_occurrence("0 0 * * *", next_run, None).unwrap());
+        assert!(!is_scheduled_occurrence("0 9 * * *", next_run, None).unwrap());
+    }
+
+    #[tokio::test]
+    async fn out_of_window_interval_run_is_reported_missed() {
+        let database = crate::Database::connect("sqlite::memory:").await.unwrap();
+        let pool = database.pool();
+        let now = utc("2026-10-20T00:00:00Z");
+        let scheduler = CronScheduler::new(pool.clone(), Arc::new(SilentExecutor(None)))
+            .with_clock(move || now);
+        let job = scheduler
+            .register(CronJobSpec::new(
+                "interval:1d",
+                serde_json::json!({"channel_id": "test"}),
+            ))
+            .await
+            .unwrap();
+
+        // 40h overdue with the default 6h catch-up window: the newest missed occurrence
+        // (16h ago) is outside the window, but the stored next_run is still a real
+        // occurrence of the interval schedule and must be reported as missed.
+        let missed_run = now - TimeDelta::hours(40);
+        sqlx::query("UPDATE cron_jobs SET next_run_at = ? WHERE id = ?")
+            .bind(missed_run)
+            .bind(&job.id)
+            .execute(pool)
+            .await
+            .unwrap();
+
+        assert!(scheduler
+            .claim_job(&job.id, true, true)
+            .await
+            .unwrap()
+            .is_none());
+
+        let missed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM cron_problems WHERE job_id = ? AND kind = 'missed'",
+        )
+        .bind(&job.id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            missed, 1,
+            "an out-of-window interval run must be recorded as a missed occurrence"
+        );
+        let rescheduled = scheduler.get(&job.id).await.unwrap().unwrap();
+        assert_eq!(rescheduled.next_run_at, Some(now + TimeDelta::days(1)));
     }
 
     #[tokio::test]

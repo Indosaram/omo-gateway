@@ -3,6 +3,8 @@ use axum::http::StatusCode;
 use axum::Json;
 use sqlx::SqlitePool;
 
+use crate::error::OmonError;
+
 use crate::tracker::api::{me_id, new_id, non_empty, one_of, ApiResult, TrackerError};
 use crate::tracker::issues::{
     fetch_issue_detail, load_comments, load_issue, notify, record_activity, relation_direction,
@@ -356,6 +358,67 @@ pub async fn lane_action(
     )?;
     lanes::execute_lane_action(&pool, &issue_id, input)
         .await
-        .map_err(|error| TrackerError::conflict(error.to_string(), "lane_command_failed"))?;
+        .map_err(lane_action_error)?;
     Ok(Json(fetch_issue_detail(&pool, &issue_id).await?))
+}
+
+/// Missing issue -> 404; a rejected lane command or illegal transition -> 409; other
+/// validation errors -> 400; anything else keeps the default (500) mapping.
+fn lane_action_error(error: OmonError) -> TrackerError {
+    match error {
+        OmonError::Config(message) => {
+            if message == "issue not found" {
+                TrackerError::not_found("issue")
+            } else if message.starts_with("lane action failed")
+                || message.contains("IllegalTransition")
+                || message.starts_with("illegal lane transition")
+                || message.starts_with("lane must be")
+            {
+                TrackerError::conflict(message, "lane_command_failed")
+            } else {
+                TrackerError::bad_request(message)
+            }
+        }
+        other => other.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::response::IntoResponse;
+
+    fn status(error: OmonError) -> StatusCode {
+        lane_action_error(error).into_response().status()
+    }
+
+    #[test]
+    fn lane_action_errors_map_to_404_400_and_409() {
+        assert_eq!(
+            status(OmonError::Config("issue not found".into())),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            status(OmonError::Config("issue is not linked to a lane".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(OmonError::Config("text must not be empty".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            status(OmonError::Config("lane action failed: {}".into())),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            status(OmonError::Config(
+                "IllegalTransition: working -> closed".into()
+            )),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            status(OmonError::Database("disk".into())),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
 }

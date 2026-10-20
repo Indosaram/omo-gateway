@@ -72,7 +72,7 @@ impl SlackDebouncer {
         tokio::spawn(async move {
             tokio::time::sleep(this.duration).await;
             let lane = this.lane(&session).await;
-            let _ordered = lane.lock().await;
+            let ordered = lane.lock().await;
             let events = {
                 let mut buffer = this.buffer.lock().await;
                 let current = buffer
@@ -87,6 +87,8 @@ impl SlackDebouncer {
             if let Some(events) = events {
                 this.flush_events(events).await;
             }
+            drop(ordered);
+            this.release_lane(&session, lane).await;
         });
     }
 
@@ -110,8 +112,10 @@ impl SlackDebouncer {
         };
         for (session, events) in batches {
             let lane = self.lane(&session).await;
-            let _ordered = lane.lock().await;
+            let ordered = lane.lock().await;
             self.flush_events(events).await;
+            drop(ordered);
+            self.release_lane(&session, lane).await;
         }
     }
 
@@ -136,6 +140,17 @@ impl SlackDebouncer {
             .entry(session.clone())
             .or_default()
             .clone()
+    }
+
+    /// Drops the session's flush lock from the map once no other task holds or waits on it, so
+    /// the map does not grow with every session ever seen. Holding the map lock while checking
+    /// the count means nobody can clone the entry in between.
+    async fn release_lane(&self, session: &SessionKey, lane: Arc<Mutex<()>>) {
+        let mut lanes = self.lanes.lock().await;
+        // One reference in the map plus the caller's `lane`.
+        if Arc::strong_count(&lane) == 2 {
+            lanes.remove(session);
+        }
     }
 
     async fn flush_events(&self, events: Vec<InboundEvent>) {
@@ -284,5 +299,6 @@ mod tests {
         assert_eq!(constituents, vec!["slack:D2:1.000002".to_owned()]);
         assert!(rx.try_recv().is_err(), "cancelled batch must not be routed");
         assert!(debouncer.is_empty().await);
+        assert!(debouncer.lanes.lock().await.is_empty());
     }
 }

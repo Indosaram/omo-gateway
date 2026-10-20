@@ -159,6 +159,9 @@ pub struct Issue {
     pub archived_at: Option<String>,
     pub snoozed_until: Option<String>,
     pub label_ids: Vec<String>,
+    /// Users subscribed to this issue; the list payload carries them so clients can filter.
+    #[serde(default)]
+    pub subscriber_ids: Vec<String>,
     pub sub_issue_count: i64,
     pub sub_issue_completed: i64,
     pub comment_count: i64,

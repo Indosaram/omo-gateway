@@ -1,0 +1,24 @@
+{
+ "token": "st_01a1582e-80960-2026-10-20T08-34-55-933Z",
+ "stamp": "2026-10-20T08-34-55-933Z",
+ "tree": {
+  "descriptionDraft.ts": "6685:ed1c1c63be5b35dd",
+  "Editors.tsx": "8012:93703609741dd5a3"
+ },
+ "results": [
+  {
+   "id": "D18",
+   "check": "case B with a trusted click: Retry saves the retained draft exactly once",
+   "ok": true,
+   "detail": "trustedClick=true patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} barClearedIn=32ms stored=\"Draft kept across a failed save\" trace=[{\"k\":\"click\",\"trusted\":true},{\"k\":\"fetch\",\"m\":\"PATCH\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"k\":\"fetch\",\"m\":\"GET\",\"u\":\"/api/tracker/issues/iss-draft\"}]",
+   "phase": "attempt"
+  },
+  {
+   "id": "SETUP",
+   "check": "tree unchanged during the run",
+   "ok": true,
+   "detail": "{\"descriptionDraft.ts\":\"6685:ed1c1c63be5b35dd\",\"Editors.tsx\":\"8012:93703609741dd5a3\"}",
+   "phase": "setup-ok"
+  }
+ ]
+}

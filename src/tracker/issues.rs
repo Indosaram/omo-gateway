@@ -53,6 +53,7 @@ fn issue_from_row(row: &sqlx::sqlite::SqliteRow) -> Issue {
         archived_at: row.get("archived_at"),
         snoozed_until: row.get("snoozed_until"),
         label_ids: Vec::new(),
+        subscriber_ids: Vec::new(),
         sub_issue_count: row.get("sub_issue_count"),
         sub_issue_completed: row.get("sub_issue_completed"),
         comment_count: row.get("comment_count"),
@@ -69,22 +70,63 @@ fn issue_from_row(row: &sqlx::sqlite::SqliteRow) -> Issue {
     }
 }
 
+/// Above this many issues `hydrate` scans a link table once instead of filtering by issue id.
+const HYDRATE_FILTER_MAX: usize = 200;
+
+/// Placeholder list for `WHERE issue_id IN (...)`, or `None` when the load is big enough that
+/// one scan beats binding thousands of ids.
+fn hydrate_filter(count: usize) -> Option<String> {
+    (count <= HYDRATE_FILTER_MAX).then(|| vec!["?"; count].join(", "))
+}
+
+/// `(issue_id, value)` rows of an issue link table for the loaded issues only.
+async fn linked_rows(
+    pool: &SqlitePool,
+    table: &str,
+    column: &str,
+    issue_ids: &[&str],
+) -> ApiResult<Vec<(String, String)>> {
+    // Bind ids only for the filtered query: the unfiltered scan has no placeholders, and an
+    // extra bind would be rejected as out of range. The SQL is owned before the query borrows it.
+    let placeholders = hydrate_filter(issue_ids.len());
+    let sql = match placeholders.as_deref() {
+        Some(placeholders) => format!(
+            "SELECT issue_id, {column} FROM {table} WHERE issue_id IN ({placeholders}) ORDER BY {column}"
+        ),
+        None => format!("SELECT issue_id, {column} FROM {table} ORDER BY {column}"),
+    };
+    let mut query = sqlx::query(&sql);
+    if placeholders.is_some() {
+        for id in issue_ids {
+            query = query.bind(*id);
+        }
+    }
+    Ok(query
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|row| (row.get("issue_id"), row.get(column)))
+        .collect())
+}
+
 async fn hydrate(pool: &SqlitePool, mut issues: Vec<Issue>) -> ApiResult<Vec<Issue>> {
     if issues.is_empty() {
         return Ok(issues);
     }
+    // Small loads (single issue, detail, patch) read only their own rows; large lists keep one
+    // scan instead of binding thousands of parameters.
+    let ids: Vec<&str> = issues.iter().map(|issue| issue.id.as_str()).collect();
     let mut labels: HashMap<String, Vec<String>> = HashMap::new();
-    for row in sqlx::query("SELECT issue_id, label_id FROM tracker_issue_labels ORDER BY label_id")
-        .fetch_all(pool)
-        .await?
-    {
-        labels
-            .entry(row.get("issue_id"))
-            .or_default()
-            .push(row.get("label_id"));
+    for (issue_id, label_id) in linked_rows(pool, "tracker_issue_labels", "label_id", &ids).await? {
+        labels.entry(issue_id).or_default().push(label_id);
+    }
+    let mut subscribers: HashMap<String, Vec<String>> = HashMap::new();
+    for (issue_id, user_id) in linked_rows(pool, "tracker_subscribers", "user_id", &ids).await? {
+        subscribers.entry(issue_id).or_default().push(user_id);
     }
     for issue in &mut issues {
         issue.label_ids = labels.remove(&issue.id).unwrap_or_default();
+        issue.subscriber_ids = subscribers.remove(&issue.id).unwrap_or_default();
         if let Some(key) = issue.lane_key.as_deref() {
             issue.lane = lanes::load_lane_summary(pool, key).await?;
         }
@@ -489,6 +531,19 @@ pub async fn apply_patch(
                 "system_team",
             ));
         }
+        // Validate the target state before anything is written, then move in one transaction
+        // so a failure never leaves the issue half-moved or the sequence bumped.
+        let state = match patch.state_id.as_deref() {
+            Some(state) => state.to_string(),
+            None => default_state(pool, team_id).await?,
+        };
+        let (state_team, state_type) = state_info(pool, &state).await?;
+        if state_team != team_id {
+            return Err(TrackerError::bad_request("state belongs to another team"));
+        }
+        let now = now_utc();
+        let (started, completed, canceled) =
+            timestamps_for(&state_type, current.started_at.clone(), &now);
         let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
         let number: i64 = sqlx::query_scalar(
             "UPDATE tracker_teams SET issue_seq = issue_seq + 1 WHERE id = ? RETURNING issue_seq",
@@ -496,28 +551,32 @@ pub async fn apply_patch(
         .bind(team_id)
         .fetch_one(&mut *tx)
         .await?;
-        tx.commit().await?;
-        let state = match patch.state_id.as_deref() {
-            Some(state) => state.to_string(),
-            None => default_state(pool, team_id).await?,
-        };
-        sqlx::query("UPDATE tracker_issues SET team_id = ?, number = ?, identifier = ?, state_id = ?, cycle_id = NULL WHERE id = ?")
-            .bind(team_id)
-            .bind(number)
-            .bind(format!("{key}-{number}"))
-            .bind(&state)
-            .bind(issue_id)
-            .execute(pool)
-            .await?;
-        record_activity(
-            pool,
-            issue_id,
-            Some(me),
-            "team",
-            Some(&current.team_id),
-            Some(team_id),
+        sqlx::query(
+            "UPDATE tracker_issues SET team_id = ?, number = ?, identifier = ?, state_id = ?, cycle_id = NULL,
+                started_at = ?, completed_at = ?, canceled_at = ? WHERE id = ?",
         )
+        .bind(team_id)
+        .bind(number)
+        .bind(format!("{key}-{number}"))
+        .bind(&state)
+        .bind(&started)
+        .bind(&completed)
+        .bind(&canceled)
+        .bind(issue_id)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
+             VALUES (?, ?, 'team', ?, ?, ?)",
+        )
+        .bind(issue_id)
+        .bind(me)
+        .bind(&current.team_id)
+        .bind(team_id)
+        .bind(&now)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         touched = true;
     }
 
@@ -695,16 +754,50 @@ pub async fn apply_patch(
                 "an issue cannot be its own parent",
             ));
         }
-        touched |= change(
-            pool,
-            issue_id,
-            me,
-            "parent_id",
-            "parent",
-            current.parent_id.clone(),
-            parent,
-        )
-        .await?;
+        // The ancestor walk and the write share one BEGIN IMMEDIATE transaction, so two
+        // concurrent cross-parent patches serialize: the second one sees the first edge and is
+        // rejected instead of both passing their check and closing a cycle. The activity row is
+        // written in the same transaction as the edge, so history never disagrees with the tree.
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+        if let Some(parent) = parent.as_deref() {
+            // Walk up from the new parent; reaching this issue means the change closes a cycle.
+            let cycle: Option<i64> = sqlx::query_scalar(
+                "WITH RECURSIVE up(id) AS (
+                    SELECT ? UNION SELECT i.parent_id FROM tracker_issues i JOIN up ON i.id = up.id
+                    WHERE i.parent_id IS NOT NULL
+                 )
+                 SELECT 1 FROM up WHERE id = ? LIMIT 1",
+            )
+            .bind(parent)
+            .bind(issue_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if cycle.is_some() {
+                return Err(TrackerError::bad_request(
+                    "an issue cannot be nested under its own sub-issue",
+                ));
+            }
+        }
+        if current.parent_id != parent {
+            sqlx::query("UPDATE tracker_issues SET parent_id = ? WHERE id = ?")
+                .bind(&parent)
+                .bind(issue_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "INSERT INTO tracker_activity (issue_id, actor_id, kind, from_value, to_value, created_at)
+                 VALUES (?, ?, 'parent', ?, ?, ?)",
+            )
+            .bind(issue_id)
+            .bind(me)
+            .bind(&current.parent_id)
+            .bind(&parent)
+            .bind(now_utc())
+            .execute(&mut *tx)
+            .await?;
+            touched = true;
+        }
+        tx.commit().await?;
     }
     if let Some(due) = patch.due_date {
         touched |= change(
@@ -811,8 +904,8 @@ pub async fn remove(
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
     let issue_id = resolve_issue_id(&pool, &id).await?;
-    let lane: Option<String> =
-        sqlx::query_scalar("SELECT lane_key FROM tracker_issues WHERE id = ?")
+    let (lane, session_ref): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT lane_key, session_ref FROM tracker_issues WHERE id = ?")
             .bind(&issue_id)
             .fetch_one(&pool)
             .await?;
@@ -822,18 +915,27 @@ pub async fn remove(
             "lane_linked",
         ));
     }
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query("UPDATE tracker_issues SET parent_id = NULL WHERE parent_id = ?")
         .bind(&issue_id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
     sqlx::query("DELETE FROM tracker_notifications WHERE issue_id = ?")
         .bind(&issue_id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+    if let Some(reference) = session_ref.as_deref() {
+        // Session sync re-creates issues for live sessions; the tombstone keeps this one gone.
+        // It shares the delete's transaction, and both writers take BEGIN IMMEDIATE, so sync
+        // either commits first (this delete then removes the row) or checks the tombstone first
+        // and skips the insert. There is no window in which sync re-creates the issue.
+        sessions::tombstone(&mut tx, reference).await?;
+    }
     sqlx::query("DELETE FROM tracker_issues WHERE id = ?")
         .bind(&issue_id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -949,12 +1051,8 @@ pub async fn fetch_issue_detail(pool: &SqlitePool, issue_id: &str) -> ApiResult<
     .bind(issue_id)
     .fetch_all(pool)
     .await?;
-    let subscriber_ids: Vec<String> = sqlx::query_scalar(
-        "SELECT user_id FROM tracker_subscribers WHERE issue_id = ? ORDER BY user_id",
-    )
-    .bind(issue_id)
-    .fetch_all(pool)
-    .await?;
+    // `load_issue` already hydrated the subscribers for this issue.
+    let subscriber_ids = issue.subscriber_ids.clone();
     let lane_detail = match issue.lane_key.as_deref() {
         Some(key) => lanes::load_lane_detail(pool, key).await?,
         None => None,
@@ -994,11 +1092,41 @@ pub fn row_count_error(rows: u64, what: &str) -> ApiResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sessions::overview::Overview;
+    use crate::sessions::probe::{LiveSession, MachineSnapshot};
+    use crate::sessions::registry::SessionList;
     use crate::storage::Database;
     use crate::tracker::seed::{ensure_seeded, ensure_sessions_team};
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+    use chrono::Utc;
+
+    /// One live session on machine `local`; `reference` is `<machine>:<session_id>`.
+    fn overview_with_live(reference: &str) -> Overview {
+        let (machine, session_id) = reference.split_once(':').unwrap();
+        Overview {
+            list: SessionList {
+                sessions: Vec::new(),
+                errors: Vec::new(),
+                stale: Vec::new(),
+                exit_code: 0,
+            },
+            snapshots: vec![(
+                machine.to_string(),
+                Ok(MachineSnapshot {
+                    machine: machine.to_string(),
+                    sessions: vec![LiveSession {
+                        machine: machine.to_string(),
+                        session_id: session_id.to_string(),
+                        routing_id: session_id.to_string(),
+                        ..LiveSession::default()
+                    }],
+                    errors: Vec::new(),
+                }),
+            )],
+        }
+    }
 
     #[tokio::test]
     async fn patch_title_on_session_issue_returns_conflict_and_leaves_db_unchanged() {
@@ -1078,5 +1206,373 @@ mod tests {
 
         assert_eq!(title_in_db, original_title);
         assert_eq!(description_in_db, original_description);
+    }
+
+    async fn insert_team(pool: &SqlitePool, id: &str, key: &str) {
+        sqlx::query(
+            "INSERT INTO tracker_teams (id, key, name, icon, color, issue_seq, system, cycles_enabled, cycle_weeks, triage_enabled, created_at, sort_order)
+             VALUES (?, ?, ?, 'box', '#5e6ad2', 0, 0, 0, 2, 0, ?, 9.0)",
+        )
+        .bind(id)
+        .bind(key)
+        .bind(key)
+        .bind(now_utc())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_state(pool: &SqlitePool, id: &str, team_id: &str) {
+        sqlx::query(
+            "INSERT INTO tracker_states (id, team_id, name, type, color, position, lane_status, description)
+             VALUES (?, ?, 'Todo', 'unstarted', '#e2e2e2', 1.0, NULL, NULL)",
+        )
+        .bind(id)
+        .bind(team_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_issue(
+        pool: &SqlitePool,
+        id: &str,
+        team_id: &str,
+        key: &str,
+        number: i64,
+        state_id: &str,
+    ) {
+        let now = now_utc();
+        sqlx::query(
+            "INSERT INTO tracker_issues (id, team_id, number, identifier, title, description, state_id, priority,
+                estimate, assignee_id, creator_id, project_id, milestone_id, cycle_id, parent_id, due_date,
+                sort_order, lane_key, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 'Issue', '', ?, 0, NULL, NULL, 'me', NULL, NULL, NULL, NULL, NULL, 0.0, NULL, ?, ?)",
+        )
+        .bind(id)
+        .bind(team_id)
+        .bind(number)
+        .bind(format!("{key}-{number}"))
+        .bind(state_id)
+        .bind(&now)
+        .bind(&now)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn team_move_rejects_a_state_from_the_old_team_and_writes_nothing() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_team(&pool, "team-a", "AAA").await;
+        insert_team(&pool, "team-b", "BBB").await;
+        insert_state(&pool, "state-a", "team-a").await;
+        insert_state(&pool, "state-b", "team-b").await;
+        insert_issue(&pool, "issue-1", "team-a", "AAA", 1, "state-a").await;
+
+        let patch = IssuePatch {
+            team_id: Some("team-b".into()),
+            state_id: Some("state-a".into()),
+            ..Default::default()
+        };
+        let result = apply_patch(&pool, "issue-1", "me", patch).await;
+        assert!(
+            result.is_err(),
+            "a state from the old team must fail the move"
+        );
+        assert_eq!(
+            result.unwrap_err().into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
+
+        let (team_id, number, identifier): (String, i64, String) = sqlx::query_as(
+            "SELECT team_id, number, identifier FROM tracker_issues WHERE id = 'issue-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(team_id, "team-a");
+        assert_eq!(number, 1);
+        assert_eq!(identifier, "AAA-1");
+        let seq: i64 =
+            sqlx::query_scalar("SELECT issue_seq FROM tracker_teams WHERE id = 'team-b'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(seq, 0, "the failed move must not consume a team number");
+
+        // The same move with the target team's own state succeeds.
+        let patch = IssuePatch {
+            team_id: Some("team-b".into()),
+            state_id: Some("state-b".into()),
+            ..Default::default()
+        };
+        let moved = apply_patch(&pool, "issue-1", "me", patch).await.unwrap();
+        assert_eq!(moved.team_id, "team-b");
+        assert_eq!(moved.identifier, "BBB-1");
+        assert_eq!(moved.state_id, "state-b");
+    }
+
+    #[tokio::test]
+    async fn parent_cycle_of_two_issues_is_rejected() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_team(&pool, "team-a", "AAA").await;
+        insert_state(&pool, "state-a", "team-a").await;
+        insert_issue(&pool, "issue-a", "team-a", "AAA", 1, "state-a").await;
+        insert_issue(&pool, "issue-b", "team-a", "AAA", 2, "state-a").await;
+
+        let patch = IssuePatch {
+            parent_id: Some(Some("issue-b".into())),
+            ..Default::default()
+        };
+        apply_patch(&pool, "issue-a", "me", patch).await.unwrap();
+
+        let patch = IssuePatch {
+            parent_id: Some(Some("issue-a".into())),
+            ..Default::default()
+        };
+        let result = apply_patch(&pool, "issue-b", "me", patch).await;
+        assert!(result.is_err(), "B under A closes the cycle A -> B -> A");
+        assert_eq!(
+            result.unwrap_err().into_response().status(),
+            StatusCode::BAD_REQUEST
+        );
+        let parent: Option<String> =
+            sqlx::query_scalar("SELECT parent_id FROM tracker_issues WHERE id = 'issue-b'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(parent, None);
+    }
+
+    #[tokio::test]
+    async fn removing_a_session_issue_keeps_the_next_sync_from_recreating_it() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        let team_id = ensure_sessions_team(&pool).await.unwrap();
+        let (state_id,): (String,) = sqlx::query_as(
+            "SELECT id FROM tracker_states WHERE team_id = ? AND session_state = 'working'",
+        )
+        .bind(&team_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let reference = "local:tombstone-test";
+        let now = now_utc();
+        sqlx::query(
+            "INSERT INTO tracker_issues (id, team_id, number, identifier, title, description, state_id, priority,
+                estimate, assignee_id, creator_id, project_id, milestone_id, cycle_id, parent_id, due_date,
+                sort_order, lane_key, session_ref, created_at, updated_at)
+             VALUES ('issue-ses', ?, 1, 'SES-1', 'Session', '', ?, 0, NULL, NULL, 'me', NULL, NULL, NULL, NULL, NULL, 0.0, NULL, ?, ?, ?)",
+        )
+        .bind(&team_id)
+        .bind(&state_id)
+        .bind(reference)
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        remove(State(pool.clone()), Path("issue-ses".into()))
+            .await
+            .unwrap();
+        let tombstone: Option<String> =
+            sqlx::query_scalar("SELECT value FROM tracker_meta WHERE key = ?")
+                .bind(format!("session_tombstone:{reference}"))
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(tombstone.is_some(), "the delete must write a tombstone");
+
+        // The session is still live, so sync runs again for the same reference.
+        sessions::sync_from_overview(&pool, &overview_with_live(reference), Utc::now())
+            .await
+            .unwrap();
+        let recreated: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM tracker_issues WHERE session_ref = ?")
+                .bind(reference)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(recreated, 0, "a tombstoned session issue stays deleted");
+        let still_tombstoned: Option<String> =
+            sqlx::query_scalar("SELECT value FROM tracker_meta WHERE key = ?")
+                .bind(format!("session_tombstone:{reference}"))
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(
+            still_tombstoned.is_some(),
+            "the tombstone survives while the session is still live"
+        );
+    }
+
+    #[test]
+    fn hydrate_filters_by_issue_id_only_for_small_loads() {
+        assert_eq!(hydrate_filter(1).as_deref(), Some("?"));
+        assert_eq!(hydrate_filter(3).as_deref(), Some("?, ?, ?"));
+        assert!(hydrate_filter(HYDRATE_FILTER_MAX).is_some());
+        assert_eq!(hydrate_filter(HYDRATE_FILTER_MAX + 1), None);
+    }
+
+    /// The unfiltered scan has no placeholders, so it must not bind ids either; a large load has
+    /// to hydrate through the real SQLite driver, not just the helper.
+    #[tokio::test]
+    async fn hydrate_above_the_filter_limit_reads_labels_and_subscribers() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_team(&pool, "team-a", "AAA").await;
+        insert_state(&pool, "state-a", "team-a").await;
+        sqlx::query(
+            "INSERT INTO tracker_labels (id, team_id, name, color, parent_id, description, created_at)
+             VALUES ('label-x', NULL, 'Bug', '#eb5757', NULL, NULL, ?)",
+        )
+        .bind(now_utc())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let total = HYDRATE_FILTER_MAX + 1;
+        let mut tx = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        for number in 1..=total as i64 {
+            let id = format!("bulk-{number}");
+            sqlx::query(
+                "INSERT INTO tracker_issues (id, team_id, number, identifier, title, description, state_id, priority,
+                    estimate, assignee_id, creator_id, project_id, milestone_id, cycle_id, parent_id, due_date,
+                    sort_order, lane_key, created_at, updated_at)
+                 VALUES (?, 'team-a', ?, ?, 'Issue', '', 'state-a', 0, NULL, NULL, 'me', NULL, NULL, NULL, NULL, NULL, 0.0, NULL, ?, ?)",
+            )
+            .bind(&id)
+            .bind(number)
+            .bind(format!("AAA-{number}"))
+            .bind(now_utc())
+            .bind(now_utc())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO tracker_issue_labels (issue_id, label_id) VALUES (?, 'label-x')",
+            )
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO tracker_subscribers (issue_id, user_id) VALUES (?, 'me')")
+                .bind(&id)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+        }
+        tx.commit().await.unwrap();
+
+        let issues = load_issues(&pool, "WHERE i.team_id = ? ORDER BY i.number", &["team-a"])
+            .await
+            .expect("a load above the filter limit must not bind ids against an unfiltered query");
+        assert_eq!(issues.len(), total);
+        assert!(issues
+            .iter()
+            .all(|issue| issue.label_ids == ["label-x"] && issue.subscriber_ids == ["me"]));
+    }
+
+    /// Two cross-parent patches at once: A under B and B under A. The ancestor walk and the
+    /// parent write share one write transaction, so exactly one wins and no cycle can form.
+    #[tokio::test]
+    async fn concurrent_cross_parent_patches_leave_no_cycle() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_team(&pool, "team-a", "AAA").await;
+        insert_state(&pool, "state-a", "team-a").await;
+        insert_issue(&pool, "issue-a", "team-a", "AAA", 1, "state-a").await;
+        insert_issue(&pool, "issue-b", "team-a", "AAA", 2, "state-a").await;
+
+        // An open write transaction excludes a second writer; that is what serializes the
+        // ancestor walk with the parent write.
+        let held = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let mut blocked = Box::pin(pool.begin_with("BEGIN IMMEDIATE"));
+        assert!(
+            futures_util::poll!(blocked.as_mut()).is_pending(),
+            "a second writer must wait for the open transaction"
+        );
+        held.commit().await.unwrap();
+        blocked.await.unwrap().commit().await.unwrap();
+
+        let under_b = IssuePatch {
+            parent_id: Some(Some("issue-b".into())),
+            ..Default::default()
+        };
+        let under_a = IssuePatch {
+            parent_id: Some(Some("issue-a".into())),
+            ..Default::default()
+        };
+        let outcomes = tokio::join!(
+            apply_patch(&pool, "issue-a", "me", under_b),
+            apply_patch(&pool, "issue-b", "me", under_a),
+        );
+        let results = [outcomes.0, outcomes.1];
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "exactly one cross-parent patch may win"
+        );
+        let rejected = results
+            .into_iter()
+            .find_map(|result| result.err())
+            .expect("the losing patch is rejected");
+        assert_eq!(rejected.into_response().status(), StatusCode::BAD_REQUEST);
+
+        for start in ["issue-a", "issue-b"] {
+            let mut current = Some(start.to_string());
+            for _ in 0..8 {
+                let Some(id) = current else { break };
+                let parent: Option<String> =
+                    sqlx::query_scalar("SELECT parent_id FROM tracker_issues WHERE id = ?")
+                        .bind(&id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_ne!(parent.as_deref(), Some(start), "cycle through {start}");
+                current = parent;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn loaded_issues_carry_their_subscribers() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_team(&pool, "team-a", "AAA").await;
+        insert_state(&pool, "state-a", "team-a").await;
+        insert_issue(&pool, "issue-a", "team-a", "AAA", 1, "state-a").await;
+        insert_issue(&pool, "issue-b", "team-a", "AAA", 2, "state-a").await;
+        for (issue, user) in [("issue-a", "me"), ("issue-b", "me")] {
+            subscribe_user(&pool, issue, user).await.unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO tracker_users (id, name, display_name, email, avatar_color, kind, model, is_me, created_at)
+             VALUES ('u2', 'Two', 'Two', NULL, '#ffffff', 'agent', NULL, 0, ?)",
+        )
+        .bind(now_utc())
+        .execute(&pool)
+        .await
+        .unwrap();
+        subscribe_user(&pool, "issue-a", "u2").await.unwrap();
+
+        let issues = load_issues(&pool, "WHERE i.team_id = ? ORDER BY i.number", &["team-a"])
+            .await
+            .unwrap();
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].subscriber_ids, ["me", "u2"]);
+        assert_eq!(issues[1].subscriber_ids, ["me"]);
+        let detail = fetch_issue_detail(&pool, "issue-a").await.unwrap();
+        assert_eq!(detail.subscriber_ids, ["me", "u2"]);
     }
 }

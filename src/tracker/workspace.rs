@@ -307,7 +307,7 @@ pub async fn bootstrap(State(pool): State<SqlitePool>) -> ApiResult<Json<Bootstr
 }
 
 async fn set_project_links(
-    pool: &SqlitePool,
+    conn: &mut sqlx::SqliteConnection,
     project_id: &str,
     team_ids: Option<&[String]>,
     member_ids: Option<&[String]>,
@@ -315,26 +315,26 @@ async fn set_project_links(
     if let Some(team_ids) = team_ids {
         sqlx::query("DELETE FROM tracker_project_teams WHERE project_id = ?")
             .bind(project_id)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
         for team in team_ids {
             sqlx::query("INSERT INTO tracker_project_teams (project_id, team_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
                 .bind(project_id)
                 .bind(team)
-                .execute(pool)
+                .execute(&mut *conn)
                 .await?;
         }
     }
     if let Some(member_ids) = member_ids {
         sqlx::query("DELETE FROM tracker_project_members WHERE project_id = ?")
             .bind(project_id)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
         for member in member_ids {
             sqlx::query("INSERT INTO tracker_project_members (project_id, user_id) VALUES (?, ?) ON CONFLICT DO NOTHING")
                 .bind(project_id)
                 .bind(member)
-                .execute(pool)
+                .execute(&mut *conn)
                 .await?;
         }
     }
@@ -362,6 +362,7 @@ pub async fn create_project(
         sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), 0.0) + 1.0 FROM tracker_projects")
             .fetch_one(&pool)
             .await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     sqlx::query(
         "INSERT INTO tracker_projects (id, name, description, summary, icon, color, status, priority, lead_id,
             start_date, target_date, sort_order, created_at, updated_at)
@@ -381,10 +382,11 @@ pub async fn create_project(
     .bind(sort_order)
     .bind(&now)
     .bind(&now)
-    .execute(&pool)
+    .execute(&mut *tx)
     .await?;
     let members = input.member_ids.unwrap_or_else(|| vec![me.clone()]);
-    set_project_links(&pool, &id, input.team_ids.as_deref(), Some(&members)).await?;
+    set_project_links(&mut tx, &id, input.team_ids.as_deref(), Some(&members)).await?;
+    tx.commit().await?;
     Ok(created(load_project(&pool, &id).await?))
 }
 
@@ -454,13 +456,17 @@ pub async fn update_project(
     .bind(&id)
     .execute(&pool)
     .await?;
-    set_project_links(
-        &pool,
-        &id,
-        patch.team_ids.as_deref(),
-        patch.member_ids.as_deref(),
-    )
-    .await?;
+    // The pool has one connection: release it before load_project borrows the pool again.
+    {
+        let mut conn = pool.acquire().await?;
+        set_project_links(
+            &mut conn,
+            &id,
+            patch.team_ids.as_deref(),
+            patch.member_ids.as_deref(),
+        )
+        .await?;
+    }
     Ok(Json(load_project(&pool, &id).await?))
 }
 
@@ -771,14 +777,38 @@ pub async fn update_label(
             "a label cannot be its own parent",
         ));
     }
+    // The ancestor walk and the write share one BEGIN IMMEDIATE transaction, so two concurrent
+    // cross-parent patches serialize: the second one sees the first edge and is rejected instead
+    // of both passing their check and closing a cycle.
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    if let Some(parent) = parent_id.as_deref() {
+        // Walk up from the new parent; reaching this label means the change closes a cycle.
+        let cycle: Option<i64> = sqlx::query_scalar(
+            "WITH RECURSIVE up(id) AS (
+                SELECT ? UNION SELECT l.parent_id FROM tracker_labels l JOIN up ON l.id = up.id
+                WHERE l.parent_id IS NOT NULL
+             )
+             SELECT 1 FROM up WHERE id = ? LIMIT 1",
+        )
+        .bind(parent)
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if cycle.is_some() {
+            return Err(TrackerError::bad_request(
+                "a label cannot be nested under its own descendant",
+            ));
+        }
+    }
     sqlx::query("UPDATE tracker_labels SET name = ?, color = ?, parent_id = ?, description = ? WHERE id = ?")
         .bind(&name)
         .bind(patch.color.unwrap_or(current.color))
         .bind(&parent_id)
         .bind(patch.description.unwrap_or(current.description))
         .bind(&id)
-        .execute(&pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(Json(load_label(&pool, &id).await?))
 }
 
@@ -873,7 +903,7 @@ async fn reject_system_team(pool: &SqlitePool, team_id: &str) -> ApiResult<()> {
     match system {
         None => Err(TrackerError::not_found("team")),
         Some(true) => Err(TrackerError::conflict(
-            "the agent team's workflow mirrors lane statuses and cannot be edited",
+            "system team workflows are managed automatically and cannot be edited",
             "system_team",
         )),
         Some(false) => Ok(()),
@@ -1244,4 +1274,151 @@ pub async fn search(
     .await?;
     let projects = load_projects(&pool, "WHERE p.name LIKE ? ESCAPE '\\'", Some(&pattern)).await?;
     Ok(Json(json!({ "issues": issues, "projects": projects })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+    use crate::tracker::seed::ensure_seeded;
+    use axum::response::IntoResponse;
+
+    async fn insert_label(pool: &SqlitePool, id: &str, parent: Option<&str>) {
+        sqlx::query(
+            "INSERT INTO tracker_labels (id, team_id, name, color, parent_id, description, created_at)
+             VALUES (?, NULL, ?, '#ffffff', ?, NULL, ?)",
+        )
+        .bind(id)
+        .bind(id)
+        .bind(parent)
+        .bind(now_utc())
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_project_with_unknown_team_leaves_no_project_behind() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        let input = ProjectInput {
+            name: "Orphan".into(),
+            description: None,
+            summary: None,
+            icon: None,
+            color: None,
+            status: None,
+            priority: None,
+            lead_id: None,
+            start_date: None,
+            target_date: None,
+            team_ids: Some(vec!["missing-team".into()]),
+            member_ids: None,
+        };
+        let result = create_project(State(pool.clone()), Json(input)).await;
+        assert!(result.is_err(), "an unknown team id must fail the create");
+        let projects: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tracker_projects")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(projects, 0);
+    }
+
+    #[tokio::test]
+    async fn update_label_rejects_indirect_parent_cycle() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_label(&pool, "label-a", None).await;
+        insert_label(&pool, "label-b", Some("label-a")).await;
+        insert_label(&pool, "label-c", Some("label-b")).await;
+
+        let patch = LabelPatch {
+            parent_id: Some(Some("label-c".into())),
+            ..Default::default()
+        };
+        let result = update_label(State(pool.clone()), Path("label-a".into()), Json(patch)).await;
+        assert!(
+            result.is_err(),
+            "A under C closes the cycle A <- B <- C <- A"
+        );
+        let parent: Option<String> =
+            sqlx::query_scalar("SELECT parent_id FROM tracker_labels WHERE id = 'label-a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(parent, None);
+
+        let ok = LabelPatch {
+            parent_id: Some(Some("label-c".into())),
+            ..Default::default()
+        };
+        insert_label(&pool, "label-d", None).await;
+        let updated = update_label(State(pool.clone()), Path("label-d".into()), Json(ok))
+            .await
+            .unwrap();
+        assert_eq!(updated.parent_id.as_deref(), Some("label-c"));
+    }
+
+    /// Two cross-parent label patches at once: A under B and B under A. The ancestor walk and the
+    /// write share one write transaction, so exactly one wins and the hierarchy stays acyclic.
+    #[tokio::test]
+    async fn concurrent_cross_parent_label_patches_leave_no_cycle() {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        ensure_seeded(&pool).await.unwrap();
+        insert_label(&pool, "label-a", None).await;
+        insert_label(&pool, "label-b", None).await;
+
+        // An open write transaction excludes a second writer; that is what serializes the
+        // ancestor walk with the parent write.
+        let held = pool.begin_with("BEGIN IMMEDIATE").await.unwrap();
+        let mut blocked = Box::pin(pool.begin_with("BEGIN IMMEDIATE"));
+        assert!(
+            futures_util::poll!(blocked.as_mut()).is_pending(),
+            "a second writer must wait for the open transaction"
+        );
+        held.commit().await.unwrap();
+        blocked.await.unwrap().commit().await.unwrap();
+
+        let under_b = LabelPatch {
+            parent_id: Some(Some("label-b".into())),
+            ..Default::default()
+        };
+        let under_a = LabelPatch {
+            parent_id: Some(Some("label-a".into())),
+            ..Default::default()
+        };
+        let outcomes = tokio::join!(
+            update_label(State(pool.clone()), Path("label-a".into()), Json(under_b)),
+            update_label(State(pool.clone()), Path("label-b".into()), Json(under_a)),
+        );
+        let results = [outcomes.0, outcomes.1];
+        assert_eq!(
+            results.iter().filter(|result| result.is_ok()).count(),
+            1,
+            "exactly one cross-parent label patch may win"
+        );
+        let rejected = results
+            .into_iter()
+            .find_map(|result| result.err())
+            .expect("the losing patch is rejected");
+        assert_eq!(rejected.into_response().status(), StatusCode::BAD_REQUEST);
+
+        for start in ["label-a", "label-b"] {
+            let mut current = Some(start.to_string());
+            for _ in 0..8 {
+                let Some(id) = current else { break };
+                let parent: Option<String> =
+                    sqlx::query_scalar("SELECT parent_id FROM tracker_labels WHERE id = ?")
+                        .bind(&id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert_ne!(parent.as_deref(), Some(start), "cycle through {start}");
+                current = parent;
+            }
+        }
+    }
 }

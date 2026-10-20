@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Timelike, Utc};
 use parking_lot::Mutex;
@@ -36,8 +36,10 @@ pub fn in_quiet_hours(now: DateTime<Utc>) -> bool {
     now.with_timezone(&chrono_tz::Asia::Seoul).hour() < 8
 }
 
-fn tool_registry() -> &'static Mutex<HashMap<String, String>> {
-    static TOOLS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+pub const TOOL_ACTIVITY_TTL: Duration = Duration::from_secs(600);
+
+fn tool_registry() -> &'static Mutex<HashMap<String, (String, Instant)>> {
+    static TOOLS: OnceLock<Mutex<HashMap<String, (String, Instant)>>> = OnceLock::new();
     TOOLS.get_or_init(Default::default)
 }
 
@@ -47,13 +49,32 @@ pub fn record_tool_activity(session: &SessionKey, tool: &str) {
     if tool.is_empty() {
         return;
     }
-    tool_registry()
-        .lock()
-        .insert(session.storage_key(), tool.chars().take(60).collect());
+    let now = Instant::now();
+    let mut map = tool_registry().lock();
+    map.retain(|_, (_, recorded_at)| now.duration_since(*recorded_at) < TOOL_ACTIVITY_TTL);
+    map.insert(
+        session.storage_key(),
+        (tool.chars().take(60).collect(), now),
+    );
+}
+
+/// Clears the tool activity entry for a session on turn end.
+pub fn clear_tool_activity(session: &SessionKey) {
+    clear_tool(&session.storage_key());
 }
 
 fn last_tool(storage_key: &str) -> Option<String> {
-    tool_registry().lock().get(storage_key).cloned()
+    let mut map = tool_registry().lock();
+    match map.get(storage_key) {
+        Some((tool, recorded_at)) if recorded_at.elapsed() < TOOL_ACTIVITY_TTL => {
+            Some(tool.clone())
+        }
+        Some(_) => {
+            map.remove(storage_key);
+            None
+        }
+        None => None,
+    }
 }
 
 fn clear_tool(storage_key: &str) {
@@ -94,6 +115,7 @@ impl StatusDriver {
         turn: TurnStart,
     ) -> Self {
         let storage_key = turn.session.storage_key();
+        clear_tool(&storage_key);
         let stored: Option<(String, DateTime<Utc>)> = match sqlx::query_as(
             "SELECT platform_message_id, started_at FROM turn_status_messages
              WHERE session_key = ? AND event_id = ? AND state = 'running'",
@@ -268,5 +290,37 @@ impl StatusDriver {
     /// Leaves the stored message running for the restarted turn to adopt.
     pub fn abandon(self) {
         clear_tool(&self.storage_key);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_activity_clears_on_turn_end_and_bounds_ttl() {
+        let session = SessionKey {
+            platform: "slack".to_owned(),
+            guild_id: None,
+            channel_id: "C123".to_owned(),
+            thread_id: None,
+            user_id: "U123".to_owned(),
+            bot_id: None,
+        };
+        record_tool_activity(&session, "cargo");
+        assert_eq!(last_tool(&session.storage_key()), Some("cargo".to_string()));
+
+        // Cleared on turn end
+        clear_tool_activity(&session);
+        assert_eq!(last_tool(&session.storage_key()), None);
+
+        // Bounded TTL expiration
+        {
+            let mut map = tool_registry().lock();
+            let expired_at = Instant::now() - TOOL_ACTIVITY_TTL - Duration::from_secs(1);
+            map.insert(session.storage_key(), ("stale".to_string(), expired_at));
+        }
+        assert_eq!(last_tool(&session.storage_key()), None);
+        assert!(!tool_registry().lock().contains_key(&session.storage_key()));
     }
 }

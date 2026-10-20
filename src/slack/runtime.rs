@@ -24,6 +24,10 @@ pub struct SlackRuntime {
     pub approvals: crate::SmartApprovalGuard,
     pub bot_user_id: String,
     pub team_id: String,
+    /// Serializes startup backfill against the reconcile passes. Both read the same cursors and
+    /// claim the same delivery rows, so running them at once lets a pass that starts mid-turn
+    /// read a stale cursor and step past a message whose turn later failed.
+    backfill_lock: tokio::sync::Mutex<()>,
 }
 
 pub struct SlackDeps {
@@ -68,6 +72,7 @@ pub async fn build(deps: SlackDeps) -> Result<SlackRuntime> {
         approvals,
         bot_user_id: auth.user_id,
         team_id: auth.team_id,
+        backfill_lock: tokio::sync::Mutex::new(()),
     })
 }
 
@@ -77,10 +82,24 @@ impl SlackRuntime {
         if !self.config.missed_backfill {
             return;
         }
+        let _pass = self.backfill_lock.lock().await;
         match super::backfill::run(&self.ingress).await {
             Ok(0) => {}
             Ok(routed) => tracing::info!(routed, "slack missed-message backfill routed messages"),
             Err(error) => tracing::warn!(%error, "slack missed-message backfill failed"),
+        }
+    }
+
+    /// One settled reconcile pass, serialized with [`Self::backfill`].
+    async fn reconcile_once(&self) {
+        let _pass = self.backfill_lock.lock().await;
+        match super::backfill::run_settled(&self.ingress, Some(RECONCILE_SETTLE)).await {
+            Ok(0) => {}
+            Ok(routed) => tracing::warn!(
+                routed,
+                "slack reconcile routed messages the socket never delivered"
+            ),
+            Err(error) => tracing::warn!(%error, "slack reconcile failed"),
         }
     }
 
@@ -97,14 +116,7 @@ impl SlackRuntime {
                 _ = shutdown.cancelled() => return,
                 _ = tokio::time::sleep(RECONCILE_INTERVAL) => {}
             }
-            match super::backfill::run_settled(&self.ingress, Some(RECONCILE_SETTLE)).await {
-                Ok(0) => {}
-                Ok(routed) => tracing::warn!(
-                    routed,
-                    "slack reconcile routed messages the socket never delivered"
-                ),
-                Err(error) => tracing::warn!(%error, "slack reconcile failed"),
-            }
+            self.reconcile_once().await;
         }
     }
 
@@ -171,4 +183,184 @@ pub async fn supervise(runtime: Arc<SlackRuntime>, shutdown: CancellationToken) 
         backoff = (backoff * 2).min(Duration::from_secs(60));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::extract::Request;
+    use axum::response::Response;
+    use serde_json::{json, Value};
+
+    use super::*;
+    use crate::slack::ingress::write_cursor;
+    use crate::{Database, InboundEvent, MultiplexerConfig, SessionMultiplexer};
+
+    const BOT: &str = "UBOT";
+    const TEAM: &str = "T1";
+    const OWNER: &str = "UOWNER";
+    const STEP_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Holds the "hold" turn open until the test releases it, so a backfill pass can be observed
+    /// mid-turn.
+    struct BlockingRunner {
+        entered: tokio::sync::mpsc::UnboundedSender<()>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+
+    #[async_trait]
+    impl crate::AgentRunner for BlockingRunner {
+        async fn run(&self, _: &mut crate::SessionContext, event: InboundEvent) -> Result<()> {
+            if event.content == "hold" {
+                let _ = self.entered.send(());
+                if let Ok(permit) = self.release.acquire().await {
+                    permit.forget();
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// Reports every `conversations.history` request for `CFREE` on a channel.
+    async fn fake() -> (String, tokio::sync::mpsc::UnboundedReceiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let app = axum::Router::new().fallback(move |req: Request| {
+            let tx = tx.clone();
+            async move {
+                let method = req.uri().path().trim_start_matches("/api/").to_owned();
+                let body = axum::body::to_bytes(req.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: Value = crate::slack::api::decode_test_body(&body);
+                let channel = body["channel"].as_str().unwrap_or_default().to_owned();
+                let reply = match (method.as_str(), channel.as_str()) {
+                    ("conversations.open", _) => json!({ "ok": true, "channel": { "id": "D1" } }),
+                    ("conversations.history", "CFREE") => {
+                        let _ = tx.send(channel);
+                        json!({ "ok": true, "messages": [
+                            { "type": "message", "user": OWNER, "text": "hold", "ts": "101.000000" }
+                        ]})
+                    }
+                    _ => json!({ "ok": true, "messages": [] }),
+                };
+                Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(Body::from(reply.to_string()))
+                    .unwrap()
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        (base, rx)
+    }
+
+    struct Fixture {
+        _db: Database,
+        runtime: Arc<SlackRuntime>,
+        entered: tokio::sync::mpsc::UnboundedReceiver<()>,
+        hits: tokio::sync::mpsc::UnboundedReceiver<String>,
+        release: Arc<tokio::sync::Semaphore>,
+    }
+
+    async fn fixture() -> Fixture {
+        let db = Database::connect("sqlite::memory:").await.unwrap();
+        let pool = db.pool().clone();
+        let (entered_tx, entered) = tokio::sync::mpsc::unbounded_channel();
+        let release = Arc::new(tokio::sync::Semaphore::new(0));
+        let multiplexer = SessionMultiplexer::new(
+            pool.clone(),
+            Arc::new(BlockingRunner {
+                entered: entered_tx,
+                release: release.clone(),
+            }),
+            MultiplexerConfig::default(),
+        );
+        let (base, hits) = fake().await;
+        let config = Arc::new(SlackConfig {
+            allowed_users: vec![OWNER.into()],
+            free_response_channels: vec!["CFREE".into()],
+            ..SlackConfig::test_default()
+        });
+        let api = SlackApi::with_base_url("xoxb-test".into(), format!("{base}/api"));
+        let ingress = Arc::new(SlackIngress::new(
+            config.clone(),
+            api.clone(),
+            multiplexer.clone(),
+            pool.clone(),
+            BOT.into(),
+            TEAM.into(),
+        ));
+        write_cursor(&pool, BOT, "CFREE", "", "100.000000")
+            .await
+            .unwrap();
+        let commands = Arc::new(SlackCommands::new(
+            config.clone(),
+            api.clone(),
+            BOT,
+            crate::slack::commands::SlackCommandDeps::new(multiplexer, pool),
+        ));
+        let runtime = Arc::new(SlackRuntime {
+            config,
+            egress: Arc::new(SlackEgress::new(api.clone())),
+            api,
+            ingress,
+            commands,
+            approvals: crate::SmartApprovalGuard::new(),
+            bot_user_id: BOT.into(),
+            team_id: TEAM.into(),
+            backfill_lock: tokio::sync::Mutex::new(()),
+        });
+        Fixture {
+            _db: db,
+            runtime,
+            entered,
+            hits,
+            release,
+        }
+    }
+
+    #[tokio::test]
+    async fn reconcile_pass_waits_for_the_startup_backfill() {
+        let mut f = fixture().await;
+        let backfill = tokio::spawn({
+            let runtime = f.runtime.clone();
+            async move { runtime.backfill().await }
+        });
+        tokio::time::timeout(STEP_TIMEOUT, f.entered.recv())
+            .await
+            .expect("the startup backfill should route the missed message")
+            .expect("runner channel open");
+        // The backfill pass already read the channel; clear that hit.
+        while f.hits.try_recv().is_ok() {}
+        assert!(
+            f.runtime.backfill_lock.try_lock().is_err(),
+            "the startup pass must hold the pass lock for the whole turn"
+        );
+
+        let runtime = f.runtime.clone();
+        let mut reconcile = Box::pin(async move { runtime.reconcile_once().await });
+        assert!(
+            futures_util::poll!(reconcile.as_mut()).is_pending(),
+            "a reconcile pass must not read a target while the startup backfill is mid-turn"
+        );
+
+        f.release.add_permits(1);
+        tokio::time::timeout(STEP_TIMEOUT, backfill)
+            .await
+            .expect("the startup pass finishes once its turn is released")
+            .unwrap();
+        tokio::time::timeout(STEP_TIMEOUT, reconcile)
+            .await
+            .expect("the waiting pass runs once the startup pass releases the lock");
+        assert!(
+            f.hits.try_recv().is_ok(),
+            "the waiting pass reads the target once the backfill finishes"
+        );
+    }
 }

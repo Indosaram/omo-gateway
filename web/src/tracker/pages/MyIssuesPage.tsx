@@ -25,9 +25,7 @@ export function MyIssuesPage({ tab }: { tab: MyIssuesTab }) {
       case 'created':
         return live.filter((issue) => issue.creator_id === meId)
       case 'subscribed':
-        // TODO(FE-C): the issue list payload has no subscriber_ids; creators and assignees are auto-subscribed,
-        // so this approximates subscriptions until the API exposes them on Issue.
-        return live.filter((issue) => issue.creator_id === meId || issue.assignee_id === meId)
+        return live.filter((issue) => issue.subscriber_ids.includes(meId))
       case 'activity': {
         const since = Date.now() - 14 * 86_400_000
         return live.filter(

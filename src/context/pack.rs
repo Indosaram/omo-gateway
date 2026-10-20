@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -14,6 +15,9 @@ pub const MAX_THREAD_MESSAGES: usize = 20;
 const MAX_LANES: i64 = 10;
 const MAX_LINE_CHARS: usize = 300;
 const REPLIES_FETCH_LIMIT: u32 = 200;
+/// Pages one context pack reads per thread. A longer thread is truncated rather than swept, so a
+/// single owner message can never turn into an unbounded number of Slack calls.
+const MAX_REPLIES_PAGES: usize = 20;
 const BUILD_TIMEOUT: Duration = Duration::from_secs(5);
 
 const THREAD_HEADER: &str =
@@ -29,11 +33,104 @@ pub trait ThreadReader: Send + Sync {
     async fn thread_replies(&self, channel: &str, thread_ts: &str) -> Result<Vec<Value>>;
 }
 
+/// Exact Slack ts order. Parsing a ts as `f64` loses the microsecond digits at these magnitudes,
+/// so two replies in the same second can compare equal and stop the walk early.
+fn ts_parts(ts: &str) -> Option<(u64, u64)> {
+    let (secs, frac) = ts.split_once('.')?;
+    let secs: u64 = secs.parse().ok()?;
+    let frac: String = format!("{frac:0<6}");
+    Some((secs, frac.get(..6)?.parse().ok()?))
+}
+
+/// Forward walk over one thread's replies.
+///
+/// `conversations.replies` returns the thread parent first on *every* page, so pages are deduped by
+/// ts. Slack's `response_metadata.next_cursor` decides whether more remain: a short page is not an
+/// end-of-thread signal. A peer that sends no cursor falls back to advancing `oldest` to the newest
+/// ts read, which terminates because a page that adds nothing new ends the walk.
+#[derive(Default)]
+pub(crate) struct ReplyWalk {
+    /// Slack continuation cursor for the next request, when the peer supplied one.
+    cursor: Option<String>,
+    newest: Option<(u64, u64)>,
+    newest_raw: Option<String>,
+    seen: HashSet<String>,
+    pages: usize,
+}
+
+impl ReplyWalk {
+    /// `oldest` for the next request; unused once a real cursor exists.
+    fn oldest(&self) -> Option<&str> {
+        if self.cursor.is_some() {
+            return None;
+        }
+        self.newest_raw.as_deref()
+    }
+}
+
+pub(crate) fn paginate_replies(
+    all_replies: &mut Vec<Value>,
+    chunk: Vec<Value>,
+    walk: &mut ReplyWalk,
+    next_cursor: Option<String>,
+) -> bool {
+    walk.pages += 1;
+    let mut fresh = 0usize;
+    for message in chunk {
+        let Some(ts) = message.get("ts").and_then(Value::as_str).map(str::to_owned) else {
+            continue;
+        };
+        if !walk.seen.insert(ts.clone()) {
+            continue;
+        }
+        fresh += 1;
+        if let Some(parts) = ts_parts(&ts) {
+            if walk.newest.is_none_or(|newest| parts > newest) {
+                walk.newest = Some(parts);
+                walk.newest_raw = Some(ts.clone());
+            }
+        }
+        all_replies.push(message);
+    }
+    if walk.pages >= MAX_REPLIES_PAGES {
+        return false;
+    }
+    match next_cursor {
+        Some(cursor) if walk.cursor.as_deref() != Some(cursor.as_str()) => {
+            walk.cursor = Some(cursor);
+            true
+        }
+        // A repeated cursor would loop forever, and Slack sends none once the thread is exhausted.
+        Some(_) => false,
+        // The cursor series ended, so the thread is fully read. Without any cursor (a peer that
+        // does not paginate) keep going only while pages still add messages.
+        None if walk.cursor.is_some() => false,
+        None => fresh > 0,
+    }
+}
+
 #[async_trait]
 impl ThreadReader for SlackApi {
     async fn thread_replies(&self, channel: &str, thread_ts: &str) -> Result<Vec<Value>> {
-        self.conversations_replies(channel, thread_ts, None, REPLIES_FETCH_LIMIT)
-            .await
+        let mut all_replies = Vec::new();
+        let mut walk = ReplyWalk::default();
+        loop {
+            let cursor = walk.cursor.clone();
+            let oldest = walk.oldest().map(str::to_owned);
+            let page = self
+                .conversations_replies_page(
+                    channel,
+                    thread_ts,
+                    cursor.as_deref(),
+                    oldest.as_deref(),
+                    REPLIES_FETCH_LIMIT,
+                )
+                .await?;
+            if !paginate_replies(&mut all_replies, page.messages, &mut walk, page.next_cursor) {
+                break;
+            }
+        }
+        Ok(all_replies)
     }
 }
 
@@ -91,12 +188,19 @@ impl PrecedentSource for LedgerPrecedents {
                 }
                 targets.push(cwd);
             }
-            let wt_rows: Vec<(String, String)> =
-                sqlx::query_as("SELECT repo, path FROM lane_worktrees WHERE lane_key = ?")
-                    .bind(key)
-                    .fetch_all(pool)
-                    .await
-                    .unwrap_or_default();
+            let wt_rows: Vec<(String, String)> = match sqlx::query_as(
+                "SELECT repo, path FROM lane_owned_worktrees WHERE lane_key = ? AND state = 'registered'",
+            )
+            .bind(key)
+            .fetch_all(pool)
+            .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(%error, lane_key = %key, "failed to query lane_owned_worktrees");
+                    return Err(error.into());
+                }
+            };
             for (repo, path) in wt_rows {
                 if !repo.is_empty() {
                     targets.push(repo);
@@ -535,6 +639,83 @@ fn clip(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
 
+    /// Slack `conversations.replies` as production serves it: the parent comes first on every page,
+    /// a full-size request may be answered with a short page, and only `next_cursor` says whether
+    /// more replies remain.
+    async fn paged_thread_fake(total: u64) -> (SlackApi, Arc<parking_lot::Mutex<Vec<Value>>>) {
+        use axum::body::Body;
+        use axum::response::Response;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/api", listener.local_addr().unwrap());
+        let calls: Arc<parking_lot::Mutex<Vec<Value>>> = Arc::default();
+        let recorded = calls.clone();
+        let app = axum::Router::new().fallback(move |request: axum::extract::Request| {
+            let recorded = recorded.clone();
+            async move {
+                let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    .await
+                    .unwrap();
+                let body: Value = crate::slack::api::decode_test_body(&bytes);
+                let after: u64 = body["cursor"]
+                    .as_str()
+                    .and_then(|cursor| cursor.strip_prefix("at-"))
+                    .and_then(|n| n.parse().ok())
+                    .unwrap_or(0);
+                // Short pages on purpose: 60 replies per page even though 200 were requested.
+                let replies: Vec<Value> = (after + 1..=total.min(after + 60))
+                    .map(json_ts)
+                    .collect();
+                let last = after + replies.len() as u64;
+                let more = last < total;
+                let mut messages = vec![json_ts(0)];
+                messages.extend(replies);
+                recorded.lock().push(body.clone());
+                let reply = serde_json::json!({
+                    "ok": true,
+                    "messages": messages,
+                    "response_metadata": { "next_cursor": if more { format!("at-{last}") } else { String::new() } },
+                });
+                Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(Body::from(reply.to_string()))
+                    .unwrap()
+            }
+        });
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        (SlackApi::with_base_url("xoxb-test".into(), base), calls)
+    }
+
+    fn json_ts(n: u64) -> Value {
+        serde_json::json!({ "ts": format!("1700000000.{n:06}"), "text": format!("m{n}") })
+    }
+
+    #[tokio::test]
+    async fn thread_reader_walks_every_page_by_cursor_without_repeating_the_parent() {
+        let (api, calls) = paged_thread_fake(250).await;
+
+        let replies = ThreadReader::thread_replies(&api, "C1", "1700000000.000000")
+            .await
+            .unwrap();
+
+        assert_eq!(replies.len(), 251, "parent plus 250 replies, each once");
+        let mut seen: Vec<&str> = replies
+            .iter()
+            .map(|message| message["ts"].as_str().unwrap())
+            .collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), 251, "no ts may be stored twice");
+        assert_eq!(seen.last().copied(), Some("1700000000.000250"));
+
+        // The walk followed Slack's cursor instead of guessing from page length.
+        let requests = calls.lock().clone();
+        assert!(requests.len() > 1, "a short page must not end the walk");
+        assert!(requests[0].get("cursor").is_none());
+        assert_eq!(requests[1]["cursor"], "at-60");
+    }
+
     #[test]
     fn kill_switch_defaults_on_and_parses_off_values() {
         assert!(flag_enabled(None));
@@ -550,5 +731,142 @@ mod tests {
         assert!(pack.contains(THREAD_HEADER));
         assert!(pack.contains(LANES_HEADER));
         assert!(pack.contains(PRECEDENTS_HEADER));
+    }
+
+    #[test]
+    fn paginate_thread_replies_follows_the_cursor_and_dedupes_the_parent() {
+        use serde_json::json;
+
+        let root = json!({ "ts": "1.000000", "text": "root" });
+        let reply = |n: u64| json!({ "ts": format!("1.{n:06}"), "text": format!("msg {n}") });
+        let mut all = Vec::new();
+        let mut walk = ReplyWalk::default();
+
+        // A short page that still carries a cursor: the old `len < limit` check stopped here.
+        let page1: Vec<Value> = std::iter::once(root.clone())
+            .chain((1..=5).map(reply))
+            .collect();
+        assert!(paginate_replies(
+            &mut all,
+            page1,
+            &mut walk,
+            Some("c2".into())
+        ));
+        assert_eq!(walk.cursor.as_deref(), Some("c2"));
+        assert_eq!(all.len(), 6);
+
+        // Slack repeats the parent on every page; it must be stored once.
+        let page2: Vec<Value> = std::iter::once(root.clone())
+            .chain((6..=10).map(reply))
+            .collect();
+        assert!(paginate_replies(
+            &mut all,
+            page2,
+            &mut walk,
+            Some("c3".into())
+        ));
+        assert_eq!(all.len(), 11);
+
+        // Exhausted: no cursor left.
+        let page3: Vec<Value> = vec![root];
+        assert!(!paginate_replies(&mut all, page3, &mut walk, None));
+        assert_eq!(all.len(), 11);
+        assert_eq!(all.last().unwrap()["ts"], "1.000010");
+    }
+
+    #[test]
+    fn paginate_thread_replies_without_a_cursor_advances_by_ts_and_cannot_loop() {
+        use serde_json::json;
+
+        let mut all = Vec::new();
+        let mut walk = ReplyWalk::default();
+        let page: Vec<Value> = vec![
+            json!({ "ts": "1.000000" }),
+            // Same second, one microsecond apart: `f64` cannot separate these reliably.
+            json!({ "ts": "1.000001" }),
+            json!({ "ts": "1.000002" }),
+        ];
+        assert!(paginate_replies(&mut all, page, &mut walk, None));
+        assert_eq!(walk.oldest(), Some("1.000002"));
+
+        // A peer that answers with only the parent adds nothing new, so the walk ends.
+        assert!(!paginate_replies(
+            &mut all,
+            vec![json!({ "ts": "1.000000" })],
+            &mut walk,
+            None
+        ));
+        assert_eq!(all.len(), 3);
+
+        // A cursor that repeats itself would loop forever; the walk stops instead.
+        let mut looping = ReplyWalk::default();
+        let mut seen = Vec::new();
+        assert!(paginate_replies(
+            &mut seen,
+            vec![json!({ "ts": "2.000000" })],
+            &mut looping,
+            Some("same".into())
+        ));
+        assert!(!paginate_replies(
+            &mut seen,
+            vec![json!({ "ts": "2.000001" })],
+            &mut looping,
+            Some("same".into())
+        ));
+    }
+
+    #[tokio::test]
+    async fn precedent_lookup_queries_lane_owned_worktrees() {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        // `lane_owned_worktrees.lane_key` references `lanes(key)`, so the lane must exist first.
+        sqlx::query(
+            "INSERT INTO lanes (key, title, lead_session_key, cwd, brief_path, session_key, \
+                                status, done_signals, last_activity_at) \
+             VALUES ('test-lane', 'Test lane', 'lead', '/work', '/work/brief', 'lane', \
+                     'working', 'file done', CURRENT_TIMESTAMP)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO lane_owned_worktrees (lane_key, path, role, repo, common_dir, git_dir, identity, branch, registrar, state)
+             VALUES ('test-lane', '/work/my-repo', 'cwd', 'my-repo', '/tmp/c', '/tmp/g', 'id', 'main', 'reg', 'registered')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO action_precedents (signature, effect, target_scope, decision, scope, origin)
+             VALUES ('sig:my-repo', 'edit', 'my-repo', 'allow', 'exact', 'test')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let event = InboundEvent::message(
+            SessionKey {
+                platform: "slack".to_owned(),
+                guild_id: None,
+                channel_id: "C1".to_owned(),
+                thread_id: None,
+                user_id: "U1".to_owned(),
+                bot_id: None,
+            },
+            "m1",
+            "inspect",
+        );
+
+        let precedents = LedgerPrecedents;
+        let results = precedents
+            .precedents(&pool, &event, &["test-lane".to_string()])
+            .await
+            .unwrap();
+
+        assert!(!results.is_empty());
+        assert!(results[0].contains("my-repo"));
     }
 }

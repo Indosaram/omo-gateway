@@ -1,5 +1,8 @@
 /**
- * Tests for the sidecar ``session.create`` params built by ChatSidebar.
+ * Tests for the sidecar ``session.create`` params used by ChatSidebar.
+ *
+ * The params live in ``lib/chat-sidebar-session-params`` (ChatSidebar
+ * re-exports them) so this test does not pull the component's UI deps.
  *
  * The sidecar must opt its session into close_on_disconnect so the gateway
  * reaps the slash_worker on WS disconnect (the #21370/#21467 leak), and it
@@ -10,7 +13,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { sidecarSessionCreateParams } from "@/components/ChatSidebar";
+import { sidecarSessionCreateParams } from "@/lib/chat-sidebar-session-params";
 
 describe("sidecarSessionCreateParams", () => {
   it("opts into close_on_disconnect", () => {

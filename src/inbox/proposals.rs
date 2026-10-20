@@ -193,8 +193,7 @@ impl GatewayActions {
             "OPENAI_API_BASE"
         })
         .ok();
-        let lead = std::env::var("OMON_LANE_DEFAULT_LEAD")
-            .unwrap_or_else(|_| crate::lanes::kibitzer::DEFAULT_LEAD.to_owned());
+        let lead = crate::runtime_config::default_lead();
         crate::SessionKey::from_storage_key(&lead)?;
         Ok(Self {
             judge: std::sync::Arc::new(super::triage::production_judge(pool.clone())),

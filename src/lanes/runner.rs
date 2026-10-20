@@ -134,6 +134,13 @@ async fn apply_reopen(
         .bind(key)
         .execute(&mut *tx)
         .await?;
+    // A pause is a throttle for the run it was set in, not a property of the lane: close
+    // does not clear it, so a reopen must, or the reopened lane is skipped forever.
+    sqlx::query("UPDATE lane_pauses SET resumed_at = ? WHERE lane_key = ? AND resumed_at IS NULL")
+        .bind(now)
+        .bind(key)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("INSERT INTO lane_inbox(lane_key, text, at) VALUES (?, ?, ?)")
         .bind(key)
         .bind(text.unwrap_or("The lane was reopened; re-check state and continue"))
@@ -506,16 +513,71 @@ pub async fn create_auto_worktree(
 }
 
 /// Undoes `create_auto_worktree` when the lane row was never stored. The tree is fresh
-/// and clean and its branch sits at HEAD, so neither command needs a force flag.
-pub async fn discard_auto_worktree(tree: &AutoWorktree) {
+/// and clean and its branch sits at HEAD, so neither command needs a force flag. A failure
+/// is returned rather than logged away: a tree that survives this is one nothing else
+/// will ever clean, so the caller has to be able to say what was left behind.
+pub async fn discard_auto_worktree(tree: &AutoWorktree) -> Result<()> {
     let repo = tree.repo.to_string_lossy();
-    if let Err(error) = git(&repo, &["worktree", "remove", &tree.path.to_string_lossy()]).await {
-        tracing::warn!(path = %tree.path.display(), %error, "unused auto worktree not removed");
-        return;
+    git(&repo, &["worktree", "remove", &tree.path.to_string_lossy()]).await?;
+    git(&repo, &["branch", "-d", &tree.branch]).await?;
+    Ok(())
+}
+
+/// The lane branch still holds commits the lane's own base lacks. Close removes the
+/// worktree and keeps the branch, so the owner must be told where the work went; nothing
+/// here merges it. The base is the commit the lane started from, not the control
+/// repository's moving HEAD, so commits the owner made in the meantime are never reported
+/// as lane work and a diverged HEAD cannot inflate the count.
+pub(crate) async fn unmerged_lane_branch(
+    pool: &SqlitePool,
+    lane_key: &str,
+) -> Result<Option<String>> {
+    let trees: Vec<(String, String)> = sqlx::query_as(
+        "SELECT repo, branch FROM lane_owned_worktrees WHERE lane_key=? ORDER BY id",
+    )
+    .bind(lane_key)
+    .fetch_all(pool)
+    .await?;
+    let start: Option<String> =
+        sqlx::query_scalar("SELECT start_commit FROM lane_usage_context WHERE lane_key=?")
+            .bind(lane_key)
+            .fetch_optional(pool)
+            .await?
+            .flatten();
+    for (repo, branch) in trees {
+        let base = match &start {
+            // The recorded base is only usable while the branch still descends from it.
+            Some(commit)
+                if git(&repo, &["merge-base", "--is-ancestor", commit, &branch])
+                    .await
+                    .is_ok() =>
+            {
+                Some(commit.clone())
+            }
+            _ => None,
+        };
+        let reference = base.as_deref().unwrap_or("HEAD");
+        let ahead = match git(
+            &repo,
+            &["rev-list", "--count", &format!("{reference}..{branch}")],
+        )
+        .await
+        {
+            Ok(ahead) => ahead,
+            Err(error) => {
+                tracing::info!(lane = lane_key, %branch, %error, "lane branch comparison skipped");
+                continue;
+            }
+        };
+        if ahead != "0" {
+            let against = match &base {
+                Some(commit) => format!("base {}", commit.chars().take(12).collect::<String>()),
+                None => "the repository HEAD".to_string(),
+            };
+            return Ok(Some(format!("{branch} ({ahead} commits not in {against})")));
+        }
     }
-    if let Err(error) = git(&repo, &["branch", "-d", &tree.branch]).await {
-        tracing::warn!(branch = %tree.branch, %error, "unused auto worktree branch not deleted");
-    }
+    Ok(None)
 }
 
 /// Why a worktree must survive the sweep: local changes, or commits no remote has.
@@ -1096,6 +1158,9 @@ impl LaneRunner {
                 sqlx::query("UPDATE lane_close_intents SET phase=1 WHERE id=? AND state='running'").bind(id).execute(&self.pool).await?;
             }
             remove_owned(&self.pool,&intent).await?;
+            // The worktree is gone and its branch stays behind; compute the gap before the
+            // write lock so the close transaction never waits on git.
+            let unmerged = unmerged_lane_branch(&self.pool, &lane.key).await?;
             let mut tx=self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let changed=sqlx::query("UPDATE lanes SET status='closed',updated_at=? WHERE key=? AND status=? AND (SELECT COALESCE(MAX(id),0) FROM lane_history WHERE lane_key=? AND reason='reopened')=?")
                 .bind(Utc::now()).bind(&lane.key).bind(&intent.original_status).bind(&lane.key).bind(intent.generation).execute(&mut *tx).await?;
@@ -1112,6 +1177,24 @@ impl LaneRunner {
                 sqlx::query("INSERT INTO lane_history(lane_key,at,from_status,to_status,reason) VALUES (?,?,?,?,?)")
                     .bind(&lane.key).bind(Utc::now()).bind(status.as_str()).bind(to.as_str()).bind(intent.note.as_deref().map(super::state::safe_reason)).execute(&mut *tx).await?;
                 status=to;
+            }
+            if let Some(note) = unmerged {
+                // Surfaced, never merged: the owner decides whether to merge or push.
+                let body = super::scrub::scrub(&format!(
+                    "lane work is on unmerged branch {note}; nothing was merged into the repository HEAD"
+                ));
+                let reported: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM lane_events WHERE lane_key=? AND kind='unmerged_branch' AND body=?)")
+                    .bind(&lane.key).bind(&body).fetch_one(&mut *tx).await?;
+                if !reported {
+                    crate::storage::lanes::enqueue_lane_event_with_executor(
+                        &mut *tx,
+                        Some(&lane.key),
+                        &lane.lead_session_key,
+                        "unmerged_branch",
+                        &body,
+                    )
+                    .await?;
+                }
             }
             sqlx::query("UPDATE lane_close_intents SET state='completed',phase=2,error=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND state='running'").bind(id).execute(&mut *tx).await?;
             tx.commit().await?;
@@ -1387,7 +1470,7 @@ impl LaneRunner {
         let mut guard_tick = tokio::time::interval(super::guard::GUARD_INTERVAL);
         guard_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut guard_watcher = super::guard::GuardWatcher::default();
-        let guard_lead = std::env::var("OMON_LANE_DEFAULT_LEAD").ok();
+        let guard_lead = Some(crate::runtime_config::default_lead());
         let service_result: Result<()> = async {
         loop {
             if shutdown.is_cancelled() {
@@ -2210,5 +2293,219 @@ mod activity_generation_tests {
                 .as_deref(),
             Some("new-binding")
         );
+    }
+
+    #[tokio::test]
+    async fn reopen_clears_a_pause_that_outlived_close() {
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut lane = Lane::new(
+            "paused",
+            "Paused",
+            "lead",
+            "/tmp",
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "closed".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        // Close never clears a pause, so the row is still open when the lane reopens.
+        sqlx::query("INSERT INTO lane_pauses(lane_key, paused_at, paused_by, resumed_at) VALUES ('paused', ?, 'owner', NULL)")
+            .bind(Utc::now())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        reopen(db.pool(), "paused", None).await.unwrap();
+        assert!(!crate::storage::lanes::is_lane_paused(db.pool(), "paused")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn close_surfaces_the_unmerged_lane_branch() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = tokio::fs::canonicalize(dir.path()).await.unwrap();
+        let repo_path = root.join("repo");
+        tokio::fs::create_dir(&repo_path).await.unwrap();
+        let repo = repo_path.to_string_lossy().into_owned();
+        git(&repo, &["init", "--quiet"]).await.unwrap();
+        git(&repo, &["config", "user.email", "lane@example.com"])
+            .await
+            .unwrap();
+        git(&repo, &["config", "user.name", "lane"]).await.unwrap();
+        tokio::fs::write(repo_path.join("seed.txt"), "seed")
+            .await
+            .unwrap();
+        git(&repo, &["add", "seed.txt"]).await.unwrap();
+        git(&repo, &["commit", "--quiet", "-m", "seed"])
+            .await
+            .unwrap();
+        let tree_path = root.join("repo-lanes").join("b15");
+        tokio::fs::create_dir_all(root.join("repo-lanes"))
+            .await
+            .unwrap();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "lane/b15",
+                tree_path.to_str().unwrap(),
+                "HEAD",
+            ],
+        )
+        .await
+        .unwrap();
+        let tree = tokio::fs::canonicalize(&tree_path).await.unwrap();
+        tokio::fs::write(tree.join("lane.txt"), "lane work")
+            .await
+            .unwrap();
+        git(tree.to_str().unwrap(), &["add", "lane.txt"])
+            .await
+            .unwrap();
+        git(tree.to_str().unwrap(), &["commit", "--quiet", "-m", "work"])
+            .await
+            .unwrap();
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut lane = Lane::new(
+            "b15",
+            "B15",
+            "lead",
+            tree.to_str().unwrap(),
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "verified_done".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        register_owned_worktree(db.pool(), "b15", &repo_path, &tree)
+            .await
+            .unwrap();
+        let runner = LaneRunner::new(db.pool().clone(), Arc::new(UnusedBackend));
+        let id = crate::storage::lanes::request_close(db.pool(), "b15", false, None)
+            .await
+            .unwrap();
+        runner.close_intent(id).await.unwrap();
+        let body: String = sqlx::query_scalar(
+            "SELECT body FROM lane_events WHERE lane_key='b15' AND kind='unmerged_branch'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert!(body.contains("lane/b15"), "{body}");
+        assert_eq!(
+            get_lane(db.pool(), "b15").await.unwrap().unwrap().status,
+            "closed"
+        );
+    }
+
+    #[tokio::test]
+    async fn unmerged_branch_counts_only_work_beyond_the_recorded_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = tokio::fs::canonicalize(dir.path()).await.unwrap();
+        let repo_path = root.join("repo");
+        tokio::fs::create_dir(&repo_path).await.unwrap();
+        let repo = repo_path.to_string_lossy().into_owned();
+        git(&repo, &["init", "--quiet"]).await.unwrap();
+        git(&repo, &["config", "user.email", "lane@example.com"])
+            .await
+            .unwrap();
+        git(&repo, &["config", "user.name", "lane"]).await.unwrap();
+        tokio::fs::write(repo_path.join("seed.txt"), "seed")
+            .await
+            .unwrap();
+        git(&repo, &["add", "seed.txt"]).await.unwrap();
+        git(&repo, &["commit", "--quiet", "-m", "seed"])
+            .await
+            .unwrap();
+        let base = git(&repo, &["rev-parse", "HEAD"]).await.unwrap();
+        let tree_path = root.join("repo-lanes").join("b15b");
+        tokio::fs::create_dir_all(root.join("repo-lanes"))
+            .await
+            .unwrap();
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "lane/b15b",
+                tree_path.to_str().unwrap(),
+                "HEAD",
+            ],
+        )
+        .await
+        .unwrap();
+        let tree = tokio::fs::canonicalize(&tree_path).await.unwrap();
+        tokio::fs::write(tree.join("lane.txt"), "lane work")
+            .await
+            .unwrap();
+        git(tree.to_str().unwrap(), &["add", "lane.txt"])
+            .await
+            .unwrap();
+        git(tree.to_str().unwrap(), &["commit", "--quiet", "-m", "work"])
+            .await
+            .unwrap();
+        // The control repository moves onto an unrelated history, so its HEAD no longer
+        // contains the commit the lane was started from.
+        git(&repo, &["checkout", "--orphan", "unrelated"])
+            .await
+            .unwrap();
+        git(
+            &repo,
+            &["commit", "--quiet", "--allow-empty", "-m", "unrelated"],
+        )
+        .await
+        .unwrap();
+        let db = crate::storage::Database::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let mut lane = Lane::new(
+            "b15b",
+            "B15b",
+            "lead",
+            tree.to_str().unwrap(),
+            "/tmp/brief",
+            "lane",
+            "file done",
+        );
+        lane.status = "working".into();
+        crate::storage::insert_lane(db.pool(), &lane).await.unwrap();
+        register_owned_worktree(db.pool(), "b15b", &repo_path, &tree)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO lane_usage_context(lane_key,start_commit,purpose) VALUES('b15b',?,'lane_small')",
+        )
+        .bind(&base)
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let note = unmerged_lane_branch(db.pool(), "b15b")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(note.contains("lane/b15b"), "{note}");
+        assert!(note.contains("1 commits"), "{note}");
+        assert!(
+            note.contains(&base.chars().take(12).collect::<String>()),
+            "{note}"
+        );
+        // Only without a recorded base does the moving HEAD become the reference, and it
+        // then counts the abandoned base commit as lane work.
+        sqlx::query("DELETE FROM lane_usage_context WHERE lane_key='b15b'")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let fallback = unmerged_lane_branch(db.pool(), "b15b")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(fallback.contains("2 commits"), "{fallback}");
     }
 }

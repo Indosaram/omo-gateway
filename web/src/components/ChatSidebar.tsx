@@ -32,6 +32,7 @@ import { ModelReloadConfirm } from "@/components/ModelReloadConfirm";
 import { ReasoningPicker } from "@/components/ReasoningPicker";
 import { GatewayClient, type ConnectionState } from "@/lib/gatewayClient";
 import { api, buildWsUrl } from "@/lib/api";
+import { sidecarSessionCreateParams } from "@/lib/chat-sidebar-session-params";
 import { titleFromSessionInfoPayload } from "@/lib/chat-title";
 
 import { cn } from "@/lib/utils";
@@ -79,20 +80,10 @@ interface ChatSidebarProps {
   onSessionTitleChange?: (title: string | null) => void;
 }
 
-/** Build the ``session.create`` params for the sidecar session.
- *
- * Extracted from the effect below so the invariant — close_on_disconnect
- * is set, source is "tool", and the profile is forwarded when present —
- * can be tested without reading component source text. See
- * ``chat-sidebar-session-params.test.ts``.
- */
-export function sidecarSessionCreateParams(profile?: string): Record<string, unknown> {
-  return {
-    close_on_disconnect: true,
-    source: "tool",
-    ...(profile ? { profile } : {}),
-  };
-}
+// The pure ``session.create`` params live in a dependency-free module so they
+// can be tested without this component's UI imports. Re-exported here to keep
+// the component's public surface unchanged.
+export { sidecarSessionCreateParams };
 
 export function ChatSidebar({
   channel,

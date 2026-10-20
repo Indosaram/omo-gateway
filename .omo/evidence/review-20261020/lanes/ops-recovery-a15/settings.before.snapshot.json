@@ -1,0 +1,15 @@
+{
+  "_redacted": "snapshot of the packages field only; all other settings omitted (providers, permission, retry, models, theme)",
+  "_source_sha256": "40d7d255f90f904dd1bfc1b8c38b9923b440d7c48dfc25a0b406da897da27930",
+  "packageCount": 8,
+  "packages": [
+    "git:github.com/code-yeongyu/pi-ast-grep",
+    "git:github.com/code-yeongyu/pi-comment-checker",
+    "git:github.com/code-yeongyu/pi-rules",
+    "git:github.com/code-yeongyu/pi-nested-agents-md",
+    "git:github.com/code-yeongyu/pi-websearch",
+    "git:github.com/code-yeongyu/pi-webfetch",
+    "git:github.com/code-yeongyu/pi-goal",
+    "git:github.com/DevNewbie1826/omo-zcode-oauth"
+  ]
+}

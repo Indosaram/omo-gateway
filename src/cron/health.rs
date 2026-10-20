@@ -286,7 +286,7 @@ async fn record_problem(
 }
 
 fn default_lead() -> Option<String> {
-    lead_from(std::env::var("OMON_LANE_DEFAULT_LEAD").ok().as_deref())
+    lead_from(Some(&crate::runtime_config::default_lead()))
 }
 
 /// Same rule as the rest of the gateway: an unset or blank override means the built-in

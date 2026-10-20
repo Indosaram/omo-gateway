@@ -29,6 +29,23 @@ pub struct AuthInfo {
     pub team: String,
 }
 
+/// One page of `conversations.replies`, with Slack's continuation cursor when more remain.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RepliesPage {
+    pub messages: Vec<Value>,
+    pub next_cursor: Option<String>,
+}
+
+/// One page of `conversations.history`, with Slack's `has_more` flag.
+///
+/// `messages.len() < limit` is not an end-of-history signal either: Slack may answer a full-size
+/// request with a short page. Only `has_more` says whether older messages remain.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HistoryPage {
+    pub messages: Vec<Value>,
+    pub has_more: bool,
+}
+
 /// Slack Web API client. Deliberately not `Debug`: it holds the bot token.
 #[derive(Clone)]
 pub struct SlackApi {
@@ -148,8 +165,26 @@ impl SlackApi {
         latest: Option<&str>,
         limit: u32,
     ) -> Result<Vec<Value>> {
-        let mut body =
-            json!({ "channel": channel, "limit": limit.clamp(1, 200), "inclusive": false });
+        Ok(self
+            .conversations_history_page(channel, oldest, latest, limit)
+            .await?
+            .messages)
+    }
+
+    /// One `conversations.history` page plus Slack's `has_more`.
+    ///
+    /// Callers that walk a channel of unknown length must page with this: a short page does not
+    /// prove there is nothing older, so only `has_more` ends the walk. When Slack omits the flag,
+    /// a full page counts as "may have more", which can only cost one extra request.
+    pub async fn conversations_history_page(
+        &self,
+        channel: &str,
+        oldest: Option<&str>,
+        latest: Option<&str>,
+        limit: u32,
+    ) -> Result<HistoryPage> {
+        let limit = limit.clamp(1, 200);
+        let mut body = json!({ "channel": channel, "limit": limit, "inclusive": false });
         if let Some(oldest) = oldest {
             body["oldest"] = json!(oldest);
         }
@@ -157,7 +192,11 @@ impl SlackApi {
             body["latest"] = json!(latest);
         }
         let mut value = self.call("conversations.history", body).await?;
-        Ok(messages(&mut value))
+        let messages = messages(&mut value);
+        let has_more = value["has_more"]
+            .as_bool()
+            .unwrap_or(messages.len() >= limit as usize);
+        Ok(HistoryPage { messages, has_more })
     }
 
     pub async fn conversations_replies(
@@ -167,13 +206,44 @@ impl SlackApi {
         oldest: Option<&str>,
         limit: u32,
     ) -> Result<Vec<Value>> {
+        Ok(self
+            .conversations_replies_page(channel, thread_ts, None, oldest, limit)
+            .await?
+            .messages)
+    }
+
+    /// One `conversations.replies` page plus Slack's `response_metadata.next_cursor`.
+    ///
+    /// Callers that walk a thread of unknown length must page with this: `messages.len() < limit`
+    /// is not an end-of-thread signal (Slack may answer a full-size request with a short page that
+    /// still has a `next_cursor`), so only the cursor says whether more replies remain.
+    pub async fn conversations_replies_page(
+        &self,
+        channel: &str,
+        thread_ts: &str,
+        cursor: Option<&str>,
+        oldest: Option<&str>,
+        limit: u32,
+    ) -> Result<RepliesPage> {
         let mut body = json!({ "channel": channel, "ts": thread_ts, "limit": limit.clamp(1, 200) });
-        if let Some(oldest) = oldest {
+        if let Some(cursor) = cursor {
+            body["cursor"] = json!(cursor);
+        }
+        // `oldest` is only meaningful on the first request: a cursor already encodes the position.
+        if let Some(oldest) = oldest.filter(|_| cursor.is_none()) {
             body["oldest"] = json!(oldest);
             body["inclusive"] = json!(false);
         }
         let mut value = self.call("conversations.replies", body).await?;
-        Ok(messages(&mut value))
+        let next_cursor = value["response_metadata"]["next_cursor"]
+            .as_str()
+            .map(str::trim)
+            .filter(|cursor| !cursor.is_empty())
+            .map(str::to_owned);
+        Ok(RepliesPage {
+            messages: messages(&mut value),
+            next_cursor,
+        })
     }
 
     pub async fn conversations_members(&self, channel: &str) -> Result<Vec<String>> {

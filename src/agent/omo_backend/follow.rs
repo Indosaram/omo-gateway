@@ -59,6 +59,13 @@ fn agent_message_text(frame: &Value) -> Option<&str> {
         .flatten()
 }
 
+/// True when the frame belongs to the gateway's own turn, which just finished on this thread.
+/// `thread/resume` can replay its terminal frames; its reply already reached the messenger, so
+/// the follower must neither adopt it as an engine-started turn nor deliver it again.
+fn is_gateway_owned_turn(turn: Option<&str>, gateway_turn: Option<&str>) -> bool {
+    matches!((turn, gateway_turn), (Some(turn), Some(own)) if turn == own)
+}
+
 impl OmoBackend {
     /// Stops a session's follower. An engine-started turn already in flight is still
     /// delivered; the follower exits once it completes.
@@ -68,7 +75,12 @@ impl OmoBackend {
         }
     }
 
-    pub(super) fn follow_thread(&self, session: &SessionContext, thread_id: String) {
+    pub(super) fn follow_thread(
+        &self,
+        session: &SessionContext,
+        thread_id: String,
+        gateway_turn: Option<String>,
+    ) {
         let storage_key = session.key.storage_key();
         let generation = FOLLOWER_GENERATION.fetch_add(1, Ordering::Relaxed);
         let token = CancellationToken::new();
@@ -84,7 +96,13 @@ impl OmoBackend {
         tokio::spawn(async move {
             let started = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
             if let Err(error) = backend
-                .run_follower(&mut session, &thread_id, token, started)
+                .run_follower(
+                    &mut session,
+                    &thread_id,
+                    token,
+                    started,
+                    gateway_turn.clone(),
+                )
                 .await
             {
                 tracing::warn!(session = %session.key, %error, "engine-turn follower ended");
@@ -105,6 +123,7 @@ impl OmoBackend {
         thread_id: &str,
         token: CancellationToken,
         started: f64,
+        gateway_turn: Option<String>,
     ) -> Result<()> {
         let deadline = tokio::time::Instant::now() + FOLLOW_WINDOW;
         let setup_deadline = tokio::time::Instant::now() + self.config.request_timeout * 2;
@@ -151,6 +170,14 @@ impl OmoBackend {
             let gateway_turn_running = self.active_turns.lock().contains_key(&storage_key);
             let method = val.get("method").and_then(Value::as_str).unwrap_or("");
 
+            if let Some(reply) = super::user_input_cancellation(&val) {
+                if !gateway_turn_running {
+                    ws.send(reply).await.map_err(|error| {
+                        OmonError::Llm(format!("user input cancellation failed: {error}"))
+                    })?;
+                }
+                continue;
+            }
             if let (Some(req_id), true) = (val.get("id"), is_approval_request(method)) {
                 // A running gateway turn answers its own approvals on its connection.
                 if !gateway_turn_running {
@@ -168,11 +195,19 @@ impl OmoBackend {
                     if gateway_turn_running {
                         return Ok(());
                     }
+                    if is_gateway_owned_turn(turn.as_deref(), gateway_turn.as_deref()) {
+                        // A replay of the gateway turn that just finished: its reply already
+                        // reached the messenger, so this is not an engine-started turn.
+                        continue;
+                    }
                     current = turn;
                     latest_text.clear();
                 }
                 "item/completed" => {
-                    if current.is_none() && !gateway_turn_running {
+                    if current.is_none()
+                        && !gateway_turn_running
+                        && !is_gateway_owned_turn(turn.as_deref(), gateway_turn.as_deref())
+                    {
                         current = turn.clone();
                     }
                     if current.is_some() && turn == current {
@@ -185,6 +220,7 @@ impl OmoBackend {
                     let followed = current.is_some() && turn == current;
                     let fresh_replay = current.is_none()
                         && !gateway_turn_running
+                        && !is_gateway_owned_turn(turn.as_deref(), gateway_turn.as_deref())
                         && val
                             .pointer("/params/turn/completedAt")
                             .and_then(Value::as_f64)
@@ -311,7 +347,19 @@ impl OmoBackend {
 mod tests {
     use serde_json::json;
 
-    use super::final_agent_text;
+    use super::{final_agent_text, is_gateway_owned_turn};
+
+    #[test]
+    fn the_gateways_own_finished_turn_is_never_replayed_as_an_engine_turn() {
+        // given
+        let own = Some("turn-own");
+
+        // when / then
+        assert!(is_gateway_owned_turn(Some("turn-own"), own));
+        assert!(!is_gateway_owned_turn(Some("turn-engine"), own));
+        assert!(!is_gateway_owned_turn(None, own));
+        assert!(!is_gateway_owned_turn(Some("turn-own"), None));
+    }
 
     #[test]
     fn final_agent_text_takes_the_last_agent_message() {

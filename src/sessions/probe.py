@@ -197,9 +197,13 @@ def all_sessions(limit):
 
 def find(target):
     sessions, _ = all_sessions(1)
-    matches = [s for s in sessions if target in (s["session_id"], s["routing_id"], s["name"])]
-    if len(matches) != 1:
-        emit({"ok": False, "error": "session not found" if not matches else "ambiguous session"}, 3)
+    matches = [s for s in sessions if target in (s["session_id"], s["routing_id"])]
+    if not matches:
+        emit({"ok": False, "error": "session not found"}, 3)
+    if len(matches) > 1:
+        # Ambiguous is not "not running": exit 3 would tell the owner the session ended.
+        ids = ", ".join(sorted(s["session_id"] for s in matches))
+        emit({"ok": False, "error": "ambiguous session: %s" % ids}, 5)
     return matches[0]
 
 

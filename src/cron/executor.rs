@@ -637,6 +637,10 @@ fn payload_session_key(payload: &serde_json::Value, job_id: &str) -> SessionKey 
     let deliver = payload
         .get("deliver")
         .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .find(|destination| !destination.is_empty())
         .unwrap_or_default();
     let (platform, channel, thread) =
         if let Some(slack) = super::store::slack_destination(deliver, None) {
@@ -1149,48 +1153,120 @@ pub fn resolve_workspace_instructions(workdir: &Path) -> Option<String> {
     None
 }
 
-/// Collects all descendant process IDs for the given `root` process.
-///
-/// Executes `ps -A -o pid=,ppid=` to capture a snapshot of the process tree.
-/// Parses the output into a parent-to-children map and performs a breadth-first search
-/// starting from `root`.
+/// One process captured in a `ps` snapshot: its pid, the process group it belonged to,
+/// and its start time, which identifies the process instance across PID reuse.
 #[cfg(unix)]
-fn collect_descendant_pids(root: i32) -> Vec<i32> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessEntry {
+    pid: i32,
+    pgid: i32,
+    start: String,
+}
+
+/// The process tree under one root, captured in a single `ps` snapshot.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TreeSnapshot {
+    root: ProcessEntry,
+    descendants: Vec<ProcessEntry>,
+}
+
+/// The signal a validated snapshot entry licenses, in the order they are sent.
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignalTarget {
+    Group(i32),
+    Process(i32),
+}
+
+/// A signal candidate derived from the snapshot, with the evidence needed to authorize it
+/// at the moment it is dispatched.
+#[cfg(unix)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PlannedSignal {
+    /// What to signal.
+    target: SignalTarget,
+    /// The pid whose identity licenses it: the observed group leader for `Group`, the
+    /// process itself for `Process`.
+    witness: i32,
+    /// Start token of `witness` in the snapshot; a different token means a reused pid.
+    witness_start: String,
+}
+
+/// Collapses whitespace so a start-time token reads the same every time `ps` prints it
+/// (macOS pads single-digit days with a second space).
+#[cfg(unix)]
+fn normalize_start_token(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Parses `ps -A -o pid=,ppid=,pgid=,lstart=` output into `(pid, ppid, pgid, start)` rows.
+///
+/// The start time is whatever follows the three numeric columns, normalized, so its
+/// internal spaces are preserved.
+#[cfg(unix)]
+fn parse_process_table(text: &str) -> Vec<(i32, i32, i32, String)> {
+    let mut rows = Vec::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(pid), Some(ppid), Some(pgid)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        let (Ok(pid), Ok(ppid), Ok(pgid)) =
+            (pid.parse::<i32>(), ppid.parse::<i32>(), pgid.parse::<i32>())
+        else {
+            continue;
+        };
+        let start = normalize_start_token(&parts.collect::<Vec<_>>().join(" "));
+        if start.is_empty() {
+            continue;
+        }
+        rows.push((pid, ppid, pgid, start));
+    }
+    rows
+}
+
+/// Collects the process tree under `root` from a single
+/// `ps -A -o pid=,ppid=,pgid=,lstart=` snapshot.
+///
+/// Returns `None` when the snapshot cannot be read or does not contain `root`: without a
+/// snapshot there is no identity to validate a signal against, so callers must fail closed.
+/// Each entry carries the process group and start time observed in the same snapshot, which
+/// is what a later kill is checked against.
+#[cfg(unix)]
+fn collect_process_tree(root: i32) -> Option<TreeSnapshot> {
     if root <= 1 {
-        return Vec::new();
+        return None;
     }
 
     // Try `ps` in PATH first, falling back to `/bin/ps` if standard PATH lookup fails.
     let output = std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,ppid="])
+        .args(["-A", "-o", "pid=,ppid=,pgid=,lstart="])
         .output()
         .or_else(|_| {
             std::process::Command::new("/bin/ps")
-                .args(["-A", "-o", "pid=,ppid="])
+                .args(["-A", "-o", "pid=,ppid=,pgid=,lstart="])
                 .output()
-        });
-
-    let Ok(output) = output else {
-        return Vec::new();
-    };
+        })
+        .ok()?;
 
     if !output.status.success() {
-        return Vec::new();
+        return None;
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    let rows = parse_process_table(&stdout);
     let mut parent_to_children: std::collections::HashMap<i32, Vec<i32>> =
         std::collections::HashMap::new();
+    let mut entries: std::collections::HashMap<i32, ProcessEntry> =
+        std::collections::HashMap::new();
 
-    for line in stdout.lines() {
-        let mut parts = line.split_whitespace();
-        if let (Some(pid_str), Some(ppid_str)) = (parts.next(), parts.next()) {
-            if let (Ok(pid), Ok(ppid)) = (pid_str.parse::<i32>(), ppid_str.parse::<i32>()) {
-                parent_to_children.entry(ppid).or_default().push(pid);
-            }
-        }
+    for (pid, ppid, pgid, start) in rows {
+        parent_to_children.entry(ppid).or_default().push(pid);
+        entries.insert(pid, ProcessEntry { pid, pgid, start });
     }
 
+    let root_entry = entries.get(&root)?.clone();
     let mut descendants = Vec::new();
     let mut queue = std::collections::VecDeque::new();
     let mut visited = std::collections::HashSet::new();
@@ -1202,14 +1278,156 @@ fn collect_descendant_pids(root: i32) -> Vec<i32> {
         if let Some(children) = parent_to_children.get(&parent) {
             for &child in children {
                 if visited.insert(child) {
-                    descendants.push(child);
+                    if let Some(entry) = entries.get(&child) {
+                        descendants.push(entry.clone());
+                    }
                     queue.push_back(child);
                 }
             }
         }
     }
 
-    descendants
+    Some(TreeSnapshot {
+        root: root_entry,
+        descendants,
+    })
+}
+
+/// Reads the current start-time token for `pid`, or `None` when the process is gone or
+/// cannot be inspected.
+#[cfg(unix)]
+fn process_start_token(pid: i32) -> Option<String> {
+    if pid <= 1 {
+        return None;
+    }
+    let pid_arg = pid.to_string();
+    let output = std::process::Command::new("ps")
+        .args(["-p", &pid_arg, "-o", "lstart="])
+        .output()
+        .or_else(|_| {
+            std::process::Command::new("/bin/ps")
+                .args(["-p", &pid_arg, "-o", "lstart="])
+                .output()
+        })
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let token = normalize_start_token(&String::from_utf8_lossy(&output.stdout));
+    (!token.is_empty()).then_some(token)
+}
+
+/// The process group a snapshot entry licenses a group kill for, or `None`.
+///
+/// The init group and any unknown group (`<= 1`) are never signalled, and neither is the
+/// gateway's own group (`own_pgid`) nor a group already covered by another entry
+/// (`skip_pgid`).
+#[cfg(unix)]
+fn signalable_group(pgid: i32, own_pgid: i32, skip_pgid: Option<i32>) -> Option<i32> {
+    (pgid > 1 && pgid != own_pgid && skip_pgid != Some(pgid)).then_some(pgid)
+}
+
+/// Builds the signal candidates a snapshot licenses, in dispatch order: descendants
+/// leaves-first, then the root.
+///
+/// This only applies the static policy — never the init/unknown groups (`<= 1`), never the
+/// gateway's own group (`own_pgid`), and the root's group at most once — and does not read
+/// any live process state. Whether a candidate is still safe to send is decided per signal
+/// by [`authorize`] immediately before it is sent.
+#[cfg(unix)]
+fn signal_plan(snapshot: Option<&TreeSnapshot>, own_pgid: i32) -> Vec<PlannedSignal> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+    let mut plan = Vec::new();
+    for entry in snapshot.descendants.iter().rev() {
+        if let Some(pgid) = signalable_group(entry.pgid, own_pgid, Some(snapshot.root.pgid)) {
+            plan.push(PlannedSignal {
+                target: SignalTarget::Group(pgid),
+                witness: entry.pid,
+                witness_start: entry.start.clone(),
+            });
+        }
+        plan.push(PlannedSignal {
+            target: SignalTarget::Process(entry.pid),
+            witness: entry.pid,
+            witness_start: entry.start.clone(),
+        });
+    }
+    if let Some(pgid) = signalable_group(snapshot.root.pgid, own_pgid, None) {
+        plan.push(PlannedSignal {
+            target: SignalTarget::Group(pgid),
+            witness: snapshot.root.pid,
+            witness_start: snapshot.root.start.clone(),
+        });
+    }
+    plan.push(PlannedSignal {
+        target: SignalTarget::Process(snapshot.root.pid),
+        witness: snapshot.root.pid,
+        witness_start: snapshot.root.start.clone(),
+    });
+    plan
+}
+
+/// Authorizes one candidate against live process state, immediately before it is sent.
+///
+/// A signal is sent only when the witness pid still carries the snapshot's start token. A
+/// group signal additionally requires that the witness is *still* in the group recorded in
+/// the snapshot (`group_of`), because a process can change groups without its start time
+/// changing — the snapshot's group id alone is not proof the group is still ours. The
+/// init/unknown groups and the gateway's own group are refused here as well, since the
+/// caller's group could not have been known when the snapshot was taken.
+#[cfg(unix)]
+fn authorize(
+    planned: &PlannedSignal,
+    own_pgid: i32,
+    start_of: &dyn Fn(i32) -> Option<String>,
+    group_of: &dyn Fn(i32) -> Option<i32>,
+) -> Option<SignalTarget> {
+    let start = start_of(planned.witness)?;
+    if start != planned.witness_start {
+        return None;
+    }
+    match planned.target {
+        SignalTarget::Group(pgid) => {
+            // A process can call setpgid without its start token changing, so the snapshot's
+            // group id is only trustworthy while the witness still reports it.
+            if group_of(planned.witness)? != pgid {
+                return None;
+            }
+            signalable_group(pgid, own_pgid, None).map(SignalTarget::Group)
+        }
+        SignalTarget::Process(pid) => (pid > 1).then_some(SignalTarget::Process(pid)),
+    }
+}
+
+/// Walks the snapshot's candidates and hands each one to `send` only after [`authorize`]
+/// revalidated it, so every signal is checked against live state at dispatch time rather
+/// than once up front.
+#[cfg(unix)]
+fn dispatch_signals(
+    snapshot: &TreeSnapshot,
+    own_pgid: i32,
+    start_of: &dyn Fn(i32) -> Option<String>,
+    group_of: &dyn Fn(i32) -> Option<i32>,
+    mut send: impl FnMut(SignalTarget),
+) {
+    for planned in signal_plan(Some(snapshot), own_pgid) {
+        if let Some(target) = authorize(&planned, own_pgid, start_of, group_of) {
+            send(target);
+        }
+    }
+}
+
+/// The current process group of `pid`, or `None` when it is gone or unreadable.
+#[cfg(unix)]
+fn current_process_group(pid: i32) -> Option<i32> {
+    if pid <= 1 {
+        return None;
+    }
+    // SAFETY: libc::getpgid takes a process ID by value and reports failure with -1.
+    let pgid = unsafe { libc::getpgid(pid) };
+    (pgid > 1).then_some(pgid)
 }
 
 /// Kills the entire process tree rooted at `root_pid`, including descendants that moved
@@ -1220,49 +1438,56 @@ fn collect_descendant_pids(root: i32) -> Vec<i32> {
 /// killed bash, but `omo` survived 22 more minutes in its own process group, leaving orphaned
 /// state.
 ///
-/// Root fix: Snapshot the parent->child tree first via `ps -A -o pid=,ppid=`, SIGKILL each
-/// descendant and its process group BEFORE killing the root. This guarantees descendants are
-/// not reparented to init/launchd before their PIDs are discovered and signaled.
+/// Root fix: Snapshot the parent->child tree first via
+/// `ps -A -o pid=,ppid=,pgid=,lstart=`, then signal each descendant and its process group
+/// BEFORE the root, so descendants are not reparented to init/launchd before their PIDs are
+/// discovered.
+///
+/// Every signal is revalidated immediately before it is sent: the witness pid must still
+/// carry the snapshot's start time, and a group signal additionally requires the witness to
+/// still be in the snapshot's group (checked with `getpgid`), since a process can change
+/// groups without its start time changing. The gateway's own process group and the
+/// init/unknown groups are never signalled, and when no snapshot can be read nothing is
+/// signalled at all.
+///
+/// This is race *protection*, not a guarantee: the window is narrowed to the gap between
+/// each revalidation and its `kill`, which cannot be made atomic here, and processes the
+/// tree spawns after the snapshot are not covered.
 #[cfg(unix)]
 pub fn kill_process_tree(root_pid: u32) {
     if root_pid <= 1 {
         return;
     }
     let root = root_pid as i32;
-    let descendants = collect_descendant_pids(root);
+    // SAFETY: libc::getpgrp takes no arguments and returns the caller's process group.
+    let own_pgid = unsafe { libc::getpgrp() };
+    let Some(snapshot) = collect_process_tree(root) else {
+        tracing::warn!(
+            root_pid,
+            "no process tree snapshot; refusing to signal any process for this root"
+        );
+        return;
+    };
 
-    // Kill descendants leaves-first, signaling both individual PID and any process group
-    // headed by the descendant (or reported via getpgid) before touching the root.
-    for &pid in descendants.iter().rev() {
-        if pid > 1 {
-            // SAFETY: libc::getpgid takes a process ID by value.
-            let pgid = unsafe { libc::getpgid(pid) };
-            if pgid > 1 && pgid != root {
-                // SAFETY: libc::kill with negative pid signals the process group whose pgid equals `pgid`.
-                unsafe {
-                    libc::kill(-pgid, libc::SIGKILL);
-                }
-            }
-            // SAFETY: libc::kill accepts process ID and signal number by value.
-            // When subshells or background jobs run with job control enabled (e.g. bash `set -m`),
-            // the job leader's pid becomes its process group id, so signaling -pid terminates the group.
-            // Signaling positive pid terminates the individual process.
-            unsafe {
-                if pid != root {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
+    // Each target is authorized against live state right before it is sent.
+    dispatch_signals(
+        &snapshot,
+        own_pgid,
+        &process_start_token,
+        &current_process_group,
+        |target| match target {
+            // SAFETY: libc::kill with negative pid signals the process group whose pgid
+            // equals `pgid`; `authorize` just confirmed the witness is still in that group.
+            SignalTarget::Group(pgid) => unsafe {
+                libc::kill(-pgid, libc::SIGKILL);
+            },
+            // SAFETY: libc::kill accepts a process ID and signal number by value;
+            // `authorize` just confirmed the pid still carries the snapshot's start time.
+            SignalTarget::Process(pid) => unsafe {
                 libc::kill(pid, libc::SIGKILL);
-            }
-        }
-    }
-
-    // Finally kill the root process group and the root process itself.
-    // SAFETY: libc::kill accepts process ID and signal number by value.
-    // -root signals the root's process group; root signals the root process itself.
-    unsafe {
-        libc::kill(-root, libc::SIGKILL);
-        libc::kill(root, libc::SIGKILL);
-    }
+            },
+        },
+    );
 }
 
 #[cfg(not(unix))]
@@ -1271,8 +1496,223 @@ pub fn kill_process_tree(_root_pid: u32) {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
+mod process_tree_tests {
+    use super::{
+        dispatch_signals, parse_process_table, signal_plan, ProcessEntry, SignalTarget,
+        TreeSnapshot,
+    };
+    use std::collections::HashMap;
+
+    const ROOT: i32 = 100;
+    const ROOT_START: &str = "Tue Oct 20 15:35:47 2026";
+    const OWN_PGID: i32 = 7;
+
+    fn entry(pid: i32, pgid: i32, start: &str) -> ProcessEntry {
+        ProcessEntry {
+            pid,
+            pgid,
+            start: start.to_owned(),
+        }
+    }
+
+    fn snapshot(root_pgid: i32, descendants: Vec<ProcessEntry>) -> TreeSnapshot {
+        TreeSnapshot {
+            root: entry(ROOT, root_pgid, ROOT_START),
+            descendants,
+        }
+    }
+
+    /// A `start_of` lookup over `(pid, start)` pairs; pids absent from the map are gone.
+    fn starts(pairs: &[(i32, &str)]) -> impl Fn(i32) -> Option<String> {
+        let map: HashMap<i32, String> = pairs
+            .iter()
+            .map(|(pid, start)| (*pid, (*start).to_owned()))
+            .collect();
+        move |pid| map.get(&pid).cloned()
+    }
+
+    /// A `group_of` lookup over `(pid, pgid)` pairs; pids absent from the map are gone.
+    fn groups(pairs: &[(i32, i32)]) -> impl Fn(i32) -> Option<i32> {
+        let map: HashMap<i32, i32> = pairs.iter().copied().collect();
+        move |pid| map.get(&pid).copied()
+    }
+
+    fn targets(plan: &[super::PlannedSignal]) -> Vec<SignalTarget> {
+        plan.iter().map(|planned| planned.target).collect()
+    }
+
+    // --- pure plan shape (no live process state) ---
+
+    #[test]
+    fn missing_snapshot_yields_no_candidates() {
+        assert!(signal_plan(None, OWN_PGID).is_empty());
+    }
+
+    #[test]
+    fn own_group_and_init_are_never_group_candidates() {
+        // Root and descendant both live in the gateway's own group: a group kill would hit
+        // the gateway itself, so only the individual processes are planned.
+        let snap = snapshot(OWN_PGID, vec![entry(200, OWN_PGID, "start-b")]);
+        assert_eq!(
+            targets(&signal_plan(Some(&snap), OWN_PGID)),
+            vec![SignalTarget::Process(200), SignalTarget::Process(ROOT)]
+        );
+
+        // The init group is never planned either.
+        let init_group = snapshot(1, Vec::new());
+        assert_eq!(
+            targets(&signal_plan(Some(&init_group), OWN_PGID)),
+            vec![SignalTarget::Process(ROOT)]
+        );
+    }
+
+    #[test]
+    fn candidates_are_leaves_first_with_the_root_group_once() {
+        let snap = snapshot(
+            ROOT,
+            vec![entry(200, ROOT, "start-b"), entry(300, 300, "start-c")],
+        );
+        assert_eq!(
+            targets(&signal_plan(Some(&snap), OWN_PGID)),
+            vec![
+                SignalTarget::Group(300),
+                SignalTarget::Process(300),
+                // 200 sits in the root's group, so only its process is planned here.
+                SignalTarget::Process(200),
+                SignalTarget::Group(ROOT),
+                SignalTarget::Process(ROOT),
+            ]
+        );
+    }
+
+    // --- dispatch-time enforcement (this is what kill_process_tree runs) ---
+
+    fn dispatched(
+        snap: &TreeSnapshot,
+        start_of: &dyn Fn(i32) -> Option<String>,
+        group_of: &dyn Fn(i32) -> Option<i32>,
+    ) -> Vec<SignalTarget> {
+        let mut sent = Vec::new();
+        dispatch_signals(snap, OWN_PGID, start_of, group_of, |target| {
+            sent.push(target)
+        });
+        sent
+    }
+
+    #[test]
+    fn reused_descendant_pid_is_skipped_even_when_it_leads_the_same_group_id() {
+        // The reused PID is a new group leader (pgid == pid), so a group comparison alone
+        // would accept it; the start token no longer matches.
+        let snap = snapshot(ROOT, vec![entry(4242, 4242, "Mon Jan 1 00:00:01 2024")]);
+        let sent = dispatched(
+            &snap,
+            &starts(&[(ROOT, ROOT_START), (4242, "Wed Oct 21 09:00:00 2026")]),
+            &groups(&[(ROOT, ROOT), (4242, 4242)]),
+        );
+        assert_eq!(
+            sent,
+            vec![SignalTarget::Group(ROOT), SignalTarget::Process(ROOT)]
+        );
+    }
+
+    #[test]
+    fn group_changed_after_the_snapshot_blocks_only_the_group_signal() {
+        // Same process (start token matches) that has since left its snapshot group: the
+        // group kill would hit whoever owns that group id now, so only the process is hit.
+        let snap = snapshot(ROOT, vec![entry(200, 200, "start-b")]);
+        let sent = dispatched(
+            &snap,
+            &starts(&[(ROOT, ROOT_START), (200, "start-b")]),
+            &groups(&[(ROOT, ROOT), (200, 900)]),
+        );
+        assert_eq!(
+            sent,
+            vec![
+                SignalTarget::Process(200),
+                SignalTarget::Group(ROOT),
+                SignalTarget::Process(ROOT),
+            ],
+            "a stale snapshot pgid must not be signalled as a group"
+        );
+    }
+
+    #[test]
+    fn reused_root_pid_is_not_signalled() {
+        let snap = snapshot(ROOT, Vec::new());
+        let sent = dispatched(
+            &snap,
+            &starts(&[(ROOT, "Wed Oct 21 09:00:00 2026")]),
+            &groups(&[(ROOT, ROOT)]),
+        );
+        assert!(
+            sent.is_empty(),
+            "a reused root must not be killed: {sent:?}"
+        );
+    }
+
+    #[test]
+    fn vanished_processes_are_skipped() {
+        let snap = snapshot(ROOT, vec![entry(200, 200, "start-b")]);
+        let sent = dispatched(
+            &snap,
+            &starts(&[(ROOT, ROOT_START)]),
+            &groups(&[(ROOT, ROOT)]),
+        );
+        assert_eq!(
+            sent,
+            vec![SignalTarget::Group(ROOT), SignalTarget::Process(ROOT)]
+        );
+    }
+
+    #[test]
+    fn the_gateway_group_is_refused_at_dispatch_too() {
+        // The snapshot put the root in group 500, but by dispatch time that pid reports the
+        // gateway's own group: the group signal must be refused, not just the process one.
+        let snap = snapshot(500, Vec::new());
+        let sent = dispatched(
+            &snap,
+            &starts(&[(ROOT, ROOT_START)]),
+            &groups(&[(ROOT, OWN_PGID)]),
+        );
+        assert_eq!(sent, vec![SignalTarget::Process(ROOT)]);
+    }
+
+    #[test]
+    fn unreadable_group_state_skips_the_group_signal() {
+        let snap = snapshot(ROOT, Vec::new());
+        let sent = dispatched(&snap, &starts(&[(ROOT, ROOT_START)]), &groups(&[]));
+        assert_eq!(sent, vec![SignalTarget::Process(ROOT)]);
+    }
+
+    #[test]
+    fn process_table_keeps_the_start_time_after_three_numeric_columns() {
+        // macOS pads single-digit days, so the token is normalized before comparison.
+        let table = "  100     1   100 Tue Oct 20 15:35:47 2026\n  200   100   200 Thu Jan  1 09:00:09 1970\n\ngarbage\n";
+        assert_eq!(
+            parse_process_table(table),
+            vec![
+                (100, 1, 100, ROOT_START.to_owned()),
+                (200, 100, 200, "Thu Jan 1 09:00:09 1970".to_owned()),
+            ]
+        );
+    }
+}
+
+#[cfg(test)]
 mod slack_session_tests {
     use super::payload_session_key;
+
+    #[test]
+    fn multiple_destinations_use_only_first_session() {
+        let key = payload_session_key(
+            &serde_json::json!({"deliver": " slack:C1 ,discord:42"}),
+            "job",
+        );
+        assert_eq!(key.platform, "slack");
+        assert_eq!(key.channel_id, "C1");
+        assert_eq!(key.thread_id, None);
+    }
 
     #[test]
     fn payload_session_platform_follows_the_deliver_prefix() {

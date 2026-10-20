@@ -20,7 +20,7 @@ const TAB_LABELS: Record<IssueTab, string> = {
   triage: 'Triage',
 }
 
-/** omo sessions mirror into the system team SES; its states are live session states, so a board reads best. */
+/** omo sessions mirror into the system team; its states are live session states, so a board reads best. */
 const SESSIONS_DISPLAY: Partial<ViewDisplay> = { layout: 'board', grouping: 'status', show_empty_groups: true }
 
 export function TeamIssuesPage({ teamKey, tab }: { teamKey: string; tab: IssueTab }) {
@@ -49,7 +49,11 @@ export function TeamIssuesPage({ teamKey, tab }: { teamKey: string; tab: IssueTa
       viewKey={`team:${teamKey}:${tab}`}
       teamId={team.id}
       stateTypes={types}
-      defaultDisplay={teamKey === 'SES' ? SESSIONS_DISPLAY : tab === 'backlog' ? { show_empty_groups: false } : undefined}
+      defaultDisplay={
+        // Match the resolved system team by id: its key is only a label and may be SES,
+        // SES1..SES99 or a later candidate, while a user team may own any of those keys.
+        team.id === t.sessionsTeam?.id ? SESSIONS_DISPLAY : tab === 'backlog' ? { show_empty_groups: false } : undefined
+      }
       renderHeader={(toolbar) => (
         <PageHeader
           crumbs={[{ label: team.name, icon: <TeamIcon color={team.color} name={team.name} size={16} />, href: `/team/${team.key}/all` }]}

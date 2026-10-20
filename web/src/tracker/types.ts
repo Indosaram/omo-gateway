@@ -154,6 +154,8 @@ export interface Issue {
   archived_at: string | null
   snoozed_until: string | null
   label_ids: ID[]
+  /** Users subscribed to this issue; the server sends it on every issue payload. */
+  subscriber_ids: ID[]
   sub_issue_count: number
   sub_issue_completed: number
   comment_count: number

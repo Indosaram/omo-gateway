@@ -168,9 +168,7 @@ impl Kibitzer {
             judge_model_present = std::env::var_os("TYPESAFE_MODEL").is_some(),
             "kibitzer configured"
         );
-        let lead = SessionKey::from_storage_key(
-            &std::env::var("OMON_LANE_DEFAULT_LEAD").unwrap_or_else(|_| DEFAULT_LEAD.into()),
-        )?;
+        let lead = SessionKey::from_storage_key(&crate::runtime_config::default_lead())?;
         let capture = Arc::new(Capture::default());
         let mut config = OmoBackendConfig::from_env()?;
         let model = model_for_purpose(ModelPurpose::Kibitzer);

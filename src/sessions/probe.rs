@@ -5,7 +5,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::control::{self, Target};
+use super::control::{self, ControlError, Target};
 use super::registry::{CommandRunner, ProcessCommandRunner};
 
 pub const PROBE_PY: &str = include_str!("probe.py");
@@ -93,7 +93,10 @@ impl<R: CommandRunner + 'static> Probe<R> {
         Self { runner }
     }
 
-    pub fn argv(machine: &str, args: &[String]) -> Vec<String> {
+    /// Local argv only when the machine *is* `local`. A remote host whose name does not
+    /// parse as a `Target` is an error: running the probe locally would report this
+    /// machine's sessions under the remote label.
+    pub fn argv(machine: &str, args: &[String]) -> Result<Vec<String>, ProbeError> {
         let b64_code = base64::engine::general_purpose::STANDARD.encode(PROBE_PY.as_bytes());
         let mut inner_words = vec![
             "python3".to_owned(),
@@ -103,11 +106,13 @@ impl<R: CommandRunner + 'static> Probe<R> {
         ];
         inner_words.extend(args.iter().cloned());
 
-        let target_str = format!("{machine}:session");
-        match target_str.parse::<Target>() {
-            Ok(target) => control::transport_argv(&target, &inner_words),
-            Err(_) => inner_words,
+        if machine == "local" {
+            return Ok(inner_words);
         }
+        let target = format!("{machine}:session")
+            .parse::<Target>()
+            .map_err(|_| ProbeError::Transport(format!("invalid machine name {machine:?}")))?;
+        Ok(control::transport_argv(&target, &inner_words))
     }
 
     pub async fn snapshot(
@@ -116,7 +121,7 @@ impl<R: CommandRunner + 'static> Probe<R> {
         text_limit: usize,
     ) -> Result<MachineSnapshot, ProbeError> {
         let args = vec!["snapshot".to_owned(), text_limit.to_string()];
-        let argv = Self::argv(machine, &args);
+        let argv = Self::argv(machine, &args)?;
 
         let output = tokio::time::timeout(PROBE_TIMEOUT, self.runner.run("local", &argv))
             .await
@@ -171,7 +176,7 @@ impl<R: CommandRunner + 'static> Probe<R> {
 
     pub async fn interrupt(&self, machine: &str, session: &str) -> Result<(), ProbeError> {
         let args = vec!["interrupt".to_owned(), session.to_owned()];
-        let argv = Self::argv(machine, &args);
+        let argv = Self::argv(machine, &args)?;
 
         let output = tokio::time::timeout(PROBE_TIMEOUT, self.runner.run("local", &argv))
             .await
@@ -216,7 +221,7 @@ impl<R: CommandRunner + 'static> Probe<R> {
         if let Some(c) = comment {
             args.push(c.to_owned());
         }
-        let argv = Self::argv(machine, &args);
+        let argv = Self::argv(machine, &args)?;
 
         let output = tokio::time::timeout(PROBE_TIMEOUT, self.runner.run("local", &argv))
             .await
@@ -245,8 +250,27 @@ impl<R: CommandRunner + 'static> Probe<R> {
     }
 }
 
-pub fn answers_for(question: &PendingQuestion, text: &str) -> serde_json::Value {
+/// One text answers one question. A request that asks several questions at once cannot be
+/// answered from a single reply: the text would land as free-form input on every question
+/// whose options do not list it, which is not what the owner typed.
+pub fn answers_for(
+    question: &PendingQuestion,
+    text: &str,
+) -> Result<serde_json::Value, ControlError> {
     let trimmed = text.trim();
+    if question.questions.len() > 1 {
+        let ids = question
+            .questions
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ControlError::Ambiguous(format!(
+            "request {} asks {} questions ({ids}); answer it at the terminal",
+            question.request_id,
+            question.questions.len()
+        )));
+    }
     let mut map = serde_json::Map::new();
 
     for item in &question.questions {
@@ -264,7 +288,7 @@ pub fn answers_for(question: &PendingQuestion, text: &str) -> serde_json::Value 
         map.insert(item.id.clone(), val);
     }
 
-    serde_json::Value::Object(map)
+    Ok(serde_json::Value::Object(map))
 }
 
 #[cfg(test)]
@@ -306,7 +330,8 @@ mod tests {
     #[test]
     fn test_argv_local_and_remote() {
         let local_argv =
-            Probe::<ProcessCommandRunner>::argv("local", &["snapshot".into(), "300".into()]);
+            Probe::<ProcessCommandRunner>::argv("local", &["snapshot".into(), "300".into()])
+                .expect("local argv");
         assert_eq!(local_argv[0], "python3");
         assert_eq!(local_argv[1], "-c");
         assert_eq!(
@@ -318,7 +343,8 @@ mod tests {
         assert_eq!(local_argv[5], "300");
 
         let remote_argv =
-            Probe::<ProcessCommandRunner>::argv("omarchy", &["snapshot".into(), "300".into()]);
+            Probe::<ProcessCommandRunner>::argv("omarchy", &["snapshot".into(), "300".into()])
+                .expect("remote argv");
         assert_eq!(remote_argv[0], "ssh");
         assert_eq!(remote_argv[1], "-o");
         assert_eq!(remote_argv[2], "BatchMode=yes");
@@ -409,6 +435,19 @@ mod tests {
         assert!(matches!(err, ProbeError::Timeout), "{err:?}");
     }
 
+    #[test]
+    fn unparsable_machine_is_an_error_not_a_local_run() {
+        // `valid_host` accepts names a `Target` rejects; those must never run the probe
+        // on this machine and report local sessions under the remote label.
+        let argv = Probe::<ProcessCommandRunner>::argv("box+1", &["snapshot".into()]);
+        match argv {
+            Err(ProbeError::Transport(message)) => {
+                assert!(message.contains("box+1"), "{message}");
+            }
+            other => panic!("expected a transport error, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn remote_probe_runs_ssh_argv_locally_once() {
         let runner = Arc::new(FakeRunner::new(vec![Ok(CommandOutput {
@@ -430,6 +469,33 @@ mod tests {
     fn test_answers_for_mapping() {
         let pq = PendingQuestion {
             request_id: "req-1".into(),
+            questions: vec![QuestionItem {
+                id: "q1".into(),
+                header: Some("Approval".into()),
+                question: Some("Proceed?".into()),
+                options: vec!["Yes".into(), "No".into()],
+            }],
+        };
+
+        let ans_match = answers_for(&pq, "Yes").expect("single question answers");
+        let obj = ans_match.as_object().expect("object");
+        assert_eq!(
+            obj.get("q1").unwrap(),
+            &serde_json::json!({ "selected": ["Yes"] })
+        );
+
+        let ans_custom = answers_for(&pq, "Maybe later").expect("single question answers");
+        let obj2 = ans_custom.as_object().expect("object");
+        assert_eq!(
+            obj2.get("q1").unwrap(),
+            &serde_json::json!({ "selected": [], "text": "Maybe later" })
+        );
+    }
+
+    #[test]
+    fn multi_question_request_is_rejected_instead_of_repeating_one_answer() {
+        let pq = PendingQuestion {
+            request_id: "req-2".into(),
             questions: vec![
                 QuestionItem {
                     id: "q1".into(),
@@ -446,26 +512,12 @@ mod tests {
             ],
         };
 
-        let ans_match = answers_for(&pq, "Yes");
-        let obj = ans_match.as_object().expect("object");
-        assert_eq!(
-            obj.get("q1").unwrap(),
-            &serde_json::json!({ "selected": ["Yes"] })
-        );
-        assert_eq!(
-            obj.get("q2").unwrap(),
-            &serde_json::json!({ "selected": [], "text": "Yes" })
-        );
-
-        let ans_custom = answers_for(&pq, "Maybe later");
-        let obj2 = ans_custom.as_object().expect("object");
-        assert_eq!(
-            obj2.get("q1").unwrap(),
-            &serde_json::json!({ "selected": [], "text": "Maybe later" })
-        );
-        assert_eq!(
-            obj2.get("q2").unwrap(),
-            &serde_json::json!({ "selected": [], "text": "Maybe later" })
-        );
+        match answers_for(&pq, "Yes") {
+            Err(ControlError::Ambiguous(message)) => {
+                assert!(message.contains("req-2"), "{message}");
+                assert!(message.contains("q1, q2"), "{message}");
+            }
+            other => panic!("expected an ambiguous error, got {other:?}"),
+        }
     }
 }

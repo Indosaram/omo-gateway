@@ -47,12 +47,44 @@ pub enum AutonomyCommand {
     Revoke {
         precedent_id: i64,
     },
+    /// Record what happened to an action-loop item (`inbox:<id>`, `github:<id>`, ...).
+    /// `executed` is the lead's own report of the action plus the reference of the result it
+    /// produced; the item is not done yet. `verified` is the only "done", and it is not taken on
+    /// trust: the gateway reads the event back itself with `<calendar cmd> cal get <event id>`
+    /// (`OMON_ACTION_LOOP_CALENDAR_CMD`, default `zele`, 30s bound), requires the parsed `id` to
+    /// match and the parsed `description` to carry the item key as a whole token. So put the item
+    /// key in the event description when creating it. A result this gateway cannot read back
+    /// (a pull request, a message) cannot be verified.
+    Outcome {
+        item_key: String,
+        #[arg(long)]
+        status: String,
+        #[arg(long)]
+        external_id: Option<String>,
+        #[arg(long)]
+        detail: Option<String>,
+    },
+    /// Adopt an item delivered **before** `action_loop_outcomes` existed: it has a seen mark but
+    /// can never own an outcome row, so it would stay invisible to reconciliation forever.
+    ///
+    /// Not a backfill and never automatic. The item must already be a bot/owner `inbox_decisions`
+    /// row with an `action_loop_seen` mark and no outcome row, and `--external-id` must pass the
+    /// same exact provider readback as `verified`: the event must exist and carry this item key as
+    /// its own token. The row is written as `executed` with `legacy-reconcile:` provenance — never
+    /// `verified` — and the seen mark is kept, so the item can never be re-emitted.
+    Adopt {
+        item_key: String,
+        #[arg(long)]
+        external_id: String,
+        #[arg(long)]
+        detail: Option<String>,
+    },
 }
 
 pub fn is_owner_invocation_env() -> bool {
-    // Every command an engine turn runs carries PI_SESSION_ID: a model may never decide or
-    // revoke its own proposals, whatever session it runs in. The owner decides in Slack,
-    // Discord, the dashboard or a plain terminal.
+    // Every command an engine turn runs carries PI_SESSION_ID: a model may never decide, revoke or
+    // adopt on its own, whatever session it runs in. The owner decides in Slack, Discord, the
+    // dashboard or a plain terminal.
     if std::env::var("PI_SESSION_ID").is_ok_and(|id| !id.trim().is_empty()) {
         return false;
     }
@@ -170,6 +202,80 @@ pub async fn run_cli(args: AutonomyArgs) -> i32 {
             {
                 Ok(updated) => {
                     println!("{}", serde_json::to_string(&updated).unwrap_or_default());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    1
+                }
+            }
+        }
+        AutonomyCommand::Outcome {
+            item_key,
+            status,
+            external_id,
+            detail,
+        } => {
+            let pool = match connect_cli_pool().await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return 1;
+                }
+            };
+            match action_loop::record_outcome(
+                &pool,
+                &item_key,
+                action_loop::OutcomeReport::new(&status)
+                    .external_id(external_id.as_deref())
+                    .detail(detail.as_deref()),
+                chrono::Utc::now(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    println!("recorded {item_key} {status}");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    1
+                }
+            }
+        }
+        AutonomyCommand::Adopt {
+            item_key,
+            external_id,
+            detail,
+        } => {
+            // Adoption is an explicit historical mapping of one already-delivered item, not
+            // automated event processing, so it is an owner decision: an engine turn (any session
+            // carrying PI_SESSION_ID), a cron job or a lane may never run it, whatever lead it
+            // belongs to. The owner runs it from a terminal or an owner-origin session.
+            if !is_owner_invocation_env() {
+                eprintln!(
+                    "error: only an owner-origin session or local CLI may adopt a historical action-loop item"
+                );
+                return 2;
+            }
+            let pool = match connect_cli_pool().await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return 1;
+                }
+            };
+            match action_loop::adopt_legacy_item(
+                &pool,
+                &item_key,
+                &external_id,
+                detail.as_deref(),
+                chrono::Utc::now(),
+            )
+            .await
+            {
+                Ok(()) => {
+                    println!("adopted {item_key} executed external_id={external_id}");
                     0
                 }
                 Err(e) => {

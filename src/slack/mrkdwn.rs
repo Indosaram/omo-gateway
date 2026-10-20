@@ -103,6 +103,13 @@ pub fn bound_chunks(mut chunks: Vec<String>, max_messages: usize, limit: usize) 
             while end > 0 && !last.is_char_boundary(end) {
                 end -= 1;
             }
+            // Never leave half of an escaped `&amp;` / `&lt;` / `&gt;` before the notice.
+            if let Some(amp) = last[..end]
+                .rfind('&')
+                .filter(|&amp| end - amp < 5 && !last[amp..end].contains(';'))
+            {
+                end = amp;
+            }
             last.truncate(end);
         }
         if last.split('\n').filter(|line| is_fence(line)).count() % 2 == 1 {
@@ -472,6 +479,17 @@ mod tests {
             bound_chunks(chunks[..3].to_vec(), MAX_MESSAGES, 100),
             chunks[..3]
         );
+    }
+
+    #[test]
+    fn bound_chunks_never_splits_an_html_entity() {
+        let budget = 100 - (TRUNCATION_NOTICE.len() + FENCE_CLOSE.len());
+        for offset in 1..5 {
+            let text = format!("{}&amp;{}", "x".repeat(budget - offset), "y".repeat(50));
+            let bounded = bound_chunks(vec![text, "b".to_owned()], 1, 100);
+            let body = bounded[0].trim_end_matches(TRUNCATION_NOTICE);
+            assert_eq!(body, "x".repeat(budget - offset), "offset {offset}");
+        }
     }
 
     #[test]

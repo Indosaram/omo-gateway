@@ -48,14 +48,27 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
   })
   if (response.status === 204) return undefined as T
   const text = await response.text()
-  const payload = text ? JSON.parse(text) : null
+  // Error responses are not always JSON (plain-text 403 from the host/origin guard, Axum body
+  // rejections, proxy 502 HTML). Parsing must not throw before the status check, so the caller
+  // still sees the status and the server's own text.
+  let payload: (T & { error?: string; code?: string | null }) | null = null
+  let parseError: unknown = null
+  if (text) {
+    try {
+      payload = JSON.parse(text) as T & { error?: string; code?: string | null }
+    } catch (err) {
+      parseError = err
+    }
+  }
   if (!response.ok) {
+    const bodyText = parseError ? text.trim() : ''
     throw new TrackerApiError(
-      payload?.error ?? `${response.status} ${response.statusText}`,
+      payload?.error ?? (bodyText || `${response.status} ${response.statusText}`),
       response.status,
       payload?.code ?? null,
     )
   }
+  if (parseError) throw parseError
   return payload as T
 }
 

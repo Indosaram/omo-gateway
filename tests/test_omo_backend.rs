@@ -13,6 +13,77 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
 
+#[tokio::test]
+async fn unsupported_user_input_does_not_block_queued_turn() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        for method in ["initialize", "thread/resume", "turn/start"] {
+            let message = ws.next().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert_eq!(request["method"], method);
+            if method != "initialize" {
+                ws.send(Message::text(
+                    json!({
+                        "id":"user-input-0", "method":"item/tool/requestUserInput",
+                        "params":{"threadId":"r1", "turnId":"prior", "waitForAnswer":true,
+                            "questions":[{"id":"choice", "question":"Choose", "options":[]}]}
+                    })
+                    .to_string(),
+                ))
+                .await
+                .unwrap();
+                let response = ws.next().await.unwrap().unwrap();
+                let response: Value = serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_eq!(response["id"], "user-input-0");
+                assert_eq!(response["result"]["cancelled"], true);
+                assert_eq!(response["result"]["answers"], json!({}));
+            }
+            let result = if method == "turn/start" {
+                json!({"turn":{"id":"t2"}})
+            } else {
+                json!({"thread":{"id":"r1"}})
+            };
+            ws.send(Message::text(
+                json!({"id":request["id"],"result":result}).to_string(),
+            ))
+            .await
+            .unwrap();
+        }
+        for frame in [
+            json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2",
+                "item":{"id":"answer","type":"agentMessage","text":"finished"}}}),
+            json!({"method":"turn/completed","params":{"threadId":"r1","turn":{"id":"t2","status":"completed"}}}),
+        ] {
+            ws.send(Message::text(frame.to_string())).await.unwrap();
+        }
+    });
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://{address}")),
+        Arc::new(CapturingDispatcher::new()),
+    );
+    let key = SessionKey::new("local", None::<String>, "input", None::<String>, "user");
+    let mut session = SessionContext::new(key.clone());
+    session
+        .state
+        .metadata
+        .insert("omo_thread_id".into(), json!("r1"));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(
+            &mut session,
+            InboundEvent::message(key, "input", "continue"),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    peer.await.unwrap();
+    assert_eq!(session.state.metadata["cron_agent_output"], "finished");
+}
+
 // Public backend entry point over a real loopback WebSocket. Each script is a
 // new subscription to r1, so completed t1 frames can replay while t2 is active.
 async fn run_correlated_frames(frames: Vec<Value>) -> (omon_gateway::Result<()>, Vec<StreamChunk>) {

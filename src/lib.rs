@@ -17,6 +17,7 @@ pub mod multiplexer;
 pub mod profiles;
 pub mod readiness;
 pub mod report;
+pub mod runtime_config;
 pub mod security;
 pub mod sessions;
 pub mod slack;
@@ -45,6 +46,7 @@ pub use multiplexer::{
     RestartLoopGuard, ScaleToZero, SessionActor, SessionMultiplexer,
 };
 pub use readiness::*;
+pub use runtime_config::{default_lead, set_default_lead};
 pub use security::*;
 pub use storage::{
     Database, MessageSearchDocument, MessageSearchHit, MessageSearchIndex, MessengerPolicyStore,

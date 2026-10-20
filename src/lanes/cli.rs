@@ -481,7 +481,14 @@ pub async fn start(
                 Ok(created) => created,
                 Err(error) => {
                     if let Some(tree) = &auto_worktree {
-                        super::runner::discard_auto_worktree(tree).await;
+                        if let Err(cleanup) = super::runner::discard_auto_worktree(tree).await {
+                            tracing::warn!(key = %lane.key, error = %cleanup, "auto worktree cleanup failed");
+                            return Err(invalid(format!(
+                                "{error}; auto worktree {} and branch {} remain: {cleanup}",
+                                tree.path.display(),
+                                tree.branch
+                            )));
+                        }
                     }
                     return Err(invalid(error));
                 }
@@ -539,7 +546,10 @@ pub async fn start(
     }
     if inserted.is_err() {
         if let Some(tree) = &auto_worktree {
-            super::runner::discard_auto_worktree(tree).await;
+            if let Err(cleanup) = super::runner::discard_auto_worktree(tree).await {
+                // No lane row exists to carry an event, so the log is the only record.
+                tracing::warn!(key = %lane.key, path = %tree.path.display(), branch = %tree.branch, %cleanup, "auto worktree cleanup failed after a failed lane insert");
+            }
         }
     }
     inserted?;
@@ -550,8 +560,11 @@ pub async fn start(
         if let Err(error) =
             super::runner::register_owned_worktree(pool, &lane.key, &tree.repo, &tree.path).await
         {
-            tracing::warn!(key = %lane.key, %error, "auto worktree registration failed");
-            warnings.push(format!("auto worktree not registered: {error}"));
+            // An unregistered tree is invisible to close and to the startup sweep, and the
+            // shared repository root is no substitute for the isolated tree the lane was
+            // started for, so the lane is blocked here instead of being run in place.
+            tracing::warn!(key = %lane.key, %error, "auto worktree registration failed; blocking the lane");
+            warnings.push(block_lane_after_worktree_failure(pool, &mut lane, tree, &error).await);
         }
     }
     if let Err(error) = crate::usage::capture_lane_start(
@@ -586,6 +599,49 @@ pub async fn start(
         body["warnings"] = json!(warnings);
     }
     Ok((if decision.is_hold() { 4 } else { 0 }, body))
+}
+
+/// A lane whose auto worktree could not be registered has no usable cwd: nothing tracks
+/// the tree (close calls it an unowned external cwd and the startup sweep only visits
+/// registered trees), and falling back to the shared repository root would defeat the
+/// isolation the worktree exists for and let the lane collide with other work. So the
+/// lane is blocked in `failed`, which no service loop picks up and which `lane reopen`
+/// still accepts once the cause is fixed, and the failure plus anything cleanup could not
+/// remove is surfaced to the owner as a `launch_failed` event.
+async fn block_lane_after_worktree_failure(
+    pool: &SqlitePool,
+    lane: &mut Lane,
+    tree: &super::runner::AutoWorktree,
+    error: &OmonError,
+) -> String {
+    let detail = match super::runner::discard_auto_worktree(tree).await {
+        Ok(()) => format!(
+            "auto worktree registration failed: {error}; {} and branch {} were removed",
+            tree.path.display(),
+            tree.branch
+        ),
+        Err(cleanup) => format!(
+            "auto worktree registration failed: {error}; cleanup also failed: {cleanup}; remove {} and branch {} by hand",
+            tree.path.display(),
+            tree.branch
+        ),
+    };
+    if let Err(blocked) = transition(pool, &lane.key, LaneStatus::Failed, Some(&detail)).await {
+        tracing::warn!(key = %lane.key, error = %blocked, "lane block after worktree failure failed");
+    }
+    if let Err(event) = crate::storage::enqueue_lane_event(
+        pool,
+        Some(&lane.key),
+        &lane.lead_session_key,
+        "launch_failed",
+        &super::scrub::scrub(&detail),
+    )
+    .await
+    {
+        tracing::warn!(key = %lane.key, error = %event, "launch failure event not recorded");
+    }
+    lane.status = "failed".into();
+    detail
 }
 
 async fn require_lane(pool: &SqlitePool, key: &str) -> Result<Lane> {
@@ -776,5 +832,152 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(generation, 0);
+    }
+
+    async fn git_at(dir: &std::path::Path, args: &[&str]) {
+        let output = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A repo with one commit plus an auto worktree on `lane/<key>` cut from that commit.
+    async fn worktree_fixture(
+        key: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = tokio::fs::canonicalize(dir.path())
+            .await
+            .unwrap()
+            .join("repo");
+        tokio::fs::create_dir(&repo).await.unwrap();
+        git_at(&repo, &["init", "--quiet"]).await;
+        git_at(&repo, &["config", "user.email", "lane@example.com"]).await;
+        git_at(&repo, &["config", "user.name", "lane"]).await;
+        tokio::fs::write(repo.join("seed.txt"), "seed")
+            .await
+            .unwrap();
+        git_at(&repo, &["add", "seed.txt"]).await;
+        git_at(&repo, &["commit", "--quiet", "-m", "seed"]).await;
+        let path = dir.path().join("repo-lanes").join(key);
+        tokio::fs::create_dir_all(path.parent().unwrap())
+            .await
+            .unwrap();
+        git_at(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &format!("lane/{key}"),
+                path.to_str().unwrap(),
+                "HEAD",
+            ],
+        )
+        .await;
+        let path = tokio::fs::canonicalize(&path).await.unwrap();
+        (dir, repo, path)
+    }
+
+    #[tokio::test]
+    async fn registration_failure_blocks_the_lane_in_its_own_tree() {
+        let (_dir, repo, path) = worktree_fixture("cli-lane").await;
+        let tree = crate::lanes::runner::AutoWorktree {
+            repo: repo.clone(),
+            path: path.clone(),
+            branch: "lane/cli-lane".into(),
+        };
+        let db = working_lane().await;
+        sqlx::query("UPDATE lanes SET cwd = ? WHERE key = 'cli-lane'")
+            .bind(path.to_str().unwrap())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let mut lane = get_lane(db.pool(), "cli-lane").await.unwrap().unwrap();
+        let detail = block_lane_after_worktree_failure(
+            db.pool(),
+            &mut lane,
+            &tree,
+            &OmonError::Config("worktree identity changed".into()),
+        )
+        .await;
+        assert!(detail.contains("worktree identity changed"), "{detail}");
+        // The lane is blocked where it was started: rerouting it into the shared
+        // repository root would defeat the isolation the worktree exists for.
+        let stored = get_lane(db.pool(), "cli-lane").await.unwrap().unwrap();
+        assert_eq!(stored.status, "failed");
+        assert_eq!(stored.cwd, path.to_string_lossy());
+        assert_ne!(stored.cwd, repo.to_string_lossy());
+        // The failure reaches the owner through the lane event queue.
+        let body: String = sqlx::query_scalar(
+            "SELECT body FROM lane_events WHERE lane_key='cli-lane' AND kind='launch_failed'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert!(body.contains("worktree identity changed"), "{body}");
+        // The freshly created tree and its branch are owned, so they are cleaned up.
+        assert!(!path.exists(), "owned worktree must be removed");
+        let branch = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["show-ref", "--verify", "refs/heads/lane/cli-lane"])
+            .output()
+            .await
+            .unwrap();
+        assert!(
+            !branch.status.success(),
+            "owned worktree branch must be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_cleanup_failure_is_surfaced_not_swallowed() {
+        let (dir, repo, _path) = worktree_fixture("cli-lane").await;
+        let stale = dir.path().join("repo-lanes").join("gone");
+        let tree = crate::lanes::runner::AutoWorktree {
+            repo: repo.clone(),
+            path: stale.clone(),
+            branch: "lane/cli-lane".into(),
+        };
+        // Cleanup reports its own failure instead of logging it away.
+        assert!(crate::lanes::runner::discard_auto_worktree(&tree)
+            .await
+            .is_err());
+        let db = working_lane().await;
+        let mut lane = get_lane(db.pool(), "cli-lane").await.unwrap().unwrap();
+        let detail = block_lane_after_worktree_failure(
+            db.pool(),
+            &mut lane,
+            &tree,
+            &OmonError::Config("registration failed".into()),
+        )
+        .await;
+        let stale_text = stale.to_string_lossy().into_owned();
+        assert!(detail.contains("cleanup also failed"), "{detail}");
+        assert!(detail.contains(&stale_text), "{detail}");
+        let body: String = sqlx::query_scalar(
+            "SELECT body FROM lane_events WHERE lane_key='cli-lane' AND kind='launch_failed'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert!(body.contains("cleanup also failed"), "{body}");
+        assert_eq!(
+            get_lane(db.pool(), "cli-lane")
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "failed"
+        );
     }
 }

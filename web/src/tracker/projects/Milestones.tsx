@@ -37,6 +37,7 @@ export function MilestoneList({
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
+  const [saving, setSaving] = useState(false)
 
   const stats = (m: Milestone) => {
     const own = issues.filter((i) => i.milestone_id === m.id && t.statesById.get(i.state_id)?.type !== 'canceled')
@@ -45,7 +46,8 @@ export function MilestoneList({
   }
 
   const add = async () => {
-    if (!name.trim()) return
+    if (!name.trim() || saving) return
+    setSaving(true)
     try {
       const created = await trackerApi.addMilestone(projectId, { name: name.trim(), target_date: date || null })
       onChange([...milestones, created])
@@ -54,6 +56,8 @@ export function MilestoneList({
       setAdding(false)
     } catch (err) {
       t.reportError(err)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -125,7 +129,7 @@ export function MilestoneList({
           <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>
             Cancel
           </Button>
-          <Button variant="primary" size="sm" disabled={!name.trim()} onClick={() => void add()}>
+          <Button variant="primary" size="sm" disabled={!name.trim() || saving} onClick={() => void add()}>
             Add
           </Button>
         </div>

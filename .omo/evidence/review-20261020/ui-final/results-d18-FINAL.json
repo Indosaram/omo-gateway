@@ -1,0 +1,125 @@
+{
+ "authoritative": true,
+ "written": "2026-10-20T08:35Z",
+ "item": "D18",
+ "verdict": "PASS (A, B, C)",
+ "tree": {
+  "descriptionDraft.ts": "6685:ed1c1c63be5b35dd",
+  "Editors.tsx": "8012:93703609741dd5a3"
+ },
+ "tree_note": "Fingerprints asserted identical before and after the run; both runs report the same tree.",
+ "harness": {
+  "mock": "http://127.0.0.1:9131 (ui-final-d18, single-owner claim)",
+  "vite": "http://127.0.0.1:5299",
+  "isolation": "case A+B share one page (B consumes the draft A retained); case C runs on a fresh page because B's save mutates the client store",
+  "guards": "claim/takeover, ping identity, seed check, proxy check, no-foreign-pending, tree fingerprint before+after"
+ },
+ "runs": [
+  {
+   "file": "results-d18-attempt-2026-10-20T08-34-40-369Z.json",
+   "kind": "A/B/C single owner, fresh page for C",
+   "fail": 0
+  },
+  {
+   "file": "results-d18-b-trusted-2026-10-20T08-34-55-933Z.json",
+   "kind": "case B with a trusted (native) click",
+   "fail": 0
+  }
+ ],
+ "checks": [
+  {
+   "id": "D18",
+   "check": "case A: a delayed failed save keeps the draft through close/reopen",
+   "ok": true,
+   "detail": "peekIn=2ms held=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=1 notSavedIn=56ms retryShown=true keptInEditor=\"Draft kept across a failed save\" closedIn=8ms closeRetryHeld=true quiesced=true [observation: retainedDraft@settled=null moduleUrls=[\"http://127.0.0.1:5299/src/tracker/detail/descriptionDraft.ts?t=1792484949583\",\"http://127.0.0.1:5299/src/tracker/detail/descriptionDraft.ts\"]] reopened=8ms firstFrame=\"Draft kept across a failed save\" firstBars=1 after400ms=\"Draft kept across a failed save\" bars=1",
+   "phase": "attempt",
+   "run": "abc"
+  },
+  {
+   "id": "D18",
+   "check": "case B: Retry after recovery saves the retained draft exactly once",
+   "ok": true,
+   "detail": "instr=instrumented click=clicked patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} pendingClearedIn=6ms stored=\"Draft kept across a failed save\" retainedAfterRetry=null",
+   "phase": "attempt",
+   "run": "abc"
+  },
+  {
+   "id": "D18-TRACE",
+   "check": "event trace for the Retry click",
+   "ok": true,
+   "detail": "[{\"t\":0,\"k\":\"node\",\"tag\":\"BUTTON\",\"cls\":\"ld-tab\",\"rect\":[890,184,47,24],\"disabled\":false,\"pointerEvents\":\"auto\"},{\"t\":0,\"k\":\"hit-test\",\"at\":[913,196],\"hitTag\":\"BUTTON\",\"hitCls\":\"ld-tab\",\"hitIsButton\":true},{\"t\":0,\"k\":\"parent\",\"tag\":\"DIV\",\"cls\":\"ld-desc-pending\",\"parentPointerEvents\":\"auto\"},{\"t\":0,\"k\":\"listener:click\",\"trusted\":false,\"target\":\"BUTTON\"},{\"t\":0,\"k\":\"fetch\",\"m\":\"PATCH\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"t\":7,\"k\":\"fetch\",\"m\":\"GET\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"t\":15,\"k\":\"bar-mutation\",\"bars\":0},{\"t\":16,\"k\":\"fetch\",\"m\":\"GET\",\"u\":\"/api/tracker/issues/iss-draft\"}]",
+   "phase": "attempt",
+   "run": "abc"
+  },
+  {
+   "id": "D18",
+   "check": "case C: reopening while the retry PATCH is in flight keeps the draft",
+   "ok": true,
+   "detail": "held=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] released=1 closedIn=3ms retryHeld=[\"patch={\\\"description\\\":\\\"Draft kept across a failed save\\\"}\"] reopened=3ms released2=1 quiesced=true firstFrame=\"Draft kept across a failed save\" [observation: retainedDraft@first=null] | afterSettle=\"Draft kept across a failed save\" bars=1 [observation: retainedDraft@settle=null]",
+   "phase": "attempt",
+   "run": "abc"
+  },
+  {
+   "id": "SETUP",
+   "check": "tree unchanged during the run",
+   "ok": true,
+   "detail": "fingerprints={\"descriptionDraft.ts\":\"6685:ed1c1c63be5b35dd\",\"Editors.tsx\":\"8012:93703609741dd5a3\"}",
+   "phase": "setup-ok",
+   "run": "abc"
+  },
+  {
+   "id": "D18",
+   "check": "case B with a trusted click: Retry saves the retained draft exactly once",
+   "ok": true,
+   "detail": "trustedClick=true patchCount=1 patch=patch={\"description\":\"Draft kept across a failed save\"} barClearedIn=32ms stored=\"Draft kept across a failed save\" trace=[{\"k\":\"click\",\"trusted\":true},{\"k\":\"fetch\",\"m\":\"PATCH\",\"u\":\"/api/tracker/issues/iss-draft\"},{\"k\":\"fetch\",\"m\":\"GET\",\"u\":\"/api/tracker/issues/iss-draft\"}]",
+   "phase": "attempt",
+   "run": "trusted-b"
+  },
+  {
+   "id": "SETUP",
+   "check": "tree unchanged during the run",
+   "ok": true,
+   "detail": "{\"descriptionDraft.ts\":\"6685:ed1c1c63be5b35dd\",\"Editors.tsx\":\"8012:93703609741dd5a3\"}",
+   "phase": "setup-ok",
+   "run": "trusted-b"
+  }
+ ],
+ "cause": {
+  "kind": "app defect, fixed",
+  "summary": "Pre-fix, the description editor's unmount flush fired on React StrictMode's simulated unmount and left a phantom save in flight on the still-live saver instance; the reopened peek's Retry joined that request instead of starting its own, so the click produced zero HTTP requests and zero UI change.",
+  "worker_fix": "createUnmountFlush in web/src/tracker/detail/descriptionDraft.ts, wired at web/src/tracker/detail/Editors.tsx (drops the unmount save when StrictMode's simulated unmount immediately remounts).",
+  "measured_after_fix": "trusted click -> exactly 1 PATCH, Unsaved changes bar cleared in 32 ms, stored description equals the draft."
+ },
+ "superseded_attempts": [
+  {
+   "file": "results-final.json",
+   "why": "baseline matrix, phase prefix - kept as the before image"
+  },
+  {
+   "file": "results-d18-postfix.json",
+   "why": "post-first-patch run (A/C pass, B fail) - superseded by later tree revisions"
+  },
+  {
+   "file": "results-d18-postfix.INVALID-portcollision.json",
+   "why": "invalid: a second harness drove the same mock"
+  },
+  {
+   "file": "results-d18-attempt-2026-10-20T08-28-17-737Z.json",
+   "why": "case C was a harness artifact: the gate also held the detail GET"
+  },
+  {
+   "file": "results-d18-attempt-2026-10-20T08-29-04-044Z.json",
+   "why": "tree mutated mid-run (17:29:09 / 17:29:18), verdicts not attributable"
+  },
+  {
+   "file": "results-d18-attempt-2026-10-20T08-31-47-612Z.json",
+   "why": "A/C asserted on retainedDraft() via a dynamic import that resolved to an HMR duplicate module instance; DOM was correct in both"
+  }
+ ],
+ "harness_errors_found_and_fixed": [
+  "port collision with a concurrent harness -> claim protocol + fail-fast prerequisites",
+  "mock gate keyed by path held the detail GET -> writes only",
+  "internal retainedDraft() probe resolved to an HMR duplicate module instance -> verdicts are DOM-only",
+  "gate released 3 coalesced PATCHes where the assertion expected 1 -> >= 1 for holds, == 1 only for the Retry measurement"
+ ]
+}

@@ -101,6 +101,10 @@ struct Item {
 }
 
 impl Item {
+    fn is_ci_failure(&self) -> bool {
+        self.source == "github" && self.snippet.starts_with("[CI failed]")
+    }
+
     fn text(&self) -> String {
         crate::judge::scrub_for_external(&format!(
             "{} from {}: {} - {}",
@@ -292,7 +296,11 @@ impl Triage {
         let mut writing = Vec::new();
         for item in items {
             // Backlog that arrives late is history, not a new task for the owner.
-            if now - item.received_at > chrono::Duration::hours(STALE_AFTER_HOURS) {
+            // GitHub CI failures are exempt: PR updatedAt does not move when checks finish,
+            // so a re-run or scheduled check on an older PR is an active failure, not stale backlog.
+            if !item.is_ci_failure()
+                && now - item.received_at > chrono::Duration::hours(STALE_AFTER_HOURS)
+            {
                 classified.push((item, Class::Fyi, None));
                 continue;
             }
@@ -634,5 +642,136 @@ impl TriageWriter for SmallModelWriter {
             .await?;
         let text = capture.0.lock().clone();
         Ok(text)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockJudge(String);
+
+    #[async_trait]
+    impl Judge for MockJudge {
+        async fn choice(
+            &self,
+            _purpose: Purpose,
+            _state: &str,
+            _instructions: &str,
+            _options: &[&str],
+        ) -> std::result::Result<crate::judge::Choice, crate::judge::JudgeError> {
+            Ok(crate::judge::Choice::new(&self.0))
+        }
+
+        async fn noul(
+            &self,
+            _purpose: Purpose,
+            _state: &str,
+            _instructions: &str,
+        ) -> std::result::Result<f64, crate::judge::JudgeError> {
+            unimplemented!()
+        }
+
+        async fn diff(
+            &self,
+            _purpose: Purpose,
+            _prompt: &str,
+            _repo: &std::path::Path,
+            _revision: Option<&str>,
+        ) -> std::result::Result<crate::judge::DiffVerdict, crate::judge::JudgeError> {
+            unimplemented!()
+        }
+    }
+
+    struct MockWriter;
+
+    #[async_trait]
+    impl TriageWriter for MockWriter {
+        async fn write(&self, items: &[WritingItem]) -> Result<String> {
+            let arr: Vec<serde_json::Value> = items
+                .iter()
+                .map(|item| {
+                    serde_json::json!({
+                        "id": item.id,
+                        "reason": "ci failure requires fix",
+                        "proposed_action": "investigate failure"
+                    })
+                })
+                .collect();
+            serde_json::to_string(&arr).map_err(|e| OmonError::Config(e.to_string()))
+        }
+
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+    }
+
+    #[tokio::test]
+    async fn github_ci_failure_not_dropped_as_stale_when_pr_older_than_24h() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+
+        let judge = Arc::new(MockJudge("owner_must_act".into()));
+        let writer = Arc::new(MockWriter);
+        let mut triage = Triage::new(
+            pool.clone(),
+            judge,
+            writer,
+            crate::lanes::kibitzer::DEFAULT_LEAD.into(),
+        );
+
+        let now = Utc::now();
+        let old_time = now - chrono::Duration::hours(48);
+
+        sqlx::query(
+            "INSERT INTO inbox_items (id, source, source_ref, snippet, received_at, raw_hash, collected_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("item-ci-1")
+        .bind("github")
+        .bind("gh:1")
+        .bind("[CI failed] repo#1: tests failing")
+        .bind(old_time)
+        .bind("hash1")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO inbox_items (id, source, source_ref, snippet, received_at, raw_hash, collected_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind("item-normal-1")
+        .bind("github")
+        .bind("gh:2")
+        .bind("General PR update")
+        .bind(old_time)
+        .bind("hash2")
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let processed = triage.flush(now, true).await.unwrap();
+        assert_eq!(processed, 2);
+
+        let ci_class: String =
+            sqlx::query_scalar("SELECT class FROM inbox_decisions WHERE item_id = 'item-ci-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(ci_class, "owner");
+
+        let normal_class: String =
+            sqlx::query_scalar("SELECT class FROM inbox_decisions WHERE item_id = 'item-normal-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(normal_class, "fyi");
     }
 }

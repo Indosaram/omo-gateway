@@ -210,8 +210,20 @@ async fn execute(command: SessionsCommand) -> Result<i32, ControlError> {
                 .adopt(&target, &goal, &done, &lead)
                 .await
                 .map_err(failure);
+            // Report the canonical target the lane was stored with, not the user's prefix:
+            // `sessions release` needs the full id once the session has ended.
+            let stored = match &result {
+                Ok(key) => driver
+                    .target(key)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|resolved| resolved.to_string()),
+                Err(_) => None,
+            };
             database.close().await;
-            let value = json!({"key":result?,"target":target.to_string(),"kind":"external","status":"working"});
+            let key = result?;
+            let value = json!({"key":key,"target":stored.unwrap_or_else(|| target.to_string()),"kind":"external","status":"working"});
             println!("{value}");
             Ok(0)
         }

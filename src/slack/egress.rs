@@ -148,7 +148,14 @@ impl SlackEgress {
             return Ok(());
         };
         self.api
-            .update_message(&channel, &ts, label, Some(text_blocks(label)))
+            // The label is gateway-built (`decision_label`) and carries a `<@user>` mention that
+            // must render, so it is not escaped like agent-supplied text.
+            .update_message(
+                &channel,
+                &ts,
+                label,
+                Some(json!([{ "type": "section", "text": { "type": "mrkdwn", "text": label } }])),
+            )
             .await
     }
 
@@ -618,7 +625,7 @@ impl SlackEgress {
                 .as_deref()
                 .map(|m| format!("{m} "))
                 .unwrap_or_default(),
-            truncate_chars(reason, APPROVAL_REASON_LIMIT)
+            escape(&truncate_chars(reason, APPROVAL_REASON_LIMIT))
         );
         let ts = self
             .post(
@@ -1225,6 +1232,31 @@ mod tests {
         assert_eq!(requests[1].0, "chat.update");
         assert_eq!(requests[1].1["text"], "✅ Allowed once by <@U1>");
         assert_eq!(requests[1].1["blocks"][0]["type"], "section");
+        assert_eq!(
+            requests[1].1["blocks"][0]["text"]["text"],
+            "✅ Allowed once by <@U1>"
+        );
+    }
+
+    #[tokio::test]
+    async fn approval_fallback_text_escapes_agent_reason() {
+        let server = fake().await;
+        server
+            .egress()
+            .dispatch(OutboundAction::ApprovalRequest {
+                session: session(),
+                request_id: Uuid::new_v4(),
+                command: "ls".into(),
+                reason: "<!channel> wipe & <@U9>".into(),
+            })
+            .await
+            .unwrap();
+
+        let requests = server.requests();
+        assert_eq!(
+            requests[0].1["text"],
+            "Approval needed: &lt;!channel&gt; wipe &amp; &lt;@U9&gt;"
+        );
     }
 
     #[tokio::test]

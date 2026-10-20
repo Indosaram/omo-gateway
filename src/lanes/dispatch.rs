@@ -213,9 +213,39 @@ impl EventDispatcher {
 
 fn critical(event: &LaneEvent) -> bool {
     match event.kind.as_str() {
+        // These carry the only record of something the owner must act on: where finished work
+        // went, or why a lane failed to launch, so they must reach the owner without passing
+        // the wake judgment that can skip an event.
         "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed"
-        | "cron_report" => true,
+        | "cron_report" | "unmerged_branch" | "launch_failed" => true,
         "cron_problem" => event.body.contains("needs_owner"),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(kind: &str) -> LaneEvent {
+        LaneEvent {
+            id: 1,
+            lane_key: Some("lane".into()),
+            lead_session_key: "lead".into(),
+            kind: kind.into(),
+            body: "body".into(),
+            created_at: Utc::now(),
+            delivered_at: None,
+        }
+    }
+
+    #[test]
+    fn owner_visible_failure_events_skip_the_wake_judgment() {
+        // The branch name is the only pointer to work that left the lane, and a launch
+        // failure is the only notice that a lane never ran, so a judge verdict must never
+        // be able to drop either event.
+        assert!(critical(&event("unmerged_branch")));
+        assert!(critical(&event("launch_failed")));
+        assert!(!critical(&event("nudged")));
     }
 }

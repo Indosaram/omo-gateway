@@ -115,6 +115,10 @@ pub struct Watcher<R> {
     first_seen: HashMap<String, DateTime<Utc>>,
     slack_hints: bool,
     pending_completions: HashMap<String, Notice>,
+    /// Notices whose delivery succeeded but whose `session_watch_notices` row could not be
+    /// written. This only stops a repeat within this process: nothing was persisted, so a
+    /// restart can still send the same notice again.
+    sent_fallback: HashSet<String>,
 }
 
 fn display_name(session: &LiveSession) -> &str {
@@ -193,6 +197,31 @@ fn short_hash(text: &str) -> String {
     digest[..8].iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// A dedupe key is `{kind}:{target}:{...}` and a target is `{machine}:{session}`, so the
+/// machine is the second colon-separated segment. Reading that segment cannot mistake one
+/// host for another the way a substring search of the whole key can: with hosts `x` and
+/// `my`, the key `q:my:x:…` (machine `my`, session `x`) contains `:x:`.
+fn notice_machine(key: &str) -> Option<&str> {
+    key.split_once(':')?
+        .1
+        .split_once(':')
+        .map(|(machine, _)| machine)
+}
+
+/// Keeps each held notice's timer while the notice is still live, and also while the machine
+/// it belongs to failed this tick: a failed snapshot says nothing about whether the question
+/// was answered, so dropping the timer would restart the whole wait.
+fn retain_first_seen(
+    first_seen: &mut HashMap<String, DateTime<Utc>>,
+    present: &HashSet<&str>,
+    failed_machines: &HashSet<&str>,
+) {
+    first_seen.retain(|key, _| {
+        present.contains(key.as_str())
+            || notice_machine(key).is_some_and(|machine| failed_machines.contains(machine))
+    });
+}
+
 impl<R: CommandRunner + 'static> Watcher<R> {
     pub fn new(pool: SqlitePool, control: SessionControl<R>, interval: Duration) -> Self {
         Self::with_policy(pool, control, interval, NotifyPolicy::default())
@@ -213,6 +242,7 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             first_seen: HashMap::new(),
             slack_hints: false,
             pending_completions: HashMap::new(),
+            sent_fallback: HashSet::new(),
         }
     }
 
@@ -275,8 +305,13 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             }
         }
         let present: HashSet<&str> = notices.iter().map(|n| n.dedupe_key.as_str()).collect();
-        self.first_seen
-            .retain(|key, _| present.contains(key.as_str()));
+        let failed_machines: HashSet<&str> = overview
+            .snapshots
+            .iter()
+            .filter(|(_, res)| res.is_err())
+            .map(|(machine, _)| machine.as_str())
+            .collect();
+        retain_first_seen(&mut self.first_seen, &present, &failed_machines);
         let quiet = self.policy.is_quiet(now);
         let wait = TimeDelta::from_std(self.policy.notify_after).unwrap_or(TimeDelta::zero());
         let mut fresh = Vec::new();
@@ -293,12 +328,13 @@ impl<R: CommandRunner + 'static> Watcher<R> {
             if quiet {
                 continue;
             }
-            let sent: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM session_watch_notices WHERE dedupe_key = ?)",
-            )
-            .bind(&notice.dedupe_key)
-            .fetch_one(&self.pool)
-            .await?;
+            let sent: bool = self.sent_fallback.contains(&notice.dedupe_key)
+                || sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM session_watch_notices WHERE dedupe_key = ?)",
+                )
+                .bind(&notice.dedupe_key)
+                .fetch_one(&self.pool)
+                .await?;
             if sent {
                 self.pending_completions.remove(&notice.dedupe_key);
             } else {
@@ -359,6 +395,8 @@ impl<R: CommandRunner + 'static> Watcher<R> {
                         }
                         Err(error) => {
                             tracing::warn!(%error, key = %notice.dedupe_key, "session notice sent but not recorded");
+                            self.sent_fallback.insert(notice.dedupe_key.clone());
+                            self.pending_completions.remove(&notice.dedupe_key);
                         }
                     },
                     Err(error) => {
@@ -835,5 +873,245 @@ mod tests {
 
         shutdown.cancel();
         handle.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_snapshot_does_not_restart_question_wait() {
+        let pool = pool().await;
+        let fail_probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fail_probe_clone = fail_probe.clone();
+
+        struct FlakyRunner {
+            snapshot: serde_json::Value,
+            fail_probe: Arc<std::sync::atomic::AtomicBool>,
+        }
+
+        #[async_trait]
+        impl CommandRunner for FlakyRunner {
+            async fn run(
+                &self,
+                _machine: &str,
+                argv: &[String],
+            ) -> std::result::Result<CommandOutput, String> {
+                if argv.iter().any(|word| word.contains("list"))
+                    && argv.iter().any(|word| word.contains("thread"))
+                {
+                    return Ok(CommandOutput {
+                        code: 0,
+                        stdout: b"[]".to_vec(),
+                        stderr: Vec::new(),
+                    });
+                }
+                if self.fail_probe.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err("probe timed out".into());
+                }
+                Ok(CommandOutput {
+                    code: 0,
+                    stdout: serde_json::to_vec(&self.snapshot).unwrap(),
+                    stderr: Vec::new(),
+                })
+            }
+        }
+
+        let runner = Arc::new(FlakyRunner {
+            snapshot: live(false, true, 3),
+            fail_probe,
+        });
+
+        let mut watcher = Watcher::with_policy(
+            pool.clone(),
+            SessionControl::new(runner, vec![]),
+            Duration::from_secs(60),
+            NotifyPolicy {
+                notify_after: Duration::from_secs(1800),
+                quiet_hours: None,
+            },
+        );
+
+        let t0 = Utc::now();
+        // Tick 1: question first seen, not yet released (wait is 1800s)
+        assert!(watcher.tick_at(t0).await.unwrap().is_empty());
+
+        // Tick 2: probe fails at t0 + 10m; first_seen must NOT be wiped
+        fail_probe_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(watcher
+            .tick_at(t0 + TimeDelta::minutes(10))
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Tick 3: probe succeeds at t0 + 31m; wait duration elapsed (31m >= 30m)
+        fail_probe_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+        let notices = watcher.tick_at(t0 + TimeDelta::minutes(31)).await.unwrap();
+        assert_eq!(
+            notices.len(),
+            1,
+            "question should be notified after wait time elapsed despite intermediate probe failure"
+        );
+    }
+
+    #[test]
+    fn failed_machine_keeps_only_its_own_timers() {
+        let now = Utc::now();
+        let mut first_seen = HashMap::new();
+        // Machine `my` holds a session literally named `x`; its key is `q:my:x:…`, which a
+        // substring search for the failed machine `x` would wrongly keep.
+        first_seen.insert(format!("q:my:x:{}", short_hash("Pick one")), now);
+        first_seen.insert(format!("q:my:y:{}", short_hash("Pick two")), now);
+        first_seen.insert(format!("q:x:z:{}", short_hash("Pick three")), now);
+
+        let failed: HashSet<&str> = ["x"].into_iter().collect();
+        retain_first_seen(&mut first_seen, &HashSet::new(), &failed);
+
+        assert!(
+            first_seen.contains_key(&format!("q:x:z:{}", short_hash("Pick three"))),
+            "the failed machine's own timer must survive"
+        );
+        assert!(
+            !first_seen.contains_key(&format!("q:my:x:{}", short_hash("Pick one"))),
+            "a session id equal to a failed machine name is not that machine"
+        );
+        assert!(!first_seen.contains_key(&format!("q:my:y:{}", short_hash("Pick two"))));
+    }
+
+    #[test]
+    fn notice_machine_reads_the_target_segment() {
+        assert_eq!(
+            notice_machine("q:local:01a1429e-8585:abcd1234"),
+            Some("local")
+        );
+        assert_eq!(notice_machine("c:omarchy:01a1429e-8585:7"), Some("omarchy"));
+        assert_eq!(notice_machine("q:my:x:abcd1234"), Some("my"));
+        assert_eq!(notice_machine("not-a-key"), None);
+    }
+
+    /// Records every dispatched message so the test can drain it once `serve` returns.
+    struct RecordingDispatcher {
+        sent: tokio::sync::mpsc::Sender<String>,
+    }
+
+    #[async_trait]
+    impl OutboundDispatcher for RecordingDispatcher {
+        async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+            if let OutboundAction::SendMessage { content, .. } = action {
+                let _ = self.sent.send(content).await;
+            }
+            Ok(())
+        }
+    }
+
+    // Signals each tick (one local probe per tick) so a test advances the watcher on an
+    // event rather than on elapsed time.
+    struct TickSignallingRunner {
+        inner: Arc<Scripted>,
+        tick_tx: tokio::sync::mpsc::Sender<()>,
+    }
+
+    #[async_trait]
+    impl CommandRunner for TickSignallingRunner {
+        async fn run(
+            &self,
+            machine: &str,
+            argv: &[String],
+        ) -> std::result::Result<CommandOutput, String> {
+            if argv.first().is_some_and(|word| word == "python3") {
+                let _ = self.tick_tx.try_send(());
+            }
+            self.inner.run(machine, argv).await
+        }
+    }
+
+    /// Runs on the real clock, never `start_paused`. Paused time auto-advances to the nearest
+    /// pending timer when nothing is runnable, and SQLite completes on its own worker thread,
+    /// so virtual time jumped past sqlx's 30 s acquire timeout inside the fixture and the test
+    /// died with `PoolTimedOut` before it asserted anything.
+    #[tokio::test]
+    async fn mark_sent_failure_after_a_successful_send_does_not_send_again() {
+        let pool = pool().await;
+        // A real insert failure: every write to the notice ledger aborts, as a full disk or a
+        // locked database would. `INSERT OR IGNORE` does not swallow a trigger ABORT.
+        sqlx::query(
+            "CREATE TRIGGER fail_mark_sent BEFORE INSERT ON session_watch_notices BEGIN SELECT RAISE(ABORT, 'disk full'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let runner = Arc::new(Scripted {
+            snapshot: Mutex::new(live(false, true, 3)),
+            remote_down: false,
+        });
+        let shutdown = CancellationToken::new();
+        let (tick_tx, mut tick_rx) = tokio::sync::mpsc::channel(64);
+        let counting = Arc::new(TickSignallingRunner {
+            inner: runner,
+            tick_tx,
+        });
+
+        let watcher = Watcher::with_policy(
+            pool.clone(),
+            SessionControl::new(counting, vec!["omarchy".into()]),
+            Duration::from_millis(10),
+            NotifyPolicy {
+                notify_after: Duration::ZERO,
+                quiet_hours: None,
+            },
+        );
+
+        let (sent_tx, mut sent_rx) = tokio::sync::mpsc::channel(16);
+        let dispatcher = Arc::new(RecordingDispatcher { sent: sent_tx });
+        let owner_dm = SessionKey::new(
+            "discord",
+            None::<String>,
+            "channel-1",
+            None::<String>,
+            "user-1",
+        );
+
+        let shutdown_clone = shutdown.clone();
+        let handle =
+            tokio::spawn(async move { watcher.serve(dispatcher, owner_dm, shutdown_clone).await });
+
+        // given: the first tick dispatches the question, then `mark_sent` fails on the trigger
+        let first = tokio::time::timeout(Duration::from_secs(5), sent_rx.recv())
+            .await
+            .expect("timeout waiting for the first dispatch")
+            .expect("sent_rx closed");
+        assert!(first.contains("Pick one"), "{first}");
+
+        // when: later ticks run; a tick's probe follows the previous tick's dispatch, so three
+        // probe signals cover the buffered first tick plus two complete retry chances
+        for n in 0..3 {
+            tokio::time::timeout(Duration::from_secs(5), tick_rx.recv())
+                .await
+                .unwrap_or_else(|_| panic!("timeout waiting for tick signal {n}"))
+                .expect("tick_rx closed");
+        }
+
+        // then: after the watcher settles, no second dispatch exists
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("watcher must stop after cancellation")
+            .expect("watcher task panicked")
+            .expect("watcher stops on cancellation");
+
+        assert!(
+            sent_rx.try_recv().is_err(),
+            "the question must be sent exactly once, got a second dispatch"
+        );
+
+        // Persistence really did fail, so the suppression came from the in-process set alone.
+        let persisted: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM session_watch_notices WHERE dedupe_key = ?)",
+        )
+        .bind(format!(
+            "q:local:01a1429e-8585-7e8a-b89b-2ea8458e4312:{}",
+            short_hash("Pick one")
+        ))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!persisted, "the trigger must have blocked the ledger write");
     }
 }

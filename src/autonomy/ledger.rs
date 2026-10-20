@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use chrono::{DateTime, NaiveTime, TimeZone, Timelike, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
 use super::effect::{requires_always_ask, Classification, Effect};
 use crate::{ApprovalDecision, ApprovalError, SessionKey, SmartApprovalGuard};
@@ -537,72 +537,190 @@ pub async fn finalize_ask_result(
     lead_session_key: &str,
     result: Result<ApprovalDecision, ApprovalError>,
 ) -> Result<AskResolution, sqlx::Error> {
-    match result {
+    // The claim is the first statement of the transaction, so it takes the write lock before any
+    // read: a second answer waits for this one to commit and then claims nothing. Only the winner
+    // writes the precedent, so the counters move once.
+    let mut tx = pool.begin().await?;
+    let claim_state = match &result {
+        Ok(ApprovalDecision::Deny { .. }) => ProposalState::Declined,
+        Err(ApprovalError::Timeout | ApprovalError::Cancelled | ApprovalError::Persistence(_)) => {
+            ProposalState::Expired
+        }
+        Ok(ApprovalDecision::Once | ApprovalDecision::Session | ApprovalDecision::Always) => {
+            ProposalState::Approved
+        }
+    };
+    let claimed = claim_proposal(&mut tx, proposal_id, claim_state).await?;
+    let Some(row) = proposal_row(&mut tx, proposal_id).await? else {
+        // Nothing to decide: never leave a precedent behind for a proposal that does not exist.
+        tx.rollback().await?;
+        return Ok(AskResolution::Deny {
+            reason: format!("proposal #{proposal_id} no longer exists; the action was not run"),
+            count_toward_limit: false,
+        });
+    };
+    if !claimed {
+        // `decide_proposal` (CLI or short reply) or a concurrent answer already recorded the
+        // owner's decision and the precedent; recording it again would bump the counters twice.
+        tx.rollback().await?;
+        return Ok(
+            settled_resolution(&row).unwrap_or_else(|| AskResolution::Deny {
+                reason: pending_ask_reason(proposal_id),
+                count_toward_limit: false,
+            }),
+        );
+    }
+    let resolution = match result {
         Ok(ApprovalDecision::Once | ApprovalDecision::Session) => {
-            record_once_and_check_candidate(
-                pool,
+            count_once_candidate(
+                &mut tx,
                 proposal_id,
                 classification.effect,
                 &classification.target,
                 lead_session_key,
             )
             .await?;
-            Ok(AskResolution::Allow)
+            AskResolution::Allow
         }
         Ok(ApprovalDecision::Always) => {
-            let prec_id = upsert_precedent(
-                pool,
-                &classification.signature,
-                classification.effect,
-                &classification.target,
-                PrecedentDecision::Allow,
-                PrecedentScope::Exact,
-                origin,
-                None,
+            let prec_id = write_precedent(
+                &mut tx,
+                &PrecedentWrite::of_classification(
+                    classification,
+                    PrecedentDecision::Allow,
+                    PrecedentScope::Exact,
+                    origin,
+                    None,
+                ),
             )
             .await?;
-            update_proposal_decision(pool, proposal_id, ProposalState::Approved, prec_id, None)
-                .await?;
-            Ok(AskResolution::Allow)
+            finish_decided(&mut tx, proposal_id, prec_id, None).await?;
+            AskResolution::Allow
         }
         Ok(ApprovalDecision::Deny { reason }) => {
             let words = reason.as_deref().unwrap_or("declined by owner");
-            let prec_id = upsert_precedent(
-                pool,
-                &classification.signature,
-                classification.effect,
-                &classification.target,
-                PrecedentDecision::Deny,
-                PrecedentScope::Exact,
-                origin,
-                Some(words),
+            let prec_id = write_precedent(
+                &mut tx,
+                &PrecedentWrite::of_classification(
+                    classification,
+                    PrecedentDecision::Deny,
+                    PrecedentScope::Exact,
+                    origin,
+                    Some(words),
+                ),
             )
             .await?;
-            update_proposal_decision(
-                pool,
-                proposal_id,
-                ProposalState::Declined,
-                prec_id,
-                Some(words),
-            )
-            .await?;
-            Ok(AskResolution::Deny {
+            finish_decided(&mut tx, proposal_id, prec_id, Some(words)).await?;
+            AskResolution::Deny {
                 reason: words.to_string(),
                 count_toward_limit: true,
-            })
+            }
         }
         Err(ApprovalError::Timeout | ApprovalError::Cancelled | ApprovalError::Persistence(_)) => {
-            update_proposal_decision(pool, proposal_id, ProposalState::Expired, None, None).await?;
-            Ok(AskResolution::Deny {
-                reason: format!(
-                    "owner has not answered yet; continue with other work and mention pending proposal #{proposal_id} in your report"
-                ),
+            AskResolution::Deny {
+                reason: pending_ask_reason(proposal_id),
                 count_toward_limit: false,
-            })
+            }
         }
+    };
+    tx.commit().await?;
+    Ok(resolution)
+}
+
+/// The resolution a proposal already recorded, or `None` while it is still open.
+fn settled_resolution(row: &ActionProposal) -> Option<AskResolution> {
+    match row.state.as_str() {
+        "approved" | "auto_allowed" => Some(AskResolution::Allow),
+        "declined" | "auto_denied" => Some(AskResolution::Deny {
+            reason: row
+                .owner_words
+                .clone()
+                .unwrap_or_else(|| "declined by owner".to_string()),
+            count_toward_limit: true,
+        }),
+        _ => None,
     }
 }
 
+fn pending_ask_reason(proposal_id: i64) -> String {
+    format!(
+        "owner has not answered yet; continue with other work and mention pending proposal #{proposal_id} in your report"
+    )
+}
+
+/// The proposal row, read inside the caller's transaction.
+async fn proposal_row(
+    conn: &mut SqliteConnection,
+    id: i64,
+) -> Result<Option<ActionProposal>, sqlx::Error> {
+    sqlx::query_as::<_, ActionProposal>("SELECT * FROM action_proposals WHERE id = ?")
+        .bind(id)
+        .fetch_optional(conn)
+        .await
+}
+
+/// Records the decided state and, for a precedent-writing decision, the precedent it created.
+async fn set_decided(
+    conn: &mut SqliteConnection,
+    id: i64,
+    state: ProposalState,
+    precedent_id: Option<i64>,
+    owner_words: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE action_proposals
+         SET state = ?, precedent_id = COALESCE(?, precedent_id), owner_words = COALESCE(?, owner_words), decided_at = CURRENT_TIMESTAMP
+         WHERE id = ?",
+    )
+    .bind(state.as_str())
+    .bind(precedent_id)
+    .bind(owner_words)
+    .bind(id)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Claims an open proposal for one decision. True only for the answer that won the claim.
+async fn claim_proposal(
+    conn: &mut SqliteConnection,
+    id: i64,
+    state: ProposalState,
+) -> Result<bool, sqlx::Error> {
+    let res = sqlx::query(
+        "UPDATE action_proposals
+         SET state = ?, decided_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND state = 'pending'",
+    )
+    .bind(state.as_str())
+    .bind(id)
+    .execute(conn)
+    .await?;
+    Ok(res.rows_affected() == 1)
+}
+
+/// Attaches the precedent and the owner's words to a proposal already claimed by this decision.
+async fn finish_decided(
+    conn: &mut SqliteConnection,
+    id: i64,
+    precedent_id: Option<i64>,
+    owner_words: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE action_proposals
+         SET precedent_id = COALESCE(?, precedent_id), owner_words = COALESCE(?, owner_words)
+         WHERE id = ?",
+    )
+    .bind(precedent_id)
+    .bind(owner_words)
+    .bind(id)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+/// Records an `once` approval and emits the third-owner-once candidate. Claims the proposal first,
+/// so a decision that was already recorded is never counted a second time.
 pub async fn record_once_and_check_candidate(
     pool: &SqlitePool,
     proposal_id: i64,
@@ -610,7 +728,24 @@ pub async fn record_once_and_check_candidate(
     target: &str,
     lead_session_key: &str,
 ) -> Result<bool, sqlx::Error> {
-    update_proposal_decision(pool, proposal_id, ProposalState::Approved, None, None).await?;
+    let mut tx = pool.begin().await?;
+    if !claim_proposal(&mut tx, proposal_id, ProposalState::Approved).await? {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+    let emitted =
+        count_once_candidate(&mut tx, proposal_id, effect, target, lead_session_key).await?;
+    tx.commit().await?;
+    Ok(emitted)
+}
+
+async fn count_once_candidate(
+    conn: &mut SqliteConnection,
+    proposal_id: i64,
+    effect: Effect,
+    target: &str,
+    lead_session_key: &str,
+) -> Result<bool, sqlx::Error> {
     if !effect.allows_class_precedent() {
         return Ok(false);
     }
@@ -623,7 +758,7 @@ pub async fn record_once_and_check_candidate(
     )
     .bind(effect.as_str())
     .bind(target)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
 
     if count < 3 {
@@ -640,7 +775,7 @@ pub async fn record_once_and_check_candidate(
         effect.as_str(),
         target
     ))
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     if already_emitted {
         return Ok(false);
@@ -656,7 +791,7 @@ pub async fn record_once_and_check_candidate(
     .bind(effect.as_str())
     .bind(target)
     .bind(format!("{}:%:{target}", effect.as_str()))
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     if has_deny {
         return Ok(false);
@@ -669,7 +804,7 @@ pub async fn record_once_and_check_candidate(
     )
     .bind(effect.as_str())
     .bind(target)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await?;
     let sig_list: Vec<String> = sigs.into_iter().map(|(s,)| s).collect();
     let body = format!(
@@ -685,7 +820,7 @@ pub async fn record_once_and_check_candidate(
     )
     .bind(lead_session_key)
     .bind(&body)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(true)
 }
@@ -785,12 +920,40 @@ pub async fn decide_proposal(
     owner_words: Option<&str>,
     lead_session_key: Option<&str>,
 ) -> Result<ActionProposal, String> {
-    let proposal = get_proposal(pool, proposal_id)
+    let kind = decision_kind.trim().to_ascii_lowercase();
+    let claim_state = match kind.as_str() {
+        "allow" | "once" | "allow-always" | "always" => ProposalState::Approved,
+        "deny" | "decline" => ProposalState::Declined,
+        other => {
+            return Err(format!(
+                "invalid decision `{other}` (expected allow, deny, or allow-always)"
+            ))
+        }
+    };
+    // Claim first, then read: the claim takes the write lock so a card press that lands at the
+    // same moment waits here and then claims nothing, instead of bumping the same counters again.
+    // Only an exact-scope decision is claimed: it is the one a card press and a short reply can
+    // both issue for the same proposal. A class-scope decision is an explicit owner instruction
+    // that may also be recorded after the proposal was already answered.
+    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+    let claimed = if scope == PrecedentScope::Exact {
+        claim_proposal(&mut tx, proposal_id, claim_state)
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        set_decided(&mut tx, proposal_id, claim_state, None, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        true
+    };
+    let Some(proposal) = proposal_row(&mut tx, proposal_id)
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("proposal #{proposal_id} not found"))?;
+    else {
+        return Err(format!("proposal #{proposal_id} not found"));
+    };
     let effect = Effect::from_str(&proposal.effect)?;
-    let fallback_lead = std::env::var("OMON_LANE_DEFAULT_LEAD").ok();
+    let fallback_lead = Some(crate::runtime_config::default_lead());
     let lead = [lead_session_key, Some(proposal.session_key.as_str())]
         .into_iter()
         .flatten()
@@ -802,127 +965,109 @@ pub async fn decide_proposal(
         PrecedentScope::Class => format!("{}:class:{}", effect.as_str(), proposal.target),
     };
 
-    match decision_kind.trim().to_ascii_lowercase().as_str() {
+    if matches!(kind.as_str(), "allow-always" | "always") && !effect.allows_any_precedent() {
+        return Err("spend never gets a precedent".to_string());
+    }
+    if scope == PrecedentScope::Class && !effect.allows_class_precedent() {
+        return Err(format!(
+            "effect `{}` does not allow class precedents",
+            effect.as_str()
+        ));
+    }
+
+    if !claimed {
+        // Another answer already decided this proposal; record nothing and report the row.
+        tx.rollback().await.map_err(|e| e.to_string())?;
+        return Ok(proposal);
+    }
+
+    match kind.as_str() {
         "allow" | "once" => {
             if scope == PrecedentScope::Class {
-                if !effect.allows_class_precedent() {
-                    return Err(format!(
-                        "effect `{}` does not allow class precedents",
-                        effect.as_str()
-                    ));
-                }
-                let prec_id = upsert_precedent(
-                    pool,
-                    &sig_for_scope,
-                    effect,
-                    &proposal.target,
-                    PrecedentDecision::Allow,
-                    PrecedentScope::Class,
-                    "owner_decide",
-                    owner_words,
+                let prec_id = write_precedent(
+                    &mut tx,
+                    &PrecedentWrite {
+                        signature: &sig_for_scope,
+                        effect,
+                        target_scope: &proposal.target,
+                        decision: PrecedentDecision::Allow,
+                        scope: PrecedentScope::Class,
+                        origin: "owner_decide",
+                        owner_words,
+                    },
                 )
                 .await
                 .map_err(|e| e.to_string())?;
-                update_proposal_decision(
-                    pool,
-                    proposal_id,
-                    ProposalState::Approved,
-                    prec_id,
-                    owner_words,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
+                finish_decided(&mut tx, proposal_id, prec_id, owner_words)
+                    .await
+                    .map_err(|e| e.to_string())?;
             } else {
-                record_once_and_check_candidate(pool, proposal_id, effect, &proposal.target, lead)
+                count_once_candidate(&mut tx, proposal_id, effect, &proposal.target, lead)
                     .await
                     .map_err(|e| e.to_string())?;
-                if let Some(words) = owner_words {
-                    update_proposal_decision(
-                        pool,
-                        proposal_id,
-                        ProposalState::Approved,
-                        None,
-                        Some(words),
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?;
+                if owner_words.is_some() {
+                    finish_decided(&mut tx, proposal_id, None, owner_words)
+                        .await
+                        .map_err(|e| e.to_string())?;
                 }
-            }
-            if let Some(g) = guard {
-                let _ = g.resolve_proposal_id(proposal_id, ApprovalDecision::Once);
             }
         }
         "allow-always" | "always" => {
-            if !effect.allows_any_precedent() {
-                return Err("spend never gets a precedent".to_string());
-            }
-            if scope == PrecedentScope::Class && !effect.allows_class_precedent() {
-                return Err(format!(
-                    "effect `{}` does not allow class precedents",
-                    effect.as_str()
-                ));
-            }
-            let prec_id = upsert_precedent(
-                pool,
-                &sig_for_scope,
-                effect,
-                &proposal.target,
-                PrecedentDecision::Allow,
-                scope,
-                "owner_decide",
-                owner_words,
+            let prec_id = write_precedent(
+                &mut tx,
+                &PrecedentWrite {
+                    signature: &sig_for_scope,
+                    effect,
+                    target_scope: &proposal.target,
+                    decision: PrecedentDecision::Allow,
+                    scope,
+                    origin: "owner_decide",
+                    owner_words,
+                },
             )
             .await
             .map_err(|e| e.to_string())?;
-            update_proposal_decision(
-                pool,
-                proposal_id,
-                ProposalState::Approved,
-                prec_id,
-                owner_words,
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            if let Some(g) = guard {
-                let _ = g.resolve_proposal_id(proposal_id, ApprovalDecision::Always);
-            }
+            finish_decided(&mut tx, proposal_id, prec_id, owner_words)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         "deny" | "decline" => {
-            let prec_id = upsert_precedent(
-                pool,
-                &sig_for_scope,
-                effect,
-                &proposal.target,
-                PrecedentDecision::Deny,
-                scope,
-                "owner_decide",
-                owner_words,
+            let prec_id = write_precedent(
+                &mut tx,
+                &PrecedentWrite {
+                    signature: &sig_for_scope,
+                    effect,
+                    target_scope: &proposal.target,
+                    decision: PrecedentDecision::Deny,
+                    scope,
+                    origin: "owner_decide",
+                    owner_words,
+                },
             )
             .await
             .map_err(|e| e.to_string())?;
-            update_proposal_decision(
-                pool,
-                proposal_id,
-                ProposalState::Declined,
-                prec_id,
-                owner_words,
-            )
-            .await
-            .map_err(|e| e.to_string())?;
-            if let Some(g) = guard {
-                let _ = g.resolve_proposal_id(
-                    proposal_id,
-                    ApprovalDecision::Deny {
-                        reason: owner_words.map(str::to_string),
-                    },
-                );
-            }
+            finish_decided(&mut tx, proposal_id, prec_id, owner_words)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         other => {
             return Err(format!(
                 "invalid decision `{other}` (expected allow, deny, or allow-always)"
             ));
         }
+    }
+    tx.commit().await.map_err(|e| e.to_string())?;
+
+    // Wake a live waiter only after the decision is committed, so it reads the recorded state.
+    if let Some(g) = guard {
+        let decision = match kind.as_str() {
+            "allow" | "once" => ApprovalDecision::Once,
+            "allow-always" | "always" => ApprovalDecision::Always,
+            _ => ApprovalDecision::Deny {
+                reason: owner_words.map(str::to_string),
+            },
+        };
+        let _ = g.resolve_proposal_id(proposal_id, decision);
     }
 
     get_proposal(pool, proposal_id)
@@ -1047,6 +1192,67 @@ pub async fn upsert_precedent(
     origin: &str,
     owner_words: Option<&str>,
 ) -> Result<Option<i64>, sqlx::Error> {
+    let mut conn = pool.acquire().await?;
+    write_precedent(
+        &mut conn,
+        &PrecedentWrite {
+            signature,
+            effect,
+            target_scope,
+            decision,
+            scope,
+            origin,
+            owner_words,
+        },
+    )
+    .await
+}
+
+/// One precedent write: what to record, for whom, and the owner's words.
+struct PrecedentWrite<'a> {
+    signature: &'a str,
+    effect: Effect,
+    target_scope: &'a str,
+    decision: PrecedentDecision,
+    scope: PrecedentScope,
+    origin: &'a str,
+    owner_words: Option<&'a str>,
+}
+
+impl<'a> PrecedentWrite<'a> {
+    fn of_classification(
+        classification: &'a Classification,
+        decision: PrecedentDecision,
+        scope: PrecedentScope,
+        origin: &'a str,
+        owner_words: Option<&'a str>,
+    ) -> Self {
+        Self {
+            signature: &classification.signature,
+            effect: classification.effect,
+            target_scope: &classification.target,
+            decision,
+            scope,
+            origin,
+            owner_words,
+        }
+    }
+}
+
+/// The precedent write shared by the pooled and transactional callers.
+async fn write_precedent(
+    conn: &mut SqliteConnection,
+    spec: &PrecedentWrite<'_>,
+) -> Result<Option<i64>, sqlx::Error> {
+    let &PrecedentWrite {
+        signature,
+        effect,
+        target_scope,
+        decision,
+        scope,
+        origin,
+        owner_words,
+    } = spec;
     if !effect.allows_any_precedent() {
         return Ok(None);
     }
@@ -1081,14 +1287,14 @@ pub async fn upsert_precedent(
     .bind(add_dec)
     .bind(origin)
     .bind(owner_words)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
 
     let row: Option<(i64,)> =
         sqlx::query_as("SELECT id FROM action_precedents WHERE signature = ? AND scope = ?")
             .bind(signature)
             .bind(scope.as_str())
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await?;
     Ok(row.map(|(id,)| id))
 }
@@ -1158,4 +1364,314 @@ pub async fn revoke_precedent(pool: &SqlitePool, id: i64) -> Result<bool, sqlx::
     .execute(pool)
     .await?;
     Ok(res.rows_affected() > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn pending_push(pool: &SqlitePool, target: &str) -> (i64, Classification) {
+        let cls = Classification::new(
+            Effect::VcsRemote,
+            "git push",
+            target,
+            "git push origin lane/1",
+        );
+        let id = insert_proposal(
+            pool,
+            &NewProposal {
+                origin: ProposalOrigin::EngineApproval,
+                session_key: "slack:T1:C1::U1".into(),
+                signature: cls.signature.clone(),
+                effect: cls.effect,
+                target: cls.target.clone(),
+                summary: cls.summary.clone(),
+                payload_json: "{}".into(),
+                tainted: false,
+                state: ProposalState::Pending,
+                precedent_id: None,
+                owner_words: None,
+                platform_message_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        (id, cls)
+    }
+
+    #[tokio::test]
+    async fn one_owner_decision_via_decide_then_waiter_counts_once() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let lead = "slack:T1:C1::U1";
+
+        let (allow_id, allow_cls) = pending_push(&pool, "/repo-allow").await;
+        decide_proposal(
+            &pool,
+            None,
+            allow_id,
+            "allow-always",
+            PrecedentScope::Exact,
+            None,
+            Some(lead),
+        )
+        .await
+        .unwrap();
+        // The live engine waiter wakes with the same decision and finalizes.
+        let res = finalize_ask_result(
+            &pool,
+            allow_id,
+            &allow_cls,
+            "engine_approval",
+            lead,
+            Ok(ApprovalDecision::Always),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res, AskResolution::Allow);
+        let approvals: i64 = sqlx::query_scalar(
+            "SELECT approvals FROM action_precedents WHERE signature = ? AND scope = 'exact'",
+        )
+        .bind(&allow_cls.signature)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(approvals, 1, "one decision must bump approvals once");
+
+        let (deny_id, deny_cls) = pending_push(&pool, "/repo-deny").await;
+        decide_proposal(
+            &pool,
+            None,
+            deny_id,
+            "deny",
+            PrecedentScope::Exact,
+            Some("직접 올릴게"),
+            Some(lead),
+        )
+        .await
+        .unwrap();
+        let res = finalize_ask_result(
+            &pool,
+            deny_id,
+            &deny_cls,
+            "engine_approval",
+            lead,
+            Ok(ApprovalDecision::Deny { reason: None }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            res,
+            AskResolution::Deny {
+                reason: "직접 올릴게".into(),
+                count_toward_limit: true
+            }
+        );
+        let (declines, words): (i64, Option<String>) = sqlx::query_as(
+            "SELECT declines, owner_words FROM action_precedents WHERE signature = ? AND scope = 'exact'",
+        )
+        .bind(&deny_cls.signature)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(declines, 1, "one decision must bump declines once");
+        assert_eq!(words.as_deref(), Some("직접 올릴게"));
+    }
+
+    #[tokio::test]
+    async fn waiter_then_short_reply_also_counts_once() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let lead = "slack:T1:C1::U1";
+
+        let (id, cls) = pending_push(&pool, "/repo-waiter-first").await;
+        let res = finalize_ask_result(
+            &pool,
+            id,
+            &cls,
+            "engine_approval",
+            lead,
+            Ok(ApprovalDecision::Always),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res, AskResolution::Allow);
+        // The owner's short reply arrives after the card was already answered.
+        let row = decide_proposal(
+            &pool,
+            None,
+            id,
+            "allow-always",
+            PrecedentScope::Exact,
+            None,
+            Some(lead),
+        )
+        .await
+        .unwrap();
+        assert_eq!(row.state, "approved");
+
+        let approvals: i64 = sqlx::query_scalar(
+            "SELECT approvals FROM action_precedents WHERE signature = ? AND scope = 'exact'",
+        )
+        .bind(&cls.signature)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            approvals, 1,
+            "the reply after the card press must not bump approvals again"
+        );
+    }
+
+    /// Two pools on one database file stand in for the gateway and the CLI: each has its own
+    /// connection, so nothing but the claim stops both answers from writing.
+    async fn file_backed_pools(path: &std::path::Path) -> (SqlitePool, SqlitePool) {
+        use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+        async fn connect(path: &std::path::Path) -> SqlitePool {
+            let options = SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(true)
+                .foreign_keys(true)
+                .busy_timeout(std::time::Duration::from_secs(10))
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+            SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await
+                .unwrap()
+        }
+        let first = connect(path).await;
+        sqlx::migrate!("./migrations").run(&first).await.unwrap();
+        let second = connect(path).await;
+        (first, second)
+    }
+
+    /// A second runtime thread keeps a busy-waiting writer on one connection from starving the
+    /// other answer; the assertions are on committed state, so no timing is involved.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_card_press_and_short_reply_record_one_decision() {
+        let dir = std::env::temp_dir().join(format!(
+            "omon-ledger-b4-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ledger.sqlite3");
+        let (card_pool, reply_pool) = file_backed_pools(&path).await;
+        let lead = "slack:T1:C1::U1";
+        let (id, cls) = pending_push(&card_pool, "/repo-race").await;
+
+        let (card, reply) = tokio::join!(
+            finalize_ask_result(
+                &card_pool,
+                id,
+                &cls,
+                "engine_approval",
+                lead,
+                Ok(ApprovalDecision::Always),
+            ),
+            decide_proposal(
+                &reply_pool,
+                None,
+                id,
+                "allow-always",
+                PrecedentScope::Exact,
+                None,
+                Some(lead),
+            ),
+        );
+        assert_eq!(card.unwrap(), AskResolution::Allow);
+        assert_eq!(reply.unwrap().state, "approved");
+
+        let (approvals, declines): (i64, i64) = sqlx::query_as(
+            "SELECT approvals, declines FROM action_precedents WHERE signature = ? AND scope = 'exact'",
+        )
+        .bind(&cls.signature)
+        .fetch_one(&card_pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            (approvals, declines),
+            (1, 0),
+            "a card press and a short reply at once are one owner decision"
+        );
+        let precedents: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM action_precedents WHERE signature = ?")
+                .bind(&cls.signature)
+                .fetch_one(&card_pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            precedents, 1,
+            "the losing answer must not add a precedent row"
+        );
+        let state: String = sqlx::query_scalar("SELECT state FROM action_proposals WHERE id = ?")
+            .bind(id)
+            .fetch_one(&card_pool)
+            .await
+            .unwrap();
+        assert_eq!(state, "approved");
+
+        card_pool.close().await;
+        reply_pool.close().await;
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn deciding_a_missing_proposal_writes_no_precedent() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let lead = "slack:T1:C1::U1";
+        let cls = Classification::new(
+            Effect::VcsRemote,
+            "git push",
+            "/repo-missing",
+            "git push origin lane/1",
+        );
+
+        let resolution = finalize_ask_result(
+            &pool,
+            9_999,
+            &cls,
+            "engine_approval",
+            lead,
+            Ok(ApprovalDecision::Always),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resolution,
+            AskResolution::Deny {
+                reason: "proposal #9999 no longer exists; the action was not run".into(),
+                count_toward_limit: false,
+            }
+        );
+
+        let decided = decide_proposal(
+            &pool,
+            None,
+            9_999,
+            "allow-always",
+            PrecedentScope::Exact,
+            None,
+            Some(lead),
+        )
+        .await;
+        assert!(decided.is_err(), "a missing proposal cannot be decided");
+
+        let precedents: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM action_precedents WHERE signature = ?")
+                .bind(&cls.signature)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            precedents, 0,
+            "a decision for a missing proposal must not create a precedent"
+        );
+        let proposals: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM action_proposals WHERE id = ?")
+                .bind(9_999_i64)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(proposals, 0, "nothing to update either");
+    }
 }

@@ -1,0 +1,36 @@
+{
+  "base": "http://127.0.0.1:5399",
+  "rows": [
+    {
+      "id": "D17",
+      "check": "lane panel offers only actions the backend accepts, for all 8 lane statuses",
+      "ok": true,
+      "detail": "offered={\"queued\":[\"close\"],\"working\":[\"send\",\"close\"],\"blocked\":[\"send\",\"close\"],\"done_claimed\":[\"object\"],\"not_done\":[\"send\",\"close\"],\"verified_done\":[\"close\"],\"closed\":[\"reopen\"],\"failed\":[\"reopen\"]} violations=[] headTableViolations=[\"queued:send\",\"done_claimed:send\",\"verified_done:object\"]"
+    },
+    {
+      "id": "D20",
+      "check": "session panel shortens any user home, keeps other absolute paths and the full path in title",
+      "ok": true,
+      "detail": "shown=[{\"cwd\":\"/Users/alice/code/omon\",\"shown\":\"~/code/omon\",\"title\":\"/Users/alice/code/omon\"},{\"cwd\":\"/home/ci/work\",\"shown\":\"~/work\",\"title\":\"/home/ci/work\"},{\"cwd\":\"/opt/omon/app\",\"shown\":\"/opt/omon/app\",\"title\":\"/opt/omon/app\"},{\"cwd\":\"/Users\",\"shown\":\"/Users\",\"title\":\"/Users\"}] headRegexWould=[\"/Users/alice/code/omon\",\"/home/ci/work\",\"/opt/omon/app\",\"/Users\"]"
+    },
+    {
+      "id": "D21",
+      "check": "board move into a completed state: lane_not_verified shows exactly one actionable toast",
+      "ok": false,
+      "detail": "boardIn=19ms dragged=true patch=\"patch={\\\"state_id\\\":\\\"34788013-42b6-476d-bf91-5e61c2f2868d\\\"}\" toastIn=-1ms toasts=[]"
+    },
+    {
+      "id": "D22",
+      "check": "timeline day labels are consecutive calendar days across the 2026-11-01 fall-back",
+      "ok": true,
+      "detail": "tz=America/New_York ticks=44 months=[\"October 2026\",\"November 2026\"] firstMismatch=-1 headFormulaFirstMismatch=23 headTicksAroundMismatch=[\"31\",\"1\",\"1\",\"2\"] ticksAround=[\"31\",\"1\",\"2\",\"3\"]"
+    },
+    {
+      "id": "ALL",
+      "check": "no page console errors during the run",
+      "ok": true,
+      "detail": "consoleErrors=[]"
+    }
+  ],
+  "failed": 1
+}

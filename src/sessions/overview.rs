@@ -156,7 +156,6 @@ pub fn format_overview(o: &Overview, now: DateTime<Utc>, max_chars: usize) -> St
                 compact(m_str, 32),
                 compact(err_msg, 70)
             ));
-            continue;
         }
 
         let snap_sessions = snap_res.and_then(|r| r.as_ref().ok()).map(|s| &s.sessions);
@@ -858,6 +857,49 @@ mod tests {
                 m == "hanging-host" && matches!(res, Err(err) if err == "probe timed out")
             }),
             "hanging host snapshot should be timed out"
+        );
+    }
+
+    #[test]
+    fn format_overview_shows_listing_sessions_when_probe_fails() {
+        let now = Utc::now();
+        let list = SessionList {
+            sessions: vec![Session {
+                session_id: "01a1428d-5e53-7f52-974a-0f2bcb7e9722".into(),
+                name: Some("remote-worker".into()),
+                cwd: Some("/home/indo/remote-app".into()),
+                status: Some("idle".into()),
+                alive: None,
+                surface: None,
+                updated_at: None,
+                controls: vec![],
+                machine: "remote-box".into(),
+                last_activity: None,
+                raw: serde_json::json!({}),
+            }],
+            errors: vec![],
+            stale: vec![],
+            exit_code: 0,
+        };
+        let snapshots = vec![(
+            "remote-box".into(),
+            Err("python3: command not found".into()),
+        )];
+
+        let overview = Overview { list, snapshots };
+        let formatted = format_overview(&overview, now, 1900);
+
+        assert!(
+            formatted.contains("⚠️ remote-box: python3: command not found"),
+            "warning should be displayed"
+        );
+        assert!(
+            formatted.contains("🖥️ remote-box — 작업 중 0 · 답변 대기 0 · 대기 1"),
+            "host header with count should be displayed"
+        );
+        assert!(
+            formatted.contains("⚪ remote-worker · `remote-box:01a1428d-5e53`"),
+            "listed session should be rendered even when probe failed"
         );
     }
 }

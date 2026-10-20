@@ -21,6 +21,7 @@ import {
   Archive,
 } from 'lucide-react'
 import { navigate, useRoute, type Route } from '../router'
+import { TrackerApiError } from '../api'
 import { useTracker, type TrackerState } from '../store'
 import type { ID, Issue, Priority } from '../types'
 import { PRIORITY_LABELS } from '../types'
@@ -92,8 +93,20 @@ function buildCommands(t: TrackerState, route: Route, page: string | null): Pale
     try {
       await t.updateIssues(ids, patch)
       toast(message)
-    } catch {
-      // updateIssues already rolled back and reported the error to the store.
+    } catch (err) {
+      // updateIssues already rolled back and reported the error to the store, except for
+      // lane_not_verified, which needs the "Force close" action offered here.
+      if (err instanceof TrackerApiError && err.code === 'lane_not_verified' && patch.state_id) {
+        toast(err.message, {
+          kind: 'error',
+          action: {
+            label: 'Force close',
+            onClick: () => {
+              void t.updateIssues(ids, { ...patch, force_note: 'closed from tracker' }).catch(t.reportError)
+            },
+          },
+        })
+      }
     }
   }
 

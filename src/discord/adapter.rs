@@ -873,6 +873,16 @@ impl DiscordAdapter {
     }
 }
 
+/// Removes `[[measure ...]]` markers from text that is not a final reply. The extracted claims
+/// belong to the reply path (`stream`), which records and re-measures them; interim narration and
+/// edits only have to keep the raw marker away from the user.
+fn strip_claim_markers(content: &str, claims_enabled: bool) -> String {
+    if !claims_enabled {
+        return content.to_string();
+    }
+    crate::report::claims::strip_and_extract_claims(content).0
+}
+
 /// Edits carry the reasoning-filtered text and must fit a single Discord message.
 fn edit_message_content(filtered: &str) -> String {
     bound_split_messages(chunk_markdown(filtered, DISCORD_MESSAGE_LIMIT), 1)
@@ -1370,6 +1380,8 @@ pub async fn handle_event(
         FullEvent::InteractionCreate {
             interaction: Interaction::Component(component),
         } => {
+            // A `custom_id` that Discord cannot carry is sent compacted; parsing expands it back
+            // to the exact original id, so the command receives the producer's full token.
             if let Some(click) = super::buttons::parse_button_custom_id(&component.data.custom_id) {
                 super::buttons::handle_button_click(ctx, component, &data.allowed_users, click)
                     .await?;
@@ -1385,7 +1397,7 @@ pub async fn handle_event(
                 let is_paired = data.pairing_store.is_user_paired_sync(user_id);
                 let ledger_owner_required =
                     crate::agent::agent_workspace::approval_ledger_enabled();
-                let is_discord_owner = user_id.to_string() == crate::inbox::proposals::OWNER_ID;
+                let is_discord_owner = is_configured_owner_user(user_id, &configured_owner_id());
                 if (ledger_owner_required && !is_discord_owner)
                     || (!is_paired
                         && !is_user_authorized(
@@ -1615,7 +1627,7 @@ pub async fn steer_claimed_event(data: &PoiseData, event: &InboundEvent) -> Resu
         return Ok(true);
     }
 
-    let answered = event.author_id.as_deref() == Some(crate::inbox::proposals::OWNER_ID)
+    let answered = is_configured_owner_author(event.author_id.as_deref(), &configured_owner_id())
         && data
             .multiplexer
             .resolve_owner_reply(&event.session, &event.content)
@@ -2524,6 +2536,9 @@ impl DiscordFileUploader for SerenityFileUploader {
 
 struct ActiveDiscordStream {
     throttler: Arc<LiveEditThrottler<dyn DiscordMessageTransport>>,
+    /// The placeholder message the final chunk edits. It is the platform message id a
+    /// re-measure correction replies to, so it must outlive the throttler's internal state.
+    message_id: MessageId,
     last_sequence: Mutex<Option<u64>>,
 }
 
@@ -2680,6 +2695,10 @@ pub struct DiscordEgress {
     pub runtime_footer: bool,
     pub default_model: Option<String>,
     pub workspace_root: Option<PathBuf>,
+    /// Whether `[[measure ...]]` handling is on, resolved from the environment once when the
+    /// egress is built. Reading it per call made the behaviour depend on process-global env at
+    /// an arbitrary later moment, which no test could control without mutating that env.
+    claims_enabled: bool,
 }
 
 const TYPING_REFRESH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -2760,6 +2779,11 @@ impl DeadTargetRegistry {
 
     pub fn set_pool(&mut self, pool: sqlx::SqlitePool) {
         self.pool = Some(pool);
+    }
+
+    /// The pool durable dead targets are stored in, when one was configured.
+    pub fn pool(&self) -> Option<sqlx::SqlitePool> {
+        self.pool.clone()
     }
 
     pub fn is_dead(&self, channel_id: u64) -> bool {
@@ -3085,6 +3109,7 @@ impl DiscordEgress {
             runtime_footer: false,
             default_model: None,
             workspace_root: None,
+            claims_enabled: crate::report::claims::report_claims_enabled(),
         }
     }
 
@@ -3114,7 +3139,15 @@ impl DiscordEgress {
             runtime_footer: false,
             default_model: None,
             workspace_root: None,
+            claims_enabled: crate::report::claims::report_claims_enabled(),
         })
+    }
+
+    /// Overrides the `[[measure ...]]` handling resolved from the environment. Tests use it so
+    /// they never have to mutate process-global environment variables.
+    pub fn with_claims_enabled(mut self, enabled: bool) -> Self {
+        self.claims_enabled = enabled;
+        self
     }
 
     pub fn with_upload_transport(mut self, transport: Arc<dyn DiscordUploadTransport>) -> Self {
@@ -3252,6 +3285,12 @@ impl DiscordEgress {
 
     pub fn dead_targets(&self) -> Arc<DeadTargetRegistry> {
         self.dead_targets.clone()
+    }
+
+    /// The SQLite pool this egress persists dead targets through, when durable state is
+    /// configured. Claim bookkeeping reuses it so callers do not have to wire a second pool.
+    pub fn pool(&self) -> Option<sqlx::SqlitePool> {
+        self.dead_targets.pool()
     }
 
     pub fn with_dead_targets(mut self, dead_targets: Arc<DeadTargetRegistry>) -> Self {
@@ -3405,8 +3444,7 @@ impl DiscordEgress {
             self.keep_typing(&session).await;
             return Ok(());
         };
-        let (claim_stripped, _extracted_claims) = if crate::report::claims::report_claims_enabled()
-        {
+        let (claim_stripped, extracted_claims) = if self.claims_enabled {
             crate::report::claims::strip_and_extract_claims(content)
         } else {
             (content.to_string(), Vec::new())
@@ -3458,6 +3496,7 @@ impl DiscordEgress {
                     .await?;
                 Ok::<_, OmonError>(Arc::new(ActiveDiscordStream {
                     throttler: Arc::new(LiveEditThrottler::new(transport, channel, message_id)),
+                    message_id,
                     last_sequence: Mutex::new(None),
                 }))
             })
@@ -3500,6 +3539,22 @@ impl DiscordEgress {
         drop(last_sequence);
 
         if chunk.is_final {
+            // The markers are gone, so the facts they asserted must be re-measured here: otherwise
+            // a wrong number reaches the user and is never corrected (Slack does the same in
+            // `SlackEgress::spawn_claim_checks`).
+            if !extracted_claims.is_empty() {
+                if let Some(pool) = self.pool() {
+                    self.spawn_claim_checks(
+                        pool,
+                        &http,
+                        session.clone(),
+                        channel,
+                        active.message_id,
+                        extracted_claims,
+                    )
+                    .await;
+                }
+            }
             let tables_result = self
                 .dispatch_rendered_tables(&http, channel, rendered_tables)
                 .await;
@@ -3522,6 +3577,70 @@ impl DiscordEgress {
             if let Some(error) = media_error {
                 return Err(error);
             }
+        }
+        Ok(())
+    }
+
+    /// Records the reply's `[[measure ...]]` claims and re-measures them after the standard delay,
+    /// posting the `정정:` correction as a reply when the measurement disagrees. Mirrors
+    /// `SlackEgress::spawn_claim_checks` so both platforms correct themselves the same way.
+    async fn spawn_claim_checks(
+        &self,
+        pool: SqlitePool,
+        http: &Arc<serenity::Http>,
+        session: SessionKey,
+        channel: ChannelId,
+        message_id: MessageId,
+        claims: Vec<crate::report::claims::ExtractedClaim>,
+    ) {
+        let transport: Arc<dyn DiscordMessageTransport> = self
+            .message_transport
+            .clone()
+            .unwrap_or_else(|| Arc::new(SerenityMessageTransport::new(http.clone())));
+        let dispatcher: Arc<dyn OutboundDispatcher> = Arc::new(DiscordClaimReplyDispatcher {
+            transport,
+            channel,
+            fallback_reference: message_id,
+        });
+        let cwd = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."));
+        let _ = crate::report::claims::record_and_schedule_claims(
+            pool,
+            dispatcher,
+            session,
+            message_id.get().to_string(),
+            claims,
+            cwd,
+            crate::report::claims::DEFAULT_REMEASURE_DELAY,
+        )
+        .await;
+    }
+}
+
+/// Posts a re-measure correction back into the channel, replying to the reply that made the claim.
+struct DiscordClaimReplyDispatcher {
+    transport: Arc<dyn DiscordMessageTransport>,
+    channel: ChannelId,
+    fallback_reference: MessageId,
+}
+
+#[async_trait]
+impl OutboundDispatcher for DiscordClaimReplyDispatcher {
+    async fn dispatch(&self, action: OutboundAction) -> Result<()> {
+        if let OutboundAction::SendMessage {
+            content, reply_to, ..
+        } = action
+        {
+            let reference = reply_to
+                .as_deref()
+                .and_then(|id| id.parse::<u64>().ok())
+                .map(MessageId::new)
+                .or(Some(self.fallback_reference));
+            self.transport
+                .send_message_with_reference(self.channel, content, reference)
+                .await?;
         }
         Ok(())
     }
@@ -3619,7 +3738,8 @@ impl OutboundDispatcher for DiscordEgress {
                 content,
                 reply_to,
             } => {
-                let filtered_content = filter_reasoning(&content);
+                let filtered_content =
+                    filter_reasoning(&strip_claim_markers(&content, self.claims_enabled));
                 if is_explicit_silence(&filtered_content) {
                     self.typing.lock().await.remove(&session.storage_key());
                     return Ok(());
@@ -3833,7 +3953,8 @@ impl OutboundDispatcher for DiscordEgress {
                 platform_message_id,
                 content,
             } => {
-                let filtered_content = filter_reasoning(&content);
+                let filtered_content =
+                    filter_reasoning(&strip_claim_markers(&content, self.claims_enabled));
                 if is_explicit_silence(&filtered_content) {
                     self.typing.lock().await.remove(&session.storage_key());
                     return Ok(());
@@ -4264,6 +4385,23 @@ pub fn build_approval_content_with_mentions(
 
 pub fn is_authorized_clicker(user_id: u64, allowed: &[u64]) -> bool {
     allowed.is_empty() || allowed.contains(&user_id)
+}
+
+/// The configured Discord owner: the first `DISCORD_ALLOWED_USERS` id, falling back to the
+/// compiled-in default. `/sessions` already gates on this, so approval buttons and owner-reply
+/// steering must use it too instead of comparing against the default id directly.
+fn configured_owner_id() -> String {
+    crate::sessions::status_reply::owner_id()
+}
+
+/// Owner check against an explicitly supplied owner id, so the gate is a pure function that can be
+/// tested without mutating process-global environment variables.
+fn is_configured_owner_user(user_id: u64, owner: &str) -> bool {
+    user_id.to_string() == owner
+}
+
+fn is_configured_owner_author(author_id: Option<&str>, owner: &str) -> bool {
+    author_id == Some(owner)
 }
 
 /// Determines if candidate_id represents a newer Discord message ID than current_cursor.
@@ -6098,6 +6236,8 @@ mod fix_r5_discord_adapter_tests {
     struct RecordingTransport {
         sent: std::sync::Mutex<Vec<String>>,
         edits: std::sync::Mutex<Vec<String>>,
+        /// The reply reference each `send_message_with_reference` call carried.
+        references: std::sync::Mutex<Vec<Option<MessageId>>>,
     }
 
     #[async_trait]
@@ -6116,8 +6256,19 @@ mod fix_r5_discord_adapter_tests {
             Ok(())
         }
 
-        async fn send_message(&self, _channel_id: ChannelId, content: String) -> Result<MessageId> {
+        async fn send_message(&self, channel_id: ChannelId, content: String) -> Result<MessageId> {
+            self.send_message_with_reference(channel_id, content, None)
+                .await
+        }
+
+        async fn send_message_with_reference(
+            &self,
+            _channel_id: ChannelId,
+            content: String,
+            reference: Option<MessageId>,
+        ) -> Result<MessageId> {
             self.sent.lock().unwrap().push(content);
+            self.references.lock().unwrap().push(reference);
             Ok(MessageId::new(42))
         }
 
@@ -6456,6 +6607,117 @@ mod fix_r5_discord_adapter_tests {
             transport.sent.lock().unwrap().as_slice(),
             ["visible answer"]
         );
+    }
+
+    #[tokio::test]
+    async fn send_message_strips_measure_markers() {
+        let transport = Arc::new(RecordingTransport::default());
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()))
+            .with_claims_enabled(true);
+        egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session("7"),
+                content: "지금 확인 중입니다 [[measure [\"wc\", \"-l\", \"a.txt\"] expect~\"3\"]]"
+                    .into(),
+                reply_to: None,
+            })
+            .await
+            .unwrap();
+        let sent = transport.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert!(!sent[0].contains("[[measure"), "{sent:?}");
+        assert!(sent[0].contains("지금 확인 중입니다"), "{sent:?}");
+    }
+
+    #[test]
+    fn claim_marker_stripping_follows_the_injected_flag() {
+        let with_marker = "숫자는 3입니다 [[measure [\"echo\", \"3\"] expect~\"3\"]]";
+        assert_eq!(strip_claim_markers(with_marker, true), "숫자는 3입니다");
+        // Disabled: the text is left exactly as given, which is what `EditMessage` must also do.
+        assert_eq!(strip_claim_markers(with_marker, false), with_marker);
+    }
+
+    #[tokio::test]
+    async fn final_stream_records_measure_claims_for_re_measurement() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let transport = Arc::new(RecordingTransport::default());
+        let egress = egress_with(transport.clone(), Arc::new(CountingUploader::default()))
+            .with_claims_enabled(true)
+            .with_dead_targets(Arc::new(DeadTargetRegistry::new().with_pool(pool.clone())));
+        egress
+            .dispatch(OutboundAction::Stream {
+                session: session("7"),
+                chunk: crate::StreamChunk {
+                    stream_id: Uuid::new_v4(),
+                    sequence: 0,
+                    content: "줄 수는 3입니다 [[measure [\"echo\", \"3\"] expect~\"3\"]]".into(),
+                    is_final: true,
+                    reply_to: None,
+                },
+            })
+            .await
+            .unwrap();
+
+        let delivered = transport.edits.lock().unwrap().clone();
+        assert_eq!(delivered.len(), 1);
+        assert!(!delivered[0].contains("[[measure"), "{delivered:?}");
+
+        // The claim must be recorded against the delivered message, or a wrong number is never
+        // re-measured and never corrected.
+        let (claim_id, platform_message_id, argv_json, state): (i64, String, String, String) =
+            sqlx::query_as("SELECT id, platform_message_id, argv_json, state FROM report_claims")
+                .fetch_one(&pool)
+                .await
+                .expect("the reply's claim must be recorded for re-measurement");
+        assert_eq!(platform_message_id, "42");
+        assert_eq!(argv_json, "[\"echo\",\"3\"]");
+        assert_eq!(state, "pending");
+
+        // Drive the check to completion deterministically: no delay, no polling. The assertion
+        // that the measurement disagrees proves the `정정:` correction reaches the Discord
+        // transport, replying to the message that carried the claim.
+        sqlx::query("UPDATE report_claims SET expect_regex = '^999$' WHERE id = ?")
+            .bind(claim_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let corrections = Arc::new(RecordingTransport::default());
+        let dispatcher = DiscordClaimReplyDispatcher {
+            transport: corrections.clone(),
+            channel: ChannelId::new(7),
+            fallback_reference: MessageId::new(42),
+        };
+        let outcome = crate::report::claims::execute_pending_claim(
+            &pool,
+            &dispatcher,
+            &session("7"),
+            claim_id,
+            &std::env::temp_dir(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, "corrected");
+        let sent = corrections.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1, "exactly one correction is delivered");
+        assert!(sent[0].starts_with("정정:"), "{sent:?}");
+        assert!(sent[0].contains("줄 수는 3입니다"), "{sent:?}");
+        assert!(sent[0].contains("실제 측정값: 3"), "{sent:?}");
+        let references = corrections.references.lock().unwrap().clone();
+        assert_eq!(
+            references,
+            vec![Some(MessageId::new(42))],
+            "the correction replies to the message that made the claim"
+        );
+    }
+
+    #[test]
+    fn approval_owner_gate_uses_the_configured_owner_id() {
+        // The gate is a pure function of the supplied owner id, so no process env is touched.
+        assert!(is_configured_owner_user(424242, "424242"));
+        assert!(!is_configured_owner_user(999, "424242"));
+        assert!(is_configured_owner_author(Some("424242"), "424242"));
+        assert!(!is_configured_owner_author(Some("999"), "424242"));
+        assert!(!is_configured_owner_author(None, "424242"));
     }
 
     #[tokio::test]

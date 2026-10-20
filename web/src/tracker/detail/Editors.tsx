@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { useTracker } from '../store'
 import type { Issue } from '../types'
+import { createDraftSaver, createUnmountFlush, retainedDraft, type DraftSaver, type SaveState } from './descriptionDraft'
 import { Markdown, notifyError, useAutosize } from './shared'
 
 export interface TitleHandle {
@@ -70,86 +71,116 @@ export function DescriptionEditor({ issue, compact = false }: { issue: Issue; co
   const t = useTracker()
   const [editing, setEditing] = useState(false)
   const [tab, setTab] = useState<'write' | 'preview'>('write')
-  const [value, setValue] = useState(issue.description)
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const [value, setValue] = useState(() => retainedDraft(issue.id) ?? issue.description)
+  const [saveState, setSaveState] = useState<SaveState>(() =>
+    retainedDraft(issue.id) === undefined ? 'idle' : 'failed',
+  )
+  const [pending, setPending] = useState(() => retainedDraft(issue.id) !== undefined)
   const el = useRef<HTMLTextAreaElement>(null)
   const timer = useRef<number | undefined>(undefined)
-  const lastSaved = useRef(issue.description)
   const issueId = issue.id
   const updateIssues = t.updateIssues
   useAutosize(el, value, compact ? 80 : 120)
 
-  useEffect(() => {
-    if (!editing) {
-      setValue(issue.description)
-      lastSaved.current = issue.description
-    }
-  }, [issue.description, editing])
+  // The saver owns the draft (the newest text, what the server acknowledged, and what must survive
+  // this component), so the rules stay testable without a DOM: descriptionDraft.test.ts.
+  const updateIssuesRef = useRef(updateIssues)
+  updateIssuesRef.current = updateIssues
+  const saverRef = useRef<DraftSaver | null>(null)
+  if (saverRef.current === null) {
+    saverRef.current = createDraftSaver({
+      issueId,
+      initial: issue.description,
+      save: (text) => updateIssuesRef.current([issueId], { description: text }),
+      onChange: (snapshot) => {
+        setValue(snapshot.value)
+        setSaveState(snapshot.state)
+        setPending(snapshot.dirty)
+      },
+      onError: notifyError,
+    })
+  }
+  const saver = saverRef.current
 
-  const save = (next: string) => {
+  useEffect(() => {
+    // Adopts the server copy only when nothing typed is waiting: a failed save rolls the issue back
+    // in the store, and adopting that value would throw the user's draft away.
+    saver.sync(issue.description)
+  }, [saver, issue.description])
+
+  const flush = () => {
     window.clearTimeout(timer.current)
-    if (next === lastSaved.current) return
-    const previous = lastSaved.current
-    lastSaved.current = next
-    setSaveState('saving')
-    updateIssues([issueId], { description: next })
-      .then(() => setSaveState('saved'))
-      .catch((err) => {
-        // Not saved: let the next blur or keystroke retry instead of treating it as saved.
-        lastSaved.current = previous
-        setSaveState('idle')
-        notifyError(err)
-      })
+    return saver.flush()
   }
 
-  // Closing the peek by clicking outside unmounts the editor before blur fires: flush the
-  // pending autosave instead of dropping the last keystrokes.
-  const latest = useRef(value)
-  latest.current = value
-  const saveRef = useRef(save)
-  saveRef.current = save
-  useEffect(
-    () => () => {
+  // Closing the peek by clicking outside unmounts the editor before blur fires: keep the newest text
+  // synchronously and still try to save it, so nothing typed is dropped. `createUnmountFlush` drops
+  // that save when StrictMode's simulated unmount immediately remounts us, which is what used to
+  // leave a phantom request in flight that swallowed the user's Retry.
+  const flushRef = useRef(flush)
+  flushRef.current = flush
+  const unmountFlush = useRef<{ attach: () => void; detach: () => void } | null>(null)
+  if (unmountFlush.current === null) {
+    unmountFlush.current = createUnmountFlush(() => {
+      if (saver.dirty()) void flushRef.current()
+    })
+  }
+  const owed = unmountFlush.current
+  useEffect(() => {
+    owed.attach()
+    return () => {
       window.clearTimeout(timer.current)
-      if (latest.current !== lastSaved.current) saveRef.current(latest.current)
-    },
-    [],
-  )
+      saver.dispose()
+      owed.detach()
+    }
+  }, [saver, owed])
 
   const onChange = (next: string) => {
-    setValue(next)
+    saver.edit(next)
     window.clearTimeout(timer.current)
-    timer.current = window.setTimeout(() => save(next), AUTOSAVE_MS)
+    timer.current = window.setTimeout(() => void flushRef.current(), AUTOSAVE_MS)
   }
 
   const finish = () => {
-    save(value)
-    setEditing(false)
     setTab('write')
+    void flush().then((saved) => {
+      // A failed save keeps the editor open with the text and a Retry button instead of discarding it.
+      if (saved) setEditing(false)
+    })
   }
 
   if (!editing) {
     return (
-      <div
-        className="ld-desc ld-desc-view"
-        role="button"
-        tabIndex={0}
-        aria-label="Edit description"
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest('a')) return
-          setEditing(true)
-          requestAnimationFrame(() => el.current?.focus())
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
+      <>
+        <div
+          className="ld-desc ld-desc-view"
+          role="button"
+          tabIndex={0}
+          aria-label="Edit description"
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('a')) return
             setEditing(true)
             requestAnimationFrame(() => el.current?.focus())
-          }
-        }}
-      >
-        {value.trim() ? <Markdown source={value} /> : <div className="ld-desc-placeholder">Add description…</div>}
-      </div>
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              setEditing(true)
+              requestAnimationFrame(() => el.current?.focus())
+            }
+          }}
+        >
+          {value.trim() ? <Markdown source={value} /> : <div className="ld-desc-placeholder">Add description…</div>}
+        </div>
+        {pending && (
+          <div className="ld-desc-pending">
+            Unsaved changes
+            <button type="button" className="ld-tab" onClick={() => void flush()}>
+              Retry
+            </button>
+          </div>
+        )}
+      </>
     )
   }
 
@@ -174,8 +205,19 @@ export function DescriptionEditor({ issue, compact = false }: { issue: Issue; co
           Preview
         </button>
         <span className="ld-desc-status">
-          {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Markdown supported'}
+          {saveState === 'saving'
+            ? 'Saving…'
+            : saveState === 'saved'
+              ? 'Saved'
+              : saveState === 'failed'
+                ? 'Not saved'
+                : 'Markdown supported'}
         </span>
+        {saveState === 'failed' && (
+          <button type="button" className="ld-tab" onClick={() => void flush()}>
+            Retry
+          </button>
+        )}
       </div>
       {tab === 'write' ? (
         <textarea

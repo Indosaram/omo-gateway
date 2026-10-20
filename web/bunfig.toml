@@ -1,0 +1,9 @@
+# Bun picks this up for `bun test` run from web/.
+#
+# The dashboard suite is vitest-authored: it relies on the `@/` path alias
+# (resolved from tsconfig.json "paths") and on `vi.stubGlobal` /
+# `vi.unstubAllGlobals`, which bun's `vitest` compatibility layer does not
+# implement. test-preload.ts installs those two helpers before any test file
+# loads.
+[test]
+preload = ["./test-preload.ts"]

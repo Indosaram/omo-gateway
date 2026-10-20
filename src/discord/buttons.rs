@@ -1,6 +1,15 @@
 //! A button with custom id `omon:btn:<namespace>:<action>:<arg>` runs the command configured for
 //! `<namespace>` in the button-actions file with `<action> <arg>` appended. Exit 0 marks the
 //! button done; any other outcome restores it for a retry.
+//!
+//! Discord rejects a component `custom_id` longer than 100 characters, while a publish binding
+//! carries a full sha256 token (`omon:btn:content-intel:publish:96-417-435:4.<64 hex>.2`, 110
+//! characters). Truncating that token would weaken the publish binding, so an over-long id is
+//! instead compacted losslessly into an explicitly versioned form: a `v1` field is inserted before
+//! the token and each 64-hex-digit part becomes `b64-<43 base64url chars>`, which turns the same
+//! id into 96 characters. Only an id carrying that `v1` field is ever decoded, so a legitimate raw
+//! token is never reinterpreted, and [`parse_button_custom_id`] expands it back before parsing so
+//! the command still receives the exact original token.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -8,10 +17,12 @@ use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use parking_lot::Mutex;
 use serde::Deserialize;
 use serenity::all::{
-    ActionRow, ActionRowComponent, ButtonKind, ChannelId, ComponentInteraction, Context,
+    ActionRow, ActionRowComponent, Button, ButtonKind, ChannelId, ComponentInteraction, Context,
     CreateActionRow, CreateAllowedMentions, CreateButton, CreateInteractionResponse,
     CreateInteractionResponseMessage, CreateMessage, EditMessage, Http, MessageId,
 };
@@ -104,6 +115,9 @@ fn is_arg(segment: &str) -> bool {
 }
 
 fn is_token(segment: &str) -> bool {
+    // 128 keeps the Slack button values working (Slack allows 2000-character values). Discord
+    // cannot carry an id that long, so [`compact_custom_id`] shrinks the hex parts losslessly
+    // before it is sent there.
     (1..=128).contains(&segment.len())
         && segment.starts_with(|c: char| c.is_ascii_alphanumeric())
         && segment
@@ -111,10 +125,110 @@ fn is_token(segment: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
 }
 
+/// Discord rejects a component `custom_id` longer than this. An id above it is sent in the
+/// lossless [`compact_custom_id`] form rather than truncated.
+pub const DISCORD_CUSTOM_ID_LIMIT: usize = 100;
+
+/// Marks a compacted token part: `b64-` followed by the base64url (no padding) of the original
+/// 32 bytes. A compacted id is always recognised by its [`COMPACT_VERSION`] field, never by this
+/// marker alone, so an untouched token that happens to start with `b64-` keeps its literal value.
+const COMPACT_PART_MARKER: &str = "b64-";
+const HEX_SHA256_CHARS: usize = 64;
+const COMPACT_PAYLOAD_CHARS: usize = 43;
+
+/// Version field inserted before the token of a compacted id: `omon:btn:<namespace>:<action>:<arg>:v1:<token>`.
+/// A six-segment id never contains it, so today's ids are unambiguous and need no migration.
+const COMPACT_VERSION: &str = "v1";
+
+/// Whether a `custom_id` is short enough for Discord to accept it on a component.
+pub fn custom_id_fits_discord(custom_id: &str) -> bool {
+    custom_id.len() <= DISCORD_CUSTOM_ID_LIMIT
+}
+
+fn hex_to_bytes(hex: &str) -> Option<[u8; 32]> {
+    let bytes = hex.as_bytes();
+    if bytes.len() != HEX_SHA256_CHARS || !bytes.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (index, pair) in bytes.chunks(2).enumerate() {
+        let text = std::str::from_utf8(pair).ok()?;
+        out[index] = u8::from_str_radix(text, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Compacts a token part: a 64-hex-digit digest becomes `b64-<43 base64url chars>`, anything else
+/// is returned unchanged. Nothing is dropped, so the digest keeps its full strength.
+fn compact_part(part: &str) -> String {
+    match hex_to_bytes(part) {
+        Some(bytes) => format!("{COMPACT_PART_MARKER}{}", URL_SAFE_NO_PAD.encode(bytes)),
+        None => part.to_owned(),
+    }
+}
+
+/// Expands a compacted token part back to its 64-hex-digit form; other parts pass through.
+fn expand_part(part: &str) -> String {
+    let Some(payload) = part.strip_prefix(COMPACT_PART_MARKER) else {
+        return part.to_owned();
+    };
+    if payload.len() != COMPACT_PAYLOAD_CHARS {
+        return part.to_owned();
+    }
+    match URL_SAFE_NO_PAD.decode(payload) {
+        Ok(bytes) if bytes.len() == 32 => bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .concat(),
+        _ => part.to_owned(),
+    }
+}
+
+/// The Discord-legal form of a `custom_id`: identical when it already fits, otherwise the same id
+/// with an explicit [`COMPACT_VERSION`] field and its hex digest parts compacted losslessly.
+pub fn compact_custom_id(custom_id: &str) -> String {
+    if custom_id_fits_discord(custom_id) {
+        return custom_id.to_owned();
+    }
+    let mut parts: Vec<String> = custom_id.split(':').map(str::to_owned).collect();
+    // `omon:btn:<namespace>:<action>:<arg>:<token>` — only the token can hold a sha256 digest.
+    if parts.len() != 6 {
+        return custom_id.to_owned();
+    }
+    let token = parts[5]
+        .split('.')
+        .map(compact_part)
+        .collect::<Vec<_>>()
+        .join(".");
+    parts[5] = COMPACT_VERSION.to_owned();
+    parts.push(token);
+    parts.join(":")
+}
+
+/// The original form of a `custom_id`: expands the [`compact_custom_id`] encoding, so the parsed
+/// click carries exactly the token the producer built. An id without the version field is
+/// returned verbatim, so a raw token is never rewritten.
+pub fn expand_custom_id(custom_id: &str) -> String {
+    let mut parts: Vec<String> = custom_id.split(':').map(str::to_owned).collect();
+    if parts.len() != 7 || parts[5] != COMPACT_VERSION {
+        return custom_id.to_owned();
+    }
+    let token = parts[6]
+        .split('.')
+        .map(expand_part)
+        .collect::<Vec<_>>()
+        .join(".");
+    parts.truncate(5);
+    parts.push(token);
+    parts.join(":")
+}
+
 /// The arg and token become argv elements of the configured command, so they may never start
-/// with `-`.
+/// with `-`. A compacted id is expanded first, so `click.token` is always the producer's token.
 pub fn parse_button_custom_id(custom_id: &str) -> Option<ButtonClick> {
-    let mut parts = custom_id.strip_prefix(BUTTON_PREFIX)?.split(':');
+    let expanded = expand_custom_id(custom_id);
+    let mut parts = expanded.strip_prefix(BUTTON_PREFIX)?.split(':');
     let (namespace, action, arg) = (parts.next()?, parts.next()?, parts.next()?);
     let token = parts.next();
     if parts.next().is_some()
@@ -276,12 +390,20 @@ pub fn reply_text(outcome: &ActionOutcome) -> String {
 }
 
 /// `None` when a row holds anything but buttons: select menus cannot be round-tripped here.
+///
+/// Every non-link `custom_id` is re-emitted through [`compact_custom_id`], so a row that carries
+/// an over-long id (a full sha256 publish binding) goes back to Discord within its 100-character
+/// limit while the full token stays recoverable on the next click. Label, emoji and style come
+/// from the original button, so only the id changes.
 pub fn rebuild_buttons(
     rows: &[ActionRow],
     clicked: &str,
     clicked_label: Option<&str>,
     disabled: bool,
 ) -> Option<Vec<CreateActionRow>> {
+    let resend = |button: &Button, custom_id: &str| {
+        CreateButton::from(button.clone()).custom_id(compact_custom_id(custom_id))
+    };
     rows.iter()
         .map(|row| {
             row.components
@@ -290,12 +412,15 @@ pub fn rebuild_buttons(
                     ActionRowComponent::Button(button) => Some(match &button.data {
                         ButtonKind::NonLink { custom_id, style } if custom_id == clicked => {
                             match clicked_label {
-                                Some(label) => CreateButton::new(custom_id.clone())
+                                Some(label) => resend(button, custom_id)
                                     .style(*style)
                                     .label(label)
                                     .disabled(disabled),
-                                None => CreateButton::from(button.clone()).disabled(disabled),
+                                None => resend(button, custom_id).disabled(disabled),
                             }
+                        }
+                        ButtonKind::NonLink { custom_id, .. } => {
+                            resend(button, custom_id).disabled(disabled || button.disabled)
                         }
                         ButtonKind::Link { .. } => CreateButton::from(button.clone()),
                         _ => {
@@ -518,6 +643,89 @@ mod tests {
                 token: Some(token),
                 ..click("publish", "96-417-435")
             })
+        );
+    }
+
+    #[test]
+    fn over_long_button_id_round_trips_through_the_compact_form() {
+        let token = format!("4.{}.2", "a".repeat(64));
+        let original = format!("omon:btn:content-intel:publish:96-417-435:{token}");
+        assert!(
+            !custom_id_fits_discord(&original),
+            "the fixture must exceed Discord's limit"
+        );
+
+        // What goes to Discord fits, and it still carries all 256 bits of the digest.
+        let sent = compact_custom_id(&original);
+        assert!(
+            custom_id_fits_discord(&sent),
+            "{sent} ({} chars)",
+            sent.len()
+        );
+        assert!(
+            !sent.contains(&"a".repeat(64)),
+            "the digest must not be verbatim"
+        );
+        assert_eq!(sent.split(':').nth(5), Some(COMPACT_VERSION));
+        let expected = concat!(
+            "omon:btn:content-intel:publish:96-417-435:v1:",
+            "4.b64-qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqo.2"
+        );
+        assert_eq!(sent, expected);
+        assert_eq!(compact_custom_id(&sent), sent, "compaction is idempotent");
+
+        // A click on that id expands to the exact original id and token.
+        assert_eq!(expand_custom_id(&sent), original);
+        let click = parse_button_custom_id(&sent).unwrap();
+        assert_eq!(click.namespace, "content-intel");
+        assert_eq!(click.action, "publish");
+        assert_eq!(click.arg, "96-417-435");
+        assert_eq!(click.token, Some(token));
+
+        // An id that already fits is never rewritten.
+        assert_eq!(
+            compact_custom_id("omon:btn:content-intel:publish:86"),
+            "omon:btn:content-intel:publish:86"
+        );
+        assert_eq!(
+            expand_custom_id("omon:btn:content-intel:publish:86"),
+            "omon:btn:content-intel:publish:86"
+        );
+    }
+
+    #[test]
+    fn a_raw_token_that_looks_compacted_is_left_alone() {
+        let raw_token = format!("4.b64-{}.2", "q".repeat(43));
+        let raw = format!("omon:btn:content-intel:publish:86:{raw_token}");
+        assert!(custom_id_fits_discord(&raw));
+        assert_eq!(expand_custom_id(&raw), raw);
+        assert_eq!(parse_button_custom_id(&raw).unwrap().token, Some(raw_token));
+
+        let other = "omon:btn:content-intel:publish:86:v9:4.b64-abc.2";
+        assert_eq!(expand_custom_id(other), other);
+    }
+
+    #[test]
+    fn rerendered_buttons_send_the_compact_id_and_keep_the_token() {
+        let token = format!("4.{}.2", "b".repeat(64));
+        let original = format!("omon:btn:content-intel:publish:96-417-435:{token}");
+        let rows: Vec<ActionRow> = serde_json::from_value(serde_json::json!([{
+            "type": 1,
+            "components": [
+                {"type": 2, "style": 3, "label": "발행", "custom_id": original.clone()},
+                {"type": 2, "style": 2, "label": "건너뛰기", "custom_id": "omon:btn:content-intel:skip:86"}
+            ]
+        }]))
+        .unwrap();
+
+        let restored = rebuild_buttons(&rows, &original, None, false).unwrap();
+        let json = serde_json::to_value(&restored).unwrap();
+        let clicked = json[0]["components"][0]["custom_id"].as_str().unwrap();
+        assert!(custom_id_fits_discord(clicked), "{clicked}");
+        assert_eq!(parse_button_custom_id(clicked).unwrap().token, Some(token));
+        assert_eq!(
+            json[0]["components"][1]["custom_id"],
+            "omon:btn:content-intel:skip:86"
         );
     }
 

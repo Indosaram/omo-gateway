@@ -85,7 +85,7 @@ pub fn owner_thread(key: &SessionKey, author: &str, owner: &str) -> bool {
 
 /// Whether the dispatcher may treat this as private is still decided by
 /// `owner_thread_is_private` (channel membership limited to owner and bot).
-fn slack_home_conversation(
+pub(crate) fn slack_home_conversation(
     key: &SessionKey,
     author: &str,
     owner: &str,
