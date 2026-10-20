@@ -58,3 +58,20 @@ readyz 200, dashboard ready, codesign strict OK with TeamIdentifier 5DUM8WPB4C
 
 Still to prove in production: no A7 recurrence, and one triaged item reaching
 `verified` with a calendar readback. A log monitor is active for both.
+
+## Follow-up deployment bded9799 (2026-10-20 23:07 KST)
+
+B5 production counterexample (ferryx#12/#13 emitted as `github:` before triage
+and again as `inbox:` after it) fixed in `src/autonomy/loop.rs`; gate
+`review-20261020-b5` GATE-PASS (test 462s, web 0 fail), loop.rs hash unchanged
+across the gate. Commit `bded97995ce65ad50a3e044f1d9fcf3b32ba8f8a` pushed to main.
+
+Deploy: `DEPLOYED rev=bded9799 dirty_paths=0`, deploy.sh `deploy OK`, readyz 200,
+dashboard ready, codesign strict OK TeamIdentifier 5DUM8WPB4C (23:06:58),
+`slack socket: connected` at 2026-10-20T14:07:03.808281Z.
+
+Production after 610bf915: action-loop events 162-165 all reached the lead
+(`lead_turn`), and the lead recorded outcomes for every item. No busy refusal
+(A7) has occurred since the fix was deployed, so the live retry path is covered
+by the loopback tests, not yet by a production occurrence. No post-deploy item
+was a scheduling request, so no automatic calendar `verified` row exists yet.

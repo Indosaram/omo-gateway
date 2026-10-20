@@ -684,3 +684,10 @@ action-loop item". That is the intended behaviour and it must not be worked arou
 So the honest split is: **migration + readback + negative probe are rehearsable by anyone on a copy;
 the one write that maps a historical item to an artifact is an owner action.** This lane did not run
 steps 3–6, and nothing was written to the live DB.
+
+
+## Post-deployment corrections (2026-10-20)
+
+- A1/A5 FIXED src/lanes/dispatch.rs (`critical`: `"action_loop" => true`, commit 610bf915) — the wake judge recorded triaged batches as `jev_skip` and the loop then failed them before the lead saw them (11 items at 11:18Z/11:30Z). Test: lanes::dispatch::tests::owner_visible_failure_events_skip_the_wake_judgment. Production after deployment: events 162, 163, 164, 165 were all `lane event admitted to lead turn` with delivery_reason `lead_turn`, and the lead recorded outcomes (9 failed with checked reasons, 1 executed `owner-dm-notice-20261020T1359`).
+- B5 FIXED src/autonomy/loop.rs (inbox scan excludes items seen/outcome-tracked under `github:`, commit bded9799) — production counterexample: ferryx#12 and #13 were emitted as `github:` before triage and again as `inbox:` after it. Test: autonomy::action_loop::tests::github_item_taken_before_triage_is_not_taken_again_after_triage; gate review-20261020-b5 GATE-PASS; deployed bded9799.
+- A14: the verified state still requires a calendar readback. No post-deployment item so far was a scheduling request, so no automatic `verified` row exists yet; the gateway did not mark anything verified without a readback.
