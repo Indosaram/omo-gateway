@@ -218,6 +218,9 @@ fn critical(event: &LaneEvent) -> bool {
         // the wake judgment that can skip an event.
         "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed"
         | "cron_report" | "unmerged_branch" | "launch_failed" => true,
+        // Triage already chose these items for action; a wake skip ends them as failed before
+        // the lead sees them (2026-10-20 11:18Z and 11:30Z: 11 items, no lead turn).
+        "action_loop" => true,
         "cron_problem" => event.body.contains("needs_owner"),
         _ => false,
     }
@@ -246,6 +249,10 @@ mod tests {
         // be able to drop either event.
         assert!(critical(&event("unmerged_branch")));
         assert!(critical(&event("launch_failed")));
+        assert!(
+            critical(&event("action_loop")),
+            "triaged action items must reach the lead, not end as jev_skip failures"
+        );
         assert!(!critical(&event("nudged")));
     }
 }

@@ -1,0 +1,11 @@
+1c992e238d6bb453f3b674bd471b379f4be87c3e
+fmt exit=0 secs=15
+clippy exit=0 secs=203
+test exit=101 secs=672
+web-test-raw exit=0 secs=0
+web-tsc exit=0 secs=11
+web-build exit=0 secs=9
+web-test-fails=0
+web-test-passes=151
+web-test-unresolved-imports=0
+GATE-FAIL

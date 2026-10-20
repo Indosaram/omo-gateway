@@ -1,4 +1,5 @@
-// Browser checks for D17 / D20 / D21 / D22, driven through the real tracker DOM.
+// Browser checks for D17 / D20 / D22, driven through the real tracker DOM. (D21 lives in
+// checks-d21.ts: it invokes the real updateWithLaneToast against the mounted provider.)
 //
 //   TZ=America/New_York bun run checks-ui.ts
 //
@@ -173,64 +174,11 @@ try {
   )
 
   // ================================================================= D21
-  // model.ts:168-183 updateWithLaneToast: a lane_not_verified 409 must produce exactly one toast,
-  // the actionable one. The store's duplicate (store.tsx:441-446) is suppressed. The other caller of
-  // that suppression (pickers.tsx useApply) is already covered by ui-final/results-final.json D27;
-  // this drives the board-move caller, which D27 never touched.
-  await post('/reset')
-  await go(view, '/tracker/team/OMO/all')
-  await waitFor(view, `!!document.querySelector('[data-issue-row="OMO-101"]')`, 20000)
-  await view.evaluate(`(() => { const b = document.querySelector('[data-layout="board"]'); if (!b) return false; b.click(); return true })()`)
-  const boardIn = await waitFor(view, `!!document.querySelector('[data-issue-card="OMO-101"]')`, 15000)
-  const target = (await ctl('/state')).completed
-  // Bring the Done column into view first: releasing outside the viewport makes closestCorners pick
-  // whichever column happens to be nearest, which is how the first attempt landed on "Duplicate".
-  await view.evaluate(`(() => { const c = document.querySelector('[data-board-column=${JSON.stringify(target.id)}]'); if (!c) return false; c.scrollIntoView({ block: 'nearest', inline: 'center' }); return true })()`)
-  await Bun.sleep(300)
-  const rects = await view.evaluate(`
-    (() => {
-      const card = document.querySelector('[data-issue-card="OMO-101"]')
-      const col = document.querySelector('[data-board-column=${JSON.stringify(target.id)}]')
-      if (!card || !col) return null
-      const a = card.getBoundingClientRect(), b = col.getBoundingClientRect()
-      const vw = window.innerWidth, vh = window.innerHeight
-      return {
-        card: { x: a.x + a.width / 2, y: a.y + a.height / 2 },
-        col: { x: b.x + b.width / 2, y: b.y + Math.min(b.height / 2, 120) },
-        inViewport: a.x >= 0 && a.y >= 0 && a.right <= vw && a.bottom <= vh && b.x >= 0 && b.right <= vw,
-      }
-    })()`)
-  let dragged = false
-  if (rects) {
-    const { card, col, inViewport } = rects as any
-    dragged = inViewport === true
-    // trusted input: the same mechanism as ui-final/verify-d18-b-trusted.ts
-    await view.cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: card.x, y: card.y, button: 'left', clickCount: 1 })
-    await view.cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: card.x + 12, y: card.y + 6, button: 'left', buttons: 1 })
-    for (const f of [0.25, 0.5, 0.75, 1]) {
-      await view.cdp('Input.dispatchMouseEvent', {
-        type: 'mouseMoved',
-        x: Math.round(card.x + (col.x - card.x) * f),
-        y: Math.round(card.y + (col.y - card.y) * f),
-        button: 'left',
-        buttons: 1,
-      })
-      await Bun.sleep(60)
-    }
-    await view.cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: col.x, y: col.y, button: 'left', clickCount: 1 })
-  }
-  const rejected = await waitLog((e) => e.method === 'PATCH' && e.path === '/api/tracker/issues/iss-lane' && e.done, 12000)
-  const toastIn = await waitFor(view, `!!document.querySelector('.lui-toast')`, 8000)
-  const toasts = (await view.evaluate(
-    `[...document.querySelectorAll('.lui-toast')].map(t => ({ text: t.innerText.replace(/\\n/g, ' '), role: t.getAttribute('role') }))`,
-  )) as any[]
-  await shot(view, 'd21-board-move-one-toast.png')
-  record(
-    'D21',
-    'board move into a completed state: lane_not_verified shows exactly one actionable toast',
-    boardIn >= 0 && dragged && rejected !== null && rejected?.note?.includes(target.id) && toastIn >= 0 && toasts.length === 1 && toasts[0].text.includes('Force close'),
-    `boardIn=${boardIn}ms dragged=${dragged} doneColumn=${target.id} patch=${JSON.stringify(rejected?.note)} toastIn=${toastIn}ms toasts=${JSON.stringify(toasts)}`,
-  )
+  // NOT EXERCISED HERE. A trusted board drag could not be aimed reliably (a 6-column board plus
+  // closestCorners resolved the drop to "Duplicate" on one run and "In Review" on the next, so a
+  // drag verdict would describe the harness, not the product). The D21 code path is exercised
+  // directly against the mounted provider in checks-d21.ts instead - results-d21.json, 5/5 pass.
+  // This file therefore makes no D21 claim.
 
   // ================================================================= D22
   // TimelineView.tsx:59-64 steps by calendar day. The browser clock is the machine's (Asia/Seoul, no
@@ -276,7 +224,7 @@ try {
     'D22',
     'timeline day labels are consecutive calendar days across the 2026-11-01 fall-back',
     tzApplied === 'America/New_York' && tlIn >= 0 && ticks.length === expected.length && firstMismatch === -1 && headMismatch >= 0,
-    `tz=${tzApplied} ticks=${ticks.length} months=${JSON.stringify(months)} firstMismatch=${firstMismatch} headFormulaFirstMismatch=${headMismatch} headTicksAroundMismatch=${JSON.stringify(headTicks.slice(Math.max(0, headMismatch - 2), headMismatch + 2))} ticksAround=${JSON.stringify(ticks.slice(Math.max(0, headMismatch - 2), headMismatch + 2))}`,
+    `tz=${tzApplied} ticks=${ticks.length} months=${JSON.stringify(months)} firstMismatchIndex=${firstMismatch} headFormulaMismatchIndex=${headMismatch} headTicksAround=${JSON.stringify(headTicks.slice(Math.max(0, headMismatch - 2), headMismatch + 2))} ticksAround=${JSON.stringify(ticks.slice(Math.max(0, headMismatch - 2), headMismatch + 2))}`,
   )
 
   record('ALL', 'no page console errors during the run', consoleErrors.length === 0, `consoleErrors=${JSON.stringify(consoleErrors.slice(0, 5))}`)

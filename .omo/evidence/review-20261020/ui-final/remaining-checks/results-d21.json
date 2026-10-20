@@ -1,0 +1,35 @@
+{
+  "rows": [
+    {
+      "id": "D21",
+      "check": "the mounted app exposes its real TrackerProvider value",
+      "ok": true,
+      "detail": "paintedRow=1430ms probe={\"ok\":true,\"visited\":8,\"keys\":74,\"hasUpdateWithLaneToastTarget\":true}"
+    },
+    {
+      "id": "D21",
+      "check": "updateWithLaneToast on a lane_not_verified 409 raises exactly one actionable toast",
+      "ok": true,
+      "detail": "toasts=[{\"text\":\"lane must be verified before closing; use force close Force close\",\"role\":\"alert\"}] result=false patch=\"patch={\\\"state_id\\\":\\\"cf69a982-fd3c-4a62-8f42-eb131473c451\\\"}\" stateUnchanged=true"
+    },
+    {
+      "id": "D21",
+      "check": "the store suppresses its own generic toast for lane_not_verified (one toast, not two)",
+      "ok": true,
+      "detail": "clearedIn=7ms rethrown={\"name\":\"TrackerApiError\",\"code\":\"lane_not_verified\",\"status\":409,\"message\":\"lane must be verified before closing; use force close\"} toastsAfterDirectUpdate=0"
+    },
+    {
+      "id": "D21",
+      "check": "Force close from that toast retries once with force_note and raises no second toast",
+      "ok": true,
+      "detail": "patch=\"patch={\\\"state_id\\\":\\\"cf69a982-fd3c-4a62-8f42-eb131473c451\\\",\\\"force_note\\\":\\\"closed from tracker board\\\"}\" storedState=cf69a982-fd3c-4a62-8f42-eb131473c451 toastsAfter=0"
+    },
+    {
+      "id": "ALL",
+      "check": "no page console errors during the run",
+      "ok": true,
+      "detail": "consoleErrors=[]"
+    }
+  ],
+  "failed": 0
+}

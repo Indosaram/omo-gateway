@@ -20,7 +20,13 @@ E12 FIXED src/autonomy/effect.rs:1350 — `is_spend_invocation` matches the prog
 E13 FIXED src/autonomy/effect.rs:322 — the `rm(`/`cp(` needles are matched only at an identifier boundary (previous char not alphanumeric/`_`/`$`), so `transform(`, `confirm(` and `perform(` stay reads while `fs.rm(` and a bare `rm(` are Unknown; test `e13_rm_needle_requires_an_identifier_boundary` (:2089)
 E14 FIXED src/autonomy/effect.rs:821 — `cargo check|clippy|test|bench` are WriteLocal (they run build scripts and test code) and a new arm at :841 classifies `npm`/`bun`/`pnpm`/`yarn` `test|run|install|ci|start|build|deploy` (and any `make` target) as Unknown so the exact command needs an owner decision; `cargo doc|metadata|tree|version` stay Read; test `e14_build_and_test_commands_are_not_read` (:2103)
 
-## B4 IMPLEMENTED: one atomic owner decision (src/autonomy/ledger.rs)
+## B4 FIXED: one atomic owner decision (src/autonomy/ledger.rs:685)
+
+Executed verification: `review-20261020-ship/test.log:158,161,166` records
+`waiter_then_short_reply_also_counts_once`,
+`one_owner_decision_via_decide_then_waiter_counts_once`, and
+`concurrent_card_press_and_short_reply_record_one_decision` all `ok`.
+The shipping gate completed with GATE-PASS.
 
 Both decision entry points now claim the proposal with a conditional update as the first statement of their transaction, and only the winner writes the precedent. `UPDATE action_proposals SET state = ? , decided_at = ... WHERE id = ? AND state = 'pending'` (`claim_proposal`, :685) returns whether this answer owns the row. SQLite grants the write lock at that statement, so a competing answer either blocks until the winner commits (then claims nothing) or wins first (then the other claims nothing). A loser records no precedent, bumps no counter and returns the state the winner recorded (`settled_resolution`), so the card press and a short reply for one proposal are one owner decision.
 

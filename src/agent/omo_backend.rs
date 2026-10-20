@@ -139,41 +139,48 @@ fn frame_turn_id(frame: &Value) -> Option<&str> {
 enum PreAckAction {
     /// Nothing to do; keep waiting for the acknowledgement.
     Continue,
-    /// The refusal was for a thread that is now idle: submit the same prompt once more.
+    /// A boundary after the refusal says the thread is idle: submit the same prompt once more.
     Resubmit,
 }
 
-/// Pre-acknowledgement protocol state: the turn boundaries seen on the thread, and whether a
-/// `turn/start` refusal is waiting for the thread to go idle. The refusal only clears on a
-/// terminal frame for *this* thread, and a completion already seen before the refusal counts,
-/// so a prompt refused while the engine was finishing never waits for a frame that will not come.
+/// Busy refusals emit their own failed turn, not an engine-session idle boundary.
 #[derive(Default)]
 struct PreAckState {
     /// turn/started and turn/completed frames, in arrival order, as (is_start, turn_id).
     events: Vec<(bool, String)>,
+    /// Turn ids seen completed, kept across refusals so their replay cannot release the wait.
+    completed: std::collections::HashSet<String>,
+    refused: std::collections::HashSet<String>,
     /// A turn/start refusal asked this loop to wait for the thread to go idle.
     awaiting_idle: bool,
-    /// The refusal was already answered with one resubmission.
-    resubmitted: bool,
+    refusals: u32,
+    retry_at: Option<tokio::time::Instant>,
 }
 
 impl PreAckState {
-    /// Folds a `turn/start` refusal. True when the loop must wait for the thread to go idle and
-    /// then resubmit instead of failing the turn; false for every other error and for a second
-    /// refusal of the same submission.
+    /// Only an explicit busy response permits another submission; the overall deadline bounds it.
     fn note_refusal(&mut self, error: &str) -> bool {
-        if self.resubmitted || !is_thread_busy_error(error) {
+        if !is_thread_busy_error(error) {
             return false;
         }
-        self.resubmitted = true;
+        self.refusals = self.refusals.saturating_add(1);
+        // `completed` is deliberately kept: the replay repeats exactly those ids.
+        self.events.clear();
         self.awaiting_idle = true;
+        let delay = Duration::from_secs(1 << self.refusals.saturating_sub(1).min(3));
+        self.retry_at = Some(tokio::time::Instant::now() + delay);
         true
     }
 
-    /// True when the thread was already idle when the refusal arrived: the last boundary seen
-    /// is a completion, so there is no running turn left to wait for.
-    fn idle_already(&self) -> bool {
-        self.awaiting_idle && self.events.last().is_some_and(|(is_start, _)| !is_start)
+    fn retry_due(&self, now: tokio::time::Instant) -> bool {
+        self.awaiting_idle && self.retry_at.is_some_and(|at| now >= at)
+    }
+
+    fn note_resubmitted(&mut self) {
+        // Until this submission's response arrives no frame or timer may submit again.
+        self.awaiting_idle = false;
+        self.retry_at = None;
+        self.events.clear();
     }
 
     /// Folds one pre-acknowledgement frame and says whether the prompt must be submitted again.
@@ -185,12 +192,27 @@ impl PreAckState {
         let Some(turn) = frame_turn_id(frame) else {
             return PreAckAction::Continue;
         };
+        if [
+            frame.pointer("/params/turn/error"),
+            frame.pointer("/params/error"),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|error| is_thread_busy_error(&error.to_string()))
+        {
+            self.refused.insert(turn.to_string());
+            self.events.retain(|(_, id)| id != turn);
+        }
+        if self.refused.contains(turn) {
+            return PreAckAction::Continue;
+        }
         match frame.get("method").and_then(Value::as_str).unwrap_or("") {
             "turn/started" => self.events.push((true, turn.to_string())),
             "turn/completed" => {
+                let fresh = self.completed.insert(turn.to_string());
                 self.events.push((false, turn.to_string()));
-                if self.awaiting_idle {
-                    self.awaiting_idle = false;
+                if self.awaiting_idle && fresh {
+                    self.retry_at = Some(tokio::time::Instant::now());
                     return PreAckAction::Resubmit;
                 }
             }
@@ -1284,9 +1306,6 @@ impl OmoBackend {
         // turn/started and turn/completed frames seen before the acknowledgement, plus whether a
         // turn/start refusal is waiting for this thread to go idle (see `PreAckState`).
         let mut pre_ack = PreAckState::default();
-        // Bounded wait for that idle boundary: a thread that never reports one fails the turn
-        // instead of holding it until the acknowledgement deadline.
-        let mut idle_wait_deadline: Option<tokio::time::Instant> = None;
         // Our acknowledged turn id was completed by the run our prompt was queued
         // behind; the next turn that starts on the thread is processing our prompt.
         let mut awaiting_successor_turn = false;
@@ -1318,18 +1337,39 @@ impl OmoBackend {
 
         loop {
             let now = tokio::time::Instant::now();
-            if let Some(wait_until) = idle_wait_deadline {
-                if now >= wait_until {
-                    // The refusal cannot be retried safely: the peer may still be executing the
-                    // running turn, and resubmitting now is exactly the collision this waits for.
+            if !turn_started_ack && pre_ack.awaiting_idle {
+                if now >= deadline {
                     self.active_turns.lock().remove(&session.key.storage_key());
                     return Err(OmonError::Llm(
                         "turn/start refused: the thread is still processing another turn; not resubmitted"
                             .into(),
                     ));
                 }
+                if pre_ack.retry_due(now) {
+                    if let Err(e) = ws
+                        .send(turn_start_request(
+                            &thread_id,
+                            &user_prompt,
+                            model.as_deref(),
+                        ))
+                        .await
+                    {
+                        self.active_turns.lock().remove(&session.key.storage_key());
+                        return Err(OmonError::Llm(format!("failed to send turn/start: {e}")));
+                    }
+                    pre_ack.note_resubmitted();
+                    last_activity_at = tokio::time::Instant::now();
+                    ack_deadline = (last_activity_at + ack_window).min(deadline);
+                    tracing::info!(
+                        session = %session.key,
+                        %thread_id,
+                        attempt = pre_ack.refusals,
+                        "resubmitted the prompt that turn/start refused"
+                    );
+                    continue;
+                }
             }
-            if !turn_started_ack && now >= ack_deadline {
+            if !turn_started_ack && !pre_ack.awaiting_idle && now >= ack_deadline {
                 // The peer can still execute this queued submission. Keep ownership
                 // so cancellation can reconcile it; never treat it as rejected.
                 return Err(OmonError::Llm(
@@ -1543,7 +1583,10 @@ impl OmoBackend {
             } else {
                 self.config.request_timeout
             };
-            if open_tool_ids.is_empty() && now >= last_activity_at + inactivity_timeout {
+            if turn_started_ack
+                && open_tool_ids.is_empty()
+                && now >= last_activity_at + inactivity_timeout
+            {
                 if let Some(turn_id) = &turn_id {
                     let interrupt = json!({
                         "jsonrpc": "2.0",
@@ -1565,9 +1608,9 @@ impl OmoBackend {
 
             let mut next_timeout = effective_work_deadline;
             if !turn_started_ack {
-                next_timeout = next_timeout.min(ack_deadline);
+                next_timeout = next_timeout.min(pre_ack.retry_at.unwrap_or(ack_deadline));
             }
-            if open_tool_ids.is_empty() {
+            if turn_started_ack && open_tool_ids.is_empty() {
                 next_timeout = next_timeout.min(last_activity_at + inactivity_timeout);
             }
             if awaiting_first_response {
@@ -1637,18 +1680,20 @@ impl OmoBackend {
                     let frame_method = parsed.get("method").and_then(Value::as_str).unwrap_or("");
                     let is_start_ack = !turn_started_ack
                         && parsed.get("method").is_none()
-                        && parsed.get("id").and_then(Value::as_u64) == Some(3);
+                        && parsed.get("id").and_then(Value::as_u64) == Some(3)
+                        && parsed.get("error").is_none();
                     if is_start_ack
-                        || frame_is_turn_progress(
-                            frame_method,
-                            &parsed,
-                            &thread_id,
-                            turn_id.as_deref(),
-                            awaiting_successor_turn,
-                        )
+                        || ((turn_started_ack || pre_ack.refusals == 0)
+                            && frame_is_turn_progress(
+                                frame_method,
+                                &parsed,
+                                &thread_id,
+                                turn_id.as_deref(),
+                                awaiting_successor_turn,
+                            ))
                     {
                         last_activity_at = tokio::time::Instant::now();
-                        if !is_cron_session && !is_lane {
+                        if (turn_started_ack || is_start_ack) && !is_cron_session && !is_lane {
                             deadline = last_activity_at + effective_total_timeout;
                             work_deadline =
                                 deadline.checked_sub(cleanup_reserve).unwrap_or(deadline);
@@ -1668,6 +1713,9 @@ impl OmoBackend {
                 .to_owned();
             if method != "turn/completed" && tokio::time::Instant::now() >= effective_work_deadline
             {
+                if !turn_started_ack && pre_ack.awaiting_idle {
+                    continue;
+                }
                 if let Some(turn_id) = &turn_id {
                     let interrupt = json!({
                         "jsonrpc": "2.0",
@@ -1696,42 +1744,12 @@ impl OmoBackend {
             {
                 if let Some(error) = val.get("error") {
                     let err_str = error.to_string();
-                    // A retry (model fallback, restart recovery) submitted while the engine is
-                    // still processing another turn is refused outright. Wait for that turn's
-                    // terminal frame on this already-subscribed connection, then submit once more,
-                    // so the retry never collides with a running engine turn. Ownership is kept
-                    // meanwhile, so cancel() can still reconcile the submission.
                     if pre_ack.note_refusal(&err_str) {
                         tracing::warn!(
                             session = %session.key,
                             %thread_id,
-                            "turn/start refused: the thread is still processing; waiting for it to go idle, then submitting once more"
-                        );
-                        if pre_ack.idle_already() {
-                            // The running turn finished while the refusal was in flight, so the
-                            // idle boundary will not be replayed: submit again right away.
-                            if let Err(e) = ws
-                                .send(turn_start_request(
-                                    &thread_id,
-                                    &user_prompt,
-                                    model.as_deref(),
-                                ))
-                                .await
-                            {
-                                self.active_turns.lock().remove(&session.key.storage_key());
-                                return Err(OmonError::Llm(format!(
-                                    "failed to send turn/start: {e}"
-                                )));
-                            }
-                            last_activity_at = tokio::time::Instant::now();
-                            // The replaced submission's turn boundaries no longer describe our prompt.
-                            pre_ack.events.clear();
-                            continue;
-                        }
-                        idle_wait_deadline = Some(
-                            last_activity_at
-                                + ack_window
-                                    .min(deadline.saturating_duration_since(last_activity_at)),
+                            attempt = pre_ack.refusals,
+                            "turn/start refused: the thread is still processing; waiting for a genuine completion or retry backoff"
                         );
                         continue;
                     }
@@ -1765,6 +1783,10 @@ impl OmoBackend {
                         .map(|(_, tid)| tid.clone())
                 });
                 pre_ack.events.clear();
+                // Acknowledged: the loop follows turn ids directly from here, so the pre-ack
+                // freshness history has no further use.
+                pre_ack.completed.clear();
+                pre_ack.refused.clear();
                 if taken_over_at.is_some() {
                     tracing::info!(
                         %thread_id,
@@ -2185,30 +2207,14 @@ impl OmoBackend {
                     // started), and that run may finish under our turn id. Keep waiting
                     // while it works, record its turn boundaries, and relay its
                     // finished messages instead of dropping them.
-                    ack_deadline = ack_deadline.max((last_activity_at + ack_window).min(deadline));
+                    if pre_ack.refusals == 0 {
+                        ack_deadline =
+                            ack_deadline.max((last_activity_at + ack_window).min(deadline));
+                    }
                     if pre_ack.observe(&val, &thread_id) == PreAckAction::Resubmit {
-                        idle_wait_deadline = None;
-                        if let Err(e) = ws
-                            .send(turn_start_request(
-                                &thread_id,
-                                &user_prompt,
-                                model.as_deref(),
-                            ))
-                            .await
-                        {
-                            self.active_turns.lock().remove(&session.key.storage_key());
-                            return Err(OmonError::Llm(format!("failed to send turn/start: {e}")));
-                        }
-                        last_activity_at = tokio::time::Instant::now();
-                        ack_deadline = last_activity_at
-                            + ack_window.min(deadline.saturating_duration_since(last_activity_at));
-                        // The replaced submission's turn boundaries no longer describe our prompt.
-                        pre_ack.events.clear();
-                        tracing::info!(
-                            session = %session.key,
-                            %thread_id,
-                            "thread went idle; resubmitted the prompt that turn/start refused"
-                        );
+                        continue;
+                    }
+                    if frame_turn_id.is_some_and(|id| pre_ack.refused.contains(id)) {
                         continue;
                     }
                     if !is_cron_session && !is_lane {
@@ -3399,8 +3405,11 @@ mod fixr5_agent_tests {
 #[cfg(test)]
 mod review_20261020_agent_tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
+    use futures_util::{SinkExt, StreamExt};
     use serde_json::json;
+    use tokio_tungstenite::tungstenite::Message;
 
     use super::{
         expire_abandoned_proposal, is_thread_busy_error, OmoBackend, PreAckAction, PreAckState,
@@ -3446,10 +3455,6 @@ mod review_20261020_agent_tests {
         let mut state = PreAckState::default();
         let busy = json!({"code":-32603,"message":"Agent is already processing."}).to_string();
         assert!(state.note_refusal(&busy));
-        assert!(
-            !state.idle_already(),
-            "a running turn is still open: must wait"
-        );
 
         // when: progress for that turn, then a completion for another thread
         let started =
@@ -3464,29 +3469,174 @@ mod review_20261020_agent_tests {
         let done =
             json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"t-run"}}});
 
-        // then: exactly one resubmission is requested
+        // then: the resubmission is requested only once that post-refusal completion arrives
         assert_eq!(state.observe(&done, "th1"), PreAckAction::Resubmit);
-        assert!(!state.note_refusal(&busy), "a second refusal must not loop");
         assert_eq!(state.observe(&done, "th1"), PreAckAction::Continue);
     }
 
     #[test]
-    fn a_turn_that_finished_before_the_refusal_is_resubmitted_immediately() {
-        // given: the running turn completed while our refusal was in flight
+    fn a_replayed_terminal_frame_never_releases_the_wait() {
+        // given: the production sequence at 2026-10-20T11:11:15Z — a terminal frame read before
+        // the refusal, then the busy refusal
         let mut state = PreAckState::default();
-        let done =
-            json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"t-run"}}});
-        assert_eq!(state.observe(&done, "th1"), PreAckAction::Continue);
-
-        // when: the refusal arrives afterwards
         let busy = json!({"code":-32603,"message":"Agent is already processing."}).to_string();
+        let stale = json!({"method":"turn/completed",
+            "params":{"threadId":"th1","turn":{"id":"t-stale","status":"completed"}}});
+        assert_eq!(state.observe(&stale, "th1"), PreAckAction::Continue);
         assert!(state.note_refusal(&busy));
 
-        // then: the thread is already idle, so no further frame will ever arrive
-        assert!(
-            state.idle_already(),
-            "a completion seen before the refusal means the thread is idle now"
+        // when: the same frame is replayed after the refusal, once and again
+        // then: it is not a boundary — replaying a known-completed id never resubmits
+        assert_eq!(state.observe(&stale, "th1"), PreAckAction::Continue);
+        assert_eq!(state.observe(&stale, "th1"), PreAckAction::Continue);
+
+        // and only a turn id never seen completed releases the wait
+        let active = json!({"method":"turn/completed",
+            "params":{"threadId":"th1","turn":{"id":"t-active","status":"completed"}}});
+        assert_eq!(state.observe(&active, "th1"), PreAckAction::Resubmit);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refused_turns_own_busy_terminal_frames_never_release_the_wait() {
+        let mut state = PreAckState::default();
+        assert!(state.note_refusal("Agent is already processing."));
+
+        for frame in [
+            json!({"method":"turn/started","params":{"threadId":"th1","turn":{"id":"refused"}}}),
+            json!({"method":"item/started","params":{"threadId":"th1","turnId":"refused","item":{"type":"userMessage"}}}),
+            json!({"method":"error","params":{"threadId":"th1","turnId":"refused","error":"Agent is already processing.","willRetry":false}}),
+            json!({"method":"thread/status/changed","params":{"threadId":"th1","status":{"type":"idle"}}}),
+            json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"refused","status":"failed","error":"Agent is already processing."}}}),
+            json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"another-refusal","status":"failed","error":{"message":"Agent is already processing."}}}}),
+        ] {
+            assert_eq!(state.observe(&frame, "th1"), PreAckAction::Continue);
+        }
+        assert!(state.awaiting_idle);
+        assert!(!state.retry_due(tokio::time::Instant::now()));
+        let genuine = json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":"real","status":"completed"}}});
+        assert_eq!(state.observe(&genuine, "th1"), PreAckAction::Resubmit);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn repeated_busy_refusals_retry_with_capped_backoff_within_the_deadline() {
+        let mut state = PreAckState::default();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
+        for seconds in [1, 2, 4, 8, 8, 8] {
+            assert!(state.note_refusal("Agent is already processing."));
+            assert!(!state.retry_due(tokio::time::Instant::now()));
+            tokio::time::advance(Duration::from_secs(seconds) - Duration::from_millis(1)).await;
+            assert!(!state.retry_due(tokio::time::Instant::now()));
+            tokio::time::advance(Duration::from_millis(1)).await;
+            assert!(tokio::time::Instant::now() < deadline);
+            assert!(state.retry_due(tokio::time::Instant::now()));
+            state.note_resubmitted();
+            let completion = json!({"method":"turn/completed","params":{"threadId":"th1","turn":{"id":format!("other-{seconds}-{}",state.refusals)}}});
+            assert_eq!(state.observe(&completion, "th1"), PreAckAction::Continue);
+            assert!(!state.retry_due(deadline));
+        }
+        assert!(!state.note_refusal("model rejected"));
+    }
+
+    async fn read_client_message(
+        ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+    ) -> serde_json::Value {
+        let message = ws.next().await.unwrap().unwrap();
+        serde_json::from_str(message.to_text().unwrap()).unwrap()
+    }
+
+    async fn answer(
+        ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        request: &serde_json::Value,
+        result: serde_json::Value,
+    ) {
+        ws.send(Message::text(
+            json!({"jsonrpc":"2.0","id":request["id"],"result":result}).to_string(),
+        ))
+        .await
+        .unwrap();
+    }
+
+    // Real time: paused time auto-advances while the client waits on loopback I/O, which
+    // fires the bounded timeouts before the peer can answer. The backoff costs one second.
+    #[tokio::test]
+    async fn a_refused_turns_own_terminal_frames_wait_for_backoff_then_complete_the_retry() {
+        // given: a real app-server peer on loopback, answering the resume and then refusing the
+        // retry exactly as the deployed runtime does
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let busy = json!({"jsonrpc":"2.0","id":3,
+            "error":{"code":-32603,"message":"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message."}});
+        let peer = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+
+            let initialize = read_client_message(&mut ws).await;
+            assert_eq!(initialize["method"], "initialize");
+            answer(&mut ws, &initialize, json!({})).await;
+            let resume = read_client_message(&mut ws).await;
+            assert_eq!(resume["method"], "thread/resume");
+            answer(&mut ws, &resume, json!({"thread":{"id":"r1"}})).await;
+
+            let first = read_client_message(&mut ws).await;
+            assert_eq!(first["method"], "turn/start");
+            let refused_at = tokio::time::Instant::now();
+            ws.send(Message::text(busy.to_string())).await.unwrap();
+            for frame in [
+                json!({"method":"turn/started","params":{"threadId":"r1","turn":{"id":"t-refused"}}}),
+                json!({"method":"item/started","params":{"threadId":"r1","turnId":"t-refused","item":{"type":"userMessage"}}}),
+                json!({"method":"error","params":{"threadId":"r1","turnId":"t-refused","error":"Agent is already processing.","willRetry":false}}),
+                json!({"method":"thread/status/changed","params":{"threadId":"r1","status":{"type":"idle"}}}),
+                json!({"method":"turn/completed","params":{"threadId":"r1","turn":{"id":"t-refused","status":"failed","error":"Agent is already processing."}}}),
+            ] {
+                ws.send(Message::text(frame.to_string())).await.unwrap();
+            }
+            let retry = read_client_message(&mut ws).await;
+            assert_eq!(retry["method"], "turn/start");
+            assert!(refused_at.elapsed() >= Duration::from_secs(1));
+            assert_eq!(retry["params"], first["params"]);
+            answer(
+                &mut ws,
+                &retry,
+                json!({"turn":{"id":"t-retry","status":"inProgress"}}),
+            )
+            .await;
+            for frame in [
+                json!({"method":"item/agentMessage/delta",
+                    "params":{"threadId":"r1","turnId":"t-retry","delta":"retry answered"}}),
+                json!({"method":"turn/completed",
+                    "params":{"threadId":"r1","turn":{"id":"t-retry","status":"completed"}}}),
+            ] {
+                ws.send(Message::text(frame.to_string())).await.unwrap();
+            }
+        });
+
+        let backend = OmoBackend::new(
+            OmoBackendConfig::new(format!("ws://{address}")),
+            Arc::new(NullDispatcher),
         );
+        let key = crate::SessionKey::new("local", None::<String>, "retry", None::<String>, "user");
+        let mut session = crate::models::SessionContext::new(key.clone());
+        session
+            .state
+            .metadata
+            .insert("omo_thread_id".into(), json!("r1"));
+
+        // then: the turn finishes on the accepted retry instead of dying on the replayed frame
+        let result = tokio::time::timeout(
+            Duration::from_secs(20),
+            crate::agent::AgentBackend::run(
+                &backend,
+                &mut session,
+                crate::models::InboundEvent::message(key, "m1", "probe"),
+            ),
+        )
+        .await
+        .expect("bounded backend completion");
+        result.expect("the retried turn must complete");
+        tokio::time::timeout(Duration::from_secs(1), peer)
+            .await
+            .expect("bounded peer completion")
+            .unwrap();
     }
 
     #[test]
