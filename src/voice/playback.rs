@@ -86,7 +86,7 @@ mod tests {
             direction: AudioDirection::Outgoing,
             payload: AudioPayload::Pcm(vec![0, 16384, -16384]),
         };
-        let (rate, channels, bytes) = frames_to_f32(&[frame.clone()]).unwrap();
+        let (rate, channels, bytes) = frames_to_f32(std::slice::from_ref(&frame)).unwrap();
         assert_eq!((rate, channels), (24_000, 1));
         assert_eq!(bytes.len(), 12);
         assert_eq!(f32::from_le_bytes(bytes[4..8].try_into().unwrap()), 0.5);
