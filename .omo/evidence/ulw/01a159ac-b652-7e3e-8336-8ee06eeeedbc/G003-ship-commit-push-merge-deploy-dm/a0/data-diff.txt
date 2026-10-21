@@ -1,0 +1,7 @@
+prod DB omon_gateway.db (read-only), before deploy: max migration 54 (c96cf4c1 ships 0001-0054)
+after deploy:
+max_migration|56
+migration|55|lane pause ack
+migration|56|tracker lane paused
+paused_state|AGT|Paused|started|2.5
+lane_pauses_cols|lane_key,paused_at,paused_by,resumed_at,acked_at,seen_working_at

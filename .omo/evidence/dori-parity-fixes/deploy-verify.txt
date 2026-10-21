@@ -1,0 +1,8 @@
+rev=7e970816 dirty_paths=1 source=/Users/indo/code/project/omon-gateway deployed_at=20261021-115756
+7e970816
+TeamIdentifier=5DUM8WPB4C
+56
+Paused
+Authority=Developer ID Application: Indo Yoon (5DUM8WPB4C)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA

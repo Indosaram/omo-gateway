@@ -1,0 +1,28 @@
+$ git status -sb
+## main...origin/main
+$ git log -1 --format="%h %s"
+7e970816 fix(lanes): close dori-parity gaps in pause, done signals, worktrees and tracker
+$ git rev-parse --short origin/main
+7e970816
+$ scripts/deploy.sh (tail)
+[deploy] atomically installing binary to /Users/indo/.omon/bin/omo-gateway
+[deploy] installing web bundle to /Users/indo/.omon/bin/../web
+[deploy] waiting for 1 running turn(s) to finish before restarting (up to 600s)
+[deploy] restarting ai.omon.gateway (old pid 10603)
+[deploy] verified: gateway=52562 transport=Slack:ready appserver=53112(ppid=52562) readyz=200 dashboard=http://127.0.0.1:9119 probes=[/api/health /api/tracker/bootstrap]
+[deploy] deploy OK
+$ cat ~/.omon/bin/DEPLOYED
+rev=7e970816 dirty_paths=1 source=/Users/indo/code/project/omon-gateway deployed_at=20261021-115756
+$ codesign -dvvv ~/.omon/bin/omo-gateway | grep Authority
+Authority=Developer ID Application: Indo Yoon (5DUM8WPB4C)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+$ curl -s -o /dev/null -w %{http_code} http://127.0.0.1:9119/api/health
+200
+$ cat dm.json
+{
+  "ok": true,
+  "channel": "D0C9HNVUK5M",
+  "ts": "1792551886.037109",
+  "text": "게이트웨이 개선 완료"
+}

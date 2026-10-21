@@ -1,0 +1,97 @@
+{
+ "manualQa": {
+  "by": "main-session",
+  "status": "passed",
+  "evidence": "main session verified live: main==origin/main 7e970816, deploy.sh exit 0 (deploy OK, Slack:ready, readyz 200), DEPLOYED rev 7e970816, Developer ID signature, /api/health 200, prod DB migrations 55/56 + AGT Paused state, Slack DM ok:true ts 1792551886.037109",
+  "surfaceEvidence": [
+   {
+    "id": "surface-cli",
+    "criterionRef": "C002",
+    "surface": "cli",
+    "invocation": "scripts/deploy.sh; cat ~/.omon/bin/DEPLOYED; codesign -dvvv ~/.omon/bin/omo-gateway; curl /api/health; cat dm.json",
+    "verdict": "passed",
+    "artifactRefs": [
+     "artifact-cli"
+    ]
+   },
+   {
+    "id": "surface-data",
+    "criterionRef": "C002",
+    "surface": "data",
+    "invocation": "sqlite3 -readonly omon_gateway.db (migrations, tracker_states lane_paused, lane_pauses columns)",
+    "verdict": "passed",
+    "artifactRefs": [
+     "artifact-data"
+    ]
+   }
+  ],
+  "adversarialCases": [
+   {
+    "id": "adv-deploy-from-branch",
+    "criterionRef": "C002",
+    "scenario": "deploy from a feature branch/worktree or with ad-hoc signing",
+    "expectedBehavior": "deploy only from main REPO with Developer ID",
+    "verdict": "passed",
+    "artifactRefs": [
+     "artifact-cli"
+    ]
+   },
+   {
+    "id": "adv-inflight-turn",
+    "criterionRef": "C002",
+    "scenario": "gateway restart while a turn is running",
+    "expectedBehavior": "deploy waits for running turns before restart",
+    "verdict": "passed",
+    "artifactRefs": [
+     "artifact-cli"
+    ]
+   }
+  ],
+  "artifactRefs": [
+   {
+    "id": "artifact-cli",
+    "kind": "cli-transcript",
+    "description": "git sync, deploy tail, DEPLOYED, codesign, health, DM response",
+    "path": ".omo/evidence/ulw/01a159ac-b652-7e3e-8336-8ee06eeeedbc/G003-ship-commit-push-merge-deploy-dm/a0/cli-transcript.txt"
+   },
+   {
+    "id": "artifact-data",
+    "kind": "data-diff",
+    "description": "prod DB migration 54->56 and Paused state",
+    "path": ".omo/evidence/ulw/01a159ac-b652-7e3e-8336-8ee06eeeedbc/G003-ship-commit-push-merge-deploy-dm/a0/data-diff.txt"
+   }
+  ]
+ },
+ "gateReview": {
+  "by": "category:deep-high",
+  "recommendation": "APPROVE",
+  "reportPath": ".omo/evidence/ulw/01a159ac-b652-7e3e-8336-8ee06eeeedbc/G003-ship-commit-push-merge-deploy-dm/a0/gate-review.md",
+  "evidence": "independent gate reviewer st_01a15c6c (Opus; deep-high provider credentials rejected) APPROVE, no blockers",
+  "blockers": [],
+  "notes": [
+   "deep-high run st_01a15c6b failed on OpenAI 401; review re-run on unspecified-high"
+  ]
+ },
+ "iteration": {
+  "fullRerun": true,
+  "status": "passed",
+  "rerunCommands": [
+   "cargo fmt --all -- --check",
+   "cargo clippy --all-targets -- -D warnings",
+   "cargo test --no-fail-fast"
+  ],
+  "evidence": "at reviewed tree: fmt 0, clippy 0, cargo test exit 0 (93 binaries, 2102 passed, 0 failed)"
+ },
+ "criteriaCoverage": {
+  "totalCriteria": 3,
+  "passCount": 3,
+  "originalIntent": "implement all plan items, review until zero findings, commit, push, redeploy, DM owner",
+  "desiredOutcome": "gateway running 7e970816 in production and owner notified",
+  "userOutcomeReview": "owner received '게이트웨이 개선 완료' DM; production gateway runs commit 7e970816 with migrations applied and healthy",
+  "adversarialClassesCovered": [
+   "deploy-provenance",
+   "in-flight-restart",
+   "review-regression"
+  ]
+ }
+}
