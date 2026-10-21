@@ -37,7 +37,7 @@ const TITLE_NO_THREAD: &str = "❌ `/omo-title` cannot tell which thread you mea
 const PENDING_WRITES_FILE: &str = "pending-writes.json";
 
 /// Every `/omo-*` command registered in `docs/slack-app-manifest.json`, with its usage.
-pub const COMMANDS: [(&str, &str); 19] = [
+pub const COMMANDS: [(&str, &str); 20] = [
     ("model", "/omo-model <name>"),
     ("reset", "/omo-reset [confirm]"),
     ("stop", "/omo-stop"),
@@ -59,6 +59,10 @@ pub const COMMANDS: [(&str, &str); 19] = [
     (
         "sessions",
         "/omo-sessions overview | read <target> [limit] | send <target> [--mode auto|steer|follow_up] <text> | stop <target> | answer <target> [--request <id>] <text> | watch <target> | unwatch <target>",
+    ),
+    (
+        "huddle",
+        "/omo-huddle join <huddle link or channel id> | leave | status | speak <text> | transcript",
     ),
 ];
 
@@ -101,6 +105,7 @@ pub struct SlackCommands {
     bot_user_id: String,
     /// Adapter so the Discord `execute_*` helpers and `stats()` run unchanged.
     poise: PoiseData,
+    huddle: Option<Arc<dyn crate::HuddleControl>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,7 +213,17 @@ pub enum SlackCommand {
     Yolo(Option<String>),
     Pair(String),
     Sessions(SessionsCommand),
+    Huddle(HuddleAction),
     Help,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HuddleAction {
+    Join(String),
+    Leave,
+    Status,
+    Speak(String),
+    Transcript,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -348,8 +363,22 @@ pub fn parse_command(command: &str, text: &str) -> std::result::Result<SlackComm
         "sessions" => parse_sessions(text)
             .map(SlackCommand::Sessions)
             .ok_or_else(usage),
+        "huddle" => parse_huddle(text).ok_or_else(usage),
         _ => Ok(SlackCommand::Help),
     }
+}
+
+fn parse_huddle(text: &str) -> Option<SlackCommand> {
+    let (action, rest) = split_word(text);
+    let action = match action.to_ascii_lowercase().as_str() {
+        "join" if !rest.is_empty() => HuddleAction::Join(rest.to_owned()),
+        "leave" if rest.is_empty() => HuddleAction::Leave,
+        "status" if rest.is_empty() => HuddleAction::Status,
+        "speak" if !rest.is_empty() => HuddleAction::Speak(rest.to_owned()),
+        "transcript" if rest.is_empty() => HuddleAction::Transcript,
+        _ => return None,
+    };
+    Some(SlackCommand::Huddle(action))
 }
 
 fn parse_sessions(text: &str) -> Option<SessionsCommand> {
@@ -592,7 +621,13 @@ impl SlackCommands {
             data,
             bot_user_id: bot_user_id.into(),
             poise,
+            huddle: None,
         }
+    }
+
+    pub fn with_huddle(mut self, huddle: Arc<dyn crate::HuddleControl>) -> Self {
+        self.huddle = Some(huddle);
+        self
     }
 
     pub fn bot_user_id(&self) -> &str {
@@ -852,7 +887,26 @@ impl SlackCommands {
                 }
                 Ok(self.sessions(command, !invocation.is_dm()).await)
             }
+            SlackCommand::Huddle(action) => self.huddle_command(key, action).await,
         }
+    }
+
+    async fn huddle_command(&self, key: SessionKey, action: HuddleAction) -> Result<Reply> {
+        let Some(huddle) = &self.huddle else {
+            return Ok(Reply::private(
+                "Slack huddles are off. Set OMON_SLACK_HUDDLE_ENABLED=true and restart the gateway.",
+            ));
+        };
+        let result = match action {
+            HuddleAction::Join(target) => huddle.join(&target, key).await,
+            HuddleAction::Leave => huddle.leave().await,
+            HuddleAction::Status => huddle.status().await,
+            HuddleAction::Speak(text) => huddle.speak(&text).await,
+            HuddleAction::Transcript => huddle.transcript().await,
+        };
+        Ok(Reply::private(match result {
+            Ok(text) | Err(text) => text,
+        }))
     }
 
     /// This bot's thread sessions in `channel`: where channel-level stop and deny look for the
@@ -1548,6 +1602,20 @@ mod tests {
             .unwrap_err()
             .contains("/omo-pair <code>"));
         assert_eq!(parse("/omo-nope", ""), SlackCommand::Help);
+        assert_eq!(
+            parse("/omo-huddle", "join channel:C0123ABCD"),
+            SlackCommand::Huddle(HuddleAction::Join("channel:C0123ABCD".into()))
+        );
+        assert_eq!(
+            parse("/omo-huddle", "leave"),
+            SlackCommand::Huddle(HuddleAction::Leave)
+        );
+        assert_eq!(
+            parse("/omo-huddle", "speak hello there"),
+            SlackCommand::Huddle(HuddleAction::Speak("hello there".into()))
+        );
+        assert!(parse_command("/omo-huddle", "join").is_err());
+        assert!(parse_command("/omo-huddle", "").is_err());
     }
 
     #[test]
@@ -1722,7 +1790,7 @@ mod tests {
         let manifest: Value =
             serde_json::from_str(include_str!("../../docs/slack-app-manifest.json")).unwrap();
         let commands = manifest["features"]["slash_commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 19);
+        assert_eq!(commands.len(), 20);
         let help = help_text();
         for command in commands {
             let name = command["command"].as_str().unwrap();

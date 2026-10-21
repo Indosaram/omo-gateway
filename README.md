@@ -83,7 +83,7 @@ It multiplexes thousands of concurrent channels, threads, and DMs with sub-milli
 │                    DISCORD RESPONSE EGRESS                  │
 │  - Live-Edit Debounced Streaming (800ms sliding window)     │
 │  - Interactive Smart Approvals ([Approve] / [Reject] UI)    │
-│  - Songbird Real-Time Voice Audio Pipeline (Opus / PCM)     │
+│  - Discord /voice join: STT, session reply, TTS playback   │
 │  - Scheduled Cron Event Push Dispatch                       │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -95,7 +95,7 @@ It multiplexes thousands of concurrent channels, threads, and DMs with sub-milli
 - ⚡ **Lock-Free Session Multiplexing**: Routes messages across servers, threads, and DMs using composite session keys `(platform, guild_id, channel_id, thread_id, user_id)` with zero lock contention.
 - 🤖 **Multi-Bot Parallel Sharding**: Run and control multiple Discord bot identities simultaneously from a single compiled ~20MB binary.
 - 📉 **Scale-to-Zero GC**: Inactive sessions automatically flush their state to SQLite and evict worker tasks, reducing idle memory footprint to near zero.
-- 🎙️ **Songbird Discord Voice**: Stream bidirectional Opus/PCM audio directly in Discord voice channels.
+- 🎙️ **Discord voice channels**: `/voice join` listens with Songbird, transcribes speech, runs the existing session, and plays the reply back. `/voice leave` disconnects. The text reply lands in the channel where the command was run.
 - ⏰ **Autonomous Cron Engine**: Persistent SQLite scheduler that triggers background agent prompt runs and command executions, pushing results directly to designated Discord channels.
 - 🛠️ **Native Tool Suite**:
   - **PTY Terminal**: Execute commands in an isolated workspace (`~/.omon/workspace`).
@@ -205,6 +205,59 @@ cargo build --release --bin omon-gateway
 cp ai.omon.gateway.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/ai.omon.gateway.plist
 ```
+
+---
+
+## 🎙️ Voice
+
+Discord voice turns on when an OpenAI-compatible speech key is set (`OPENAI_API_KEY`, or both `OMON_STT_API_KEY` and `OMON_TTS_API_KEY`). `OMON_VOICE_ENABLED=false` turns it off. The bot needs the **Connect** and **Speak** permissions, and the `GUILD_VOICE_STATES` gateway intent (registered automatically when voice is ready).
+
+`/voice join` joins the caller's current voice or stage channel, or the channel passed to the command. Incoming audio is decoded to 16 kHz mono PCM, transcribed, and sent to the same session multiplexer as a typed message (prefixed `[voice]`). The assistant reply is posted in the text channel or thread where the command ran, and synthesized speech is played in the voice channel. A new utterance stops the previous reply. The bot does not join a voice channel by itself.
+
+Slack audio **file** attachments are still transcribed locally (`ffmpeg` + `whisper-cli`). Set `SLACK_VOICE_REPLY=true` to also upload a WAV of the final assistant reply in that thread. The spoken file is that final posted text, not interim status messages.
+
+Slack's own API exposes huddle presence only. It cannot join a huddle or exchange audio. Recall.ai can record a huddle, and its published matrix marks Slack audio output unavailable, so it cannot play a reply back. Two-way huddle voice therefore uses a dedicated Slack **user** signed into the Slack web client, the same approach as the OpenClaw [`slack-huddles` plugin](https://github.com/openclaw/openclaw/tree/main/extensions/slack-huddles) (MIT, OpenClaw Foundation). `sidecar/slack-huddle/index.mjs` is an independent implementation of that approach. It does not copy OpenClaw's sources, does not read Slack session tokens or cookies, does not call Slack's internal huddle endpoints, and does not connect to AWS Chime. Login happens in that Chrome profile.
+
+The feature is **off** until `OMON_SLACK_HUDDLE_ENABLED=true`. It also needs the same STT and TTS keys as Discord voice, Node.js 22 or newer, and Chrome or Chromium on a machine with a display. `/omo-huddle` (register it from `docs/slack-app-manifest.json`) accepts `join`, `leave`, `status`, `speak`, and `transcript`.
+
+```bash
+# Linux virtual microphone. The device label must match OMON_SLACK_HUDDLE_MIC_LABEL.
+pactl load-module module-null-sink sink_name=omo_meeting \
+  sink_properties=device.description="Omo Gateway Meeting Audio"
+pactl load-module module-remap-source master=omo_meeting.monitor source_name=omo_meeting_mic \
+  source_properties=device.description="Omo Gateway Meeting Audio"
+
+# macOS: brew install blackhole-2ch sox
+# Select "BlackHole 2ch" as the huddle microphone. Playback uses sox to that device.
+```
+
+Create a Chrome profile used only by this account, start the gateway with `OMON_SLACK_HUDDLE_PROFILE` pointing at it, and sign into Slack in the window the sidecar opens. The account must already be a member of the channel. Someone else starts the huddle. `/omo-huddle join` takes a Copy huddle link (`https://app.slack.com/huddle/T…/C…`) or a channel id (`C…`, `G…`, or `D…`, optionally `channel:` or `team:T…:channel:C…`). The sidecar clicks Join on the web page, stays muted until Slack shows the virtual microphone, then unmutes. Remote audio from the page is transcribed, sent through the existing session multiplexer with a `[voice]` prefix, and the spoken reply is played into that microphone. A new utterance stops the previous reply. `/omo-huddle speak` says a sentence without asking the model. `/omo-huddle leave` clicks Leave and does not end the huddle for anyone else. `/omo-huddle transcript` shows the speech-to-text lines and any captions already visible on the page. Turn on Slack's "captions by default" preference on the dedicated account if you want captions; the sidecar does not open that menu.
+
+Limits: one huddle per dedicated account; only an already-active huddle; English Slack UI; the tab has to stay on that channel; the adapter can break when Slack changes the web UI. Slack does not sanction automated user clients, so the dedicated account can be suspended. Use an account you can afford to lose, not a personal or primary workspace owner.
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `OMON_VOICE_ENABLED` | on when STT and TTS keys resolve | `false` disables Discord voice join/playback |
+| `OMON_STT_API_KEY` | `OPENAI_API_KEY` | Key for `/audio/transcriptions` |
+| `OMON_STT_BASE_URL` | `OPENAI_API_BASE` | OpenAI-compatible STT base URL |
+| `OMON_STT_MODEL` | `whisper-1` | STT model for live voice and Discord voice-note attachments |
+| `OMON_TTS_API_KEY` | `OPENAI_API_KEY` | Key for `/audio/speech` |
+| `OMON_TTS_BASE_URL` | `OPENAI_API_BASE` | OpenAI-compatible TTS base URL |
+| `OMON_TTS_MODEL` | `tts-1` | TTS model (`response_format=pcm`) |
+| `OMON_TTS_VOICE` | `alloy` | TTS voice name |
+| `OMON_VOICE_SILENCE_MS` | `700` | Trailing silence that closes an utterance |
+| `OMON_VOICE_MIN_SPEECH_MS` | `400` | Shorter bursts are ignored |
+| `OMON_VOICE_MAX_SPEECH_MS` | `30000` | Force-flush a long utterance |
+| `SLACK_VOICE_REPLY` | `false` | Upload a spoken WAV for Slack audio-file replies when TTS is configured |
+| `OMON_SLACK_HUDDLE_ENABLED` | `false` | Drive a signed-in Slack web client into an existing huddle |
+| `OMON_SLACK_HUDDLE_PROFILE` | unset | Chrome user-data directory for the dedicated Slack account |
+| `OMON_SLACK_HUDDLE_CHROME` | first Chrome/Chromium on `PATH` | Browser binary |
+| `OMON_SLACK_HUDDLE_NODE` | `node` | Node.js 22+ used to run the sidecar |
+| `OMON_SLACK_HUDDLE_SIDECAR` | `sidecar/slack-huddle/index.mjs` when that file exists | Sidecar script |
+| `OMON_SLACK_HUDDLE_CDP_PORT` | unset | Attach to a Chrome you already started with remote debugging, instead of launching one |
+| `OMON_SLACK_HUDDLE_MIC_LABEL` | `Omo Gateway Meeting Audio` (Linux), `BlackHole 2ch` (macOS) | Microphone the sidecar selects before unmuting |
+| `OMON_SLACK_HUDDLE_PLAYBACK` | `pw-cat` into `omo_meeting` (Linux), `sox` into BlackHole (macOS) | Command that plays raw s16le on stdin. `$OMO_HUDDLE_RATE` is the sample rate |
+| `OMON_SLACK_HUDDLE_JOIN_TIMEOUT_MS` | `30000` | How long the sidecar waits for the huddle UI |
 
 ---
 

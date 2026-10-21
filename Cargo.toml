@@ -28,6 +28,11 @@ strip = "none"
 [profile.release.build-override]
 strip = "none"
 
+# Rust 1.88 warns on `format!("{}", value)` across the existing tree. Allow it so
+# `cargo clippy -- -D warnings` stays about new code rather than a format rewrite.
+[lints.clippy]
+uninlined_format_args = "allow"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1.43", features = ["full", "test-util"] }

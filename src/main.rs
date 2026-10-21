@@ -18,7 +18,7 @@ use omon_gateway::{
     MultiplexerConfig, OmoBackend, OmoBackendConfig, OmoDaemonSupervisor, OmonError,
     OpenAiSpeechToText, OutboundAction, OutboundDispatcher, PoiseData, ProfileRoute, ProfileRouter,
     RestartLoopGuard, Result, ScaleToZero, SessionContext, SessionKey, SessionMultiplexer,
-    SmartApprovalGuard, TerminalTool, ToolRegistry,
+    SmartApprovalGuard, TerminalTool, ToolRegistry,     HuddleRuntime, HuddleSettings, VoiceRuntime, VoiceSettings,
 };
 #[allow(unused_imports)]
 pub use omon_gateway::{load_cron_skills, resolve_skill_bundle, resolve_workspace_instructions};
@@ -1587,15 +1587,32 @@ async fn run_gateway_with_dashboard(
         }
         None => None,
     };
+    let voice_settings = VoiceSettings::from_env();
+    let voice_runtime = VoiceRuntime::from_settings(
+        voice_settings.clone(),
+        multiplexer.clone(),
+        pool.clone(),
+    );
+    let huddle_runtime = Arc::new(HuddleRuntime::from_voice(
+        HuddleSettings::from_env(),
+        &voice_settings,
+        multiplexer.clone(),
+        pool.clone(),
+    ));
     let slack_egress = match (&slack_config, &slack_boot) {
-        (Some(slack), Some(boot)) => Some(Arc::new(
-            omon_gateway::slack::SlackEgress::new(boot.api.clone())
+        (Some(slack), Some(boot)) => {
+            let mut egress = omon_gateway::slack::SlackEgress::new(boot.api.clone())
                 .with_workspace_root(config.workspace_root.clone())
                 .with_runtime_footer(slack.runtime_footer)
                 .with_default_model(Some(config.default_model.clone()))
                 .with_approval_mentions(slack.allowed_users.clone(), slack.approval_mentions)
-                .with_pool(pool.clone()),
-        )),
+                .with_pool(pool.clone());
+            if let (Some(replies), Some(tts)) = (voice_runtime.slack_replies(), voice_runtime.tts())
+            {
+                egress = egress.with_voice_reply(replies, tts);
+            }
+            Some(Arc::new(egress))
+        }
         _ => None,
     };
     let discord_dispatcher = discord_egress
@@ -1745,6 +1762,7 @@ async fn run_gateway_with_dashboard(
     cron_tool.bind_scheduler(Arc::new(scheduler.clone()));
 
     let mut poise_data = PoiseData::new(multiplexer.clone(), pool.clone());
+    poise_data.voice = voice_runtime.clone();
     poise_data.approvals = approval_guard.clone();
     poise_data.pairing_store.init_cache().await?;
     poise_data.profile_router = profile_router;
@@ -1792,12 +1810,10 @@ async fn run_gateway_with_dashboard(
     poise_data.approval_mentions = config.approval_mentions;
     poise_data.approvals_deny = config.approvals_deny.clone();
     let mut downloader = AttachmentDownloader::new(&config.workspace_root)?;
-    if let Some(api_key) = &config.openai_api_key {
-        let base_url = config
-            .openai_api_base
-            .as_deref()
-            .unwrap_or("https://api.openai.com/v1");
-        downloader = downloader.with_stt(Arc::new(OpenAiSpeechToText::new(api_key, base_url)));
+    if let Some(stt) = voice_settings.stt() {
+        downloader = downloader.with_stt(Arc::new(
+            OpenAiSpeechToText::new(&stt.api_key, &stt.base_url).with_model(&stt.model),
+        ));
     }
     poise_data.attachment_downloader = Some(downloader);
     if let Some(default_bot_id) = &default_bot_id {
@@ -1808,7 +1824,9 @@ async fn run_gateway_with_dashboard(
         })?);
     }
     let approval_guard_for_slack = approval_guard.clone();
-    let adapter = DiscordAdapter::new(poise_data.clone()).with_approval_guard(approval_guard);
+    let adapter = DiscordAdapter::new(poise_data.clone())
+        .with_approval_guard(approval_guard)
+        .with_voice_receive(voice_runtime.ready());
 
     let mut clients = Vec::new();
     let mut shard_managers = Vec::new();
@@ -1838,6 +1856,8 @@ async fn run_gateway_with_dashboard(
                     pairing: slack_pairing.clone(),
                 },
                 inbox_actions: poise_data.inbox_actions.clone(),
+                voice_replies: voice_runtime.slack_replies(),
+                huddle: Some(huddle_runtime),
             })
             .await
             {

@@ -7,6 +7,7 @@ pub mod pairing;
 pub mod session_commands;
 pub mod table_render;
 pub mod throttler;
+mod voice;
 
 pub use adapter::{
     append_runtime_footer, build_voice_metadata, coalesce_inbound_events, compose_reply_context,

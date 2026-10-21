@@ -770,6 +770,7 @@ impl Default for SplitMessageDebouncer {
 pub struct DiscordAdapter {
     data: PoiseData,
     approvals: SmartApprovalGuard,
+    voice_receive: bool,
 }
 
 impl DiscordAdapter {
@@ -777,11 +778,18 @@ impl DiscordAdapter {
         Self {
             data,
             approvals: SmartApprovalGuard::new(),
+            voice_receive: false,
         }
     }
 
     pub fn with_approval_guard(mut self, approvals: SmartApprovalGuard) -> Self {
         self.approvals = approvals;
+        self
+    }
+
+    /// Registers Songbird on the Discord client so `/voice join` can receive PCM.
+    pub fn with_voice_receive(mut self, enabled: bool) -> Self {
+        self.voice_receive = enabled;
         self
     }
 
@@ -812,13 +820,22 @@ impl DiscordAdapter {
         let intents = GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::DIRECT_MESSAGES
-            | GatewayIntents::MESSAGE_CONTENT;
+            | GatewayIntents::MESSAGE_CONTENT
+            | if self.voice_receive {
+                GatewayIntents::GUILD_VOICE_STATES
+            } else {
+                GatewayIntents::empty()
+            };
         let http = HttpBuilder::new(token.as_ref())
             .default_allowed_mentions(safe_allowed_mentions())
             .build();
-        let client = serenity::ClientBuilder::new_with_http(http, intents)
-            .framework(framework)
-            .await?;
+        let mut builder =
+            serenity::ClientBuilder::new_with_http(http, intents).framework(framework);
+        if self.voice_receive {
+            use songbird::SerenityInit;
+            builder = builder.register_songbird_from_config(crate::songbird_config());
+        }
+        let client = builder.await?;
         // Production starts clients straight from `client()`, so the zombie-session watchdog has
         // to be armed here rather than in `start()`.
         spawn_receive_watchdog(client.shard_manager.clone());

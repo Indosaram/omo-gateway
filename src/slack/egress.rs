@@ -73,6 +73,12 @@ pub struct SlackEgress {
     upload_limit: u64,
     claim_filter: crate::report::claims::StreamClaimFilter,
     claim_delay: Duration,
+    voice_reply: Option<SlackVoiceReply>,
+}
+
+struct SlackVoiceReply {
+    replies: Arc<crate::SlackVoiceReplies>,
+    tts: Arc<dyn crate::TextToSpeech>,
 }
 
 impl SlackEgress {
@@ -94,7 +100,18 @@ impl SlackEgress {
             upload_limit: MAX_UPLOAD_BYTES,
             claim_filter: crate::report::claims::StreamClaimFilter::new(),
             claim_delay: crate::report::claims::DEFAULT_REMEASURE_DELAY,
+            voice_reply: None,
         }
+    }
+
+    /// Speaks the final reply to an audio message that ingress marked for a voice reply.
+    pub fn with_voice_reply(
+        mut self,
+        replies: Arc<crate::SlackVoiceReplies>,
+        tts: Arc<dyn crate::TextToSpeech>,
+    ) -> Self {
+        self.voice_reply = Some(SlackVoiceReply { replies, tts });
+        self
     }
 
     pub fn with_claim_delay(mut self, delay: Duration) -> Self {
@@ -283,9 +300,51 @@ impl SlackEgress {
             }
         }
         let tables_result = self.deliver_tables(channel, thread, &tables).await;
+        self.attach_voice_reply(channel, thread, chunk.reply_to.as_deref(), &text)
+            .await;
         match media_error {
             Some(error) => Err(error),
             None => tables_result,
+        }
+    }
+
+    /// Uploads one WAV of the final posted reply. Synthesis and upload failures stay off the
+    /// text result: the message already went out, and a later duplicate final must not retry.
+    async fn attach_voice_reply(
+        &self,
+        channel: &str,
+        thread: Option<&str>,
+        reply_to: Option<&str>,
+        text: &str,
+    ) {
+        let Some(hook) = &self.voice_reply else {
+            return;
+        };
+        let spoken = crate::spoken_text(text);
+        if spoken.is_empty() || !hook.replies.take(channel, reply_to) {
+            return;
+        }
+        let tts = hook.tts.clone();
+        let frames = match tts.synthesize(0, &spoken).await {
+            Ok(frames) => frames,
+            Err(error) => {
+                tracing::warn!(%error, channel, "slack voice reply synthesis failed");
+                return;
+            }
+        };
+        let wav = match pcm_frames_to_wav(&frames) {
+            Ok(wav) => wav,
+            Err(error) => {
+                tracing::warn!(%error, channel, "slack voice reply wav encoding failed");
+                return;
+            }
+        };
+        if let Err(error) = self
+            .api
+            .upload_bytes(channel, thread, "voice-reply.wav", wav, Some("Voice reply"))
+            .await
+        {
+            tracing::warn!(%error, channel, "slack voice reply upload failed");
         }
     }
 
@@ -772,6 +831,34 @@ impl OutboundDispatcher for SlackEgress {
 
 /// Session thread first; a top-level reply in a channel threads under the triggering message.
 /// DMs stay flat.
+fn pcm_frames_to_wav(frames: &[crate::AudioFrame]) -> Result<Vec<u8>> {
+    let Some(first) = frames.iter().find(|frame| frame.byte_len() > 0) else {
+        return Err(OmonError::Config(
+            "slack voice reply had no PCM samples".into(),
+        ));
+    };
+    let mut samples = Vec::new();
+    for frame in frames {
+        if frame.byte_len() == 0 {
+            continue;
+        }
+        if frame.sample_rate != first.sample_rate || frame.channels != first.channels {
+            return Err(OmonError::Config(
+                "slack voice reply frames must share one sample rate and channel count".into(),
+            ));
+        }
+        match &frame.payload {
+            crate::AudioPayload::Pcm(more) => samples.extend_from_slice(more),
+            crate::AudioPayload::Opus(_) => {
+                return Err(OmonError::Config(
+                    "slack voice reply expects PCM, not Opus".into(),
+                ));
+            }
+        }
+    }
+    crate::pcm_to_wav(first.sample_rate, first.channels, &samples)
+}
+
 fn reply_thread<'a>(session: &'a SessionKey, reply_to: Option<&'a str>) -> Option<&'a str> {
     session.thread_id.as_deref().or_else(|| {
         session
@@ -1125,6 +1212,103 @@ mod tests {
             .unwrap();
 
         assert!(server.paths().is_empty());
+    }
+
+    struct FixedPcm;
+
+    #[async_trait]
+    impl crate::TextToSpeech for FixedPcm {
+        async fn synthesize(&self, channel_id: u64, text: &str) -> Result<Vec<crate::AudioFrame>> {
+            if crate::spoken_text(text).is_empty() {
+                return Ok(Vec::new());
+            }
+            Ok(vec![crate::AudioFrame::pcm(
+                channel_id,
+                None,
+                0,
+                vec![7, -7],
+            )])
+        }
+    }
+
+    struct FailingTts;
+
+    #[async_trait]
+    impl crate::TextToSpeech for FailingTts {
+        async fn synthesize(
+            &self,
+            _channel_id: u64,
+            _text: &str,
+        ) -> Result<Vec<crate::AudioFrame>> {
+            Err(OmonError::Config("tts down".into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn audio_message_final_uploads_one_wav_and_a_retry_does_not() {
+        let server = fake().await;
+        let replies = Arc::new(crate::SlackVoiceReplies::new());
+        replies.note("C1", "1699.0001");
+        let egress = server
+            .egress()
+            .with_voice_reply(replies.clone(), Arc::new(FixedPcm));
+        let id = Uuid::new_v4();
+
+        egress.dispatch(stream(id, 0, "Hel", false)).await.unwrap();
+        egress
+            .dispatch(stream(id, 1, "Hello **there**", true))
+            .await
+            .unwrap();
+        egress
+            .dispatch(stream(id, 1, "Hello **there**", true))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            server.paths(),
+            [
+                "chat.postMessage",
+                "files.getUploadURLExternal",
+                "upload/F1",
+                "files.completeUploadExternal",
+            ]
+        );
+        let requests = server.requests();
+        assert_eq!(requests[1].1["filename"], "voice-reply.wav");
+        assert_eq!(requests[3].1["files"][0]["title"], "Voice reply");
+        assert_eq!(requests[3].1["channel_id"], "C1");
+        assert_eq!(requests[3].1["thread_ts"], "1699.0001");
+        assert!(!replies.take("C1", Some("1699.0001")));
+    }
+
+    #[tokio::test]
+    async fn voice_reply_skips_plain_messages_and_keeps_text_when_tts_fails() {
+        let server = fake().await;
+        let replies = Arc::new(crate::SlackVoiceReplies::new());
+        replies.note("C1", "1699.0002");
+        let egress = server
+            .egress()
+            .with_voice_reply(replies.clone(), Arc::new(FailingTts));
+
+        egress
+            .dispatch(OutboundAction::SendMessage {
+                session: session(),
+                content: "status only".into(),
+                reply_to: Some("1699.0002".into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(server.paths(), ["chat.postMessage"]);
+        assert!(replies.take("C1", Some("1699.0002")));
+
+        replies.note("C1", "1699.0001");
+        let id = Uuid::new_v4();
+        egress
+            .dispatch(stream(id, 0, "spoken answer", true))
+            .await
+            .unwrap();
+        assert_eq!(server.paths(), ["chat.postMessage", "chat.postMessage"]);
+        assert!(!replies.take("C1", Some("1699.0001")));
     }
 
     #[tokio::test]

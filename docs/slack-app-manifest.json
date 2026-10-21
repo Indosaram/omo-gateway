@@ -128,6 +128,12 @@
         "description": "omo-gateway pair",
         "usage_hint": "<code>",
         "should_escape": false
+      },
+      {
+        "command": "/omo-huddle",
+        "description": "Join or leave a Slack huddle as the dedicated voice user",
+        "usage_hint": "join <link or channel> | leave | status | speak <text> | transcript",
+        "should_escape": false
       }
     ]
   },
