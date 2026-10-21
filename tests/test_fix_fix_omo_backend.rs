@@ -106,8 +106,13 @@ fn interactive_session(user: &str) -> (SessionKey, SessionContext) {
 async fn turn_error_and_invalid_frame_release_active_turn() {
     let turn_error = frame(json!({"method":"turn/error",
         "params":{"threadId":"r1","turnId":"t2","message":"boom"}}));
-    for bad in [turn_error, "not-json".to_string()] {
-        let (port, _, peer) = spawn_peer(1, vec![bad], vec![]).await;
+    // An unreadable frame is skipped (incident 2026-10-21), so the turn ends on the frame after
+    // it; either way the active turn is released.
+    for (frames, unreadable) in [
+        (vec![turn_error], false),
+        (vec!["not-json".to_string(), completed("failed")], true),
+    ] {
+        let (port, _, peer) = spawn_peer(1, frames, vec![]).await;
         let backend = OmoBackend::new(
             OmoBackendConfig::new(format!("ws://127.0.0.1:{port}")),
             Arc::new(Capture::default()),
@@ -120,6 +125,10 @@ async fn turn_error_and_invalid_frame_release_active_turn() {
         .await
         .unwrap();
         assert!(result.is_err(), "{result:?}");
+        if unreadable {
+            let error = result.as_ref().unwrap_err().to_string();
+            assert!(!error.contains("invalid json"), "{error}");
+        }
         assert!(
             backend.active_turns.lock().is_empty(),
             "errored turn left active_turns entry: {result:?}"
