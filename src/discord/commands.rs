@@ -1823,12 +1823,12 @@ mod tests {
     #[test]
     fn test_all_commands_count() {
         let commands = all();
-        assert_eq!(commands.len(), 19);
+        assert_eq!(commands.len(), 20);
         let names: HashSet<&str> = commands.iter().map(|c| c.name.as_str()).collect();
         for expected in &[
             "model", "reset", "stop", "status", "tools", "skill", "skills", "memory", "cron",
             "steer", "undo", "retry", "compress", "title", "thread", "deny", "yolo", "pair",
-            "sessions",
+            "sessions", "voice",
         ] {
             assert!(names.contains(expected), "missing command {expected}");
         }

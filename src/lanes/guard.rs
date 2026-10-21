@@ -317,6 +317,12 @@ pub async fn sample_load_1m() -> Result<f64, GuardError> {
 }
 
 pub async fn sample_load_1m_with_timeout(timeout_dur: Duration) -> Result<f64, GuardError> {
+    // Linux publishes the same 1-minute load in `/proc/loadavg`. `sysctl vm.loadavg` is macOS.
+    if let Ok(text) = tokio::fs::read_to_string("/proc/loadavg").await {
+        if let Ok(load) = parse_sysctl_loadavg(&text) {
+            return Ok(load);
+        }
+    }
     let mut cmd = tokio::process::Command::new("sysctl");
     cmd.arg("-n").arg("vm.loadavg");
 
@@ -356,6 +362,12 @@ pub async fn sample_mem_free_pct() -> Result<u32, GuardError> {
 }
 
 pub async fn sample_mem_free_pct_with_timeout(timeout_dur: Duration) -> Result<u32, GuardError> {
+    // Linux has no `memory_pressure`. MemAvailable / MemTotal is the free percentage.
+    if let Ok(text) = tokio::fs::read_to_string("/proc/meminfo").await {
+        if let Ok(pct) = parse_meminfo_free_pct(&text) {
+            return Ok(pct);
+        }
+    }
     let cmd = tokio::process::Command::new("memory_pressure");
     let output_res = run_command_with_timeout(cmd, timeout_dur, "memory_pressure").await;
     let output = match output_res {
@@ -376,6 +388,32 @@ pub async fn sample_mem_free_pct_with_timeout(timeout_dur: Duration) -> Result<u
 
     let text = String::from_utf8_lossy(&output.stdout);
     parse_memory_pressure(&text)
+}
+
+/// `MemAvailable` / `MemTotal` from `/proc/meminfo`, as a whole-number percent.
+pub fn parse_meminfo_free_pct(text: &str) -> Result<u32, GuardError> {
+    let mut total = None;
+    let mut available = None;
+    for line in text.lines() {
+        let (key, value) = line.split_once(':').unwrap_or((line, ""));
+        let kib = value
+            .split_whitespace()
+            .next()
+            .and_then(|n| n.parse::<u64>().ok());
+        match key {
+            "MemTotal" => total = kib,
+            "MemAvailable" => available = kib,
+            _ => {}
+        }
+    }
+    match (total, available) {
+        (Some(total), Some(available)) if total > 0 => {
+            Ok(((u128::from(available) * 100) / u128::from(total)) as u32)
+        }
+        _ => Err(GuardError::Parse(
+            "meminfo is missing MemTotal or MemAvailable".into(),
+        )),
+    }
 }
 
 pub fn parse_df_k(text: &str) -> Result<u64, GuardError> {
@@ -1485,6 +1523,11 @@ mod tests {
         assert!(parse_sysctl_loadavg("{}").is_err());
         assert!(parse_sysctl_loadavg("{   }").is_err());
         assert!(parse_sysctl_loadavg("not_a_number 1.0 2.0").is_err());
+        assert_eq!(
+            parse_meminfo_free_pct("MemTotal: 1000 kB\nMemAvailable: 250 kB\n").unwrap(),
+            25
+        );
+        assert!(parse_meminfo_free_pct("MemTotal: 0 kB\nMemAvailable: 1 kB\n").is_err());
 
         // memory_pressure malformed tests
         assert!(parse_memory_pressure("").is_err());

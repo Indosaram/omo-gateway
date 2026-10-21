@@ -490,8 +490,9 @@ mod tests {
         tool.max_read_bytes = 40;
 
         // A sparse file far larger than any sane allocation: reading it whole is
-        // impossible, reading bounded head/tail slices is trivial.
-        const SIZE: u64 = 1 << 50;
+        // impossible, reading bounded head/tail slices is trivial. 8 TiB stays
+        // under the maximum file size of common filesystems (ext4 rejects 16 TiB).
+        const SIZE: u64 = 1 << 43;
         let head = b"HEAD-0123456789X";
         let tail = b"TAIL-0123456789ABCDEFGHI";
         let path = dir.path().join("huge.bin");

@@ -221,7 +221,8 @@ fn default_wait_exit_notification(child_pid: i32, timeout: Duration) -> Result<W
 fn default_wait_exit_notification(child_pid: i32, timeout: Duration) -> Result<WaitNotification> {
     let start = std::time::Instant::now();
     loop {
-        if unsafe { libc::kill(child_pid, 0) != 0 } {
+        // kill(pid, 0) still succeeds for a zombie. The caller reaps with wait().
+        if unsafe { libc::kill(child_pid, 0) != 0 } || process_is_zombie(child_pid) {
             return Ok(WaitNotification::Exited);
         }
         if start.elapsed() >= timeout {
@@ -229,6 +230,18 @@ fn default_wait_exit_notification(child_pid: i32, timeout: Duration) -> Result<W
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Linux `/proc` state `Z` means the child has exited and is waiting to be reaped.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn process_is_zombie(pid: i32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().next().map(|state| state == "Z"))
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(windows)]
