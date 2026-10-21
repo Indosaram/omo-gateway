@@ -174,6 +174,11 @@ impl OpenAiSpeechToText {
                 }),
         }
     }
+
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
 }
 
 #[async_trait]
@@ -191,26 +196,7 @@ impl SpeechToText for OpenAiSpeechToText {
             AudioPayload::Opus(opus_bytes) => (opus_bytes.clone(), "audio.ogg"),
             AudioPayload::Pcm(first_samples) => {
                 let pcm_samples = concat_pcm_frames(first, first_samples, frames)?;
-                let mut wav = Vec::new();
-                let sample_rate = first.sample_rate;
-                let channels = first.channels;
-                let data_size = (pcm_samples.len() * 2) as u32;
-                wav.extend_from_slice(b"RIFF");
-                wav.extend_from_slice(&(36 + data_size).to_le_bytes());
-                wav.extend_from_slice(b"WAVE");
-                wav.extend_from_slice(b"fmt ");
-                wav.extend_from_slice(&16u32.to_le_bytes());
-                wav.extend_from_slice(&1u16.to_le_bytes());
-                wav.extend_from_slice(&channels.to_le_bytes());
-                wav.extend_from_slice(&sample_rate.to_le_bytes());
-                wav.extend_from_slice(&(sample_rate * channels as u32 * 2).to_le_bytes());
-                wav.extend_from_slice(&(channels * 2).to_le_bytes());
-                wav.extend_from_slice(&16u16.to_le_bytes());
-                wav.extend_from_slice(b"data");
-                wav.extend_from_slice(&data_size.to_le_bytes());
-                for sample in &pcm_samples {
-                    wav.extend_from_slice(&sample.to_le_bytes());
-                }
+                let wav = super::wav::pcm_to_wav(first.sample_rate, first.channels, &pcm_samples)?;
                 (wav, "audio.wav")
             }
         };
@@ -288,13 +274,44 @@ impl SpeechPipeline {
         Self { stt, llm, tts }
     }
 
+    pub fn tts(&self) -> Arc<dyn TextToSpeech> {
+        self.tts.clone()
+    }
+
     pub async fn process(
         &self,
         channel_id: u64,
         frames: &[AudioFrame],
     ) -> Result<SpeechPipelineOutput> {
-        let transcript = self.stt.transcribe(frames).await?;
+        self.process_utterance(channel_id, None, frames).await
+    }
+
+    /// Transcribes `frames`, asks the bound language model, and synthesizes the reply.
+    ///
+    /// `speaker` is a display label such as `<@user>`. An empty transcript skips the model.
+    pub async fn process_utterance(
+        &self,
+        channel_id: u64,
+        speaker: Option<&str>,
+        frames: &[AudioFrame],
+    ) -> Result<SpeechPipelineOutput> {
+        let raw = self.stt.transcribe(frames).await?;
+        let transcript = super::wav::format_voice_transcript(speaker, &raw);
+        if transcript.is_empty() {
+            return Ok(SpeechPipelineOutput {
+                transcript,
+                response: String::new(),
+                audio: Vec::new(),
+            });
+        }
         let response = self.llm.respond(channel_id, &transcript).await?;
+        if super::wav::spoken_text(&response).is_empty() {
+            return Ok(SpeechPipelineOutput {
+                transcript,
+                response,
+                audio: Vec::new(),
+            });
+        }
         let mut audio = self.tts.synthesize(channel_id, &response).await?;
         for frame in &mut audio {
             frame.direction = AudioDirection::Outgoing;

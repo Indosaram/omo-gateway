@@ -53,6 +53,7 @@ pub struct PoiseData {
     pub profile_router: ProfileRouter,
     pub pairing_store: super::PairingStore,
     pub missed_backfill: bool,
+    pub voice: crate::VoiceRuntime,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,6 +103,7 @@ impl PoiseData {
             profile_router,
             pairing_store,
             missed_backfill: false,
+            voice: crate::VoiceRuntime::disabled(),
         }
     }
 
@@ -196,6 +198,7 @@ pub fn all() -> Vec<poise::Command<PoiseData, CommandError>> {
         yolo(),
         pair(),
         super::session_commands::sessions(),
+        super::voice::voice(),
     ]
 }
 
@@ -971,7 +974,7 @@ pub async fn tools(ctx: PoiseContext<'_>) -> Result<(), CommandError> {
     Ok(())
 }
 
-async fn session_key(ctx: PoiseContext<'_>) -> Result<SessionKey, CommandError> {
+pub(crate) async fn session_key(ctx: PoiseContext<'_>) -> Result<SessionKey, CommandError> {
     let guild_id = ctx.guild_id().map(|id| id.to_string());
     let channel_id = ctx.channel_id();
     let (session_channel_id, thread_id) = if guild_id.is_some() {

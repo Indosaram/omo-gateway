@@ -83,7 +83,7 @@ It multiplexes thousands of concurrent channels, threads, and DMs with sub-milli
 │                    DISCORD RESPONSE EGRESS                  │
 │  - Live-Edit Debounced Streaming (800ms sliding window)     │
 │  - Interactive Smart Approvals ([Approve] / [Reject] UI)    │
-│  - Songbird Real-Time Voice Audio Pipeline (Opus / PCM)     │
+│  - Discord /voice join: STT, session reply, TTS playback   │
 │  - Scheduled Cron Event Push Dispatch                       │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -95,7 +95,7 @@ It multiplexes thousands of concurrent channels, threads, and DMs with sub-milli
 - ⚡ **Lock-Free Session Multiplexing**: Routes messages across servers, threads, and DMs using composite session keys `(platform, guild_id, channel_id, thread_id, user_id)` with zero lock contention.
 - 🤖 **Multi-Bot Parallel Sharding**: Run and control multiple Discord bot identities simultaneously from a single compiled ~20MB binary.
 - 📉 **Scale-to-Zero GC**: Inactive sessions automatically flush their state to SQLite and evict worker tasks, reducing idle memory footprint to near zero.
-- 🎙️ **Songbird Discord Voice**: Stream bidirectional Opus/PCM audio directly in Discord voice channels.
+- 🎙️ **Discord voice channels**: `/voice join` listens with Songbird, transcribes speech, runs the existing session, and plays the reply back. `/voice leave` disconnects. The text reply lands in the channel where the command was run.
 - ⏰ **Autonomous Cron Engine**: Persistent SQLite scheduler that triggers background agent prompt runs and command executions, pushing results directly to designated Discord channels.
 - 🛠️ **Native Tool Suite**:
   - **PTY Terminal**: Execute commands in an isolated workspace (`~/.omon/workspace`).
@@ -205,6 +205,31 @@ cargo build --release --bin omon-gateway
 cp ai.omon.gateway.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/ai.omon.gateway.plist
 ```
+
+---
+
+## 🎙️ Voice
+
+Discord voice turns on when an OpenAI-compatible speech key is set (`OPENAI_API_KEY`, or both `OMON_STT_API_KEY` and `OMON_TTS_API_KEY`). `OMON_VOICE_ENABLED=false` turns it off. The bot needs the **Connect** and **Speak** permissions, and the `GUILD_VOICE_STATES` gateway intent (registered automatically when voice is ready).
+
+`/voice join` joins the caller's current voice or stage channel, or the channel passed to the command. Incoming audio is decoded to 16 kHz mono PCM, transcribed, and sent to the same session multiplexer as a typed message (prefixed `[voice]`). The assistant reply is posted in the text channel or thread where the command ran, and synthesized speech is played in the voice channel. A new utterance stops the previous reply. The bot does not join a voice channel by itself.
+
+Slack audio **file** attachments are still transcribed locally (`ffmpeg` + `whisper-cli`). Set `SLACK_VOICE_REPLY=true` to also upload a WAV of the final assistant reply in that thread. The spoken file is that final posted text, not interim status messages. Slack does not offer a public API for a bot to join, start, or read **huddle** audio (`huddle_state` is presence only), so this gateway does not join huddles.
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `OMON_VOICE_ENABLED` | on when STT and TTS keys resolve | `false` disables Discord voice join/playback |
+| `OMON_STT_API_KEY` | `OPENAI_API_KEY` | Key for `/audio/transcriptions` |
+| `OMON_STT_BASE_URL` | `OPENAI_API_BASE` | OpenAI-compatible STT base URL |
+| `OMON_STT_MODEL` | `whisper-1` | STT model for live voice and Discord voice-note attachments |
+| `OMON_TTS_API_KEY` | `OPENAI_API_KEY` | Key for `/audio/speech` |
+| `OMON_TTS_BASE_URL` | `OPENAI_API_BASE` | OpenAI-compatible TTS base URL |
+| `OMON_TTS_MODEL` | `tts-1` | TTS model (`response_format=pcm`) |
+| `OMON_TTS_VOICE` | `alloy` | TTS voice name |
+| `OMON_VOICE_SILENCE_MS` | `700` | Trailing silence that closes an utterance |
+| `OMON_VOICE_MIN_SPEECH_MS` | `400` | Shorter bursts are ignored |
+| `OMON_VOICE_MAX_SPEECH_MS` | `30000` | Force-flush a long utterance |
+| `SLACK_VOICE_REPLY` | `false` | Upload a spoken WAV for Slack audio-file replies when TTS is configured |
 
 ---
 

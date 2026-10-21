@@ -36,6 +36,7 @@ struct Shared {
     multiplexer: crate::SessionMultiplexer,
     pool: SqlitePool,
     bot_user_id: String,
+    voice_replies: Option<Arc<crate::SlackVoiceReplies>>,
 }
 
 pub struct SlackIngress {
@@ -63,6 +64,7 @@ impl SlackIngress {
             multiplexer,
             pool,
             bot_user_id,
+            voice_replies: None,
         };
         let debouncer = SlackDebouncer::new(DEFAULT_DEBOUNCE, Arc::new(shared.clone()));
         Self {
@@ -74,6 +76,12 @@ impl SlackIngress {
             pairing: None,
             user_names: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn with_voice_replies(mut self, replies: Arc<crate::SlackVoiceReplies>) -> Self {
+        self.shared.voice_replies = Some(replies);
+        self.debouncer = SlackDebouncer::new(DEFAULT_DEBOUNCE, Arc::new(self.shared.clone()));
+        self
     }
 
     pub fn with_inbox_actions(
@@ -703,9 +711,13 @@ impl Shared {
                 }
             }
         }
+        let mut heard_audio = false;
         for transcript in transcripts {
             event.content = match transcript {
-                Ok(text) => format!("🎤 [음성 전사]: {text}\n\n{}", event.content),
+                Ok(text) => {
+                    heard_audio = true;
+                    format!("🎤 [음성 전사]: {text}\n\n{}", event.content)
+                }
                 Err(error) => {
                     tracing::warn!(%error, "failed to transcribe Slack audio attachment");
                     format!(
@@ -714,6 +726,11 @@ impl Shared {
                     )
                 }
             };
+        }
+        if heard_audio {
+            if let Some(replies) = &self.voice_replies {
+                replies.note(&event.session.channel_id, &event.platform_message_id);
+            }
         }
     }
 }

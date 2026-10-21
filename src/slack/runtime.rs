@@ -35,6 +35,8 @@ pub struct SlackDeps {
     pub egress: Arc<SlackEgress>,
     pub commands: super::commands::SlackCommandDeps,
     pub inbox_actions: Option<Arc<dyn crate::inbox::proposals::Actions>>,
+    /// Audio messages whose final reply should be uploaded as speech.
+    pub voice_replies: Option<Arc<crate::SlackVoiceReplies>>,
 }
 
 /// Resolves the bot identity with `auth.test` before anything listens, so a bad token fails
@@ -55,6 +57,9 @@ pub async fn build(deps: SlackDeps) -> Result<SlackRuntime> {
     .with_pairing(deps.commands.pairing.clone());
     if let Some(actions) = deps.inbox_actions {
         ingress = ingress.with_inbox_actions(actions);
+    }
+    if let Some(replies) = deps.voice_replies {
+        ingress = ingress.with_voice_replies(replies);
     }
     let ingress = Arc::new(ingress);
     let commands = Arc::new(SlackCommands::new(
