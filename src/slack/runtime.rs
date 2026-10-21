@@ -37,6 +37,8 @@ pub struct SlackDeps {
     pub inbox_actions: Option<Arc<dyn crate::inbox::proposals::Actions>>,
     /// Audio messages whose final reply should be uploaded as speech.
     pub voice_replies: Option<Arc<crate::SlackVoiceReplies>>,
+    /// Browser huddle client. Absent when the gateway was built without the command wired.
+    pub huddle: Option<Arc<dyn crate::HuddleControl>>,
 }
 
 /// Resolves the bot identity with `auth.test` before anything listens, so a bad token fails
@@ -62,12 +64,16 @@ pub async fn build(deps: SlackDeps) -> Result<SlackRuntime> {
         ingress = ingress.with_voice_replies(replies);
     }
     let ingress = Arc::new(ingress);
-    let commands = Arc::new(SlackCommands::new(
+    let mut commands = SlackCommands::new(
         deps.config.clone(),
         api.clone(),
         auth.user_id.clone(),
         deps.commands,
-    ));
+    );
+    if let Some(huddle) = deps.huddle {
+        commands = commands.with_huddle(huddle);
+    }
+    let commands = Arc::new(commands);
     Ok(SlackRuntime {
         config: deps.config,
         api,

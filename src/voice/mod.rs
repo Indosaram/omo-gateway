@@ -1,4 +1,5 @@
 mod config;
+mod huddle;
 mod pipeline;
 mod playback;
 mod respond;
@@ -9,6 +10,7 @@ mod utterance;
 mod wav;
 
 pub use config::VoiceSettings;
+pub use huddle::{HuddleControl, HuddleRuntime, HuddleSettings};
 pub use pipeline::{
     AudioDirection, AudioFrame, AudioFrameBuffer, AudioPayload, OpenAiSpeechToText, SpeechPipeline,
     SpeechPipelineOutput, SpeechToText, TextToSpeech, VoiceAudioPipeline, VoiceLanguageModel,
@@ -29,11 +31,29 @@ use tokio::sync::mpsc;
 /// One decoded or signalling update from a Songbird receive handler.
 #[derive(Clone, Debug)]
 pub enum VoicePacket {
-    Pcm { ssrc: u32, samples: Vec<i16> },
-    Silent { ssrc: u32 },
-    Speaker { ssrc: u32, user_id: u64 },
-    Left { user_id: u64 },
-    Opus { ssrc: u32, payload: Vec<u8> },
+    Pcm {
+        ssrc: u32,
+        samples: Vec<i16>,
+    },
+    Silent {
+        ssrc: u32,
+    },
+    Speaker {
+        ssrc: u32,
+        user_id: u64,
+    },
+    Left {
+        user_id: u64,
+    },
+    Opus {
+        ssrc: u32,
+        payload: Vec<u8>,
+    },
+    /// Display name for a PCM stream that is not a Discord user id.
+    Label {
+        ssrc: u32,
+        name: String,
+    },
 }
 
 /// Songbird global event listener which forwards received Opus or decoded PCM

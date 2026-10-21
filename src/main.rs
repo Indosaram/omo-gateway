@@ -18,7 +18,7 @@ use omon_gateway::{
     MultiplexerConfig, OmoBackend, OmoBackendConfig, OmoDaemonSupervisor, OmonError,
     OpenAiSpeechToText, OutboundAction, OutboundDispatcher, PoiseData, ProfileRoute, ProfileRouter,
     RestartLoopGuard, Result, ScaleToZero, SessionContext, SessionKey, SessionMultiplexer,
-    SmartApprovalGuard, TerminalTool, ToolRegistry, VoiceRuntime, VoiceSettings,
+    SmartApprovalGuard, TerminalTool, ToolRegistry,     HuddleRuntime, HuddleSettings, VoiceRuntime, VoiceSettings,
 };
 #[allow(unused_imports)]
 pub use omon_gateway::{load_cron_skills, resolve_skill_bundle, resolve_workspace_instructions};
@@ -1593,6 +1593,12 @@ async fn run_gateway_with_dashboard(
         multiplexer.clone(),
         pool.clone(),
     );
+    let huddle_runtime = Arc::new(HuddleRuntime::from_voice(
+        HuddleSettings::from_env(),
+        &voice_settings,
+        multiplexer.clone(),
+        pool.clone(),
+    ));
     let slack_egress = match (&slack_config, &slack_boot) {
         (Some(slack), Some(boot)) => {
             let mut egress = omon_gateway::slack::SlackEgress::new(boot.api.clone())
@@ -1851,6 +1857,7 @@ async fn run_gateway_with_dashboard(
                 },
                 inbox_actions: poise_data.inbox_actions.clone(),
                 voice_replies: voice_runtime.slack_replies(),
+                huddle: Some(huddle_runtime),
             })
             .await
             {

@@ -10,6 +10,7 @@ use super::VoicePacket;
 pub struct Utterance {
     pub ssrc: u32,
     pub user_id: Option<u64>,
+    pub name: Option<String>,
     pub samples: Vec<i16>,
     pub sample_rate: u32,
     pub channels: u16,
@@ -29,6 +30,14 @@ impl Utterance {
     }
 
     pub fn speaker_label(&self) -> Option<String> {
+        if let Some(name) = self
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            return Some(name.to_owned());
+        }
         self.user_id.map(|user_id| format!("<@{user_id}>"))
     }
 }
@@ -37,6 +46,7 @@ struct Speaker {
     samples: Vec<i16>,
     trailing_silence: usize,
     user_id: Option<u64>,
+    name: Option<String>,
 }
 
 /// Buffers per-speaker PCM until the speaker has been quiet for long enough.
@@ -49,6 +59,7 @@ pub struct UtteranceAssembler {
     max_samples: usize,
     speakers: HashMap<u32, Speaker>,
     users: HashMap<u32, u64>,
+    names: HashMap<u32, String>,
 }
 
 impl UtteranceAssembler {
@@ -72,6 +83,7 @@ impl UtteranceAssembler {
             max_samples: samples_for(sample_rate, channels, max_speech).max(1),
             speakers: HashMap::new(),
             users: HashMap::new(),
+            names: HashMap::new(),
         }
     }
 
@@ -86,6 +98,17 @@ impl UtteranceAssembler {
                 }
                 None
             }
+            VoicePacket::Label { ssrc, name } => {
+                let name = name.trim().to_owned();
+                if name.is_empty() {
+                    return None;
+                }
+                self.names.insert(ssrc, name.clone());
+                if let Some(speaker) = self.speakers.get_mut(&ssrc) {
+                    speaker.name = Some(name);
+                }
+                None
+            }
             VoicePacket::Left { user_id } => self.finish_user(user_id),
             VoicePacket::Opus { .. } => None,
         }
@@ -96,13 +119,18 @@ impl UtteranceAssembler {
             return None;
         }
         let user_id = self.users.get(&ssrc).copied();
+        let name = self.names.get(&ssrc).cloned();
         let speaker = self.speakers.entry(ssrc).or_insert_with(|| Speaker {
             samples: Vec::new(),
             trailing_silence: 0,
             user_id,
+            name,
         });
         speaker.trailing_silence = 0;
         speaker.user_id = speaker.user_id.or(user_id);
+        if speaker.name.is_none() {
+            speaker.name = self.names.get(&ssrc).cloned();
+        }
         speaker.samples.extend(samples);
         if speaker.samples.len() >= self.max_samples {
             return self.take(ssrc);
@@ -153,6 +181,7 @@ impl UtteranceAssembler {
         Some(Utterance {
             ssrc,
             user_id: speaker.user_id.or_else(|| self.users.get(&ssrc).copied()),
+            name: speaker.name.or_else(|| self.names.get(&ssrc).cloned()),
             samples: speaker.samples,
             sample_rate: self.sample_rate,
             channels: self.channels,
@@ -221,6 +250,23 @@ mod tests {
         assert_eq!(utterance.user_id, Some(42));
         assert!(utterance.speaker_label().unwrap().contains("42"));
         assert!(assembler.speakers.contains_key(&8));
+    }
+
+    #[test]
+    fn a_display_name_labels_the_utterance() {
+        let mut assembler = assembler();
+        assert!(assembler
+            .push(VoicePacket::Label {
+                ssrc: 3,
+                name: "Ada".into(),
+            })
+            .is_none());
+        assert!(assembler.push(pcm(3, 640)).is_none());
+        assert!(assembler.push(VoicePacket::Silent { ssrc: 3 }).is_none());
+        let utterance = assembler
+            .push(VoicePacket::Silent { ssrc: 3 })
+            .expect("named speaker ended");
+        assert_eq!(utterance.speaker_label().as_deref(), Some("Ada"));
     }
 
     #[test]
