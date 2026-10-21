@@ -902,3 +902,117 @@ async fn event_insert_failure_rolls_back_block_and_report() {
     assert_eq!(lane.last_report, None);
     assert!(events(database.pool()).await.is_empty());
 }
+
+/// Runs one lane turn and records how many tool calls the backend reported for it.
+struct ToolCountBackend {
+    tool_calls: u64,
+    prompts: mpsc::UnboundedSender<String>,
+}
+
+#[async_trait]
+impl omon_gateway::agent::AgentBackend for ToolCountBackend {
+    async fn run(
+        &self,
+        session: &mut omon_gateway::SessionContext,
+        event: omon_gateway::InboundEvent,
+    ) -> omon_gateway::Result<()> {
+        self.prompts.send(event.content).unwrap();
+        session.state.metadata.insert(
+            "lane_turn_tool_calls".into(),
+            serde_json::json!(self.tool_calls),
+        );
+        Ok(())
+    }
+}
+
+async fn run_continued_turn(
+    tool_calls: u64,
+    selected: &'static str,
+) -> (Database, Vec<String>, Vec<String>) {
+    let (database, _, _) = fixture().await;
+    sqlx::query("UPDATE lanes SET turns_run = 1 WHERE key = 'qa-1'")
+        .execute(database.pool())
+        .await
+        .unwrap();
+    let (prompts, mut prompt_rx) = mpsc::unbounded_channel();
+    let (observed, mut judged_rx) = mpsc::unbounded_channel();
+    let runner = omon_gateway::lanes::runner::LaneRunner::new(
+        database.pool().clone(),
+        Arc::new(ToolCountBackend {
+            tool_calls,
+            prompts,
+        }),
+    )
+    .with_judge(Arc::new(IntentJudge {
+        selected,
+        observed,
+        claim_pool: None,
+    }));
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let task = tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move { runner.run_lane("qa-1", notify, shutdown).await }
+    });
+    // The first turn's prompt arrives; the lane then parks and waits for a message.
+    tokio::time::timeout(std::time::Duration::from_secs(5), prompt_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    // Wait for the park to be committed, then stop the idle lane.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let outcome: Option<String> =
+                sqlx::query_scalar("SELECT last_turn_outcome FROM lanes WHERE key = 'qa-1'")
+                    .fetch_one(database.pool())
+                    .await
+                    .unwrap();
+            if outcome.as_deref() == Some("idle_without_claim") {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    shutdown.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let mut judged = Vec::new();
+    while let Ok(state) = judged_rx.try_recv() {
+        judged.push(state);
+    }
+    let mut extra_prompts = Vec::new();
+    while let Ok(prompt) = prompt_rx.try_recv() {
+        extra_prompts.push(prompt);
+    }
+    assert!(
+        extra_prompts.is_empty(),
+        "a parked lane must not start another turn: {extra_prompts:?}"
+    );
+    let kinds = events(database.pool()).await;
+    (database, kinds, judged)
+}
+
+#[tokio::test]
+async fn host_continued_turn_without_a_tool_call_parks_the_lane_and_tells_the_lead() {
+    let (database, kinds, judged) = run_continued_turn(0, "progress").await;
+    assert_eq!(kinds, ["no_progress"]);
+    assert!(
+        judged.is_empty(),
+        "no judge call is spent on a turn that did nothing"
+    );
+    let lane = get_lane(database.pool(), "qa-1").await.unwrap().unwrap();
+    assert_eq!(lane.status, "working");
+    assert_eq!(lane.turns_run, 2);
+}
+
+#[tokio::test]
+async fn host_continued_turn_with_tool_calls_keeps_the_report_intent_path() {
+    let (_database, kinds, judged) = run_continued_turn(3, "finished").await;
+    assert_eq!(kinds, ["idle_without_claim"]);
+    assert_eq!(judged.len(), 1);
+}
