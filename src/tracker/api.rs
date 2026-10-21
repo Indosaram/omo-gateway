@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::error::OmonError;
-use crate::tracker::{issues, lanes, seed, sessions, threads, workspace};
+use crate::tracker::{issues, lanes, requests, seed, sessions, threads, workspace};
 
 #[derive(Debug)]
 pub struct TrackerError {
@@ -167,6 +167,9 @@ pub async fn prepare(pool: &SqlitePool) -> ApiResult<String> {
     let me = me_id(pool).await?;
     seed::ensure_sessions_team(pool).await?;
     lanes::sync(pool).await?;
+    if let Err(error) = requests::sync(pool).await {
+        tracing::warn!(%error, "tracker request sync failed");
+    }
     sessions::sync_issues(pool).await;
     Ok(me)
 }
