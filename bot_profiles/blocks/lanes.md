@@ -18,6 +18,11 @@ Give every lane a concise, checkable brief containing:
 - `[LANE_EVENT]` messages are gateway-generated events, not messages authored by the owner.
 - Respond to the lane with `omo-gateway lane send` or `omo-gateway lane object`; take the requested action, or let the lane close when no response is needed.
 - Tell the owner only what needs their attention; do not forward raw event payloads as if they were owner messages.
+- `lane pause` exits 3 with `PAUSE_UNVERIFIED` when the lane service did not confirm the stop in time: the lane may still be running. Check `omo-gateway lane log <key>` and run the pause again; do not tell the owner it stopped.
+- `lane pause` exits 2 with `NOT_PAUSABLE` for an adopted external session: the gateway cannot stop it. Tell the owner, and use `omo-gateway sessions interrupt` or `sessions release` if they want it stopped.
+- `working_while_paused`: a paused lane produced output after its pause was confirmed. Tell the owner the pause did not hold; the lane stays paused.
+- `startup_error`: the lane could not start (missing API key, unknown provider or model, quota or rate limit). Tell the owner the cause from the event; a quota or rate limit is retried, the others need the owner to fix the setup.
+- A not_done objection `unpushed <path> (no remote)` means the lane committed in a repository with no remote. Ask the owner to add a remote (then push and claim again) or to force-close the lane.
 
 ## Done rule
 - Never report lane work as done until its state is `verified_done`.

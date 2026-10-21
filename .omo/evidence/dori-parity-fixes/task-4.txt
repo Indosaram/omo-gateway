@@ -1,0 +1,21 @@
+# task-4 evidence (todo 9 run, 2026-10-21T01:48:14.310Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --lib lane_count_alerts_and_clears -- --nocapture
+exit: 0
+test lanes::guard::tests::lane_count_alerts_and_clears ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1120 filtered out; finished in 0.00s
+
+$ cargo test --test test_lane_guard_alerts -- --nocapture
+exit: 0
+running 6 tests
+test queued_lane_launches_when_guard_recovers_even_at_high_cpu ... ok
+test events_are_emitted_once_per_transition ... ok
+test launch_event_failure_rolls_back_lane_and_history ... ok
+test failed_event_write_preserves_watcher_state ... ok
+test lane_saturation_alert_once_then_clear ... ok
+test retries_recount_active_lanes_and_do_not_duplicate_launches ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s
+
+
+Note: lane_saturation_alert_once_then_clear expected counts were corrected because take_undelivered_events does not mark rows delivered (cumulative queue: 1 ALERT, still 1 after the repeat sample, then ALERT+CLEAR=2 with events[1].body == "CLEAR"). The dedup and CLEAR assertions are unchanged in strength.

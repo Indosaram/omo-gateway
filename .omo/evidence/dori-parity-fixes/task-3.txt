@@ -1,0 +1,39 @@
+# task-3 evidence (todo 9 run, 2026-10-21T01:48:14.310Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --test test_lane_control -- --nocapture
+exit: 0
+running 11 tests
+test j_output_after_confirmed_pause_emits_one_event ... ok
+test e_one_nudge_per_silence ... ok
+test h_pause_without_runner_exits_3_unverified ... ok
+test a_pause_cancels_the_running_turn_and_starts_no_next_turn ... ok
+test l_pause_of_external_lane_is_refused ... ok
+test b_resume_allows_the_next_turn ... ok
+test c_paused_lane_gets_no_nudge_and_no_stale_post ... ok
+test d_nudge_is_skipped_while_a_tool_is_in_flight ... ok
+test k_pause_of_done_claimed_lane_confirms_via_service_pass ... ok
+test i_pause_with_running_service_confirms ... ok
+test f_resume_on_an_unpaused_lane_exits_2_with_not_paused ... ok
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.81s
+
+
+## QA-3 real binary (RUN_TMP=/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3, DATABASE_URL=sqlite://$RUN_TMP/qa.db, no lane service running)
+Lane qa-sig (status working, created by QA-5 `lane start`) is the pause target; the plan names it qa-p, same scenario.
+
+$ OMON_LANE_PAUSE_CONFIRM_SECS=2 /Users/indo/code/project/omon-gateway/wt/dori-parity/target/debug/omo-gateway lane pause qa-sig
+exit: 3
+{"error":"PAUSE_UNVERIFIED","key":"qa-sig","ok":false,"paused":true}
+
+$ sqlite3 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/qa.db "select resumed_at is null from lane_pauses where lane_key='qa-sig'"
+exit: 0
+1
+
+$ sqlite3 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/qa.db "update lane_pauses set acked_at=datetime('now') where lane_key='qa-sig'"
+exit: 0
+
+
+$ OMON_LANE_PAUSE_CONFIRM_SECS=2 /Users/indo/code/project/omon-gateway/wt/dori-parity/target/debug/omo-gateway lane pause qa-sig
+exit: 0
+{"changed":false,"confirmed":true,"key":"qa-sig","paused":true}
+

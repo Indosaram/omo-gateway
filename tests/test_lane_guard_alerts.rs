@@ -178,3 +178,50 @@ async fn launch_event_failure_rolls_back_lane_and_history() {
         .unwrap();
     assert_eq!(count, 0);
 }
+
+#[tokio::test]
+async fn lane_saturation_alert_once_then_clear() {
+    let database = Database::connect("sqlite::memory:").await.unwrap();
+    let mut watcher = GuardWatcher::new(thresholds());
+
+    // lanes_max is 1 in thresholds().
+    // Active lanes (1) >= maximum (1) -> produces ALERT event with reason.
+    watcher
+        .enqueue_transition(database.pool(), "lead", &HostSample::new(10.0, 50, 100, 1))
+        .await
+        .unwrap();
+
+    let events = take_undelivered_events(database.pool(), None)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "guard");
+    assert!(
+        events[0].body.contains("active lanes (1) >= maximum (1)"),
+        "expected lane alert reason in body, got: {}",
+        events[0].body
+    );
+
+    // A repeat sample adds none (deduplication). Taking events does not mark them
+    // delivered, so the queue still holds exactly the first ALERT.
+    watcher
+        .enqueue_transition(database.pool(), "lead", &HostSample::new(10.0, 50, 100, 1))
+        .await
+        .unwrap();
+    let events = take_undelivered_events(database.pool(), None)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+
+    // Active lanes drop to 0 -> produces a CLEAR event.
+    watcher
+        .enqueue_transition(database.pool(), "lead", &HostSample::new(10.0, 50, 100, 0))
+        .await
+        .unwrap();
+    let events = take_undelivered_events(database.pool(), None)
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[1].kind, "guard");
+    assert_eq!(events[1].body, "CLEAR");
+}

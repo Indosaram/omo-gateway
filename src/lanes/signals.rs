@@ -176,8 +176,23 @@ pub async fn check_signals_str(
     Ok(runner.check_all(&signals, cwd).await)
 }
 
+/// Removes a leading `(?i)done\s*=\s*` prefix if present, returning the trimmed remainder.
+pub fn strip_done_prefix(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("done") {
+        let rest_trimmed = rest.trim_start();
+        if rest_trimmed.starts_with('=') {
+            let offset = trimmed.len() - rest_trimmed.len() + 1;
+            return trimmed[offset..].trim();
+        }
+    }
+    trimmed
+}
+
 pub fn parse_signals(input: &str) -> Result<Vec<DoneSignal>, SignalParseError> {
-    let trimmed = input.trim();
+    let stripped = strip_done_prefix(input);
+    let trimmed = stripped.trim();
     if trimmed.is_empty() {
         return Err(SignalParseError::Empty);
     }
@@ -295,80 +310,67 @@ fn parse_single_signal(raw: &str) -> Result<DoneSignal, SignalParseError> {
     }
 }
 
-fn parse_merged(rest: &str) -> Result<DoneSignal, SignalParseError> {
-    if rest.is_empty() {
-        return Err(SignalParseError::InvalidSyntax(
-            "missing target for merged signal".into(),
-        ));
+fn parse_github_target(rest: &str, kind: &str) -> Result<(String, u64), SignalParseError> {
+    let trimmed = rest.trim();
+    if trimmed.is_empty() {
+        return Err(SignalParseError::InvalidSyntax(format!(
+            "missing target for {kind} signal"
+        )));
     }
-    let (repo_part, num_part) = rest.split_once('#').ok_or_else(|| {
-        SignalParseError::InvalidSyntax(format!("missing '#' in merged signal: {}", rest))
-    })?;
+
+    // Accepts:
+    // 1) owner/repo#N
+    // 2) owner/repo/pull/N
+    // 3) owner/repo/issues/N
+    let (repo_part, num_str) = if let Some((r, n)) = trimmed.split_once('#') {
+        (r, n)
+    } else if let Some((r, n)) = trimmed.split_once("/pull/") {
+        (r, n)
+    } else if let Some((r, n)) = trimmed.split_once("/issues/") {
+        (r, n)
+    } else {
+        return Err(SignalParseError::InvalidSyntax(format!(
+            "missing '#', '/pull/' or '/issues/' in {kind} signal: {rest}"
+        )));
+    };
+
     let (owner, repo) = repo_part.split_once('/').ok_or_else(|| {
         SignalParseError::InvalidSyntax(format!(
-            "missing '/' in owner/repo for merged signal: {}",
-            repo_part
+            "missing '/' in owner/repo for {kind} signal: {repo_part}"
         ))
     })?;
     let owner = owner.trim();
     let repo = repo.trim();
-    let num_str = num_part.trim();
+    let num_str = num_str.trim();
     if owner.is_empty() || repo.is_empty() {
         return Err(SignalParseError::InvalidSyntax(format!(
-            "invalid owner/repo in merged signal: {}",
-            repo_part
+            "invalid owner/repo in {kind} signal: {repo_part}"
         )));
     }
-    let pr_number: u64 = num_str.parse().map_err(|e| {
-        SignalParseError::InvalidSyntax(format!("invalid PR number '{}': {}", num_str, e))
+    let number: u64 = num_str.parse().map_err(|e| {
+        SignalParseError::InvalidSyntax(format!("invalid {kind} number '{num_str}': {e}"))
     })?;
-    if pr_number == 0 {
-        return Err(SignalParseError::InvalidSyntax(
-            "PR number must be positive".into(),
-        ));
+    if number == 0 {
+        return Err(SignalParseError::InvalidSyntax(format!(
+            "{kind} number must be positive"
+        )));
     }
 
+    Ok((format!("{owner}/{repo}"), number))
+}
+
+fn parse_merged(rest: &str) -> Result<DoneSignal, SignalParseError> {
+    let (owner_repo, pr_number) = parse_github_target(rest, "merged")?;
     Ok(DoneSignal::Merged {
-        owner_repo: format!("{}/{}", owner, repo),
+        owner_repo,
         pr_number,
     })
 }
 
 fn parse_closed(rest: &str) -> Result<DoneSignal, SignalParseError> {
-    if rest.is_empty() {
-        return Err(SignalParseError::InvalidSyntax(
-            "missing target for closed signal".into(),
-        ));
-    }
-    let (repo_part, num_part) = rest.split_once('#').ok_or_else(|| {
-        SignalParseError::InvalidSyntax(format!("missing '#' in closed signal: {}", rest))
-    })?;
-    let (owner, repo) = repo_part.split_once('/').ok_or_else(|| {
-        SignalParseError::InvalidSyntax(format!(
-            "missing '/' in owner/repo for closed signal: {}",
-            repo_part
-        ))
-    })?;
-    let owner = owner.trim();
-    let repo = repo.trim();
-    let num_str = num_part.trim();
-    if owner.is_empty() || repo.is_empty() {
-        return Err(SignalParseError::InvalidSyntax(format!(
-            "invalid owner/repo in closed signal: {}",
-            repo_part
-        )));
-    }
-    let issue_number: u64 = num_str.parse().map_err(|e| {
-        SignalParseError::InvalidSyntax(format!("invalid issue number '{}': {}", num_str, e))
-    })?;
-    if issue_number == 0 {
-        return Err(SignalParseError::InvalidSyntax(
-            "issue number must be positive".into(),
-        ));
-    }
-
+    let (owner_repo, issue_number) = parse_github_target(rest, "closed")?;
     Ok(DoneSignal::Closed {
-        owner_repo: format!("{}/{}", owner, repo),
+        owner_repo,
         issue_number,
     })
 }
@@ -672,20 +674,22 @@ fn parse_file_option(
 ) -> Result<(), SignalParseError> {
     if let Some(hex) = opt.strip_prefix("sha256=") {
         let trimmed_hex = hex.trim();
-        if trimmed_hex.is_empty() || !trimmed_hex.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(SignalParseError::InvalidSyntax(format!(
-                "invalid sha256 hex string: {}",
-                hex
-            )));
+        if trimmed_hex.len() != 64 || !trimmed_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SignalParseError::InvalidSyntax(
+                "sha256= takes 64 hex characters".into(),
+            ));
         }
-        *sha256 = Some(trimmed_hex.to_string());
+        *sha256 = Some(trimmed_hex.to_ascii_lowercase());
         Ok(())
     } else if let Some(after_json) = opt.strip_prefix("json:") {
         let (jp, json_str) = after_json.split_once('=').ok_or_else(|| {
             SignalParseError::InvalidSyntax(format!("missing '=' in json option: {}", opt))
         })?;
-        if jp.is_empty() {
-            return Err(SignalParseError::InvalidSyntax("empty json path".into()));
+        let stripped_path = jp.strip_prefix('.').unwrap_or(jp);
+        if stripped_path.is_empty() {
+            return Err(SignalParseError::InvalidSyntax(
+                "json: needs a field path like json:.version".into(),
+            ));
         }
         let val: serde_json::Value = serde_json::from_str(json_str.trim()).map_err(|e| {
             SignalParseError::MalformedJson(format!("invalid JSON value in file signal: {}", e))
@@ -1607,12 +1611,17 @@ mod tests {
                 json_value: Some(serde_json::json!(42)),
             }
         );
-        let s = parse_signals(r#"file data.json [sha256=1234abcd] [json:.status="ok"]"#).unwrap();
+        let s = parse_signals(
+            r#"file data.json [sha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef] [json:.status="ok"]"#,
+        )
+        .unwrap();
         assert_eq!(
             s[0],
             DoneSignal::File {
                 path: PathBuf::from("data.json"),
-                sha256: Some("1234abcd".into()),
+                sha256: Some(
+                    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into()
+                ),
                 json_path: Some(".status".into()),
                 json_value: Some(serde_json::json!("ok")),
             }
@@ -1786,6 +1795,150 @@ mod tests {
                 body_regex: Some("created".into()),
             }
         );
+    }
+
+    #[test]
+    fn test_parse_done_prefix() {
+        let signals = parse_signals("Done = file x.txt").unwrap();
+        assert_eq!(
+            signals[0],
+            DoneSignal::File {
+                path: PathBuf::from("x.txt"),
+                sha256: None,
+                json_path: None,
+                json_value: None,
+            }
+        );
+
+        let signals = parse_signals("done=merged a/b#1").unwrap();
+        assert_eq!(
+            signals[0],
+            DoneSignal::Merged {
+                owner_repo: "a/b".into(),
+                pr_number: 1,
+            }
+        );
+
+        let signals = parse_signals("DONE   =   closed a/b#2").unwrap();
+        assert_eq!(
+            signals[0],
+            DoneSignal::Closed {
+                owner_repo: "a/b".into(),
+                issue_number: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_github_url_forms() {
+        let merged_pull = parse_signals("merged owner/repo/pull/42").unwrap();
+        assert_eq!(
+            merged_pull[0],
+            DoneSignal::Merged {
+                owner_repo: "owner/repo".into(),
+                pr_number: 42,
+            }
+        );
+
+        let merged_issues = parse_signals("merged owner/repo/issues/43").unwrap();
+        assert_eq!(
+            merged_issues[0],
+            DoneSignal::Merged {
+                owner_repo: "owner/repo".into(),
+                pr_number: 43,
+            }
+        );
+
+        let closed_pull = parse_signals("closed owner/repo/pull/10").unwrap();
+        assert_eq!(
+            closed_pull[0],
+            DoneSignal::Closed {
+                owner_repo: "owner/repo".into(),
+                issue_number: 10,
+            }
+        );
+
+        let closed_issues = parse_signals("closed owner/repo/issues/20").unwrap();
+        assert_eq!(
+            closed_issues[0],
+            DoneSignal::Closed {
+                owner_repo: "owner/repo".into(),
+                issue_number: 20,
+            }
+        );
+
+        let standard = parse_signals("merged owner/repo#99").unwrap();
+        assert_eq!(
+            standard[0],
+            DoneSignal::Merged {
+                owner_repo: "owner/repo".into(),
+                pr_number: 99,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_rejects_short_sha_and_empty_json_path() {
+        let short_sha_err = parse_signals("file data.json sha256=1234abcd").unwrap_err();
+        match short_sha_err {
+            SignalParseError::InvalidSyntax(msg) => {
+                assert!(
+                    msg.contains("sha256= takes 64 hex characters"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSyntax for short sha, got: {other:?}"),
+        }
+
+        let non_hex_sha_err = parse_signals(
+            "file data.json sha256=zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        )
+        .unwrap_err();
+        match non_hex_sha_err {
+            SignalParseError::InvalidSyntax(msg) => {
+                assert!(
+                    msg.contains("sha256= takes 64 hex characters"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSyntax for non-hex sha, got: {other:?}"),
+        }
+
+        let empty_json_path_err = parse_signals("file data.json json:.=1").unwrap_err();
+        match empty_json_path_err {
+            SignalParseError::InvalidSyntax(msg) => {
+                assert!(
+                    msg.contains("json: needs a field path like json:.version"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSyntax for empty json path, got: {other:?}"),
+        }
+
+        let bare_empty_json_path_err = parse_signals("file data.json json:=1").unwrap_err();
+        match bare_empty_json_path_err {
+            SignalParseError::InvalidSyntax(msg) => {
+                assert!(
+                    msg.contains("json: needs a field path like json:.version"),
+                    "unexpected error message: {msg}"
+                );
+            }
+            other => panic!("expected InvalidSyntax for bare empty json path, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_strip_done_prefix_keeps_plain_lines() {
+        assert_eq!(strip_done_prefix("file x.txt"), "file x.txt");
+        assert_eq!(strip_done_prefix("Done = file x.txt"), "file x.txt");
+        assert_eq!(strip_done_prefix("done=file x.txt"), "file x.txt");
+        assert_eq!(strip_done_prefix("DONE   =   file x.txt"), "file x.txt");
+        assert_eq!(
+            strip_done_prefix("  Done = merged a/b#1 ; file y.txt  "),
+            "merged a/b#1 ; file y.txt"
+        );
+        assert_eq!(strip_done_prefix("done"), "done");
+        assert_eq!(strip_done_prefix(""), "");
     }
 
     #[test]

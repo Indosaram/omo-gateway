@@ -8,7 +8,9 @@ use omon_gateway::agent::AgentBackend;
 use omon_gateway::lanes::activity::LaneActivity;
 use omon_gateway::lanes::cli::change_claim;
 use omon_gateway::lanes::runner::{lane_key, LaneRunner, NUDGE_AFTER, NUDGE_TEXT};
-use omon_gateway::storage::lanes::{is_lane_paused, pause_lane, resume_lane};
+use omon_gateway::storage::lanes::{
+    ack_pause, is_lane_paused, pause_acked, pause_lane, resume_lane,
+};
 use omon_gateway::storage::{get_lane, insert_lane, Database, Lane};
 use omon_gateway::work_heartbeat::MockClock;
 use omon_gateway::{InboundEvent, Result, SessionContext};
@@ -285,17 +287,66 @@ async fn e_one_nudge_per_silence() {
 }
 
 async fn cli(url: &str, dir: &std::path::Path, args: &[&str]) -> (Option<i32>, serde_json::Value) {
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_omo-gateway"))
+    run_cli(url, dir, args, Some("1")).await
+}
+
+/// `confirm_secs: None` keeps the CLI's own 30 s pause confirmation deadline.
+async fn run_cli(
+    url: &str,
+    dir: &std::path::Path,
+    args: &[&str],
+    confirm_secs: Option<&str>,
+) -> (Option<i32>, serde_json::Value) {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_omo-gateway"));
+    command
         .current_dir(dir)
         .env("DATABASE_URL", url)
-        .args(args)
-        .output()
-        .await
-        .unwrap();
+        .env_remove("OMON_LANE_PAUSE_CONFIRM_SECS")
+        .args(args);
+    if let Some(secs) = confirm_secs {
+        command.env("OMON_LANE_PAUSE_CONFIRM_SECS", secs);
+    }
+    let output = command.output().await.unwrap();
     (
         output.status.code(),
         serde_json::from_slice(&output.stdout).unwrap(),
     )
+}
+
+async fn file_database(temp: &tempfile::TempDir) -> (String, Database) {
+    let url = format!("sqlite://{}", temp.path().join("ctl.db").display());
+    let database = Database::connect(&url).await.unwrap();
+    (url, database)
+}
+
+async fn insert_ctl(pool: &SqlitePool, temp: &tempfile::TempDir, status: &str) {
+    let brief = temp.path().join("brief.md");
+    tokio::fs::write(&brief, "Make done.txt").await.unwrap();
+    let mut lane = Lane::new(
+        "ctl",
+        "Control",
+        lane_key("lead").storage_key(),
+        temp.path().to_str().unwrap(),
+        brief.to_str().unwrap(),
+        lane_key("ctl").storage_key(),
+        "file done.txt",
+    );
+    lane.status = status.into();
+    if status == "done_claimed" {
+        // A fresh claim stays inside the 5-minute window, so settlement leaves it alone.
+        lane.claim_at = Some(Utc::now());
+    }
+    insert_lane(pool, &lane).await.unwrap();
+}
+
+async fn working_while_paused_events(pool: &SqlitePool, key: &str) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM lane_events WHERE lane_key = ? AND kind = 'working_while_paused'",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -322,8 +373,10 @@ async fn f_resume_on_an_unpaused_lane_exits_2_with_not_paused() {
     let (code, _) = cli(&url, temp.path(), &["lane", "resume", "missing"]).await;
     assert_ne!(code, Some(0));
 
+    // No lane service runs here, so nothing confirms the pause; the row stays open.
     let (code, body) = cli(&url, temp.path(), &["lane", "pause", "ctl"]).await;
-    assert_eq!(code, Some(0));
+    assert_eq!(code, Some(3));
+    assert_eq!(body["error"], "PAUSE_UNVERIFIED");
     assert_eq!(body["paused"], true);
     let (code, body) = cli(&url, temp.path(), &["lane", "list", "--json"]).await;
     assert_eq!(code, Some(0));
@@ -335,4 +388,187 @@ async fn f_resume_on_an_unpaused_lane_exits_2_with_not_paused() {
     assert_eq!(body["paused"], false);
     let (_, body) = cli(&url, temp.path(), &["lane", "list"]).await;
     assert_eq!(body["lanes"][0]["paused"], false);
+}
+
+#[tokio::test]
+async fn h_pause_without_runner_exits_3_unverified() {
+    let temp = tempfile::tempdir().unwrap();
+    let (url, database) = file_database(&temp).await;
+    insert_ctl(database.pool(), &temp, "working").await;
+
+    let (code, body) = cli(&url, temp.path(), &["lane", "pause", "ctl"]).await;
+    assert_eq!(code, Some(3));
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["key"], "ctl");
+    assert_eq!(body["error"], "PAUSE_UNVERIFIED");
+    assert_eq!(body["paused"], true);
+    assert!(is_lane_paused(database.pool(), "ctl").await.unwrap());
+    assert!(!pause_acked(database.pool(), "ctl").await.unwrap());
+}
+
+#[tokio::test]
+async fn i_pause_with_running_service_confirms() {
+    let temp = tempfile::tempdir().unwrap();
+    let (url, database) = file_database(&temp).await;
+    let pool = database.pool().clone();
+    insert_ctl(&pool, &temp, "working").await;
+    let (started_tx, mut started) = mpsc::unbounded_channel();
+    let (steered_tx, _steered) = mpsc::unbounded_channel();
+    let backend = Arc::new(Fake {
+        pool: pool.clone(),
+        calls: AtomicUsize::new(0),
+        started: started_tx,
+        steered: steered_tx,
+        tool: Some(false),
+    });
+    let stop = CancellationToken::new();
+    let service = tokio::spawn(LaneRunner::new(pool.clone(), backend.clone()).serve(stop.clone()));
+    // Turn 1 blocks until cancelled, so the pause must stop a running turn.
+    assert_eq!(
+        tokio::time::timeout(BOUND, started.recv()).await.unwrap(),
+        Some(1)
+    );
+
+    let (code, body) = run_cli(&url, temp.path(), &["lane", "pause", "ctl"], None).await;
+    assert_eq!(code, Some(0), "{body}");
+    assert_eq!(body["confirmed"], true);
+    assert_eq!(body["paused"], true);
+    assert_eq!(body["changed"], true);
+    assert!(pause_acked(&pool, "ctl").await.unwrap());
+    assert_eq!(
+        get_lane(&pool, "ctl")
+            .await
+            .unwrap()
+            .unwrap()
+            .last_turn_outcome
+            .as_deref(),
+        Some("paused")
+    );
+
+    let (code, body) = run_cli(&url, temp.path(), &["lane", "pause", "ctl"], None).await;
+    assert_eq!(code, Some(0), "{body}");
+    assert_eq!(body["confirmed"], true);
+    assert_eq!(body["changed"], false);
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+
+    stop.cancel();
+    tokio::time::timeout(BOUND, service)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn j_output_after_confirmed_pause_emits_one_event() {
+    let fx = fixture(Some(false)).await;
+    let pool = fx.database.pool().clone();
+    let activity = LaneActivity::new(pool.clone(), Arc::new(MockClock::new(Utc::now())));
+
+    assert!(pause_lane(&pool, "ctl", "test").await.unwrap());
+    // Output before the runner confirmed the pause is the turn being stopped, not a leak.
+    activity.captured("ctl", "still finishing").await.unwrap();
+    assert_eq!(working_while_paused_events(&pool, "ctl").await, 0);
+
+    assert!(ack_pause(&pool, "ctl").await.unwrap());
+    activity.captured("ctl", "one").await.unwrap();
+    activity.captured("ctl", "two").await.unwrap();
+    assert_eq!(working_while_paused_events(&pool, "ctl").await, 1);
+    let (lead, body): (String, String) = sqlx::query_as(
+        "SELECT lead_session_key, body FROM lane_events WHERE lane_key = 'ctl' AND kind = 'working_while_paused'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(lead, lane_key("lead").storage_key());
+    assert!(body.contains("ctl"), "{body}");
+    assert!(is_lane_paused(&pool, "ctl").await.unwrap());
+    assert_eq!(
+        get_lane(&pool, "ctl").await.unwrap().unwrap().status,
+        "working"
+    );
+
+    // External path: pause_lane refuses external lanes, so the acked row is written directly.
+    sqlx::query("INSERT INTO lanes(key,title,lead_session_key,cwd,brief_path,session_key,omo_thread_id,status,done_signals,last_activity_at,kind,external_target) VALUES('ext','t','lead:c','/tmp','','','s','working','done',?,'external','omarchy:ext')")
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO lane_pauses(lane_key, paused_at, paused_by, resumed_at, acked_at) VALUES ('ext', ?, 'test', NULL, ?)")
+        .bind(Utc::now())
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+    activity
+        .captured_item("ext", "external output", 0, "item-1")
+        .await
+        .unwrap();
+    activity
+        .captured_item("ext", "more output", 0, "item-2")
+        .await
+        .unwrap();
+    assert_eq!(working_while_paused_events(&pool, "ext").await, 1);
+}
+
+#[tokio::test]
+async fn k_pause_of_done_claimed_lane_confirms_via_service_pass() {
+    let temp = tempfile::tempdir().unwrap();
+    let (url, database) = file_database(&temp).await;
+    let pool = database.pool().clone();
+    insert_ctl(&pool, &temp, "done_claimed").await;
+    let (started_tx, _started) = mpsc::unbounded_channel();
+    let (steered_tx, _steered) = mpsc::unbounded_channel();
+    let backend = Arc::new(Fake {
+        pool: pool.clone(),
+        calls: AtomicUsize::new(0),
+        started: started_tx,
+        steered: steered_tx,
+        tool: Some(false),
+    });
+    let stop = CancellationToken::new();
+    // A done_claimed lane never gets a lane task: only the service pass can confirm it.
+    let service = tokio::spawn(LaneRunner::new(pool.clone(), backend.clone()).serve(stop.clone()));
+
+    let (code, body) = run_cli(&url, temp.path(), &["lane", "pause", "ctl"], None).await;
+    assert_eq!(code, Some(0), "{body}");
+    assert_eq!(body["confirmed"], true);
+    assert_eq!(body["changed"], true);
+    assert!(pause_acked(&pool, "ctl").await.unwrap());
+    assert_eq!(
+        get_lane(&pool, "ctl").await.unwrap().unwrap().status,
+        "done_claimed"
+    );
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
+
+    stop.cancel();
+    tokio::time::timeout(BOUND, service)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn l_pause_of_external_lane_is_refused() {
+    let temp = tempfile::tempdir().unwrap();
+    let (url, database) = file_database(&temp).await;
+    let pool = database.pool().clone();
+    sqlx::query("INSERT INTO lanes(key,title,lead_session_key,cwd,brief_path,session_key,omo_thread_id,status,done_signals,last_activity_at,kind,external_target) VALUES('ext','t','lead:c','/tmp','','','s','working','done',?,'external','omarchy:ext')")
+        .bind(Utc::now())
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let (code, body) = cli(&url, temp.path(), &["lane", "pause", "ext"]).await;
+    assert_eq!(code, Some(2));
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["key"], "ext");
+    assert_eq!(body["error"], "NOT_PAUSABLE");
+    let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM lane_pauses WHERE lane_key = 'ext'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rows, 0);
+    assert!(pause_lane(&pool, "ext", "test").await.is_err());
 }

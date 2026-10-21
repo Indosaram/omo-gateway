@@ -217,10 +217,13 @@ fn critical(event: &LaneEvent) -> bool {
         // went, or why a lane failed to launch, so they must reach the owner without passing
         // the wake judgment that can skip an event.
         "done_claimed" | "dead" | "not_done" | "inbox_urgent" | "owner_reply_failed"
-        | "cron_report" | "unmerged_branch" | "launch_failed" => true,
+        | "cron_report" | "unmerged_branch" | "launch_failed" | "startup_error" => true,
         // Triage already chose these items for action; a wake skip ends them as failed before
         // the lead sees them (2026-10-20 11:18Z and 11:30Z: 11 items, no lead turn).
         "action_loop" => true,
+        // A lane that stopped making progress is parked until someone writes to it; skipped by
+        // the wake judgment, it would sit idle with no one told.
+        "no_progress" => true,
         "cron_problem" => event.body.contains("needs_owner"),
         _ => false,
     }
@@ -249,10 +252,16 @@ mod tests {
         // be able to drop either event.
         assert!(critical(&event("unmerged_branch")));
         assert!(critical(&event("launch_failed")));
+        assert!(critical(&event("startup_error")));
         assert!(
             critical(&event("action_loop")),
             "triaged action items must reach the lead, not end as jev_skip failures"
         );
+        assert!(critical(&event("no_progress")));
         assert!(!critical(&event("nudged")));
+        assert!(
+            !critical(&event("working_while_paused")),
+            "output after a confirmed pause is routed like other lane events"
+        );
     }
 }

@@ -59,8 +59,8 @@ pub async fn seed_agent_states(
     for (name, state_type, color, position, lane_status) in agent_states {
         let state_id = Uuid::new_v4().to_string();
         sqlx::query(
-            "INSERT INTO tracker_states (id, team_id, name, type, color, position, lane_status, description)
-             VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
+            "INSERT INTO tracker_states (id, team_id, name, type, color, position, lane_status, description, lane_paused)
+             VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0)",
         )
         .bind(state_id)
         .bind(team_id)
@@ -72,6 +72,16 @@ pub async fn seed_agent_states(
         .execute(&mut **executor)
         .await?;
     }
+
+    let paused_state_id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO tracker_states (id, team_id, name, type, color, position, lane_status, description, lane_paused)
+         VALUES (?, ?, 'Paused', 'started', '#9b8afb', 2.5, NULL, NULL, 1)",
+    )
+    .bind(paused_state_id)
+    .bind(team_id)
+    .execute(&mut **executor)
+    .await?;
 
     Ok(())
 }

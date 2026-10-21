@@ -229,15 +229,42 @@ pub async fn paused_lane_keys(pool: &SqlitePool) -> Result<std::collections::Has
     Ok(keys.into_iter().collect())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseOutcome {
+    /// A new pause row was opened.
+    Paused,
+    /// The lane already had an open pause row.
+    AlreadyPaused,
+    /// External (adopted) sessions run outside the gateway, which cannot stop them.
+    NotPausable,
+}
+
 /// Pauses a live lane. Returns false when it was already paused. The status is left
 /// unchanged; the history row records the pause with from = to = current status.
+/// An external lane is refused with a `NOT_PAUSABLE` error.
 pub async fn pause_lane(pool: &SqlitePool, key: &str, by: &str) -> Result<bool> {
+    match try_pause_lane(pool, key, by).await? {
+        PauseOutcome::Paused => Ok(true),
+        PauseOutcome::AlreadyPaused => Ok(false),
+        PauseOutcome::NotPausable => Err(OmonError::Config(format!(
+            "NOT_PAUSABLE: lane {key} is an external session"
+        ))),
+    }
+}
+
+/// Like `pause_lane`, but reports an external lane as `PauseOutcome::NotPausable`.
+pub async fn try_pause_lane(pool: &SqlitePool, key: &str, by: &str) -> Result<PauseOutcome> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let status: String = sqlx::query_scalar("SELECT status FROM lanes WHERE key = ?")
-        .bind(key)
-        .fetch_optional(&mut *tx)
-        .await?
-        .ok_or_else(|| OmonError::Config(format!("lane not found: {key}")))?;
+    let (status, kind): (String, String) =
+        sqlx::query_as("SELECT status, kind FROM lanes WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| OmonError::Config(format!("lane not found: {key}")))?;
+    if kind == "external" {
+        tx.rollback().await?;
+        return Ok(PauseOutcome::NotPausable);
+    }
     if matches!(status.as_str(), "closed" | "failed" | "verified_done") {
         return Err(OmonError::Config(format!("cannot pause a {status} lane")));
     }
@@ -248,15 +275,50 @@ pub async fn pause_lane(pool: &SqlitePool, key: &str, by: &str) -> Result<bool> 
     .fetch_one(&mut *tx)
     .await?;
     if paused {
-        return Ok(false);
+        return Ok(PauseOutcome::AlreadyPaused);
     }
     let now = Utc::now();
-    sqlx::query("INSERT INTO lane_pauses(lane_key, paused_at, paused_by, resumed_at) VALUES (?, ?, ?, NULL) ON CONFLICT(lane_key) DO UPDATE SET paused_at = excluded.paused_at, paused_by = excluded.paused_by, resumed_at = NULL")
+    sqlx::query("INSERT INTO lane_pauses(lane_key, paused_at, paused_by, resumed_at, acked_at, seen_working_at) VALUES (?, ?, ?, NULL, NULL, NULL) ON CONFLICT(lane_key) DO UPDATE SET paused_at = excluded.paused_at, paused_by = excluded.paused_by, resumed_at = NULL, acked_at = NULL, seen_working_at = NULL")
         .bind(key).bind(now).bind(by).execute(&mut *tx).await?;
     sqlx::query("INSERT INTO lane_history(lane_key, at, from_status, to_status, reason) VALUES (?, ?, ?, ?, 'paused')")
         .bind(key).bind(now).bind(&status).bind(&status).execute(&mut *tx).await?;
     tx.commit().await?;
-    Ok(true)
+    Ok(PauseOutcome::Paused)
+}
+
+/// Records that no turn of the lane is running under its open pause. Returns false when
+/// there is no open, unacknowledged pause.
+pub async fn ack_pause<'e>(
+    executor: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    key: &str,
+) -> Result<bool> {
+    let acked = sqlx::query(
+        "UPDATE lane_pauses SET acked_at = ? WHERE lane_key = ? AND resumed_at IS NULL AND acked_at IS NULL",
+    )
+    .bind(Utc::now())
+    .bind(key)
+    .execute(executor)
+    .await?;
+    Ok(acked.rows_affected() == 1)
+}
+
+/// True when the lane's open pause was acknowledged by the lane runner.
+pub async fn pause_acked(pool: &SqlitePool, key: &str) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM lane_pauses WHERE lane_key = ? AND resumed_at IS NULL AND acked_at IS NOT NULL)",
+    )
+    .bind(key)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Lanes with an open pause the lane runner has not acknowledged yet.
+pub async fn unacked_pause_keys(pool: &SqlitePool) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT lane_key FROM lane_pauses WHERE resumed_at IS NULL AND acked_at IS NULL",
+    )
+    .fetch_all(pool)
+    .await?)
 }
 
 /// Clears an active pause. Returns false when the lane was not paused.

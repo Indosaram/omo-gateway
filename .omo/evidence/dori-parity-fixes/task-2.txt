@@ -1,0 +1,15 @@
+# task-2 evidence (todo 9 run, 2026-10-21T01:48:14.310Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --test test_lane_done paused_claim_is_settled -- --nocapture
+exit: 0
+test paused_claim_is_settled_and_pause_survives ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.86s
+
+$ cargo test --test test_lane_done paused_claim_with_failing_check -- --nocapture
+exit: 0
+test paused_claim_with_failing_check_is_not_done_and_stays_paused ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.75s
+
+
+Note: both tests now claim first, then pause (a lane paused before its first turn never runs, so the claim could not happen; the original order timed out at tests/test_lane_done.rs:202). Assertions unchanged.

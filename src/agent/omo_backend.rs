@@ -1277,6 +1277,12 @@ impl OmoBackend {
         let mut sequence: u64 = 0;
         if is_lane {
             session.state.metadata.remove("lane_completed_item");
+            // Set fresh every turn: the runner reads it to tell a continued turn that made no
+            // progress from one that worked.
+            session
+                .state
+                .metadata
+                .insert("lane_turn_tool_calls".into(), json!(0));
         }
         let mut full_content = String::new();
         let mut assistant_error = None;
@@ -1904,15 +1910,15 @@ impl OmoBackend {
                             .unwrap_or_else(|| crate::autonomy::classify_frame(&val, ws_cwd));
                         if let Some(pool) = &self.pool {
                             let lead_key = if is_lane {
-                                sqlx::query_scalar::<_, String>(
+                                let lead = sqlx::query_scalar::<_, String>(
                                     "SELECT lead_session_key FROM lanes WHERE key = ?",
                                 )
                                 .bind(&session.key.channel_id)
                                 .fetch_optional(pool)
                                 .await
                                 .ok()
-                                .flatten()
-                                .unwrap_or_else(|| crate::lanes::kibitzer::DEFAULT_LEAD.to_string())
+                                .flatten();
+                                crate::runtime_config::lane_lead_or_default(lead)
                             } else {
                                 session.key.storage_key()
                             };
@@ -2342,6 +2348,12 @@ impl OmoBackend {
                             }
 
                             total_tool_calls += 1;
+                            if is_lane {
+                                session
+                                    .state
+                                    .metadata
+                                    .insert("lane_turn_tool_calls".into(), json!(total_tool_calls));
+                            }
                         }
                     }
 

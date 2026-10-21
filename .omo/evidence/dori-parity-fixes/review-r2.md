@@ -1,0 +1,9 @@
+# dori-parity-fixes review r2
+
+## F1 - Tracker drops the owner notification for terminal states reached while paused (src/tracker/lanes.rs:284)
+
+The notification for a lane status change is skipped when `last_lane_status == Some("paused")`, to avoid re-notifying on resume. That only works if the status after resume equals the status before the pause, and nothing checks that. With todo 2 (IS-2), a paused lane's done claim is settled to `verified_done` (or later `failed`) while the pause row stays open (settlement and close leave it in place). On the next sync, `is_paused` is false (verified_done/failed are not in the paused set), `effective_status` is `verified_done`, `status_changed` is true, but `last_lane_status` is `"paused"`, so no `lane_verified_done` / `lane_failed` notification is ever written. The same happens for working -> paused -> (done_claimed or blocked while paused) -> resume: the owner was never told about done_claimed/blocked, and the notification is suppressed on resume. The new-issue branch has the same gap, because `!is_paused` also skips the notification for a lane first seen while paused in blocked/done_claimed.
+
+Fix: suppress only when the status is unchanged from before the pause. Read the most recent `lane_status` activity whose `to_value != 'paused'` (the pre-pause status) and notify when `lane_status` differs from it, rather than when `last_lane_status != Some("paused")`. Add a test: pause a working lane, sync, set the status to verified_done, sync again, and assert that exactly one lane_verified_done notification exists.
+
+No other concrete defects found in the reviewed scope. Todos 1-8 acceptance items are present in code and tests. I checked these areas and found nothing: the pause ack points (a)-(d) against a running turn, the upsert that resets acked_at and seen_working_at, additive migrations 0055/0056 on existing DBs, the startup_error first-turn handling, signal parsing, guard lanes_max, and lead fallback.

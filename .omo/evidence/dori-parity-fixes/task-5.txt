@@ -1,0 +1,44 @@
+# task-5 evidence (todo 9 run, 2026-10-21T01:48:14.311Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --lib lanes::signals -- --nocapture
+exit: 0
+running 22 tests
+test lanes::signals::tests::helper_signals_hung_child ... ignored
+test lanes::signals::tests::secret_env_names_are_recognised ... ok
+test lanes::signals::tests::apostrophe_in_a_path_does_not_swallow_the_next_signal ... ok
+test lanes::signals::tests::test_json_path_navigation ... ok
+test lanes::signals::tests::test_parse_github_url_forms ... ok
+test lanes::signals::tests::test_parse_done_prefix ... ok
+test lanes::signals::tests::test_real_gh_merged_and_open_prs ... ignored
+test lanes::signals::tests::test_parse_ok_all_kinds ... ok
+test lanes::signals::tests::test_parse_rejects_short_sha_and_empty_json_path ... ok
+test lanes::signals::tests::test_strip_done_prefix_keeps_plain_lines ... ok
+test lanes::signals::tests::test_parse_rejects ... ok
+test lanes::signals::tests::read_tail_keeps_only_the_last_bytes_of_unbounded_output ... ok
+test lanes::signals::tests::test_parse_quoted_regex_and_nested_json_options ... ok
+test lanes::signals::tests::test_file_signal_checks ... ok
+test lanes::signals::tests::test_url_local_listener ... ok
+test lanes::signals::tests::test_command_caller_cancellation_cleans_up_child ... ok
+test lanes::signals::tests::test_command_failure_detail_keeps_bounded_output_tail ... ok
+test lanes::signals::tests::test_fake_gh_and_npm ... ok
+test lanes::signals::tests::test_command_timeout_and_process_cleanup ... ok
+test lanes::signals::tests::test_command_timeout_kills_whole_process_group ... ok
+test lanes::signals::tests::test_command_execution_behavior_and_constraints ... ok
+test lanes::signals::tests::test_command_timeout_override ... ok
+test result: ok. 20 passed; 0 failed; 2 ignored; 0 measured; 1099 filtered out; finished in 1.03s
+
+
+## QA-5 real binary (RUN_TMP=/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3, OMON_LANE_AUTO_WORKTREE=0; --lead uses a valid storage key '5:slack|-|2:qa|-|2:qa' because the plan's 'slack:qa' fails storage-key validation with exit 2 before signals are checked)
+$ /Users/indo/code/project/omon-gateway/wt/dori-parity/target/debug/omo-gateway lane start qa-sig --title t --brief /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/b.md --cwd /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/repo --lead '5:slack|-|2:qa|-|2:qa' --model small --done "Done = file x.txt"
+exit: 0
+{"lane":{"brief_path":"/private/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/b.md","claim_at":null,"claim_evidence":null,"created_at":"2026-10-21T01:46:48.210936Z","cwd":"/private/var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/repo","done_signals":"file x.txt","key":"qa-sig","last_activity_at":"2026-10-21T01:46:48.210936Z","last_report":null,"last_turn_outcome":null,"lead_session_key":"5:slack|-|2:qa|-|2:qa","model":"inferhub/cb/deepseek-v4.1-flash","objection":null,"omo_thread_id":null,"parent_channel_id":null,"session_key":"4:lane|-|6:qa-sig|-|11:lane:qa-sig","stale_posted_at":null,"status":"working","status_message_id":null,"thread_channel_id":null,"title":"t","turns_run":0,"updated_at":"2026-10-21T01:46:48.210936Z"},"reasons":[]}
+
+$ sqlite3 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/qa.db "select done_signals from lanes where key='qa-sig'"
+exit: 0
+file x.txt
+
+$ /Users/indo/code/project/omon-gateway/wt/dori-parity/target/debug/omo-gateway lane start qa-sig2 --title t --brief /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/b.md --cwd /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/repo --lead '5:slack|-|2:qa|-|2:qa' --model small --done "file x.txt sha256=abcd"
+exit: 2
+{"error":"configuration error: invalid syntax: sha256= takes 64 hex characters","ok":false}
+

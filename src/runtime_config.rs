@@ -38,6 +38,11 @@ pub fn default_lead() -> String {
         .unwrap_or_else(|| crate::lanes::kibitzer::DEFAULT_LEAD.to_owned())
 }
 
+/// Returns the provided lane lead if present, or falls back to [`default_lead`].
+pub fn lane_lead_or_default(lead: Option<String>) -> String {
+    lead.unwrap_or_else(default_lead)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,6 +70,58 @@ mod tests {
             .env("OMON_LANE_DEFAULT_LEAD", "slack:environment-owner")
             .output()
             .unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "child ran no test: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    #[test]
+    fn test_lane_lead_or_default_runtime_and_fallbacks() {
+        if std::env::var_os(CHILD).is_some() {
+            // Nothing set in env or runtime config -> compiled constant
+            assert_eq!(
+                lane_lead_or_default(None),
+                crate::lanes::kibitzer::DEFAULT_LEAD
+            );
+            assert_eq!(default_lead(), crate::lanes::kibitzer::DEFAULT_LEAD);
+
+            // Some(x) -> always x, even if runtime lead is set later
+            assert_eq!(
+                lane_lead_or_default(Some("slack:explicit-lead".to_string())),
+                "slack:explicit-lead"
+            );
+
+            // Set runtime lead
+            assert!(set_default_lead("slack:runtime-configured-owner"));
+
+            // Runtime set -> returns the runtime value when lead is None
+            assert_eq!(lane_lead_or_default(None), "slack:runtime-configured-owner");
+            assert_eq!(default_lead(), "slack:runtime-configured-owner");
+
+            // Some(x) still returns x
+            assert_eq!(
+                lane_lead_or_default(Some("slack:other-lead".to_string())),
+                "slack:other-lead"
+            );
+            return;
+        }
+
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        cmd.args([
+            "--exact",
+            "runtime_config::tests::test_lane_lead_or_default_runtime_and_fallbacks",
+        ])
+        .env(CHILD, "1")
+        .env_remove("OMON_LANE_DEFAULT_LEAD");
+
+        let output = cmd.output().unwrap();
         assert!(
             output.status.success(),
             "child failed: {}",

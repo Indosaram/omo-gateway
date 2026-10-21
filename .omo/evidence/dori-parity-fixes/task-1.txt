@@ -1,0 +1,23 @@
+# task-1 evidence (todo 9 run, 2026-10-21T01:48:14.310Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --test test_lane_done unpushed_commit_without_any_remote -- --nocapture
+exit: 0
+test unpushed_commit_without_any_remote_returns_not_done ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.38s
+
+$ cargo test --test test_lane_done repo_without_commits -- --nocapture
+exit: 0
+test repo_without_commits_and_remote_is_not_refused ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.23s
+
+$ cargo test --test test_lane_done verified -- --nocapture
+exit: 0
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+$ cargo test --lib keep_reason_keeps -- --nocapture
+exit: 0
+test lanes::runner::activity_generation_tests::keep_reason_keeps_a_no_remote_worktree_with_commits ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1120 filtered out; finished in 0.33s
+

@@ -61,6 +61,15 @@ async fn temp_repo() -> (tempfile::TempDir, PathBuf) {
         .unwrap();
     git(&repo, &["add", "README"]).await;
     git(&repo, &["commit", "--quiet", "-m", "base"]).await;
+    let remote = root.join("remote.git");
+    tokio::fs::create_dir(&remote).await.unwrap();
+    git(&remote, &["init", "--bare", "--quiet"]).await;
+    git(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    )
+    .await;
+    git(&repo, &["push", "-q", "origin", "main"]).await;
     (temp, repo)
 }
 
