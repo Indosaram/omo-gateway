@@ -602,6 +602,29 @@ async fn record_outcome_with(
             "`{key}` is unreconciled: an earlier turn received it and recorded no outcome, so whether it already happened is unknown. Do not repeat the action; pass --external-id <the artifact that already exists> if it happened, or --status failed --detail <what you checked> if it did not."
         ));
     }
+    // Incident 2026-10-21: a lead recorded an owner item as executed with "surfaced to owner"
+    // while its turn died before sending anything. Telling the owner is the one result the
+    // gateway can check itself: the owner alert for that item must have been delivered. An
+    // executed action with its own artifact (--external-id) is checked by verification instead.
+    if status == "executed" && external_id.is_none() {
+        if let Some(item_id) = key.strip_prefix("inbox:") {
+            let kind: Option<String> =
+                sqlx::query_scalar("SELECT kind FROM action_loop_outcomes WHERE item_key = ?")
+                    .bind(key)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            if kind.as_deref() == Some("inbox_owner")
+                && !crate::inbox::owner_alert::delivered(pool, item_id)
+                    .await
+                    .map_err(|e| e.to_string())?
+            {
+                return Err(format!(
+                    "`{key}` needs the owner and the gateway has no delivered owner alert for it yet, so `executed` would claim he was told when he was not. The gateway sends that alert within a minute of triage; record the outcome after it lands, or record --status failed --detail <why>."
+                ));
+            }
+        }
+    }
     if status == "failed" && unreconciled && detail.is_none() {
         return Err(format!(
             "`{key}` is unreconciled; record --detail <what you checked> so the unknown side effect is not silently dropped"
@@ -1359,6 +1382,63 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_owner_item_is_not_executed_until_the_owner_alert_was_delivered() {
+        let pool = crate::storage::init_pool("sqlite::memory:").await.unwrap();
+        let now = daytime_utc();
+        insert_item(&pool, "mail-1", "mail", Some("owner"), now).await;
+        let worker = ActionLoop::new(pool.clone(), LEAD);
+        worker
+            .flush_coalesced(now)
+            .await
+            .unwrap()
+            .expect("owner item reaches the loop");
+
+        let error = record_outcome(
+            &pool,
+            "inbox:mail-1",
+            OutcomeReport::new("executed").detail(Some("surfaced to owner")),
+            now,
+        )
+        .await
+        .expect_err("a claim that the owner was told needs the delivered alert");
+        assert!(error.contains("no delivered owner alert"), "{error}");
+        assert_eq!(outcome(&pool, "inbox:mail-1").await.0, "enqueued");
+
+        let owner = crate::SessionKey::new(
+            "slack",
+            None::<String>,
+            "D0OWNER",
+            None::<String>,
+            "U0OWNER",
+        );
+        let ledger = crate::DeliveryLedgerService::new(pool.clone());
+        let id = format!("{}mail-1", crate::inbox::owner_alert::OBLIGATION_PREFIX);
+        ledger.record_obligation(&id, &owner, "line").await.unwrap();
+        ledger.mark_obligation_delivered(&id).await.unwrap();
+
+        record_outcome(
+            &pool,
+            "inbox:mail-1",
+            OutcomeReport::new("executed").detail(Some("summarised for the owner")),
+            now,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome(&pool, "inbox:mail-1").await.0, "executed");
+        // A failure report never needs the alert.
+        insert_item(&pool, "mail-2", "mail", Some("owner"), now).await;
+        worker.flush_coalesced(now).await.unwrap();
+        record_outcome(
+            &pool,
+            "inbox:mail-2",
+            OutcomeReport::new("failed").detail(Some("turn died")),
+            now,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

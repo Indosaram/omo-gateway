@@ -480,9 +480,17 @@ async fn pure_prefilter_mail_kakao_imessage_rules() {
     let ad_web = item(
         InboxSourceKind::Imessage,
         "im-ad1",
-        "[Web발신] loan advertisement",
+        "[Web발신]\n(광고)[롯데카드] loan advertisement",
     );
     assert_eq!(rules.drop_reason(&ad_web), Some("imessage_ad"));
+
+    let mut booking = item(
+        InboxSourceKind::Imessage,
+        "im-web-booking",
+        "[Web발신] 윤인도 고객님! 상담 예약이 완료되었습니다. 11월02일 09:30",
+    );
+    booking.author = Some("+8215776119".into());
+    assert_eq!(rules.drop_reason(&booking), None);
 
     let ad_prefix = item(
         InboxSourceKind::Imessage,

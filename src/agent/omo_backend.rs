@@ -1256,6 +1256,7 @@ impl OmoBackend {
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
         let is_lane = session.key.platform == "lane";
+        let is_system_turn = event.origin == crate::EventOrigin::System;
 
         // Immediately notify Discord that the agent is typing while preparing/reasoning
         if !is_cron_session && !is_lane {
@@ -1551,12 +1552,18 @@ impl OmoBackend {
             // briefs instead, and the inactivity and total deadlines remain the backstop
             // for a turn that stalls later. The thread binding is kept: a silent model
             // is not a wedged thread, and dropping the binding loses the conversation.
-            // Lane turns run unattended under their own budgets and are exempt.
+            // Lane turns run unattended under their own budgets and are exempt, and so are
+            // system-origin turns on a human session (lane events, action-loop items): nobody is
+            // waiting on a reply, and killing them at 45s dropped an owner item on 2026-10-21.
+            // A started tool is work on the prompt, so it ends the wait too.
             let initial_response_timeout = self.config.initial_response_timeout;
             let awaiting_first_response = !is_cron_session
                 && !is_lane
+                && !is_system_turn
                 && turn_started_ack
                 && messages_delivered == 0
+                && total_tool_calls == 0
+                && open_tool_ids.is_empty()
                 && first_progress_at.is_none();
             if awaiting_first_response
                 && now.duration_since(prompt_started_at) >= initial_response_timeout

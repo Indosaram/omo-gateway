@@ -653,6 +653,11 @@ pub async fn recover_resume_pending_sessions_with_auth(
                 omon_gateway::storage::mark_session_resume_pending(pool, &storage_key).await?;
             } else {
                 resumed_count += 1;
+                // Replay one turn at a time: firing every recovered turn at once floods the
+                // single app-server, and fresh user turns then time out waiting for turn/start.
+                if let Err(error) = multiplexer.wait_for_session_idle(&session_key).await {
+                    warn!(session = %session_key, %error, "recovered turn idle wait failed");
+                }
             }
         } else {
             omon_gateway::storage::clear_session_resume_pending(pool, &storage_key).await?;
@@ -1655,6 +1660,7 @@ async fn run_gateway_with_dashboard(
         recovered,
         "recovered pending outbound delivery obligations on boot"
     );
+    spawn_owner_alerts(&pool, discord_egress_dispatcher.clone());
 
     let slack_pairing = omon_gateway::discord::pairing::SlackPairingStore::new(pool.clone());
     if slack_boot.is_some() {
@@ -1691,12 +1697,21 @@ async fn run_gateway_with_dashboard(
                 "Restart-loop breaker TRIPPED: skipping auto-resume of in-flight sessions to break crash loop"
             );
         } else {
-            let recovered_sessions =
-                recover_resume_pending_sessions_with_auth(&pool, &multiplexer, Some(&auth)).await?;
-            info!(
-                recovered_sessions,
-                "recovered resume_pending sessions on boot"
-            );
+            // Recovered turns replay sequentially in the background so boot is not held up.
+            let (pool, multiplexer, auth) = (pool.clone(), multiplexer.clone(), auth.clone());
+            tokio::spawn(async move {
+                match recover_resume_pending_sessions_with_auth(&pool, &multiplexer, Some(&auth))
+                    .await
+                {
+                    Ok(recovered_sessions) => info!(
+                        recovered_sessions,
+                        "recovered resume_pending sessions on boot"
+                    ),
+                    Err(error) => {
+                        tracing::error!(%error, "restart recovery of resume_pending sessions failed")
+                    }
+                }
+            });
         }
     }
 
@@ -2956,6 +2971,39 @@ async fn initialize_kibitzer_when_enabled(
     worker.initialize().await?;
     info!("kibitzer initialized before producers");
     Ok(Some(worker))
+}
+
+/// Announces owner-class inbox items in the owner DM without an agent turn (incident
+/// 2026-10-21: a lead turn died before telling the owner about a reply that needed him).
+fn spawn_owner_alerts(pool: &SqlitePool, dispatcher: Arc<dyn OutboundDispatcher>) {
+    if !omon_gateway::inbox::owner_alert::enabled() {
+        return;
+    }
+    let owner = match SessionKey::from_storage_key(&default_lead()) {
+        Ok(owner) => owner,
+        Err(error) => {
+            warn!(%error, "owner alerts disabled: default lead is not a session key");
+            return;
+        }
+    };
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if let Err(error) = omon_gateway::inbox::owner_alert::sweep(
+                &pool,
+                dispatcher.as_ref(),
+                &owner,
+                chrono::Utc::now(),
+            )
+            .await
+            {
+                warn!(%error, "owner alert sweep failed");
+            }
+        }
+    });
 }
 
 fn spawn_kibitzer(

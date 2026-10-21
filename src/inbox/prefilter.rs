@@ -89,6 +89,31 @@ impl PrefilterRules {
                 {
                     return Some("mail_updates");
                 }
+                if contains_any(
+                    &text,
+                    &[
+                        "인증 코드",
+                        "인증코드",
+                        "인증번호",
+                        "보안 코드",
+                        "verification code",
+                        "security code",
+                        "one-time code",
+                        "login code",
+                    ],
+                ) {
+                    return Some("mail_otp");
+                }
+                // Nobody reads a reply to a no-reply sender, so such mail never waits on the
+                // owner. Known notification senders (GitHub CI failures) keep their own rules.
+                let sender = author.to_lowercase();
+                if contains_any(
+                    &sender,
+                    &["no-reply", "noreply", "donotreply", "do-not-reply"],
+                ) && !contains_any(&sender, &["github.com", "discord.com", "linkedin.com"])
+                {
+                    return Some("mail_no_reply");
+                }
                 None
             }
             InboxSourceKind::Kakao => {
@@ -124,7 +149,11 @@ impl PrefilterRules {
                 {
                     return Some("imessage_shortcode");
                 }
-                if item.snippet.starts_with("[Web발신]") || item.snippet.starts_with("(광고)") {
+                // Only messages marked as ads are dropped. Plain [Web발신] also carries bookings
+                // and notices from banks and agencies, so jev judges those.
+                let body = item.snippet.trim_start();
+                let body = body.strip_prefix("[Web발신]").unwrap_or(body).trim_start();
+                if body.starts_with("(광고)") {
                     return Some("imessage_ad");
                 }
                 if contains_any(
@@ -309,6 +338,32 @@ mod tests {
             rules.drop_reason(&slack_item("U0A", "channel", &content)),
             Some("slack_not_owner_mention_or_dm")
         );
+    }
+
+    #[test]
+    fn mail_codes_and_no_reply_senders_never_reach_the_owner() {
+        let rules = PrefilterRules::default();
+        let mail = |author: &str, title: &str| {
+            let mut item = InboxItem::new(InboxSourceKind::Mail, "t", "body", Utc::now());
+            item.author = Some(author.into());
+            item.title = Some(title.into());
+            item
+        };
+        let code = mail(
+            "Slack <no-reply-x@slack.com>",
+            "Your Slack security code is 169399",
+        );
+        assert_eq!(rules.drop_reason(&code), Some("mail_otp"));
+        let survey = mail(
+            "Survey <noreply@survey.example>",
+            "Please answer our survey",
+        );
+        assert_eq!(rules.drop_reason(&survey), Some("mail_no_reply"));
+        let person = mail("REPROZ <reproz.customer@reproz.co.jp>", "Re: quote");
+        assert_eq!(rules.drop_reason(&person), None);
+        let ci = mail("GitHub <noreply@github.com>", "Run failed: ci");
+        assert_eq!(rules.drop_reason(&ci), None);
+        assert_eq!(rules.direct_class(&ci), None);
     }
 
     #[test]

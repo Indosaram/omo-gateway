@@ -823,6 +823,82 @@ async fn initial_silence_interrupts_remote_turn_without_losing_thread_binding() 
 }
 
 #[tokio::test]
+async fn initial_silence_does_not_interrupt_a_system_turn() {
+    // Lane events and action-loop items run as system turns on a human session: nobody waits on
+    // a reply, so the 45s first-response gate must not kill them (incident 2026-10-21).
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let peer = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        while let Some(Ok(Message::Text(text))) = ws.next().await {
+            let request: Value = serde_json::from_str(text.as_str()).unwrap();
+            let id = request["id"].clone();
+            match request["method"].as_str() {
+                Some("turn/start") => {
+                    ws.send(Message::text(
+                        json!({"id":id,"result":{"turn":{"id":"t1"}}}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                    ws.send(Message::text(
+                        correlation_delta("r1", "t1", "late").to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    ws.send(Message::text(
+                        correlation_terminal("t1", "completed").to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                    return;
+                }
+                Some("turn/interrupt") => panic!("a system turn was interrupted"),
+                _ => {
+                    ws.send(Message::text(
+                        json!({"id":id,"result":{"thread":{"id":"r1"}}}).to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                }
+            }
+        }
+    });
+    let backend = OmoBackend::new(
+        OmoBackendConfig::new(format!("ws://127.0.0.1:{port}"))
+            .with_initial_response_timeout(std::time::Duration::from_millis(100))
+            .with_total_timeout(std::time::Duration::from_secs(5)),
+        Arc::new(CapturingDispatcher::new()),
+    );
+    let key = SessionKey::new(
+        "slack",
+        None::<String>,
+        "D0OWNER",
+        None::<String>,
+        "U0OWNER",
+    );
+    let mut session = SessionContext::new(key.clone());
+    let mut event = InboundEvent::message(key, "lane-event:1-1", "[LANE_EVENT] item");
+    event.origin = omon_gateway::EventOrigin::System;
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        backend.run(&mut session, event),
+    )
+    .await
+    .unwrap();
+    assert!(
+        result.is_ok(),
+        "system turn must finish: {:?}",
+        result.err()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(1), peer)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn initial_silence_with_a_responsive_server_reruns_on_the_fallback_model() {
     // The primary model's quota is exhausted: the runtime retries in silence, so no event
     // arrives, while the app-server itself still answers readyz.

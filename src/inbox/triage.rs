@@ -20,7 +20,7 @@ pub const WRITING_BATCH_SIZE: usize = BATCH_SIZE;
 pub const BATCH_WINDOW: Duration = Duration::from_secs(120);
 /// Messages received longer ago than this are filed as fyi without a model call.
 pub const STALE_AFTER_HOURS: i64 = 24;
-const INSTRUCTIONS: &str = "owner_must_act = needs the owner's own decision, signature, payment or a personal reply; bot_can_handle = a coding/ops task an agent can do alone without speaking as the owner; fyi = information only; ignore = ads/promotions";
+const INSTRUCTIONS: &str = "owner_must_act = a specific person is waiting for the owner's own reply, decision, signature or payment; surveys, reminders, newsletters, receipts, notices, verification/security codes and automated mail are never owner_must_act; bot_can_handle = a coding/ops task an agent can do alone without speaking as the owner; fyi = information only; ignore = ads/promotions";
 const OPTIONS: &[&str] = &["owner_must_act", "bot_can_handle", "fyi", "ignore"];
 
 pub fn enabled() -> bool {

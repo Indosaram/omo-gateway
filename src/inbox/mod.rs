@@ -4,6 +4,7 @@ pub mod cli;
 pub mod digest;
 pub mod health;
 pub mod list;
+pub mod owner_alert;
 pub mod prefilter;
 pub mod proposals;
 pub mod set;
