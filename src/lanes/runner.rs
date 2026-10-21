@@ -31,6 +31,9 @@ pub const DEFAULT_MAX_TURNS: i64 = 24;
 
 /// A working lane quiet this long gets one progress nudge per silence.
 pub const NUDGE_AFTER: chrono::Duration = chrono::Duration::minutes(15);
+/// The host's own prompt for a lane turn that has no new input (no inbox message, not the
+/// first turn). A turn started by it that runs no tool is no progress (see `no_progress`).
+pub const LANE_CONTINUE_TEXT: &str = "Continue the lane. Report progress with [REPORT] lines; when every Done signal holds, run the claim command.";
 pub const NUDGE_TEXT: &str = "[LEAD] 진행 상황을 [REPORT] 한 줄로 보고하고 계속하세요";
 
 /// OMON_LANE_CONTROL_ENABLED (default true), read once per process.
@@ -1796,8 +1799,12 @@ impl LaneRunner {
                     .collect::<Vec<_>>()
                     .join("\n")
             } else {
-                "Continue the lane. Report progress with [REPORT] lines; when every Done signal holds, run the claim command.".into()
+                LANE_CONTINUE_TEXT.into()
             };
+            // Only the host's own "continue" has no new input behind it; an inbox message or the
+            // brief is real work even when the turn answers it without a tool.
+            let host_continued = prompt == LANE_CONTINUE_TEXT;
+            session.state.metadata.remove("lane_turn_tool_calls");
             sqlx::query("INSERT INTO lane_transcript(lane_key, at, role, text) SELECT ?, ?, 'user', ? WHERE (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
                 .bind(key).bind(Utc::now()).bind(&prompt).bind(key).bind(generation).execute(&self.pool).await?;
             sqlx::query("UPDATE lanes SET last_turn_outcome = NULL WHERE key = ? AND last_turn_outcome = 'idle_without_claim' AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ?")
@@ -2072,6 +2079,20 @@ impl LaneRunner {
                     .iter()
                     .flat_map(|entry| super::activity::reports(key, &entry.text))
                     .collect();
+                let tool_calls = session
+                    .state
+                    .metadata
+                    .get("lane_turn_tool_calls")
+                    .and_then(serde_json::Value::as_u64);
+                if host_continued && reports.is_empty() && tool_calls == Some(0) {
+                    // A continued turn that ran no tool made no progress: running more host
+                    // continuations would only spend turns until the cap. Park the lane and tell
+                    // the lead instead; an inbox message wakes it.
+                    if activity.no_progress(key, generation).await? {
+                        self.posts_ready.notify_one();
+                    }
+                    continue;
+                }
                 let pause = if reports.is_empty() {
                     activity
                         .unreported_turn_generation(

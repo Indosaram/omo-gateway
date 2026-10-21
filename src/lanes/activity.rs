@@ -291,6 +291,30 @@ impl LaneActivity {
         Ok(decision)
     }
 
+    /// A host-continued turn ran no tool and sent no report: park the lane the way a finished
+    /// turn without a claim is parked, and tell the lead once. Returns whether this call parked it;
+    /// a concurrent claim, close or reopen wins.
+    pub async fn no_progress(&self, key: &str, generation: i64) -> Result<bool> {
+        let mut tx = self.pool.begin().await?;
+        let lane: Option<Lane> = sqlx::query_as("UPDATE lanes SET last_turn_outcome = 'idle_without_claim', updated_at = ? WHERE key = ? AND status = 'working' AND (SELECT COALESCE(MAX(id), 0) FROM lane_history WHERE lane_key = ? AND reason = 'reopened') = ? RETURNING *")
+            .bind(self.clock.now()).bind(key).bind(key).bind(generation).fetch_optional(&mut *tx).await?;
+        let Some(lane) = lane else {
+            tx.rollback().await?;
+            return Ok(false);
+        };
+        self.event(
+            &mut tx,
+            &lane,
+            "no_progress",
+            &format!(
+                "lane {key} was continued by the host and ended its turn without a tool call or report; parked until a message arrives"
+            ),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
     /// Cheap local check, armed only while a turn is running. Persisted latch
     /// makes repeated checks and reconstruction after restart produce no effects.
     pub async fn quiet(&self, key: &str, turn_running: bool) -> Result<ActivityDecision> {

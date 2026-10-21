@@ -221,6 +221,9 @@ fn critical(event: &LaneEvent) -> bool {
         // Triage already chose these items for action; a wake skip ends them as failed before
         // the lead sees them (2026-10-20 11:18Z and 11:30Z: 11 items, no lead turn).
         "action_loop" => true,
+        // A lane that stopped making progress is parked until someone writes to it; skipped by
+        // the wake judgment, it would sit idle with no one told.
+        "no_progress" => true,
         "cron_problem" => event.body.contains("needs_owner"),
         _ => false,
     }
@@ -254,6 +257,7 @@ mod tests {
             critical(&event("action_loop")),
             "triaged action items must reach the lead, not end as jev_skip failures"
         );
+        assert!(critical(&event("no_progress")));
         assert!(!critical(&event("nudged")));
         assert!(
             !critical(&event("working_while_paused")),
