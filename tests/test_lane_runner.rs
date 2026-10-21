@@ -17,6 +17,7 @@ struct Script {
     calls: AtomicUsize,
     claim_at: usize,
     errors: bool,
+    error_text: Option<&'static str>,
     observed: mpsc::UnboundedSender<(SessionContext, String)>,
     release: Option<Arc<Semaphore>>,
     steered: mpsc::UnboundedSender<String>,
@@ -37,7 +38,8 @@ impl AgentBackend for Script {
             release.acquire().await.unwrap().forget();
         }
         if self.errors {
-            return Err(OmonError::Llm("scripted turn failure".into()));
+            let msg = self.error_text.unwrap_or("scripted turn failure");
+            return Err(OmonError::Llm(msg.into()));
         }
         CapturingDispatcher::new(self.pool.clone())
             .dispatch(OutboundAction::SendMessage {
@@ -93,6 +95,20 @@ fn script(
     mpsc::UnboundedReceiver<(SessionContext, String)>,
     mpsc::UnboundedReceiver<String>,
 ) {
+    script_with_error(pool, claim_at, errors, None, release)
+}
+
+fn script_with_error(
+    pool: &SqlitePool,
+    claim_at: usize,
+    errors: bool,
+    error_text: Option<&'static str>,
+    release: Option<Arc<Semaphore>>,
+) -> (
+    Arc<Script>,
+    mpsc::UnboundedReceiver<(SessionContext, String)>,
+    mpsc::UnboundedReceiver<String>,
+) {
     let (observed, receive) = mpsc::unbounded_channel();
     let (steered, steer_receive) = mpsc::unbounded_channel();
     (
@@ -101,6 +117,7 @@ fn script(
             calls: AtomicUsize::new(0),
             claim_at,
             errors,
+            error_text,
             observed,
             release,
             steered,
@@ -175,6 +192,93 @@ async fn three_errors_fail_with_dead_event() {
         .await
         .unwrap();
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn permanent_startup_error_fails_on_first_turn() {
+    let (_temp, database, lane) = fixture().await;
+    let (backend, _observed, _steered) = script_with_error(
+        database.pool(),
+        usize::MAX,
+        true,
+        Some("No API key for provider x"),
+        None,
+    );
+    LaneRunner::new(database.pool().clone(), backend)
+        .run_lane(&lane.key, Arc::new(Notify::new()), CancellationToken::new())
+        .await
+        .unwrap();
+    let row = get_lane(database.pool(), &lane.key).await.unwrap().unwrap();
+    assert_eq!(row.turns_run, 1);
+    assert_eq!(row.status, "failed");
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM lane_events WHERE kind = 'startup_error'")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn transient_startup_error_reports_and_retries() {
+    let (_temp, database, lane) = fixture().await;
+    let (backend, _observed, _steered) = script_with_error(
+        database.pool(),
+        usize::MAX,
+        true,
+        Some("rate limit exceeded"),
+        None,
+    );
+    LaneRunner::new(database.pool().clone(), backend)
+        .run_lane(&lane.key, Arc::new(Notify::new()), CancellationToken::new())
+        .await
+        .unwrap();
+    let row = get_lane(database.pool(), &lane.key).await.unwrap().unwrap();
+    assert_eq!(row.turns_run, 3);
+    assert_eq!(row.status, "failed");
+    let (startup_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM lane_events WHERE kind = 'startup_error'")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(startup_count, 1);
+    let (dead_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM lane_events WHERE kind = 'dead'")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(dead_count, 1);
+}
+
+#[tokio::test]
+async fn ordinary_first_turn_error_still_retries() {
+    let (_temp, database, lane) = fixture().await;
+    let (backend, _observed, _steered) = script_with_error(
+        database.pool(),
+        usize::MAX,
+        true,
+        Some("connection reset"),
+        None,
+    );
+    LaneRunner::new(database.pool().clone(), backend)
+        .run_lane(&lane.key, Arc::new(Notify::new()), CancellationToken::new())
+        .await
+        .unwrap();
+    let row = get_lane(database.pool(), &lane.key).await.unwrap().unwrap();
+    assert_eq!(row.turns_run, 3);
+    assert_eq!(row.status, "failed");
+    let (startup_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM lane_events WHERE kind = 'startup_error'")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(startup_count, 0);
+    let (dead_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM lane_events WHERE kind = 'dead'")
+            .fetch_one(database.pool())
+            .await
+            .unwrap();
+    assert_eq!(dead_count, 1);
 }
 
 #[tokio::test]

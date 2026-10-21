@@ -600,6 +600,17 @@ pub async fn apply_patch(
             sessions::manual_state_move(pool, reference, state_id).await?;
         } else {
             if let Some(key) = current.lane_key.as_deref() {
+                let lane_paused: i64 =
+                    sqlx::query_scalar("SELECT lane_paused FROM tracker_states WHERE id = ?")
+                        .bind(state_id)
+                        .fetch_one(pool)
+                        .await?;
+                if lane_paused == 1 {
+                    return Err(TrackerError::conflict(
+                        "Paused is set by lane pause",
+                        "illegal_lane_transition",
+                    ));
+                }
                 lanes::handle_lane_state_transition(
                     pool,
                     key,

@@ -1,0 +1,20 @@
+# task-7 evidence (todo 9 run, 2026-10-21T01:48:14.311Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --test test_lane_runner permanent_startup_error -- --nocapture
+exit: 0
+test permanent_startup_error_fails_on_first_turn ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.40s
+
+$ cargo test --test test_lane_runner startup_error -- --nocapture
+exit: 0
+running 2 tests
+test permanent_startup_error_fails_on_first_turn ... ok
+test transient_startup_error_reports_and_retries ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 14 filtered out; finished in 0.58s
+
+$ cargo test --test test_lane_runner ordinary_first_turn_error -- --nocapture
+exit: 0
+test ordinary_first_turn_error_still_retries ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.46s
+

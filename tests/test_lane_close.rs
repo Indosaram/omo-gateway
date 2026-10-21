@@ -99,6 +99,15 @@ impl Fixture {
             ],
         )
         .await;
+        let remote = dir.path().join("remote.git");
+        tokio::fs::create_dir(&remote).await.unwrap();
+        git(&remote, &["init", "--bare"]).await;
+        git(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        )
+        .await;
+        git(&repo, &["push", "-q", "origin", "main"]).await;
         let cwd = dir.path().join("lane");
         git(
             &repo,

@@ -49,11 +49,6 @@ impl Settler {
         let now = self.clock.now();
         let mut verified = Vec::new();
         for listed in list_lanes(&self.pool, &["done_claimed"]).await? {
-            if super::runner::lane_control_enabled()
-                && crate::storage::lanes::is_lane_paused(&self.pool, &listed.key).await?
-            {
-                continue;
-            }
             let mut tx = self.pool.begin().await?;
             // Read the authoritative attempt only after acquiring SQLite's write lock.
             sqlx::query("UPDATE lanes SET updated_at = updated_at WHERE key = ?")
@@ -614,13 +609,43 @@ async fn worktree_reasons(lane: &Lane, other_lanes: &[PathBuf]) -> Result<Vec<St
         {
             reasons.push(format!("uncommitted {}", path.display()));
         }
-        if !git(&path, &["remote"]).await?.trim().is_empty()
-            && !git(&path, &["log", "HEAD", "--not", "--remotes", "--oneline"])
-                .await?
-                .trim()
-                .is_empty()
-        {
-            reasons.push(format!("unpushed {}", path.display()));
+        let rev_parse = tokio::time::timeout(
+            Duration::from_secs(30),
+            tokio::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["rev-parse", "--verify", "-q", "HEAD"])
+                .kill_on_drop(true)
+                .output(),
+        )
+        .await
+        .map_err(|_| OmonError::Config(format!("git check timed out: {}", path.display())))?
+        .map_err(super::runner::io_error)?;
+        if rev_parse.status.code() == Some(1) {
+            // unborn HEAD, no commits
+            continue;
+        }
+        if !rev_parse.status.success() {
+            return Err(OmonError::Config(format!(
+                "git check {}: {}",
+                path.display(),
+                String::from_utf8_lossy(&rev_parse.stderr).trim()
+            )));
+        }
+        let count_output = git(
+            &path,
+            &["rev-list", "--count", "HEAD", "--not", "--remotes"],
+        )
+        .await?;
+        let count: u64 = count_output.trim().parse().map_err(|error| {
+            OmonError::Config(format!("git rev-list --count {}: {error}", path.display()))
+        })?;
+        if count > 0 {
+            if git(&path, &["remote"]).await?.trim().is_empty() {
+                reasons.push(format!("unpushed {} (no remote)", path.display()));
+            } else {
+                reasons.push(format!("unpushed {}", path.display()));
+            }
         }
     }
     Ok(reasons)
@@ -793,6 +818,16 @@ mod tests {
     #[tokio::test]
     async fn prunable_worktree_registration_does_not_block_verification() {
         let (dir, repo, _) = commit_fixture().await;
+        let bare = dir.path().join("bare.git");
+        git(dir.path(), &["init", "--bare", "--quiet", "bare.git"])
+            .await
+            .unwrap();
+        git(&repo, &["remote", "add", "origin", bare.to_str().unwrap()])
+            .await
+            .unwrap();
+        git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/fixture"])
+            .await
+            .unwrap();
         let wt = dir.path().join("gone-wt");
         git(
             &repo,

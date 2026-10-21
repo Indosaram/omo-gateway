@@ -1,0 +1,198 @@
+# task-9 receipt (todo 9, 2026-10-21T01:52:19.752Z)
+worktree: /Users/indo/code/project/omon-gateway/wt/dori-parity
+RUN_TMP: /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3 (TMPDIR=$RUN_TMP for all binary QA)
+CARGO_TARGET_DIR: worktree default (/Users/indo/code/project/omon-gateway/wt/dori-parity/target)
+
+## Fixes made during todo 9
+- src/lanes/signals.rs (todo 5): the worker had dropped the `fn test_json_path_navigation() {` header (unbalanced braces -> compile error), and `strip_done_prefix` had an unused binding. Restored the header and removed the binding.
+- tests/test_lane_done.rs (todo 2): the two paused_claim tests were nested inside another test fn (never ran). Moved them to top level. They then timed out because a lane paused before its first turn never runs, so it cannot claim; reordered to claim first, then pause. Assertions unchanged.
+- tests/test_lane_guard_alerts.rs (todo 4): take_undelivered_events does not mark rows delivered, so the counts are cumulative. Expected 1 / 1 / 2 with events[1].body == "CLEAR" (was 1 / 0 / 1).
+- cargo fmt --all applied.
+
+## Step 2: fmt / clippy / test (final tree)
+$ cargo fmt --all -- --check
+exit: 0
+
+$ cargo clippy --all-targets -- -D warnings
+exit: 0
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.89s
+$ cargo test --no-fail-fast   (log /tmp/dori-fulltest.log)
+exit: 0
+totals: 2100 passed; 0 failed; 20 ignored across 93 test binaries
+test result: ok. 1114 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 77.24s
+test result: ok. 120 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.66s
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.92s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.50s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.92s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.97s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+test result: ok. 13 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 2.31s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.58s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+test result: ok. 59 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.86s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.29s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.56s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.81s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.95s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.38s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.52s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.41s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.24s
+test result: ok. 26 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 1.37s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.54s
+test result: ok. 22 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 47.72s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.30s
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.60s
+test result: ok. 25 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.24s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.11s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.43s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.52s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.29s
+test result: ok. 15 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.81s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.97s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.02s
+test result: ok. 57 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 31.20s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.64s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered outtest ag15_endpoint_fallback::explicit_supported_cron_endpoint_override_is_preserved ... ok
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.54s
+test result: ok. 124 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.30s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.09s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.73s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.54s
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.69s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Note: an earlier full run in this session ended with exit 143 (SIGTERM from outside the tests, during test_usage_done_gate). That target passed alone (7 passed), and the rerun above is the authoritative one.
+
+## Step 3: QA scenarios
+See task-1.txt .. task-8.txt. QA-3: exit 3 PAUSE_UNVERIFIED, row open (1), then exit 0 confirmed changed:false. QA-5: stored done_signals 'file x.txt'; short sha exit 2 'sha256= takes 64 hex characters'. QA-8: real dashboard binary, Paused -> Working (no fallback).
+
+## Step 4: read-only prod checks
+$ plutil -extract EnvironmentVariables.DATABASE_URL raw ~/Library/LaunchAgents/ai.omon.gateway.plist
+exit: 1
+/Users/indo/Library/LaunchAgents/ai.omon.gateway.plist: Could not extract value, error: No value at that key path or invalid key path: EnvironmentVariables.DATABASE_URL
+(using /Users/indo/code/project/omon-gateway/omon_gateway.db)
+
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select count(*) from lanes where done_signals like '%sha256=%' or lower(done_signals) like 'done%=%'"
+exit: 0
+0
+
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select p.lane_key, l.status, p.paused_at from lane_pauses p join lanes l on l.key=p.lane_key where p.resumed_at is null"
+exit: 0
+qa-pause|working|2026-10-18T15:00:51.964273+00:00
+
+$ sqlite3 -readonly /Users/indo/code/project/omon-gateway/omon_gateway.db "select distinct cwd from lanes where created_at >= datetime('now','-30 days')"
+exit: 0
+/private/tmp/omon-e2e-Djyh/e2e-1
+/private/tmp/omon-e2e-Djyh/e2e-2
+/private/tmp/omon-e2e-Djyh/e2e-3
+/Users/indo/code/project/vpn-mall.com/scripts
+/Users/indo/.bun/bin
+/private/tmp/omon-lane-qa
+/Users/indo/code/project/mhc
+/Users/indo/.omon/workspace/parity-orchestrator/analysis-cwd
+/private/tmp/qa-lanes-lanes/qa-pause
+/private/tmp/qa-lanes-lanes/qa-wt-a
+/private/tmp/qa-lanes-lanes/qa-wt-b
+/private/tmp
+
+for each cwd: git -C <cwd> remote
+cwds: 12; with remote: 2; no remote: 0; not a git repo / missing: 10
+no-remote cwds: []
+missing cwds: ["/private/tmp/omon-e2e-Djyh/e2e-1","/private/tmp/omon-e2e-Djyh/e2e-2","/private/tmp/omon-e2e-Djyh/e2e-3","/Users/indo/.bun/bin","/private/tmp/omon-lane-qa","/Users/indo/.omon/workspace/parity-orchestrator/analysis-cwd","/private/tmp/qa-lanes-lanes/qa-pause","/private/tmp/qa-lanes-lanes/qa-wt-a","/private/tmp/qa-lanes-lanes/qa-wt-b","/private/tmp"]
+
+Result: 0 recent lane cwds are git repos with no remote, so no recent lane will be newly refused by the no-remote rule (10 recent cwds are gone or not git repos). One open pause row on prod: qa-pause (working, paused 2026-10-18), a QA leftover. It has acked_at NULL after migration 0055, so a deployed service will ack it on its first loop pass.
+
+## Step 5: teardown
+$ kill 10425; kill -0 10425
+exit: 1 kill: 10425: No such process
+$ kill -0 3761   (first dashboard attempt, already exited)
+exit: 1 kill: 3761: No such process
+$ rm -rf /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3; ls -d /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3
+exit: 1 ls: /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3: No such file or directory   (non-zero = removed)
+Lane service: none was started outside cargo tests (QA-3 ran deliberately without a service).
+
+## git status --short
+ M bot_profiles/blocks/lanes.md
+ M src/agent/omo_backend.rs
+ M src/lanes/activity.rs
+ M src/lanes/cli.rs
+ M src/lanes/dispatch.rs
+ M src/lanes/guard.rs
+ M src/lanes/runner.rs
+ M src/lanes/settle.rs
+ M src/lanes/signals.rs
+ M src/runtime_config.rs
+ M src/sessions/external.rs
+ M src/storage/lanes.rs
+ M src/tracker/issues.rs
+ M src/tracker/lanes.rs
+ M src/tracker/seed.rs
+ M tests/test_lane_close.rs
+ M tests/test_lane_control.rs
+ M tests/test_lane_done.rs
+ M tests/test_lane_guard_alerts.rs
+ M tests/test_lane_runner.rs
+ M tests/test_lane_worktree_auto.rs
+ M tests/test_tracker_api.rs
+?? .omo/evidence/dori-parity-fixes/
+?? .omo/plans/dori-parity-fixes.md
+?? migrations/0055_lane_pause_ack.sql
+?? migrations/0056_tracker_lane_paused.sql
+
+# After review r1/r2 fixes
+$ cargo fmt --all -- --check  exit 0
+$ cargo clippy --all-targets -- -D warnings  exit 0
+$ cargo test --no-fail-fast (default TMPDIR)
+exit: 0; binaries=93 passed=2102 failed=0

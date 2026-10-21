@@ -113,6 +113,15 @@ async fn bootstrap_seeds_workspace_and_agent_team() {
     assert!(boot["states"].as_array().unwrap().len() >= 15);
     assert_eq!(boot["me"]["is_me"], true);
     assert_eq!(team(&boot, "AGT")["system"], true);
+    let agt_id = team(&boot, "AGT")["id"].clone();
+    assert!(
+        boot["states"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|state| state["name"] == "Paused" && state["team_id"] == agt_id),
+        "AGT team must have a Paused state"
+    );
     let again = h.get("/bootstrap").await;
     assert_eq!(again["teams"].as_array().unwrap().len(), keys.len());
 }
@@ -361,4 +370,193 @@ async fn comments_relations_views_and_search_round_trip() {
         .map(|issue| issue["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, [first_id]);
+}
+
+#[tokio::test]
+async fn paused_lane_mirrors_to_paused_state_and_back() {
+    let h = Harness::new().await;
+    h.insert_lane("mirror-lane", "working").await;
+    sqlx::query(
+        "INSERT INTO lane_pauses (lane_key, paused_at, paused_by, resumed_at)
+         VALUES ('mirror-lane', datetime('now'), 'owner', NULL)",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+
+    let boot = h.get("/bootstrap").await;
+    let agt = team(&boot, "AGT")["id"].clone();
+    let paused_state = state_id(&boot, &agt, |state| state["name"] == "Paused");
+    let working_state = state_id(&boot, &agt, |state| state["lane_status"] == "working");
+
+    let issues = h
+        .get(&format!("/issues?team_id={}", agt.as_str().unwrap()))
+        .await;
+    let issue = issues["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["lane_key"] == "mirror-lane")
+        .unwrap();
+    assert_eq!(issue["state_id"], paused_state.as_str());
+
+    sqlx::query(
+        "UPDATE lane_pauses SET resumed_at = datetime('now') WHERE lane_key = 'mirror-lane'",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+
+    let issues_after = h
+        .get(&format!("/issues?team_id={}", agt.as_str().unwrap()))
+        .await;
+    let issue_after = issues_after["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["lane_key"] == "mirror-lane")
+        .unwrap();
+    assert_eq!(issue_after["state_id"], working_state.as_str());
+}
+
+#[tokio::test]
+async fn resuming_a_blocked_lane_does_not_renotify_the_owner() {
+    let h = Harness::new().await;
+    h.insert_lane("renotify-lane", "blocked").await;
+    let boot = h.get("/bootstrap").await;
+    let agt = team(&boot, "AGT")["id"].clone();
+    let list = format!("/issues?team_id={}", agt.as_str().unwrap());
+    h.get(&list).await;
+
+    sqlx::query(
+        "INSERT INTO lane_pauses (lane_key, paused_at, paused_by, resumed_at)
+         VALUES ('renotify-lane', datetime('now'), 'owner', NULL)",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+    h.get(&list).await;
+    sqlx::query(
+        "UPDATE lane_pauses SET resumed_at = datetime('now') WHERE lane_key = 'renotify-lane'",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+    h.get(&list).await;
+
+    let notifications: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM tracker_notifications n JOIN tracker_issues i ON i.id = n.issue_id
+         WHERE i.lane_key = 'renotify-lane' AND n.kind = 'lane_blocked'",
+    )
+    .fetch_one(h.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(notifications, 1);
+}
+
+#[tokio::test]
+async fn status_reached_while_paused_notifies_on_resume() {
+    let h = Harness::new().await;
+    h.insert_lane("settled-lane", "working").await;
+    let boot = h.get("/bootstrap").await;
+    let agt = team(&boot, "AGT")["id"].clone();
+    let list = format!("/issues?team_id={}", agt.as_str().unwrap());
+    h.get(&list).await;
+
+    sqlx::query(
+        "INSERT INTO lane_pauses (lane_key, paused_at, paused_by, resumed_at)
+         VALUES ('settled-lane', datetime('now'), 'owner', NULL)",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+    h.get(&list).await;
+    sqlx::query("UPDATE lanes SET status = 'verified_done' WHERE key = 'settled-lane'")
+        .execute(h.database.pool())
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE lane_pauses SET resumed_at = datetime('now') WHERE lane_key = 'settled-lane'",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+    h.get(&list).await;
+
+    let notifications: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM tracker_notifications n JOIN tracker_issues i ON i.id = n.issue_id
+         WHERE i.lane_key = 'settled-lane' AND n.kind = 'lane_verified_done'",
+    )
+    .fetch_one(h.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(notifications, 1);
+}
+
+#[tokio::test]
+async fn closed_lane_with_open_pause_stays_done() {
+    let h = Harness::new().await;
+    h.insert_lane("closed-paused-lane", "closed").await;
+    sqlx::query(
+        "INSERT INTO lane_pauses (lane_key, paused_at, paused_by, resumed_at)
+         VALUES ('closed-paused-lane', datetime('now'), 'owner', NULL)",
+    )
+    .execute(h.database.pool())
+    .await
+    .unwrap();
+
+    let boot = h.get("/bootstrap").await;
+    let agt = team(&boot, "AGT")["id"].clone();
+    let done_state = state_id(&boot, &agt, |state| state["lane_status"] == "closed");
+    let paused_state = state_id(&boot, &agt, |state| state["name"] == "Paused");
+
+    let issues = h
+        .get(&format!("/issues?team_id={}", agt.as_str().unwrap()))
+        .await;
+    let issue = issues["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["lane_key"] == "closed-paused-lane")
+        .unwrap();
+    assert_eq!(issue["state_id"], done_state.as_str());
+    assert_ne!(issue["state_id"], paused_state.as_str());
+}
+
+#[tokio::test]
+async fn moving_a_closed_lane_issue_to_paused_is_refused() {
+    let h = Harness::new().await;
+    h.insert_lane("closed-refuse-lane", "closed").await;
+    let boot = h.get("/bootstrap").await;
+    let agt = team(&boot, "AGT")["id"].clone();
+    let paused_state = state_id(&boot, &agt, |state| state["name"] == "Paused");
+
+    let issues = h
+        .get(&format!("/issues?team_id={}", agt.as_str().unwrap()))
+        .await;
+    let issue = issues["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["lane_key"] == "closed-refuse-lane")
+        .unwrap();
+    let issue_id = issue["id"].as_str().unwrap();
+
+    let (status, body) = h
+        .send(
+            Method::PATCH,
+            &format!("/issues/{issue_id}"),
+            json!({"state_id": paused_state}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "illegal_lane_transition");
+    assert_eq!(body["error"], "Paused is set by lane pause");
+
+    let lane_status: String =
+        sqlx::query_scalar("SELECT status FROM lanes WHERE key = 'closed-refuse-lane'")
+            .fetch_one(h.database.pool())
+            .await
+            .unwrap();
+    assert_eq!(lane_status, "closed");
 }

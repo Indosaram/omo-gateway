@@ -9,6 +9,7 @@ use omon_gateway::agent::AgentBackend;
 use omon_gateway::lanes::cli::change_claim_at;
 use omon_gateway::lanes::runner::{lane_key, LaneRunner};
 use omon_gateway::lanes::signals::{DoneSignal, SignalResult, SignalRunner};
+use omon_gateway::storage::lanes::{is_lane_paused, pause_lane};
 use omon_gateway::storage::{get_lane, insert_lane, Database, Lane};
 use omon_gateway::work_heartbeat::{Clock, MockClock};
 use omon_gateway::{InboundEvent, Result, SessionContext};
@@ -87,30 +88,55 @@ async fn git(path: &Path, args: &[&str]) {
 
 impl Fixture {
     async fn new(ok: bool) -> Self {
+        Self::build(ok, true, true).await
+    }
+
+    async fn new_without_remote(ok: bool) -> Self {
+        Self::build(ok, false, true).await
+    }
+
+    async fn new_unborn(ok: bool) -> Self {
+        Self::build(ok, false, false).await
+    }
+
+    async fn build(ok: bool, with_remote: bool, with_commit: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let repo = temp.path().join("repo");
         tokio::fs::create_dir(&repo).await.unwrap();
         let repo = tokio::fs::canonicalize(repo).await.unwrap();
         git(&repo, &["init"]).await;
-        tokio::fs::write(repo.join("tracked.txt"), "original\n")
-            .await
-            .unwrap();
-        git(&repo, &["add", "tracked.txt"]).await;
-        git(
-            &repo,
-            &[
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-m",
-                "fixture",
-            ],
-        )
-        .await;
+        if with_commit {
+            tokio::fs::write(repo.join("tracked.txt"), "original\n")
+                .await
+                .unwrap();
+            git(&repo, &["add", "tracked.txt"]).await;
+            git(
+                &repo,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-m",
+                    "fixture",
+                ],
+            )
+            .await;
+            if with_remote {
+                let remote = temp.path().join("remote.git");
+                tokio::fs::create_dir(&remote).await.unwrap();
+                git(&remote, &["init", "--bare"]).await;
+                git(
+                    &repo,
+                    &["remote", "add", "origin", remote.to_str().unwrap()],
+                )
+                .await;
+                git(&repo, &["push", "-q", "origin", "HEAD:refs/heads/fixture"]).await;
+            }
+        }
         let brief = temp.path().join("brief.md");
         tokio::fs::write(&brief, "Make the proof artifact then claim.")
             .await
@@ -361,11 +387,6 @@ async fn interrupted_settlement_recovers_without_replaying_signals() {
 async fn unpushed_commit_with_local_bare_remote_returns_not_done() {
     let mut fixture = Fixture::new(true).await;
     let repo = Path::new(&fixture.lane.cwd);
-    let remote = fixture._temp.path().join("remote.git");
-    tokio::fs::create_dir(&remote).await.unwrap();
-    git(&remote, &["init", "--bare"]).await;
-    git(repo, &["remote", "add", "origin", remote.to_str().unwrap()]).await;
-    git(repo, &["push", "origin", "HEAD:refs/heads/fixture"]).await;
     tokio::fs::write(repo.join("tracked.txt"), "committed change\n")
         .await
         .unwrap();
@@ -397,8 +418,42 @@ async fn unpushed_commit_with_local_bare_remote_returns_not_done() {
         reason.contains(&format!("unpushed {}", fixture.lane.cwd)),
         "actual settlement objection: {reason}"
     );
+    assert!(!reason.contains("(no remote)"));
     assert!(!reason.contains("uncommitted"));
     assert_eq!(fixture.checks.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn unpushed_commit_without_any_remote_returns_not_done() {
+    let mut fixture = Fixture::new_without_remote(true).await;
+    fixture.claim().await;
+    fixture
+        .clock
+        .set(fixture.clock.now() + chrono::Duration::minutes(5));
+    assert!(fixture.runner().settle_due().await.unwrap().is_empty());
+    let row = fixture.status().await;
+    assert_eq!(row.status, "not_done");
+    let reason = row.objection.unwrap();
+    assert!(
+        reason.contains(&format!("unpushed {} (no remote)", fixture.lane.cwd)),
+        "actual settlement objection: {reason}"
+    );
+    assert!(!reason.contains("uncommitted"));
+    assert_eq!(fixture.checks.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn repo_without_commits_and_remote_is_not_refused() {
+    let mut fixture = Fixture::new_unborn(true).await;
+    fixture.claim().await;
+    fixture
+        .clock
+        .set(fixture.clock.now() + chrono::Duration::minutes(5));
+    let verified = fixture.runner().settle_due().await.unwrap();
+    assert_eq!(verified, vec![fixture.lane.key.clone()]);
+    let row = fixture.status().await;
+    assert_eq!(row.status, "verified_done");
+    assert!(row.objection.is_none());
 }
 
 #[tokio::test]
@@ -927,4 +982,58 @@ async fn settlement_error_and_normal_stop_join_active_backend_and_checker() {
             "lane task persistence completed before serve returned"
         );
     }
+}
+
+#[tokio::test]
+async fn paused_claim_is_settled_and_pause_survives() {
+    let mut fixture = Fixture::new(true).await;
+    // The claim lands first (a paused lane starts no turn), then the owner pauses.
+    fixture.claim().await;
+    pause_lane(fixture.db.pool(), &fixture.lane.key, "lead")
+        .await
+        .unwrap();
+    assert!(is_lane_paused(fixture.db.pool(), &fixture.lane.key)
+        .await
+        .unwrap());
+    fixture
+        .clock
+        .set(fixture.clock.now() + chrono::Duration::minutes(5));
+    let settled = fixture.runner().settle_due().await.unwrap();
+    assert_eq!(settled, vec![fixture.lane.key.clone()]);
+    let row = fixture.status().await;
+    assert_eq!(row.status, "verified_done");
+    assert!(is_lane_paused(fixture.db.pool(), &fixture.lane.key)
+        .await
+        .unwrap());
+    assert_eq!(fixture.checks.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn paused_claim_with_failing_check_is_not_done_and_stays_paused() {
+    let mut fixture = Fixture::new(false).await;
+    // The claim lands first (a paused lane starts no turn), then the owner pauses.
+    fixture.claim().await;
+    pause_lane(fixture.db.pool(), &fixture.lane.key, "lead")
+        .await
+        .unwrap();
+    assert!(is_lane_paused(fixture.db.pool(), &fixture.lane.key)
+        .await
+        .unwrap());
+    fixture
+        .clock
+        .set(fixture.clock.now() + chrono::Duration::minutes(5));
+    let settled = fixture.runner().settle_due().await.unwrap();
+    assert!(settled.is_empty());
+    let row = fixture.status().await;
+    assert_eq!(row.status, "not_done");
+    assert!(row.objection.unwrap().contains("missing proof artifact"));
+    let body: String = sqlx::query_scalar("SELECT body FROM lane_events WHERE kind = 'not_done'")
+        .fetch_one(fixture.db.pool())
+        .await
+        .unwrap();
+    assert!(body.contains("missing proof artifact"));
+    assert!(is_lane_paused(fixture.db.pool(), &fixture.lane.key)
+        .await
+        .unwrap());
+    assert_eq!(fixture.checks.calls.load(Ordering::SeqCst), 1);
 }

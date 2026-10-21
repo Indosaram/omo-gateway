@@ -1,0 +1,41 @@
+# task-8 evidence (todo 9 run, 2026-10-21T01:48:14.311Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ cargo test --test test_tracker_api -- --nocapture
+exit: 0
+running 9 tests
+test bootstrap_seeds_workspace_and_agent_team ... ok
+test reopen_request_holds_state_only_while_pending ... ok
+test closed_lane_with_open_pause_stays_done ... ok
+test comments_relations_views_and_search_round_trip ... ok
+test moving_a_closed_lane_issue_to_paused_is_refused ... ok
+test create_patch_and_detail_record_activity ... ok
+test lanes_mirror_into_agent_team_states ... ok
+test lane_linked_state_changes_are_guarded ... ok
+test paused_lane_mirrors_to_paused_state_and_back ... ok
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s
+
+$ cargo test --test test_tracker_api moving_a_closed_lane_issue_to_paused_is_refused -- --nocapture
+exit: 0
+test moving_a_closed_lane_issue_to_paused_is_refused ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.57s
+
+
+## QA-8 real binary dashboard (no fallback to harness needed)
+$ cd $RUN_TMP && env -u OMON_DASHBOARD_RUN_SCHEDULER DATABASE_URL=sqlite:///var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/qa.db OMON_OMO_APPSERVER_URL=ws://127.0.0.1:1 /Users/indo/code/project/omon-gateway/wt/dori-parity/target/debug/omo-gateway dashboard --port 18999
+(OMON_OMO_APPSERVER_URL points at a dead port so the scratch dashboard never supervises the live omo app-server; an earlier attempt without it exited after logging "owned by another omon process" and was discarded)
+pid: 10425
+
+$ curl -s http://127.0.0.1:18999/api/tracker/bootstrap
+AGT team id: fd551c7a-a33b-418d-8279-c9a4b0bea2db
+AGT states: ["Queued(unstarted)","Working(started)","Paused(started)","Blocked(started)","In Review(started)","Changes Requested(started)","Verified(completed)","Done(completed)","Failed(canceled)"]
+
+$ curl -s 'http://127.0.0.1:18999/api/tracker/issues?team_id=fd551c7a-a33b-418d-8279-c9a4b0bea2db'   (qa-sig: status working, open acked pause row)
+[{"title":"t","lane_key":"qa-sig","state":"Paused"}]
+
+$ sqlite3 /var/folders/zh/7cc25lt91b1_dj577306nwdh0000gn/T/tmp.iI4BDx0ER3/qa.db "update lane_pauses set resumed_at=datetime('now') where lane_key='qa-sig'"
+exit: 0
+
+
+$ curl -s 'http://127.0.0.1:18999/api/tracker/issues?team_id=fd551c7a-a33b-418d-8279-c9a4b0bea2db'   (after resumed_at set)
+[{"title":"t","lane_key":"qa-sig","state":"Working"}]

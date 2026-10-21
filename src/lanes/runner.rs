@@ -585,11 +585,32 @@ async fn keep_reason(path: &str) -> Result<Option<&'static str>> {
     if !git(path, &["status", "--porcelain"]).await?.is_empty() {
         return Ok(Some("dirty"));
     }
-    if !git(path, &["remote"]).await?.is_empty()
-        && !git(path, &["log", "HEAD", "--not", "--remotes", "--oneline"])
-            .await?
-            .is_empty()
-    {
+    let rev_parse = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--verify", "-q", "HEAD"])
+        .kill_on_drop(true)
+        .output()
+        .await
+        .map_err(io_error)?;
+    if rev_parse.status.code() == Some(1) {
+        return Ok(None);
+    }
+    if !rev_parse.status.success() {
+        return Err(OmonError::Config(format!(
+            "git rev-parse --verify -q HEAD: {}",
+            String::from_utf8_lossy(&rev_parse.stderr).trim()
+        )));
+    }
+    let count: u64 = git(path, &["rev-list", "--count", "HEAD", "--not", "--remotes"])
+        .await?
+        .parse()
+        .map_err(|error| {
+            OmonError::Config(format!(
+                "git rev-list --count HEAD --not --remotes: {error}"
+            ))
+        })?;
+    if count > 0 {
         return Ok(Some("unpushed"));
     }
     Ok(None)
@@ -924,13 +945,13 @@ impl OutboundDispatcher for CapturingDispatcher {
                 reason,
             } => {
                 let lead_key = if session.platform == "lane" {
-                    sqlx::query_scalar::<_, String>(
+                    let lead = sqlx::query_scalar::<_, String>(
                         "SELECT lead_session_key FROM lanes WHERE key = ?",
                     )
                     .bind(&session.channel_id)
                     .fetch_optional(&self.pool)
-                    .await?
-                    .unwrap_or_else(|| super::kibitzer::DEFAULT_LEAD.to_string())
+                    .await?;
+                    crate::runtime_config::lane_lead_or_default(lead)
                 } else {
                     session.storage_key()
                 };
@@ -1512,6 +1533,15 @@ impl LaneRunner {
                     });
                 }
             }
+            // Queued, blocked and done_claimed lanes never reach run_lane, and a paused lane
+            // with no task has no turn running: acknowledge those pauses here.
+            if lane_control_enabled() {
+                for key in crate::storage::lanes::unacked_pause_keys(&self.pool).await? {
+                    if !active.contains_key(&key) {
+                        crate::storage::lanes::ack_pause(&self.pool, &key).await?;
+                    }
+                }
+            }
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 _ = guard_tick.tick() => {
@@ -1611,6 +1641,8 @@ impl LaneRunner {
     ) -> Result<()> {
         let initial = self.lane(key).await?;
         if paused(&self.pool, key).await? {
+            // No turn of this lane has started in this task: the pause holds.
+            crate::storage::lanes::ack_pause(&self.pool, key).await?;
             return Ok(());
         }
         if crate::sessions::external::ExternalDriver::<
@@ -1668,8 +1700,12 @@ impl LaneRunner {
             if shutdown.is_cancelled()
                 || closing
                 || !matches!(lane.status.as_str(), "working" | "not_done")
-                || paused(&self.pool, key).await?
             {
+                return Ok(());
+            }
+            if paused(&self.pool, key).await? {
+                // Turn boundary: the previous turn has finished and no next one starts.
+                crate::storage::lanes::ack_pause(&self.pool, key).await?;
                 return Ok(());
             }
             if lane.status == "not_done" {
@@ -1732,6 +1768,7 @@ impl LaneRunner {
                     _ = notify.notified() => continue,
                 }
             }
+            let first_turn = lane.turns_run == 0;
             let prompt = if lane.turns_run == 0 && was_reopened && !resume_fallback {
                 inbox
                     .iter()
@@ -1977,7 +2014,42 @@ impl LaneRunner {
                 }
             }
             if shutdown.is_cancelled() || paused_now {
+                if paused_now {
+                    // The turn task has been joined, whatever its outcome: nothing runs now.
+                    crate::storage::lanes::ack_pause(&self.pool, key).await?;
+                }
                 return Ok(());
+            }
+            if outcome.is_err() && first_turn {
+                let lower = outcome_text.to_ascii_lowercase();
+                if lower.contains("api key")
+                    || lower.contains("unknown provider")
+                    || lower.contains("model_not_available")
+                    || lower.contains("all fallback models failed")
+                    || lower.contains("cannot find module")
+                    || lower.contains("session crashed")
+                {
+                    return self
+                        .fail(key, "startup_error", &outcome_text, generation)
+                        .await;
+                } else if lower.contains("rate limit")
+                    || lower.contains("quota")
+                    || lower.contains("usage limit")
+                {
+                    let body: String = super::scrub::scrub(&format!("{outcome_text}: will retry"))
+                        .chars()
+                        .take(2000)
+                        .collect();
+                    sqlx::query(
+                        "INSERT INTO lane_events(lane_key, lead_session_key, kind, body, created_at) VALUES (?, ?, 'startup_error', ?, ?)",
+                    )
+                    .bind(key)
+                    .bind(&self.lane(key).await?.lead_session_key)
+                    .bind(&body)
+                    .bind(Utc::now())
+                    .execute(&self.pool)
+                    .await?;
+                }
             }
             errors = if outcome.is_err() { errors + 1 } else { 0 };
             if errors >= 3 {
@@ -2507,5 +2579,35 @@ mod activity_generation_tests {
             .unwrap()
             .unwrap();
         assert!(fallback.contains("2 commits"), "{fallback}");
+    }
+
+    #[tokio::test]
+    async fn keep_reason_keeps_a_no_remote_worktree_with_commits() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        tokio::fs::create_dir(&repo).await.unwrap();
+        git(repo.to_str().unwrap(), &["init", "--quiet"])
+            .await
+            .unwrap();
+        git(
+            repo.to_str().unwrap(),
+            &["config", "user.email", "lane@example.com"],
+        )
+        .await
+        .unwrap();
+        git(repo.to_str().unwrap(), &["config", "user.name", "lane"])
+            .await
+            .unwrap();
+        tokio::fs::write(repo.join("file.txt"), "hello")
+            .await
+            .unwrap();
+        git(repo.to_str().unwrap(), &["add", "file.txt"])
+            .await
+            .unwrap();
+        git(repo.to_str().unwrap(), &["commit", "--quiet", "-m", "init"])
+            .await
+            .unwrap();
+        let reason = keep_reason(repo.to_str().unwrap()).await.unwrap();
+        assert_eq!(reason, Some("unpushed"));
     }
 }

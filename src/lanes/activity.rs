@@ -163,6 +163,17 @@ impl LaneActivity {
             pause: lane.status != "working",
             ..ActivityDecision::default()
         };
+        let working_while_paused = sqlx::query("UPDATE lane_pauses SET seen_working_at = ? WHERE lane_key = ? AND resumed_at IS NULL AND acked_at IS NOT NULL AND seen_working_at IS NULL")
+            .bind(now).bind(key).execute(&mut *tx).await?;
+        if working_while_paused.rows_affected() == 1 {
+            self.event(
+                &mut tx,
+                &lane,
+                "working_while_paused",
+                &format!("lane {key} produced output after its pause was confirmed"),
+            )
+            .await?;
+        }
         for report in reports(key, message) {
             decision.report_count += 1;
             sqlx::query("UPDATE lanes SET last_report = ? WHERE key = ?")

@@ -189,9 +189,25 @@ pub async fn execute(
             let by = std::env::var("PI_SESSION_ID")
                 .map(|id| format!("session:{id}"))
                 .unwrap_or_else(|_| "local-cli".into());
-            let changed = crate::storage::lanes::pause_lane(pool, &key, &by).await?;
+            let changed = match crate::storage::lanes::try_pause_lane(pool, &key, &by).await? {
+                crate::storage::lanes::PauseOutcome::Paused => true,
+                crate::storage::lanes::PauseOutcome::AlreadyPaused => false,
+                crate::storage::lanes::PauseOutcome::NotPausable => {
+                    return Ok((2, json!({"ok": false, "key": key, "error": "NOT_PAUSABLE"})));
+                }
+            };
             wake(pool).await?;
-            Ok((0, json!({"key": key, "paused": true, "changed": changed})))
+            if confirm_pause(pool, &key).await? {
+                Ok((
+                    0,
+                    json!({"key": key, "paused": true, "confirmed": true, "changed": changed}),
+                ))
+            } else {
+                Ok((
+                    3,
+                    json!({"ok": false, "key": key, "error": "PAUSE_UNVERIFIED", "paused": true}),
+                ))
+            }
         }
         LaneCommand::Resume { key } => {
             control_enabled()?;
@@ -469,7 +485,7 @@ pub async fn start(
         cwd.to_string_lossy(),
         brief_path.to_string_lossy(),
         lane_key(&args.key).storage_key(),
-        args.done,
+        crate::lanes::signals::strip_done_prefix(&args.done),
     );
     lane.model = Some(model_for_purpose(purpose));
     // Discord calls run before the write transaction: holding BEGIN IMMEDIATE
@@ -642,6 +658,30 @@ async fn block_lane_after_worktree_failure(
     }
     lane.status = "failed".into();
     detail
+}
+
+/// The CLI has no notifier from the lane service, so it re-reads its own pause row until
+/// the service records that no turn of the lane is running, or the deadline passes.
+async fn confirm_pause(pool: &SqlitePool, key: &str) -> Result<bool> {
+    let seconds = std::env::var("OMON_LANE_PAUSE_CONFIRM_SECS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(30);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    let mut recheck = tokio::time::interval(std::time::Duration::from_millis(250));
+    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        if crate::storage::lanes::pause_acked(pool, key).await? {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::select! {
+            _ = recheck.tick() => {}
+            _ = tokio::time::sleep_until(deadline) => {}
+        }
+    }
 }
 
 async fn require_lane(pool: &SqlitePool, key: &str) -> Result<Lane> {

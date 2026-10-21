@@ -1,0 +1,16 @@
+# task-6 evidence (todo 9 run, 2026-10-21T01:48:14.311Z, worktree /Users/indo/code/project/omon-gateway/wt/dori-parity)
+
+## cargo QA
+$ rg -n "kibitzer::DEFAULT_LEAD" src/lanes/runner.rs src/agent/omo_backend.rs
+exit: 1
+
+
+$ cargo test --lib runtime_config -- --nocapture
+exit: 0
+running 2 tests
+test runtime_config::tests::test_default_lead_runtime_config ... ok
+test runtime_config::tests::test_lane_lead_or_default_runtime_and_fallbacks ... ok
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1119 filtered out; finished in 0.01s
+
+
+rg exit 1 with no output = no kibitzer::DEFAULT_LEAD in either file (acceptance).

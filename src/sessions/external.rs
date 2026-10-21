@@ -111,7 +111,16 @@ impl<R: CommandRunner + 'static> ExternalDriver<R> {
             .cwd
             .ok_or_else(|| invalid("session cwd is required to verify Done signals"))?;
         let key = format!("external-{}", uuid::Uuid::new_v4().simple());
-        let mut lane = Lane::new(&key, goal, lead, &cwd, "", target.to_string(), done);
+        let stripped_done = crate::lanes::signals::strip_done_prefix(done);
+        let mut lane = Lane::new(
+            &key,
+            goal,
+            lead,
+            &cwd,
+            "",
+            target.to_string(),
+            stripped_done,
+        );
         lane.status = "working".into();
         lane.omo_thread_id = Some(target.session().into());
         let baseline = self

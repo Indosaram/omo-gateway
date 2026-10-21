@@ -502,6 +502,7 @@ struct AlertMark {
     load: bool,
     mem: bool,
     disk: bool,
+    lanes: bool,
     mem_free_pct: u32,
     disk_free_gb: u64,
 }
@@ -549,6 +550,7 @@ impl GuardWatcher {
         load: bool,
         mem: bool,
         disk: bool,
+        lanes: bool,
         sample: &HostSample,
         now: std::time::Instant,
     ) -> bool {
@@ -558,17 +560,28 @@ impl GuardWatcher {
         if now.saturating_duration_since(mark.at) >= GUARD_REALERT_WINDOW {
             return true;
         }
-        self.got_worse(load, mem, disk, sample)
+        self.got_worse(load, mem, disk, lanes, sample)
     }
 
     /// The host is materially worse than at the last emitted ALERT, or a new metric started
     /// alerting. Elapsed time plays no part, so a long episode still reports real changes.
-    fn got_worse(&self, load: bool, mem: bool, disk: bool, sample: &HostSample) -> bool {
+    fn got_worse(
+        &self,
+        load: bool,
+        mem: bool,
+        disk: bool,
+        lanes: bool,
+        sample: &HostSample,
+    ) -> bool {
         let Some(mark) = self.last_alert else {
             return true;
         };
         // A metric that was not part of the last alert is new information.
-        if (load && !mark.load) || (mem && !mark.mem) || (disk && !mark.disk) {
+        if (load && !mark.load)
+            || (mem && !mark.mem)
+            || (disk && !mark.disk)
+            || (lanes && !mark.lanes)
+        {
             return true;
         }
         let disk_worse = disk
@@ -589,6 +602,7 @@ impl GuardWatcher {
         load: bool,
         mem: bool,
         disk: bool,
+        lanes: bool,
         sample: &HostSample,
         now: std::time::Instant,
     ) {
@@ -597,6 +611,7 @@ impl GuardWatcher {
             load,
             mem,
             disk,
+            lanes,
             mem_free_pct: sample.mem_free_pct,
             disk_free_gb: sample.disk_free_gb,
         });
@@ -617,6 +632,7 @@ impl GuardWatcher {
         let load_alert = sample.load_1m >= self.thresholds.load_alert;
         let mem_alert = sample.mem_free_pct < self.thresholds.mem_free_min_pct;
         let disk_alert = sample.disk_free_gb < self.thresholds.disk_free_min_gb;
+        let lanes_alert = sample.active_lanes >= self.thresholds.lanes_max;
 
         if load_alert {
             alert_reasons.push(format!(
@@ -636,6 +652,12 @@ impl GuardWatcher {
                 sample.disk_free_gb, self.thresholds.disk_free_min_gb
             ));
         }
+        if lanes_alert {
+            alert_reasons.push(format!(
+                "active lanes ({}) >= maximum ({})",
+                sample.active_lanes, self.thresholds.lanes_max
+            ));
+        }
 
         match self.current_state {
             GuardState::Clear => {
@@ -644,8 +666,9 @@ impl GuardWatcher {
                 }
                 self.current_state = GuardState::Alert;
                 self.episode_reported = false;
-                if self.worth_alerting(load_alert, mem_alert, disk_alert, sample, now) {
-                    self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
+                if self.worth_alerting(load_alert, mem_alert, disk_alert, lanes_alert, sample, now)
+                {
+                    self.mark_alert(load_alert, mem_alert, disk_alert, lanes_alert, sample, now);
                     Some(GuardReport::Alert(alert_reasons.join("; ")))
                 } else {
                     None
@@ -655,8 +678,9 @@ impl GuardWatcher {
                 let load_cleared = sample.load_1m < self.thresholds.load_ok;
                 let mem_cleared = sample.mem_free_pct >= self.thresholds.mem_free_min_pct;
                 let disk_cleared = sample.disk_free_gb >= self.thresholds.disk_free_min_gb;
+                let lanes_cleared = sample.active_lanes < self.thresholds.lanes_max;
 
-                if load_cleared && mem_cleared && disk_cleared {
+                if load_cleared && mem_cleared && disk_cleared && lanes_cleared {
                     self.current_state = GuardState::Clear;
                     let reported = std::mem::replace(&mut self.episode_reported, false);
                     return reported.then_some(GuardReport::Clear);
@@ -665,9 +689,9 @@ impl GuardWatcher {
                 // started alerting) since the last emitted ALERT. Time alone never re-alerts here.
                 if !alert_reasons.is_empty()
                     && self.last_alert.is_some()
-                    && self.got_worse(load_alert, mem_alert, disk_alert, sample)
+                    && self.got_worse(load_alert, mem_alert, disk_alert, lanes_alert, sample)
                 {
-                    self.mark_alert(load_alert, mem_alert, disk_alert, sample, now);
+                    self.mark_alert(load_alert, mem_alert, disk_alert, lanes_alert, sample, now);
                     return Some(GuardReport::Alert(alert_reasons.join("; ")));
                 }
                 None
@@ -1241,6 +1265,47 @@ mod tests {
         let s_ok_disk = HostSample::new(50.0, 50, 80, 0);
         let rep_disk_clear = watcher.check(&s_ok_disk);
         assert_eq!(rep_disk_clear, Some(GuardReport::Clear));
+        assert_eq!(watcher.state(), GuardState::Clear);
+    }
+
+    #[test]
+    fn lane_count_alerts_and_clears() {
+        let thresholds = GuardThresholds {
+            load_alert: 150.0,
+            load_ok: 80.0,
+            mem_free_min_pct: 20,
+            disk_free_min_gb: 50,
+            lanes_max: 3,
+        };
+        let mut watcher = GuardWatcher::new(thresholds);
+
+        // Under limit: no report
+        let s_under = HostSample::new(50.0, 50, 100, 2);
+        assert_eq!(watcher.check(&s_under), None);
+        assert_eq!(watcher.state(), GuardState::Clear);
+
+        // Reaching maximum (active_lanes >= lanes_max): triggers ALERT
+        let s_at_max = HostSample::new(50.0, 50, 100, 3);
+        let rep = watcher.check(&s_at_max);
+        assert!(rep.is_some() && rep.as_ref().unwrap().is_alert());
+        assert!(
+            rep.unwrap()
+                .alert_message()
+                .unwrap()
+                .contains("active lanes (3) >= maximum (3)"),
+            "expected active lanes alert reason"
+        );
+        assert_eq!(watcher.state(), GuardState::Alert);
+
+        // Repeated sample while alerting: quiet
+        let s_repeat = HostSample::new(50.0, 50, 100, 4);
+        assert_eq!(watcher.check(&s_repeat), None);
+        assert_eq!(watcher.state(), GuardState::Alert);
+
+        // Clears when active_lanes drops below lanes_max
+        let s_clear = HostSample::new(50.0, 50, 100, 2);
+        let rep_clear = watcher.check(&s_clear);
+        assert_eq!(rep_clear, Some(GuardReport::Clear));
         assert_eq!(watcher.state(), GuardState::Clear);
     }
 

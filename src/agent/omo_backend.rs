@@ -1904,15 +1904,15 @@ impl OmoBackend {
                             .unwrap_or_else(|| crate::autonomy::classify_frame(&val, ws_cwd));
                         if let Some(pool) = &self.pool {
                             let lead_key = if is_lane {
-                                sqlx::query_scalar::<_, String>(
+                                let lead = sqlx::query_scalar::<_, String>(
                                     "SELECT lead_session_key FROM lanes WHERE key = ?",
                                 )
                                 .bind(&session.key.channel_id)
                                 .fetch_optional(pool)
                                 .await
                                 .ok()
-                                .flatten()
-                                .unwrap_or_else(|| crate::lanes::kibitzer::DEFAULT_LEAD.to_string())
+                                .flatten();
+                                crate::runtime_config::lane_lead_or_default(lead)
                             } else {
                                 session.key.storage_key()
                             };

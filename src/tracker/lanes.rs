@@ -129,6 +129,15 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
         state_by_lane_status.insert(lane_status, (id, state_type));
     }
 
+    let paused_state: Option<(String, String)> = sqlx::query_as(
+        "SELECT id, type FROM tracker_states WHERE team_id = ? AND lane_paused = 1 LIMIT 1",
+    )
+    .bind(&agt_team_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let paused_lane_keys = crate::storage::lanes::paused_lane_keys(pool).await?;
+
     let me_user_id: Option<String> =
         sqlx::query_scalar("SELECT id FROM tracker_users WHERE is_me = 1 LIMIT 1")
             .fetch_optional(pool)
@@ -140,6 +149,17 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
         let brief_path: String = lane_row.get("brief_path");
         let lane_model: Option<String> = lane_row.get("model");
         let lane_status: String = lane_row.get("status");
+
+        let is_paused = paused_lane_keys.contains(&lane_key)
+            && matches!(
+                lane_status.as_str(),
+                "queued" | "working" | "blocked" | "done_claimed" | "not_done"
+            );
+        let effective_status = if is_paused {
+            "paused"
+        } else {
+            lane_status.as_str()
+        };
 
         let existing_issue = sqlx::query(
             "SELECT id, team_id, state_id, started_at
@@ -167,7 +187,20 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
             .bind(&issue_id)
             .fetch_optional(pool)
             .await?;
-            let status_changed = last_lane_status.as_deref() != Some(lane_status.as_str());
+            let status_changed = last_lane_status.as_deref() != Some(effective_status);
+            // Resuming restores the pre-pause status; the owner was already told about it,
+            // but a status reached while paused (e.g. a settled claim) is new.
+            let pre_pause_status: Option<String> = if last_lane_status.as_deref() == Some("paused")
+            {
+                sqlx::query_scalar(
+                    "SELECT to_value FROM tracker_activity WHERE issue_id = ? AND kind = 'lane_status' AND to_value <> 'paused' ORDER BY id DESC LIMIT 1",
+                )
+                .bind(&issue_id)
+                .fetch_optional(pool)
+                .await?
+            } else {
+                None
+            };
             if !status_changed {
                 let pending: i64 = sqlx::query_scalar(
                     "SELECT (SELECT COUNT(*) FROM lane_close_intents WHERE lane_key = ?1 AND state IN ('pending','running'))
@@ -181,12 +214,14 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
                 }
             }
 
-            let target_state_id = if issue_team_id == agt_team_id {
+            let target_state_id = if is_paused && issue_team_id == agt_team_id {
+                paused_state.as_ref().map(|(id, _)| id.clone())
+            } else if issue_team_id == agt_team_id {
                 state_by_lane_status
                     .get(&lane_status)
                     .map(|(id, _)| id.clone())
             } else {
-                let (mapped_type, _) = map_lane_status_to_type(&lane_status);
+                let (mapped_type, _) = map_lane_status_to_type(effective_status);
                 sqlx::query_scalar::<_, String>(
                     "SELECT id FROM tracker_states WHERE team_id = ? AND type = ? ORDER BY position ASC LIMIT 1",
                 )
@@ -252,15 +287,18 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
             )
             .bind(&issue_id)
             .bind(last_lane_status.as_deref())
-            .bind(&lane_status)
+            .bind(effective_status)
             .bind(&now)
             .execute(pool)
             .await?;
 
-            if matches!(
-                lane_status.as_str(),
-                "blocked" | "done_claimed" | "verified_done" | "failed"
-            ) {
+            if !is_paused
+                && pre_pause_status.as_deref() != Some(lane_status.as_str())
+                && matches!(
+                    lane_status.as_str(),
+                    "blocked" | "done_claimed" | "verified_done" | "failed"
+                )
+            {
                 if let Some(ref me_id) = me_user_id {
                     let notif_id = Uuid::new_v4().to_string();
                     let kind = format!("lane_{lane_status}");
@@ -283,9 +321,21 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
             let agent_user_id = ensure_agent_user(pool, lane_model.as_deref()).await?;
             let brief_text = read_brief_content(&brief_path).await;
 
-            let (target_state_id, state_type) = if let Some((id, t)) =
-                state_by_lane_status.get(&lane_status)
-            {
+            let (target_state_id, state_type) = if is_paused {
+                if let Some((id, t)) = &paused_state {
+                    (id.clone(), t.clone())
+                } else if let Some((id, t)) = state_by_lane_status.get(&lane_status) {
+                    (id.clone(), t.clone())
+                } else {
+                    let default_state: (String, String) = sqlx::query_as(
+                        "SELECT id, type FROM tracker_states WHERE team_id = ? ORDER BY position ASC LIMIT 1",
+                    )
+                    .bind(&agt_team_id)
+                    .fetch_one(pool)
+                    .await?;
+                    default_state
+                }
+            } else if let Some((id, t)) = state_by_lane_status.get(&lane_status) {
                 (id.clone(), t.clone())
             } else {
                 let default_state: (String, String) = sqlx::query_as(
@@ -368,15 +418,17 @@ async fn sync_inner(pool: &SqlitePool) -> Result<()> {
                  VALUES (?, NULL, 'lane_status', NULL, ?, ?)",
             )
             .bind(&issue_id)
-            .bind(&lane_status)
+            .bind(effective_status)
             .bind(&now)
             .execute(pool)
             .await?;
 
-            if matches!(
-                lane_status.as_str(),
-                "blocked" | "done_claimed" | "verified_done" | "failed"
-            ) {
+            if !is_paused
+                && matches!(
+                    lane_status.as_str(),
+                    "blocked" | "done_claimed" | "verified_done" | "failed"
+                )
+            {
                 if let Some(ref me_id) = me_user_id {
                     let notif_id = Uuid::new_v4().to_string();
                     let kind = format!("lane_{lane_status}");
