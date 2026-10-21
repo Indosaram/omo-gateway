@@ -84,6 +84,37 @@ pub fn persona_source(raw: Option<&str>) -> String {
         .to_owned()
 }
 
+/// Where routine owner-facing traffic goes instead of the owner DM: the channel session of the
+/// first `SLACK_HOME_CHANNEL`. The owner DM is kept for urgent items only (2026-10-21: "DM으로는
+/// 급한 용무만"). `None` when `lead` is not a Slack DM or no home channel is configured, so the
+/// caller keeps using the DM.
+pub fn report_key(lead: &SessionKey, home_channels: &[String], team: &str) -> Option<SessionKey> {
+    if lead.platform != PLATFORM || lead.guild_id.is_some() || team.is_empty() {
+        return None;
+    }
+    let home = home_channels.first()?;
+    let mut key = SessionKey::new(PLATFORM, Some(team), home.as_str(), None::<String>, "");
+    if let Some(bot) = lead.bot_id.as_deref() {
+        key = key.with_bot_id(bot);
+    }
+    Some(key)
+}
+
+/// [`report_key`] for the live configuration: the team is the one the bot already talks in.
+pub async fn report_session(pool: &SqlitePool, lead: &SessionKey) -> Result<Option<SessionKey>> {
+    let home = super::home_channels();
+    if home.is_empty() || lead.platform != PLATFORM || lead.guild_id.is_some() {
+        return Ok(None);
+    }
+    let team: Option<String> = sqlx::query_scalar(
+        "SELECT guild_id FROM sessions WHERE platform = 'slack' AND guild_id IS NOT NULL
+         ORDER BY updated_at DESC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(team.and_then(|team| report_key(lead, &home, &team)))
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
@@ -191,6 +222,23 @@ mod tests {
                 .unwrap();
         assert_eq!(kept, "edited");
         assert!(!copy_persona(&pool, "MISSING", "UOTHER").await.unwrap());
+    }
+
+    #[test]
+    fn routine_owner_traffic_goes_to_the_home_channel() {
+        let dm = SessionKey::new(PLATFORM, None::<String>, "DOWNER", None::<String>, "UOWNER")
+            .with_bot_id("UBOT");
+        let home = vec!["CHOME".to_string(), "COTHER".to_string()];
+        let report = report_key(&dm, &home, "T1").unwrap();
+        assert_eq!(report.channel_id, "CHOME");
+        assert_eq!(report.guild_id.as_deref(), Some("T1"));
+        assert_eq!(report.thread_id, None);
+        assert_eq!(report.bot_id.as_deref(), Some("UBOT"));
+        // No home channel, or a lead that is already a channel: keep the lead as it is.
+        assert!(report_key(&dm, &[], "T1").is_none());
+        assert!(report_key(&report, &home, "T1").is_none());
+        let discord = SessionKey::new("discord", None::<String>, "dm", None::<String>, "owner");
+        assert!(report_key(&discord, &home, "T1").is_none());
     }
 
     #[test]

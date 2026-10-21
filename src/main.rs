@@ -2992,10 +2992,20 @@ fn spawn_owner_alerts(pool: &SqlitePool, dispatcher: Arc<dyn OutboundDispatcher>
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
+            // Routine owner items are announced in the Slack home channel; the owner DM only
+            // gets the urgent ones, through the inbox_urgent lane event (2026-10-21).
+            let target = match omon_gateway::slack::home::report_session(&pool, &owner).await {
+                Ok(Some(report)) => report,
+                Ok(None) => owner.clone(),
+                Err(error) => {
+                    warn!(%error, "home channel lookup failed; owner alerts stay in the DM");
+                    owner.clone()
+                }
+            };
             if let Err(error) = omon_gateway::inbox::owner_alert::sweep(
                 &pool,
                 dispatcher.as_ref(),
-                &owner,
+                &target,
                 chrono::Utc::now(),
             )
             .await

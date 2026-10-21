@@ -66,10 +66,12 @@ impl EventDispatcher {
                     }
                 }
             }
-            groups
-                .entry(event.lead_session_key.clone())
-                .or_default()
-                .push(event);
+            let target = if owner_dm_worthy(&event) {
+                event.lead_session_key.clone()
+            } else {
+                self.report_target(&event.lead_session_key).await
+            };
+            groups.entry(target).or_default().push(event);
         }
         for (lead, events) in groups {
             if let Err(error) = self.deliver_group(&lead, events, now).await {
@@ -200,6 +202,22 @@ impl EventDispatcher {
         self.receipt(&ids, now, "lead_turn").await
     }
 
+    /// The home channel session that takes routine events for an owner-DM lead, or the lead
+    /// itself when there is none.
+    async fn report_target(&self, lead: &str) -> String {
+        let Ok(key) = SessionKey::from_storage_key(lead) else {
+            return lead.to_owned();
+        };
+        match crate::slack::home::report_session(&self.pool, &key).await {
+            Ok(Some(report)) => report.storage_key(),
+            Ok(None) => lead.to_owned(),
+            Err(error) => {
+                tracing::warn!(%error, lead, "home channel lookup failed; event stays on the lead");
+                lead.to_owned()
+            }
+        }
+    }
+
     async fn receipt(&self, ids: &[i64], now: DateTime<Utc>, reason: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         for id in ids {
@@ -208,6 +226,18 @@ impl EventDispatcher {
         }
         tx.commit().await?;
         Ok(())
+    }
+}
+
+/// Events urgent enough to wake a turn in the owner DM itself: something the owner must act
+/// on soon, or a failure only he can fix. Everything else (action-loop items, cron reports,
+/// finished lanes, load alerts) goes to the Slack home channel (2026-10-21: "DM으로는 급한
+/// 용무만").
+fn owner_dm_worthy(event: &LaneEvent) -> bool {
+    match event.kind.as_str() {
+        "inbox_urgent" | "owner_reply_failed" | "dead" | "launch_failed" | "startup_error" => true,
+        "cron_problem" => event.body.contains("needs_owner"),
+        _ => false,
     }
 }
 
@@ -243,6 +273,32 @@ mod tests {
             created_at: Utc::now(),
             delivered_at: None,
         }
+    }
+
+    #[test]
+    fn only_urgent_events_stay_in_the_owner_dm() {
+        for kind in [
+            "inbox_urgent",
+            "owner_reply_failed",
+            "dead",
+            "launch_failed",
+        ] {
+            assert!(owner_dm_worthy(&event(kind)), "{kind}");
+        }
+        for kind in [
+            "action_loop",
+            "cron_report",
+            "done_claimed",
+            "guard",
+            "close_failed",
+            "question",
+        ] {
+            assert!(!owner_dm_worthy(&event(kind)), "{kind}");
+        }
+        let mut problem = event("cron_problem");
+        assert!(!owner_dm_worthy(&problem));
+        problem.body = "{\"kind\":\"needs_owner\"}".into();
+        assert!(owner_dm_worthy(&problem));
     }
 
     #[test]
