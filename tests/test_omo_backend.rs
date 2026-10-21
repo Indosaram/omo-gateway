@@ -143,7 +143,12 @@ async fn run_correlated_frames_checked(
             }
         }
         for frame in frames {
-            ws.feed(Message::text(frame.to_string())).await.unwrap();
+            // A string starting with RAW: is sent verbatim, so a test can inject a broken frame.
+            let text = match frame.as_str().and_then(|s| s.strip_prefix("RAW:")) {
+                Some(raw) => raw.to_string(),
+                None => frame.to_string(),
+            };
+            ws.feed(Message::text(text)).await.unwrap();
         }
         ws.flush().await.unwrap();
         stop_rx.await.unwrap();
@@ -820,6 +825,32 @@ async fn initial_silence_interrupts_remote_turn_without_losing_thread_binding() 
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn an_unreadable_frame_is_skipped_and_the_turn_still_completes() {
+    // Incident 2026-10-21: a frame cut mid `\u` escape failed the whole turn.
+    let (result, chunks) = run_correlated_frames_checked(
+        vec![
+            correlation_ack(),
+            json!("RAW:{\"method\":\"item/agentMessage/delta\",\"params\":{\"delta\":\"\\ud8"),
+            correlation_delta("r1", "t2", "AFTER_BROKEN_FRAME"),
+            json!({"method":"item/completed","params":{"threadId":"r1","turnId":"t2","item":{"id":"m1","type":"agentMessage","text":"AFTER_BROKEN_FRAME"}}}),
+            json!({"method":"turn/completed","params":{"threadId":"r1","turn":{"id":"t2","status":"completed"}}}),
+        ],
+        None,
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "one broken frame must not fail the turn: {result:?}"
+    );
+    assert!(
+        chunks
+            .iter()
+            .any(|c| c.is_final && c.content.contains("AFTER_BROKEN_FRAME")),
+        "the reply after the broken frame is delivered"
+    );
 }
 
 #[tokio::test]
@@ -5542,6 +5573,27 @@ async fn persistence_failure_prevents_turn_submission() {
 
 #[tokio::test]
 async fn omo_approval_roundtrip_uses_session_policy() {
+    assert_eq!(
+        yolo_decision_for("cargo test").await,
+        "accept",
+        "YOLO session must accept approval request"
+    );
+}
+
+#[tokio::test]
+async fn a_gateway_restart_outside_deploy_is_declined_even_in_yolo() {
+    // Incident 2026-10-21: a turn registered a KeepAlive launchd job that restarted the gateway
+    // about 20 times; deploy.sh is the only restart path because it waits for running turns.
+    for command in [
+        "launchctl submit -l ai.omon.voice-reload -- /bin/bash ~/.omon/voice-reload.sh",
+        "launchctl kickstart -k gui/501/ai.omon.gateway",
+    ] {
+        assert_eq!(yolo_decision_for(command).await, "decline", "{command}");
+    }
+}
+
+/// The decision a YOLO session sends back for one command approval request.
+async fn yolo_decision_for(command: &'static str) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let (decision_tx, mut decision_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -5587,7 +5639,7 @@ async fn omo_approval_roundtrip_uses_session_policy() {
                                 "jsonrpc": "2.0",
                                 "id": 999,
                                 "method": "item/commandExecution/request",
-                                "params": {"command": "cargo test"}
+                                "params": {"command": command}
                             });
                             let _ = ws.send(Message::text(req.to_string())).await;
                         }
@@ -5623,12 +5675,8 @@ async fn omo_approval_roundtrip_uses_session_policy() {
     let _ = backend.run(&mut session, event).await;
 
     let decision = decision_rx.recv().await.expect("must receive decision");
-    assert_eq!(
-        decision, "accept",
-        "YOLO session must accept approval request"
-    );
-
     let _ = server.await;
+    decision
 }
 
 #[tokio::test]

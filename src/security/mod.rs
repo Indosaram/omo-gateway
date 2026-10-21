@@ -9,7 +9,8 @@ pub mod tirith;
 pub use approval_display::redact_approval_display;
 pub use dangerous::{derive_pattern_key, detect_dangerous_command, is_dangerous, DangerousFinding};
 pub use hardline::{
-    check_sudo_stdin_guard, detect_hardline_command, match_user_deny_rule, wildcard_match,
+    check_sudo_stdin_guard, detect_gateway_restart_bypass, detect_hardline_command,
+    match_user_deny_rule, wildcard_match,
 };
 pub use neutralize::{is_invisible_or_control, neutralize_untrusted_inline_text};
 pub use normalize::normalize_command_for_detection;

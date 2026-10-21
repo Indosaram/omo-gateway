@@ -1682,10 +1682,21 @@ impl OmoBackend {
             let msg = msg.map_err(|e| OmonError::Llm(format!("ws streaming error: {e}")))?;
             let val = match &msg {
                 Message::Text(text) => {
-                    let parsed = serde_json::from_str::<Value>(text.as_str()).map_err(|e| {
-                        self.active_turns.lock().remove(&session.key.storage_key());
-                        OmonError::Llm(format!("invalid json: {e}"))
-                    })?;
+                    // One unreadable frame (incident 2026-10-21: a 44KB frame cut mid `\u`
+                    // escape while the app-server was being restarted) must not fail the whole
+                    // turn; the terminal frame and the deadlines still decide how it ends.
+                    let parsed = match serde_json::from_str::<Value>(text.as_str()) {
+                        Ok(parsed) => parsed,
+                        Err(error) => {
+                            tracing::warn!(
+                                session = %session.key,
+                                %error,
+                                frame_len = text.len(),
+                                "skipping an unreadable app-server frame"
+                            );
+                            continue;
+                        }
+                    };
                     // Invariant: only frames showing real work for this thread/turn (or the
                     // turn/start acknowledgement itself) renew the inactivity watchdog and the
                     // interactive 30m deadline. Steer/interrupt acks and unrelated frames must
@@ -1855,6 +1866,33 @@ impl OmoBackend {
                     continue;
                 }
                 if is_approval_request(method) {
+                    // Restarting or killing the gateway from inside a turn, or registering a
+                    // launchd job, bypasses deploy.sh's wait for running turns (incident
+                    // 2026-10-21: a `launchctl submit` KeepAlive job restarted it ~20 times).
+                    // Declined even under YOLO, like a toolset restriction.
+                    let guarded_text = val
+                        .pointer("/params/command")
+                        .or_else(|| val.pointer("/params/item/command"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            crate::autonomy::is_bare_eval_frame(&val)
+                                .then(|| last_eval_code.clone())
+                                .flatten()
+                        });
+                    if let Some(reason) = guarded_text
+                        .as_deref()
+                        .and_then(crate::security::detect_gateway_restart_bypass)
+                    {
+                        tracing::warn!(session = %session.key, reason, "declined a gateway restart outside deploy.sh");
+                        let _ = ws
+                            .send(approval_denial_with_reason(
+                                req_id,
+                                &format!("{reason}. Restart the gateway only with scripts/deploy.sh from main; it waits for running turns."),
+                            ))
+                            .await;
+                        continue;
+                    }
                     // A toolset restriction denies even under YOLO, and counts toward the
                     // denial-loop guard like any other policy denial.
                     let mut toolset_blocked = false;

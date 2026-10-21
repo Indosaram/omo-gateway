@@ -144,6 +144,35 @@ pub fn detect_hardline_command(command: &str) -> Option<String> {
     None
 }
 
+static GATEWAY_RESTART_BYPASS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    [
+        (
+            r"\blaunchctl\b[^\n;|&]*\b(?:bootout|bootstrap|kickstart|stop|kill|unload|load|remove|disable)\b[^\n;|&]*\bai\.omon\.gateway(?:[^-\w.]|$)",
+            "stopping or restarting the gateway service from a turn kills the turns it runs",
+        ),
+        (
+            r"\blaunchctl\b[^\n;|&]*\bsubmit\b",
+            "launchctl submit registers a KeepAlive job that reruns its command forever",
+        ),
+        (
+            r"\b(?:pkill|killall)\b[^\n;|&]*\bomo-gateway\b",
+            "killing the gateway process from a turn kills the turns it runs",
+        ),
+    ]
+    .into_iter()
+    .map(|(pattern, reason)| (Regex::new(pattern).unwrap(), reason))
+    .collect()
+});
+
+/// A command or eval cell that restarts, stops or kills the gateway outside `scripts/deploy.sh`,
+/// or registers a launchd job. Read-only `launchctl print`/`list` and deploy.sh itself pass.
+pub fn detect_gateway_restart_bypass(text: &str) -> Option<&'static str> {
+    GATEWAY_RESTART_BYPASS
+        .iter()
+        .find(|(regex, _)| regex.is_match(text))
+        .map(|(_, reason)| *reason)
+}
+
 /// Matches wildcard patterns (fnmatch style) where `*` matches any sequence of characters and `?` matches any single character.
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     let pc: Vec<char> = pattern.to_ascii_lowercase().chars().collect();
@@ -269,6 +298,34 @@ mod deny_bypass_tests {
                 match_user_deny_rule(wrapped, &deny),
                 Some("npm publish *"),
                 "wrapper-prefixed command must still be denied: {wrapped}"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_restarts_outside_deploy_are_caught() {
+        use super::detect_gateway_restart_bypass;
+        for blocked in [
+            "launchctl submit -l ai.omon.voice-reload -- /bin/bash ~/.omon/voice-reload.sh",
+            "launchctl bootout gui/$uid/ai.omon.gateway; sleep 3",
+            "launchctl kickstart -k gui/501/ai.omon.gateway",
+            "await $`launchctl bootout gui/${uid}/ai.omon.gateway`",
+            "pkill -f omo-gateway",
+        ] {
+            assert!(
+                detect_gateway_restart_bypass(blocked).is_some(),
+                "must be caught: {blocked}"
+            );
+        }
+        for allowed in [
+            "launchctl print gui/501/ai.omon.gateway | grep pid",
+            "launchctl list | grep omon",
+            "launchctl kickstart -k gui/501/ai.omon.gateway-watchdog",
+            "cd ~/code/project/omon-gateway && scripts/deploy.sh",
+        ] {
+            assert!(
+                detect_gateway_restart_bypass(allowed).is_none(),
+                "must pass: {allowed}"
             );
         }
     }
